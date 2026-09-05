@@ -54,10 +54,17 @@ function numberOrNull(value: unknown) {
 function variationBody(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("SCHEMA_INVALID");
   const root = raw as RawRecord;
+  if ("status" in root && root.status !== 200) throw new Error("SCHEMA_INVALID");
   if ("data" in root && (!root.data || typeof root.data !== "object" || Array.isArray(root.data))) {
     throw new Error("SCHEMA_INVALID");
   }
   return (root.data ?? root) as RawRecord;
+}
+
+function requiredString(value: unknown) {
+  const text = stringOrNull(value);
+  if (!text) throw new Error("SCHEMA_INVALID");
+  return text;
 }
 
 function projectAttributes(raw: unknown) {
@@ -86,6 +93,41 @@ function pendingChild(asin: string, attributes: ReturnType<typeof projectAttribu
   };
 }
 
+function projectRealVariationChildren(body: RawRecord) {
+  if (!Array.isArray(body.childAsins) || !Array.isArray(body.variationDistribution)) throw new Error("SCHEMA_INVALID");
+  const childAsins: string[] = [];
+  const childSet = new Set<string>();
+  for (const value of body.childAsins) {
+    const asin = normalizeAsin(value);
+    if (!asin) throw new Error("SCHEMA_INVALID");
+    if (childSet.has(asin)) continue;
+    childSet.add(asin);
+    childAsins.push(asin);
+  }
+  if (!childAsins.length) throw new Error("SCHEMA_INVALID");
+  const attributesByAsin = new Map<string, ReturnType<typeof projectAttributes>>();
+  for (const rawDistribution of body.variationDistribution) {
+    if (!rawDistribution || typeof rawDistribution !== "object" || Array.isArray(rawDistribution)) throw new Error("SCHEMA_INVALID");
+    const distribution = rawDistribution as RawRecord;
+    const asin = normalizeAsin(distribution.asin);
+    if (!asin || !childSet.has(asin) || !Array.isArray(distribution.attributes)) throw new Error("SCHEMA_INVALID");
+    if (!attributesByAsin.has(asin)) attributesByAsin.set(asin, projectAttributes(distribution.attributes));
+  }
+  return childAsins.map(asin => pendingChild(asin, attributesByAsin.get(asin) ?? []));
+}
+
+function projectRealVariationDimensions(raw: unknown) {
+  if (!Array.isArray(raw)) throw new Error("SCHEMA_INVALID");
+  const dimensions = new Set<string>();
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SCHEMA_INVALID");
+    const dimension = value as RawRecord;
+    if (!Array.isArray(dimension.options)) throw new Error("SCHEMA_INVALID");
+    dimensions.add(requiredString(dimension.dimension));
+  }
+  return [...dimensions];
+}
+
 export function projectXydcVariationFamily({
   inputAsin,
   country,
@@ -97,38 +139,57 @@ export function projectXydcVariationFamily({
   raw: unknown;
   fetchedAt: string;
 }): XydcVariantFamily {
+  const root = raw as RawRecord;
   const body = variationBody(raw);
   const normalizedInput = normalizeAsin(inputAsin);
+  const normalizedCountry = country.trim().toUpperCase();
   const parentAsin = normalizeAsin(body.parentAsin);
-  const children = Array.isArray(body.children) ? body.children : [];
-  if (!normalizedInput || !parentAsin || !children.length) throw new Error("SCHEMA_INVALID");
+  const responseAsin = normalizeAsin(body.asin);
+  const realContract = "childAsins" in body || "variationDimensions" in body || "variationDistribution" in body;
+  if (!normalizedInput || !parentAsin) throw new Error("SCHEMA_INVALID");
+  if (realContract && (
+    root.status !== 200
+    || responseAsin !== parentAsin
+    || requiredString(body.country).toUpperCase() !== normalizedCountry
+  )) throw new Error("SCHEMA_INVALID");
   const seenChildren = new Set<string>();
   const projectedChildren: XydcVariantChild[] = [];
-  for (const rawChild of children) {
-    if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) throw new Error("SCHEMA_INVALID");
-    const child = rawChild as RawRecord;
-    const asin = normalizeAsin(child.asin);
-    if (!asin) throw new Error("SCHEMA_INVALID");
-    if (seenChildren.has(asin)) continue;
-    seenChildren.add(asin);
-    projectedChildren.push(pendingChild(asin, projectAttributes(child.attributes)));
+  if (realContract) {
+    projectedChildren.push(...projectRealVariationChildren(body));
+    if (normalizedInput !== parentAsin && !projectedChildren.some(child => child.asin === normalizedInput)) {
+      throw new Error("SCHEMA_INVALID");
+    }
+  } else {
+    const children = Array.isArray(body.children) ? body.children : [];
+    if (!children.length) throw new Error("SCHEMA_INVALID");
+    for (const rawChild of children) {
+      if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) throw new Error("SCHEMA_INVALID");
+      const child = rawChild as RawRecord;
+      const asin = normalizeAsin(child.asin);
+      if (!asin) throw new Error("SCHEMA_INVALID");
+      if (seenChildren.has(asin)) continue;
+      seenChildren.add(asin);
+      projectedChildren.push(pendingChild(asin, projectAttributes(child.attributes)));
+    }
   }
-  const dimensions = body.dimensions === undefined
-    ? [...new Set(projectedChildren.flatMap(child => child.attributes.map(attribute => attribute.dimension)))]
-    : !Array.isArray(body.dimensions)
-      ? (() => { throw new Error("SCHEMA_INVALID"); })()
-      : [...new Set(body.dimensions.map(value => {
-        const dimension = stringOrNull(value);
-        if (!dimension) throw new Error("SCHEMA_INVALID");
-        return dimension;
-      }))];
+  const dimensions = realContract
+    ? projectRealVariationDimensions(body.variationDimensions)
+    : body.dimensions === undefined
+      ? [...new Set(projectedChildren.flatMap(child => child.attributes.map(attribute => attribute.dimension)))]
+      : !Array.isArray(body.dimensions)
+        ? (() => { throw new Error("SCHEMA_INVALID"); })()
+        : [...new Set(body.dimensions.map(value => {
+          const dimension = stringOrNull(value);
+          if (!dimension) throw new Error("SCHEMA_INVALID");
+          return dimension;
+        }))];
   return XydcVariantFamilySchema.parse({
     inputAsin: normalizedInput,
-    country: country.trim().toUpperCase(),
+    country: normalizedCountry,
     parentAsin,
     dimensions,
     children: projectedChildren,
-    sourceUpdatedAt: stringOrNull(body.sourceUpdatedAt),
+    sourceUpdatedAt: realContract ? requiredString(body.lastUpdatedTime) : stringOrNull(body.sourceUpdatedAt),
     fetchedAt,
     status: "partial",
     reasonCode: "PARTIAL_CHILD_INFO",
@@ -163,27 +224,56 @@ function strictNullableImageUrl(value: unknown) {
   }
 }
 
-function informationRows(raw: unknown) {
+function providerNullableString(value: unknown) {
+  if (value == null) return null;
+  if (typeof value !== "string") throw new Error("SCHEMA_INVALID");
+  return value.trim() || null;
+}
+
+function providerNullableNumber(value: unknown) {
+  if (typeof value === "string" && !value.trim()) return null;
+  return strictNullableNumber(value);
+}
+
+function providerNullableImageUrl(primary: unknown, fallback: unknown) {
+  const imageUrl = providerNullableString(primary) ?? providerNullableString(fallback);
+  return strictNullableImageUrl(imageUrl);
+}
+
+function informationRows(raw: unknown, country: string) {
+  const root = !raw || typeof raw !== "object" || Array.isArray(raw) ? undefined : raw as RawRecord;
+  if (root && "status" in root && root.status !== 200) throw new Error("SCHEMA_INVALID");
+  const realContract = Boolean(root && "status" in root);
+  const normalizedCountry = country.trim().toUpperCase();
   const source = Array.isArray(raw)
     ? raw
-    : !raw || typeof raw !== "object"
+    : !root
       ? (() => { throw new Error("SCHEMA_INVALID"); })()
-      : Array.isArray((raw as RawRecord).data)
-        ? (raw as RawRecord).data as unknown[]
-        : Array.isArray((raw as RawRecord).items)
-          ? (raw as RawRecord).items as unknown[]
-          : (() => { throw new Error("SCHEMA_INVALID"); })();
+      : realContract
+        ? !root.data || typeof root.data !== "object" || Array.isArray(root.data) || !Array.isArray((root.data as RawRecord).entities)
+          ? (() => { throw new Error("SCHEMA_INVALID"); })()
+          : (root.data as RawRecord).entities as unknown[]
+        : Array.isArray(root.data)
+          ? root.data as unknown[]
+          : Array.isArray(root.items)
+            ? root.items as unknown[]
+            : (() => { throw new Error("SCHEMA_INVALID"); })();
   const mapped = new Map<string, XydcInformation>();
   for (const row of source) {
     if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("SCHEMA_INVALID");
     const value = row as RawRecord;
     const asin = normalizeAsin(value.asin);
-    const title = strictNullableString(value.title);
-    const imageUrl = strictNullableImageUrl(value.imageUrl);
-    const price = strictNullableNumber(value.price);
-    const currency = strictNullableString(value.currency);
-    const stars = strictNullableNumber(value.stars);
-    const productPageRatings = strictNullableNumber(value.productPageRatings);
+    if (realContract && requiredString(value.country).toUpperCase() !== normalizedCountry) throw new Error("SCHEMA_INVALID");
+    const title = realContract ? providerNullableString(value.title) : strictNullableString(value.title);
+    const imageUrl = realContract
+      ? providerNullableImageUrl(value.bigPicUrl, value.smallPicUrl)
+      : strictNullableImageUrl(value.imageUrl);
+    const price = realContract ? providerNullableNumber(value.price) : strictNullableNumber(value.price);
+    const currency = realContract ? providerNullableString(value.currency) : strictNullableString(value.currency);
+    const stars = realContract ? providerNullableNumber(value.stars) : strictNullableNumber(value.stars);
+    const productPageRatings = realContract
+      ? providerNullableNumber(value.ratings)
+      : strictNullableNumber(value.productPageRatings);
     if (!asin || (price !== null && price < 0)
       || (stars !== null && (stars < 0 || stars > 5)) || (productPageRatings !== null && (!Number.isInteger(productPageRatings) || productPageRatings < 0))) {
       throw new Error("SCHEMA_INVALID");
@@ -388,7 +478,10 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
     const batch = queuedBatch.filter(childAsin => [...drafts.values()].some(family => family.children.some(child => child.asin === childAsin && child.infoStatus !== "ready")));
     if (!batch.length) continue;
     try {
-      const information = informationRows(await request({ toolName: "get_asin_info", args: { asins: batch, country: input.country } }));
+      const information = informationRows(
+        await request({ toolName: "get_asin_info", args: { asins: batch, country: input.country } }),
+        input.country,
+      );
       for (const [asin, family] of drafts) drafts.set(asin, withInformation(family, information, batch));
       await persistFamilies(input, drafts);
     } catch (error) {

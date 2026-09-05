@@ -48,6 +48,63 @@ function infoResponse(asins: readonly string[]) {
   }));
 }
 
+function realVariationResponse() {
+  return {
+    status: 200,
+    cost_credits: 1,
+    data: {
+      asin: parentAsin,
+      country: "US",
+      parentAsin,
+      childAsins: [inputAsin, "B0CHILD002"],
+      lastUpdatedTime: "2026-09-04T07:00:00.000Z",
+      variationDimensions: [
+        { dimension: "Color", options: ["Red", "Blue"] },
+        { dimension: "Size", options: ["Small"] },
+      ],
+      variationDistribution: [
+        { asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }, { dimension: "Size", value: "Small" }] },
+        { asin: "B0CHILD002", attributes: [{ dimension: "Color", value: "Blue" }, { dimension: "Size", value: "Small" }] },
+      ],
+    },
+  };
+}
+
+function realInfoResponse() {
+  return {
+    status: 200,
+    cost_credits: 1,
+    data: {
+      entities: [
+        {
+          asin: inputAsin,
+          title: "First real child",
+          bigPicUrl: "https://images.example.test/big.jpg",
+          smallPicUrl: "https://images.example.test/small.jpg",
+          price: "12.50",
+          currency: "USD",
+          ratings: "42",
+          stars: "4.5",
+          amazonUrl: "https://www.amazon.com/dp/B0CHILD001",
+          country: "US",
+        },
+        {
+          asin: "B0CHILD002",
+          title: "Second real child",
+          bigPicUrl: null,
+          smallPicUrl: "https://images.example.test/second-small.jpg",
+          price: "9.99",
+          currency: "USD",
+          ratings: "7",
+          stars: "4",
+          amazonUrl: "https://www.amazon.com/dp/B0CHILD002",
+          country: "US",
+        },
+      ],
+    },
+  };
+}
+
 function cacheFixture(initial: Record<string, XydcVariantFamily> = {}) {
   const records: Record<string, XydcVariantFamily> = { ...initial };
   return {
@@ -64,6 +121,117 @@ function cacheFixture(initial: Record<string, XydcVariantFamily> = {}) {
     },
   };
 }
+
+test("projects the real XiYou variation and info contracts without materializing unlisted children", async () => {
+  const rawVariations = realVariationResponse();
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations" ? rawVariations : realInfoResponse(),
+  });
+  assert.equal(family[0].status, "ready");
+  assert.equal(family[0].parentAsin, parentAsin);
+  assert.equal(family[0].sourceUpdatedAt, rawVariations.data.lastUpdatedTime);
+  assert.deepEqual(family[0].dimensions, ["Color", "Size"]);
+  assert.deepEqual(family[0].children.map(child => child.asin), rawVariations.data.childAsins);
+  assert.deepEqual(family[0].children[0].attributes, rawVariations.data.variationDistribution[0].attributes);
+  assert.equal(family[0].children[0].imageUrl, "https://images.example.test/big.jpg");
+  assert.equal(family[0].children[1].imageUrl, "https://images.example.test/second-small.jpg");
+  assert.equal(family[0].children[0].productPageRatings, 42);
+  assert.equal(family[0].children[1].productPageRatings, 7);
+  assert.equal(JSON.stringify(family).includes("cost_credits"), false);
+  assert.equal(JSON.stringify(family).includes("amazonUrl"), false);
+
+  const unlistedDistribution = structuredClone(rawVariations);
+  unlistedDistribution.data.variationDistribution.push({ asin: "B0EXTRA001", attributes: [] });
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: unlistedDistribution, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+  const failedStatus = structuredClone(rawVariations);
+  failedStatus.status = 500;
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: failedStatus, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+
+  const missingStatus = { data: structuredClone(rawVariations.data) };
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: missingStatus, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+
+  const mismatchedAsin = structuredClone(rawVariations);
+  mismatchedAsin.data.asin = "B0OTHER001";
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: mismatchedAsin, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+
+  const unrelatedFamily = structuredClone(rawVariations);
+  unrelatedFamily.data.childAsins = ["B0CHILD002"];
+  unrelatedFamily.data.variationDistribution = unrelatedFamily.data.variationDistribution.filter(
+    child => child.asin === "B0CHILD002",
+  );
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: unrelatedFamily, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+
+  const mismatchedCountry = structuredClone(rawVariations);
+  mismatchedCountry.data.country = "CA";
+  assert.throws(
+    () => projectXydcVariationFamily({ inputAsin, country: "US", raw: mismatchedCountry, fetchedAt: now.toISOString() }),
+    /SCHEMA_INVALID/,
+  );
+});
+
+test("rejects a non-success real XiYou info payload without retaining its body", async () => {
+  const failedInfo = realInfoResponse();
+  failedInfo.status = 500;
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations" ? realVariationResponse() : failedInfo,
+  });
+  assert.equal(family[0].status, "partial");
+  assert.equal(family[0].reasonCode, "SCHEMA_INVALID");
+  assert.equal(JSON.stringify(family).includes("cost_credits"), false);
+});
+
+test("rejects real XiYou info rows whose country differs from the request", async () => {
+  const wrongCountry = realInfoResponse();
+  wrongCountry.data.entities[0].country = "CA";
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations" ? realVariationResponse() : wrongCountry,
+  });
+  assert.equal(family[0].status, "partial");
+  assert.equal(family[0].reasonCode, "SCHEMA_INVALID");
+  assert.equal(family[0].children[0].title, null);
+});
+
+test("normalizes blank optional fields from a real XiYou info row without discarding ready siblings", async () => {
+  const partiallyMissing = realInfoResponse();
+  Object.assign(partiallyMissing.data.entities[1] as Record<string, unknown>, {
+    title: "",
+    bigPicUrl: "",
+    smallPicUrl: "",
+    price: "",
+    currency: "",
+    stars: "",
+    ratings: "",
+  });
+  const family = await syncXydcVariantFamilies({
+    asins: [inputAsin], country: "US", token: "fixture-token", now, cache: cacheFixture().cache,
+    callTool: async ({ toolName }) => toolName === "get_asin_variations" ? realVariationResponse() : partiallyMissing,
+  });
+  assert.equal(family[0].status, "partial");
+  assert.equal(family[0].reasonCode, "PARTIAL_CHILD_INFO");
+  assert.equal(family[0].children[0].infoStatus, "ready");
+  assert.equal(family[0].children[1].infoStatus, "unavailable");
+  assert.equal(family[0].children[1].title, null);
+  assert.equal(family[0].children[1].imageUrl, null);
+  assert.equal(family[0].children[1].productPageRatings, null);
+});
 
 test("projects a child input into its real parent with deduplicated children and provider-safe fields", () => {
   const family = projectXydcVariationFamily({
