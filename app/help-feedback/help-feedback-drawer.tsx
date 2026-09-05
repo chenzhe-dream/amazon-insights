@@ -191,6 +191,7 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
   const [unread, setUnread] = useState(0);
   const [filter, setFilter] = useState<FeedbackStatus | null>(null);
   const unreadRequests = useRef(createLatestUnreadRequest());
+  const submitGeneration = useRef(0);
   const draft = useMemo<FeedbackDraft>(() => ({ category, title, description, images }), [category, description, images, title]);
 
   const refreshUnread = useCallback(() => {
@@ -225,6 +226,8 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
 
   const requestClose = useCallback((path: ClosePath) => {
     if (!shouldCloseFeedbackDrawer(draft, path, () => window.confirm("放弃尚未提交的反馈草稿？"))) return;
+    submitGeneration.current += 1;
+    setPending(false);
     setCategory("bug");
     setTitle("");
     setDescription("");
@@ -243,9 +246,12 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
     return () => window.removeEventListener("keydown", keydown);
   }, [open, requestClose]);
 
+  useEffect(() => () => { submitGeneration.current += 1; }, []);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
+    const generation = ++submitGeneration.current;
     setPending(true);
     setMessage(null);
     try {
@@ -253,6 +259,7 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
         ...draft,
         pagePath: `${window.location.pathname}${window.location.search}`,
       });
+      if (generation !== submitGeneration.current) return;
       setTitle("");
       setDescription("");
       setImages([]);
@@ -260,9 +267,9 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
       setMessage(`提交成功 · ${result.feedbackId}`);
       refreshUnread();
     } catch {
-      setMessage("提交失败，请检查内容和图片后重试");
+      if (generation === submitGeneration.current) setMessage("提交失败，请检查内容和图片后重试");
     } finally {
-      setPending(false);
+      if (generation === submitGeneration.current) setPending(false);
     }
   }
 

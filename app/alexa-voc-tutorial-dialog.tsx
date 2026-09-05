@@ -1,8 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalInteraction } from "./lib/use-modal-interaction";
 import styles from "./alexa-voc-tutorial-dialog.module.css";
 
 const ALEXA_VOC_SEVEN_QUESTION_TEMPLATE =
@@ -15,15 +15,28 @@ export function AlexaVocTutorialDialog() {
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const templateRef = useRef<HTMLTextAreaElement>(null);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyGeneration = useRef(0);
 
-  const close = useCallback(() => {
-    setOpen(false);
-    queueMicrotask(() => triggerRef.current?.focus());
+  useModalInteraction(open, dialogRef, closeRef);
+
+  const resetCopy = useCallback(() => {
+    copyGeneration.current += 1;
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = null;
   }, []);
 
+  const close = useCallback(() => {
+    resetCopy();
+    setOpen(false);
+    queueMicrotask(() => triggerRef.current?.focus());
+  }, [resetCopy]);
+
   const copyTemplate = useCallback(async () => {
+    resetCopy();
+    const generation = copyGeneration.current;
     let copied = false;
     try {
       if (navigator.clipboard?.writeText) {
@@ -33,6 +46,7 @@ export function AlexaVocTutorialDialog() {
     } catch {
       copied = false;
     }
+    if (generation !== copyGeneration.current) return;
 
     if (!copied && templateRef.current) {
       templateRef.current.focus();
@@ -51,25 +65,21 @@ export function AlexaVocTutorialDialog() {
 
     setCopyStatus("copied");
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
-    copyResetTimerRef.current = setTimeout(() => setCopyStatus("idle"), 1800);
-  }, []);
+    copyResetTimerRef.current = setTimeout(() => {
+      if (generation === copyGeneration.current) setCopyStatus("idle");
+    }, 1800);
+  }, [resetCopy]);
 
-  useEffect(() => () => {
-    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
-  }, []);
+  useEffect(() => resetCopy, [resetCopy]);
 
   useEffect(() => {
     if (!open) return;
-    closeRef.current?.focus();
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
     };
   }, [close, open]);
 
@@ -83,6 +93,7 @@ export function AlexaVocTutorialDialog() {
           }}
         >
           <section
+            ref={dialogRef}
             className={styles.dialog}
             role="dialog"
             aria-modal="true"
@@ -129,13 +140,15 @@ export function AlexaVocTutorialDialog() {
                 </div>
               </div>
               <div className={styles.screenshotFrame}>
-                <Image
+                {/* Preserve the screenshot's text without framework image re-encoding. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
                   className={styles.screenshot}
                   src="/tutorials/alexa-voc-entry.png"
                   width={338}
                   height={719}
                   alt="Alexa for Shopping 中粘贴七问模板的操作示例"
-                  priority
+                  decoding="async"
                 />
               </div>
             </div>
@@ -152,6 +165,7 @@ export function AlexaVocTutorialDialog() {
         type="button"
         className={styles.trigger}
         onClick={() => {
+          resetCopy();
           setCopyStatus("idle");
           setOpen(true);
         }}

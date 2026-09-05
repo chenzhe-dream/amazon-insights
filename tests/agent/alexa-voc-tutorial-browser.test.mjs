@@ -100,6 +100,12 @@ async function openVocPage({ copyMode = "clipboard" } = {}) {
       configurable: true,
       value: {
         writeText: async text => {
+          if (copyMode === "deferred") {
+            return new Promise((resolve, reject) => {
+              window.__finishTemplateCopy = resolve;
+              window.__failTemplateCopy = reject;
+            });
+          }
           if (copyMode !== "clipboard") throw new Error("clipboard unavailable");
           window.__copiedAlexaVocTemplate = text;
         },
@@ -140,6 +146,40 @@ async function waitUntilClosed(page, dialog) {
   await dialog.waitFor({ state: "detached" });
   await page.waitForFunction(() => document.body.style.overflow === "");
 }
+
+test("discarding pending feedback cannot erase the next draft", async () => {
+  const { context, page } = await openVocPage();
+  try {
+    const entry = page.locator(".help-feedback-entry");
+    await entry.click();
+    await page.getByRole("tab", { name: "提交反馈", exact: true }).click();
+    await page.getByLabel("标题").fill("正在提交的旧草稿");
+    await page.getByLabel("详细描述").fill("延迟返回时已经重新打开抽屉。");
+    let releaseSubmit;
+    const held = new Promise(resolve => { releaseSubmit = resolve; });
+    let requestArrived;
+    const arrived = new Promise(resolve => { requestArrived = resolve; });
+    await page.route("**/api/agent/v1/feedback", async route => {
+      requestArrived();
+      await held;
+      await route.fulfill({ json: { feedbackId: "delayed-test-only", createdAt: new Date().toISOString() } });
+    });
+    await page.getByRole("button", { name: "提交反馈", exact: true }).click();
+    await arrived;
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", { name: "关闭帮助与反馈", exact: true }).click();
+    await entry.click();
+    await page.getByLabel("标题").fill("必须保留的新草稿");
+    const response = page.waitForResponse(response => response.url().endsWith("/api/agent/v1/feedback"));
+    releaseSubmit();
+    await response;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.getByLabel("标题").inputValue(), "必须保留的新草稿");
+    assert.equal(await page.getByRole("button", { name: "提交反馈", exact: true }).isEnabled(), true);
+  } finally {
+    await context.close();
+  }
+});
 
 test("Alexa VOC tutorial opens with the approved image and closes accessibly", async () => {
   const { context, page } = await openVocPage();
@@ -234,6 +274,42 @@ test("Alexa VOC tutorial keeps the template selectable when copying fails", asyn
       length: element.value.length,
     }));
     assert.deepEqual(selection, { start: 0, end: selection.length, length: selection.length });
+  } finally {
+    await context.close();
+  }
+});
+
+test("tutorial keyboard navigation stays inside the open dialog", async () => {
+  const { context, page } = await openVocPage();
+  try {
+    await page.getByRole("button", { name: "查看录入教程", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Alexa VOC 录入教程" });
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await dialog.evaluate(node => node.contains(document.activeElement)), true);
+    await dialog.getByRole("textbox", { name: "七问模板" }).focus();
+    await page.keyboard.press("Tab");
+    assert.equal(await dialog.getByRole("button", { name: "关闭录入教程" }).evaluate(node => node === document.activeElement), true);
+  } finally {
+    await context.close();
+  }
+});
+
+test("a delayed clipboard result cannot update a reopened tutorial", async () => {
+  const { context, page } = await openVocPage({ copyMode: "deferred" });
+  try {
+    const trigger = page.getByRole("button", { name: "查看录入教程", exact: true });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Alexa VOC 录入教程" });
+    await dialog.getByRole("button", { name: "复制模板", exact: true }).click();
+    await page.waitForFunction(() => typeof window.__finishTemplateCopy === "function");
+    await page.keyboard.press("Escape");
+    await trigger.click();
+    await page.evaluate(async () => {
+      window.__finishTemplateCopy();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    assert.equal(await dialog.getByRole("button", { name: "已复制", exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole("button", { name: "复制模板", exact: true }).count(), 1);
   } finally {
     await context.close();
   }

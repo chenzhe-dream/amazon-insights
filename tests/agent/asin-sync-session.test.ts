@@ -142,9 +142,19 @@ function task2OverviewHarnessPlugin(): Plugin {
             replace: url => window.history.replaceState(null, "", url),
             prefetch: async () => undefined,
           };
+          let lastSearch;
+          let searchParams;
           export function usePathname() { return window.location.pathname; }
-          export function useSearchParams() { return new URLSearchParams(window.location.search); }
-          export function useRouter() { return router; }
+          export function useSearchParams() {
+            if (lastSearch !== window.location.search) {
+              lastSearch = window.location.search;
+              searchParams = new URLSearchParams(lastSearch);
+            }
+            return searchParams;
+          }
+          export function useRouter() {
+            return router;
+          }
         `;
       }
       return null;
@@ -1642,8 +1652,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
   try {
     const calls = await installFunnelRoute(valid, "valid");
     await valid.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?syncJob=job-1&project=${projectId}&run=${runId}`);
-    await valid.waitForFunction(() => document.querySelector(".asin-sync-progress"));
-    await valid.waitForTimeout(100);
+    await valid.getByText("队列 #3", { exact: true }).waitFor();
     assert.equal(calls.get, 1);
     assert.equal(calls.post, 0);
     assert.equal(await valid.getByText("队列 #3", { exact: true }).count(), 1);
@@ -1654,6 +1663,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
     assert.equal(calls.post, 0);
     await valid.reload();
     await waitForTestCondition(() => calls.get === 2);
+    await valid.getByText("队列 #3", { exact: true }).waitFor();
     assert.equal(calls.get, 2);
     assert.equal(calls.post, 0);
   } finally {
@@ -1665,7 +1675,7 @@ test("mounted sync funnel recovers with GET only across rerender and refresh, wh
     try {
       const calls = await installFunnelRoute(page, mode);
       await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?syncJob=job-1&project=${projectId}&run=${runId}`);
-      await page.waitForTimeout(100);
+      await waitForTestCondition(() => calls.get === 1);
       assert.equal(calls.get, 1, mode);
       assert.equal(calls.post, 0, mode);
       await page.waitForTimeout(1_650);
@@ -2283,12 +2293,12 @@ test("a restored job observed running stays expanded after remount and later fai
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
-    await page.waitForTimeout(100);
+    await page.getByText("historical running", { exact: true }).waitFor();
     assert.equal(get, 1);
     await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "keywords");
     await page.waitForTimeout(50);
     await page.evaluate(nextTab => (window as unknown as { switchSyncFunnelTab(tab: typeof nextTab): void }).switchSyncFunnelTab(nextTab), "overview");
-    await page.waitForTimeout(200);
+    await page.getByText("historical later failure", { exact: true }).waitFor();
     assert.ok(get >= 2);
     assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
     assert.equal(await page.locator(".sync-progress-list").count(), 1);
@@ -2688,7 +2698,7 @@ test("all production consumers retain terminal progress across refresh and stop 
         if (shouldNotice) {
           await page.getByText("新数据已发布，请手动刷新", { exact: true }).waitFor();
         } else {
-          await page.waitForTimeout(200);
+          await page.getByText(`${status} result`, { exact: true }).waitFor();
         }
         assert.equal(calls.get, 1, `${tab}/${status} terminal read`);
         assert.equal(calls.post, 0, `${tab}/${status} no replacement start`);
@@ -2714,6 +2724,7 @@ test("all production consumers retain terminal progress across refresh and stop 
 
         await page.reload();
         await waitForTestCondition(() => calls.get === 2);
+        await page.getByText(`${status} result`, { exact: true }).waitFor();
         assert.equal(calls.get, 2, `${tab}/${status} refresh performs one terminal GET`);
         assert.equal(calls.post, 0, `${tab}/${status} refresh remains GET-only`);
         assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", `${tab}/${status} refresh keeps the same pointer`);

@@ -54,6 +54,7 @@ test("production main runs persisted resume targets despite stale ready build pl
   const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${JOB_ID}.json`), "utf8"));
   assert.doesNotMatch(result.stderr, /\[error\]/);
   assert.match(result.stdout, /\[job\] keywords:sync/);
+  assert.match(result.stdout, /\[job\] variant:xydc:sync/);
   assert.equal(provider.requests(), 1);
   assert.equal(persisted.asinProgress[PENDING_ASIN].keywords.status, "ready");
   assert.equal(persisted.asinProgress[EMPTY_ASIN].keywords.status, "upstream-empty");
@@ -485,7 +486,10 @@ test("production main fixes a permanent category timeout gap while preserving pr
   assert.doesNotMatch(result.stderr, /\[error\]/);
   assert.equal(calls.length, 1, "runner launches category sync once and performs no fallback command");
   assert.deepEqual(calls[0], { connector: "sorftime", stage: "category" });
-  assert.deepEqual(outputs.category.gap, { state: "failed", reasonCode: "CONNECT_TIMEOUT" });
+  assert.deepEqual(outputs.category.gap, {
+    state: "failed", reasonCode: "CONNECT_TIMEOUT",
+    items: [{ asin: CATEGORY_TIMEOUT_ASIN, causeCode: "CONNECT_TIMEOUT" }],
+  });
   assert.equal(outputs.category.stageStatus, "failed");
   assert.equal(outputs.keywords.data.analysisByAsin[CATEGORY_TIMEOUT_ASIN].status, "ready");
   assert.equal(persisted.stages.find((stage: { id: string }) => stage.id === "category")?.status, "failed");
@@ -1114,6 +1118,8 @@ async function writeFakeNpm(projectRoot: string) {
   await mkdir(binDirectory, { recursive: true });
   const fakeRunner = join(binDirectory, "fake-npm.mjs");
   await writeFile(fakeRunner, `
+// Optional enrichment is covered separately; do not count it as a keyword request.
+if (process.argv.includes("variant:xydc:sync")) process.exit(0);
 const response = await fetch(process.env.FAKE_PROVIDER_ENDPOINT, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -1154,6 +1160,8 @@ async function writeCatalogFallbackFakeNpm(projectRoot: string) {
   await writeFile(fakeRunner, `
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// The optional variant command must not impersonate SellerSprite catalog sync.
+if (process.argv.includes("variant:xydc:sync")) process.exit(0);
 const label = process.argv.includes("catalog:sorftime:sync") ? "catalog:sorftime:sync" : "catalog:sync";
 const asins = (process.env.SORFTIME_ASINS ?? process.env.SELLERSPRITE_ASINS ?? "").split(",").filter(Boolean);
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({ label, asins }) + "\\n");
@@ -1184,6 +1192,8 @@ async function writeCategoryTimeoutFakeNpm(projectRoot: string) {
   const fakeRunner = join(binDirectory, "fake-npm.mjs");
   await writeFile(fakeRunner, `
 import { appendFileSync } from "node:fs";
+// Only category sync produces this fixture's Sorftime timeout diagnostic.
+if (process.argv.includes("variant:xydc:sync")) process.exit(0);
 appendFileSync(process.env.FAKE_CALLS_FILE, JSON.stringify({
   connector: process.env.SORFTIME_ASINS ? "sorftime" : "unknown",
   stage: process.env.AGENT_SYNC_STAGE_ID,
@@ -1211,6 +1221,8 @@ async function writeDegradedEvidenceFakeNpm(projectRoot: string) {
   await writeFile(fakeRunner, `
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// Isolate optional enrichment from this Sorftime degradation/evidence scenario.
+if (process.argv.includes("variant:xydc:sync")) process.exit(0);
 const stage = process.env.AGENT_SYNC_STAGE_ID;
 const localEvidenceOnly = process.env.SORFTIME_SCOPED_EVIDENCE_ONLY === "1";
 const connector = process.env.SELLERSPRITE_ASINS ? "sellerSprite"

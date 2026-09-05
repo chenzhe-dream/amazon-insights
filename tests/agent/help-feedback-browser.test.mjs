@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
@@ -337,6 +338,15 @@ if (webServerArgument >= 0) {
       sessionId: `30000000-0000-4000-8000-00000000006${index + 1}`,
     }),
   ]));
+  // Authentication and the presence heartbeat must agree on a live session.
+  for (const [token, principal] of principalByToken) {
+    await repository.createSession({
+      id: principal.sessionId, userId: principal.userId,
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      revokedAt: null, lastSeenAt: null,
+    });
+  }
   const authService = {
     async authenticate(rawToken) {
       return principalByToken.get(rawToken) ?? null;
@@ -484,7 +494,9 @@ if (webServerArgument >= 0) {
     const submitRequest = await submitRequestPromise;
     const submitResponse = await submitResponsePromise;
     assert.equal(submitResponse.status(), 200);
-    assert.match(submitRequest.headers()["content-type"] ?? "", /^multipart\/form-data; boundary=/i);
+    assert.equal(submitRequest.headers()["content-type"], "application/json");
+    assert.equal(submitRequest.headers()["x-feedback-transfer"], "1");
+    assert.equal(submitRequest.postDataJSON().images.length, 3);
     await member.page.getByText(/提交成功 · /).waitFor();
     assert.equal(await member.page.locator(".feedback-image-previews li").count(), 0);
 

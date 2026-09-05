@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -35,10 +35,28 @@ const ORGANIZATION_ID = "12000000-0000-4000-8000-000000000001";
 const ACTOR_ID = "12000000-0000-4000-8000-000000000002";
 const ASIN = "B0ALEXA001";
 const PROJECT_ASINS = [ASIN, "B0TASK1202", "B0TASK1203"] as const;
-const REPORT = readFileSync(
-  new URL("../fixtures/alexa-real-report-anonymized.txt", import.meta.url),
-  "utf8",
-);
+// Rollback of the synchronous import path needs a complete, directly parseable report.
+// Free-form reports exercise the separate asynchronous normalization suite.
+const REPORT = `示例品牌 (${ASIN}) — 顾客评价深度分析
+🎯 顾客关注点
+1. 产品质量：买家关注耐用性（Quality 1264次提及，6.1%）
+✅ 好评点
+耐用（正面维度1264次提及，6.1%）
+❌ 差评点
+重量（负面维度306条负面，占1.5%）
+💭 未被满足的需求
+1. 希望产品更轻。
+👥 使用人群
+人群分类｜特征
+家庭用户｜重视耐用性
+🏠 使用场景：
+场景｜说明与示例
+家庭使用｜日常高频使用
+⚡ 核心购买动机
+动机｜重要性｜说明
+可靠性｜⭐⭐⭐⭐⭐｜耐用证据
+💡 综合结论
+买家重视耐用性。`;
 
 const authConfig: AgentAuthenticationConfig = {
   mode: "authenticated",
@@ -114,11 +132,23 @@ function provenanceRevision(snapshot: Readonly<{ sources: readonly unknown[] }>)
   return alexa?.recordProvenance?.[0]?.revision ?? null;
 }
 
+async function seedImportRun(repository: AgentRepository, projectId: string) {
+  const runId = randomUUID();
+  const createdAt = "2026-08-31T08:00:00.000Z";
+  await repository.createAnalysisRun({
+    id: runId, projectId, mode: "existing-data", status: "queued", createdBy: ACTOR_ID,
+    dataCutoffAt: createdAt, idempotencyScope: `rollback-test:${runId}`, idempotencyKey: "create",
+    createdAt, updatedAt: createdAt,
+  });
+  return runId;
+}
+
 test("disabled authoritative writes and database outages return 503 without a static write", async (t) => {
   let transactions = 0;
   let staticWrites = 0;
   const repository = {
     manualAlexaVoc: {},
+    async findProjectById() { throw new ManualAlexaVocRepositoryError("connection"); },
     async transaction() {
       transactions += 1;
       throw new ManualAlexaVocRepositoryError("connection");
@@ -143,7 +173,7 @@ test("disabled authoritative writes and database outages return 503 without a st
     method: "POST",
     url: "/v1/manual-alexa-voc/import",
     headers: headers(),
-    payload: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    payload: { projectId: randomUUID(), runId: randomUUID(), asin: ASIN, marketplace: "US", rawText: REPORT },
   });
 
   assert.equal(response.statusCode, 503);
@@ -162,7 +192,7 @@ test("disabled authoritative writes and database outages return 503 without a st
     method: "POST",
     url: "/v1/manual-alexa-voc/import",
     headers: headers(),
-    payload: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    payload: { projectId: randomUUID(), runId: randomUUID(), asin: ASIN, marketplace: "US", rawText: REPORT },
   });
   assert.equal(failed.statusCode, 503);
   assert.equal(staticWrites, 0);
@@ -286,6 +316,7 @@ test("in-process import is immediate, refreshable, scope isolated, and run snaps
     id: projectId, organizationId: ORGANIZATION_ID, name: "Task 12 E2E",
     marketplace: "US", asins: [...PROJECT_ASINS], createdBy: ACTOR_ID, createdAt, updatedAt: createdAt,
   });
+  const runId = await seedImportRun(repository, projectId);
   const service = new ManualAlexaVocService({
     repository,
     cipher: createManualAlexaVocCipher(keyring()),
@@ -297,11 +328,11 @@ test("in-process import is immediate, refreshable, scope isolated, and run snaps
 
   const imported = await app.inject({
     method: "POST", url: "/v1/manual-alexa-voc/import", headers: headers(),
-    payload: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    payload: { projectId, runId, asin: ASIN, marketplace: "US", rawText: REPORT },
   });
   assert.equal(imported.statusCode, 201);
-  assert.equal(imported.json().publication.status, "pending");
-  assert.equal(imported.json().idempotent, false);
+  assert.equal(imported.json().disposition, "success");
+  assert.equal(imported.json().normalization.status, "success");
   const firstRecord = imported.json().record as ManualAlexaVocRecord;
 
   let page = createManualVocOverlayState("session-a", ORGANIZATION_ID, 1, "US");
@@ -312,7 +343,7 @@ test("in-process import is immediate, refreshable, scope isolated, and run snaps
   assert.equal(selectEffectiveVocByAsin(page, ORGANIZATION_ID, "US", ASIN)?.revision, "1");
 
   const listed = await app.inject({
-    method: "GET", url: `/v1/manual-alexa-voc?marketplace=US&asins=${ASIN}`, headers: headers(),
+    method: "GET", url: `/v1/manual-alexa-voc?projectId=${projectId}&marketplace=US&asins=${ASIN}`, headers: headers(),
   });
   assert.equal(listed.statusCode, 200);
   let refreshed = createManualVocOverlayState("session-a", ORGANIZATION_ID, 1, "US");
@@ -359,7 +390,7 @@ test("in-process import is immediate, refreshable, scope isolated, and run snaps
 
   const secondImport = await app.inject({
     method: "POST", url: "/v1/manual-alexa-voc/import", headers: headers(),
-    payload: { asin: ASIN, marketplace: "US", rawText: `${REPORT.trimEnd()}\n补充说明：Task 12 revision two` },
+    payload: { projectId, runId, asin: ASIN, marketplace: "US", rawText: `${REPORT.trimEnd()}\n补充说明：Task 12 revision two` },
   });
   assert.equal(secondImport.statusCode, 200);
   assert.equal(secondImport.json().record.revision, "2");
@@ -376,7 +407,7 @@ test("in-process import is immediate, refreshable, scope isolated, and run snaps
   assert.deepEqual(firstSnapshotAfter, firstSnapshotBefore);
 });
 
-test("disabled publication reports disabled without undoing committed revisions", async (t) => {
+test("disabled publication exposes no generation without undoing committed revisions", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "manual-voc-task12-publication-off-"));
   const repository = openSqliteAgentRepository({ path: join(directory, "agent.sqlite"), busyTimeoutMs: 5_000 });
   t.after(() => {
@@ -388,16 +419,22 @@ test("disabled publication reports disabled without undoing committed revisions"
     id: ACTOR_ID, organizationId: ORGANIZATION_ID, email: "task12@example.test",
     displayName: "Task 12 actor", role: "member", status: "active", createdAt, updatedAt: createdAt,
   });
+  const projectId = randomUUID();
+  await repository.createProject({
+    id: projectId, organizationId: ORGANIZATION_ID, name: "Publication disabled",
+    marketplace: "US", asins: [...PROJECT_ASINS], createdBy: ACTOR_ID, createdAt, updatedAt: createdAt,
+  });
+  const runId = await seedImportRun(repository, projectId);
   const service = new ManualAlexaVocService({
     repository, cipher: createManualAlexaVocCipher(keyring()),
     writeEnabled: true, publicationEnabled: false,
   });
   const response = await service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: ACTOR_ID },
-    request: { asin: ASIN, marketplace: "US", rawText: REPORT },
+    request: { projectId, runId, asin: ASIN, marketplace: "US", rawText: REPORT },
   });
-  assert.equal(response.publication.status, "disabled");
-  assert.equal(response.publication.generation, null);
+  assert.equal(response.disposition, "success");
+  assert.equal(response.record?.generation, null);
   assert.equal((await repository.manualAlexaVoc.listCurrent({
     organizationId: ORGANIZATION_ID, marketplace: "US", asins: [ASIN],
   }))[0]?.revision, "1");

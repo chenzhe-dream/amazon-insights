@@ -1,16 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
-import { AuthenticatedAmazonOpportunityApp, ReviewAnalysisMatrixSection, VocRunStatusSummary } from "../../app/page";
 import { sorftimeReviewAnalysisMeta } from "../../app/seller-sprite-review-analysis";
 import type { AuthenticatedWebSession } from "../../app/auth-session-gate";
 import type { VocRunObservation } from "../../app/lib/voc-run-browser";
 import type { User } from "../../shared/agent-contracts";
+
+// Node SSR verifies markup, not CSS; the built-browser tests exercise styling.
+const requireForMarkup = createRequire(import.meta.url);
+const previousCssLoader = requireForMarkup.extensions[".css"];
+requireForMarkup.extensions[".css"] = module => { module.exports = {}; };
+let pageComponents: typeof import("../../app/page");
+try {
+  pageComponents = requireForMarkup("../../app/page.tsx");
+} finally {
+  if (previousCssLoader) requireForMarkup.extensions[".css"] = previousCssLoader;
+  else delete requireForMarkup.extensions[".css"];
+}
+const { AuthenticatedAmazonOpportunityApp, ReviewAnalysisMatrixSection, VocRunStatusSummary } = pageComponents;
 
 const ROOT_PATH_DIAGNOSTIC =
   "根路径不再混合展示全部底库。请输入一批同类 ASIN，或点下方工作区进入 /p/floor-lamps、/p/kick-scooters";
@@ -43,6 +56,7 @@ function renderBuilder(
 ) {
   const session: AuthenticatedWebSession = {
     user: account,
+    sessionIdentity: "A".repeat(43),
     logout: async () => {},
     logoutPending: false,
     logoutError: null,

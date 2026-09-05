@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useModalInteraction } from "./lib/use-modal-interaction";
 import Link from "next/link";
 import type { DingTalkPublicConfigResponse, User } from "../shared/agent-contracts";
 import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbeat";
@@ -26,6 +27,9 @@ function PasswordChangeControl() {
   const dialogGeneration = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const currentPasswordRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
+
+  useModalInteraction(open && mounted, dialogRef, currentPasswordRef);
 
   useEffect(() => {
     let active = true;
@@ -92,6 +96,7 @@ function PasswordChangeControl() {
   const dialog = (
     <div className="auth-modal-backdrop" role="presentation">
       <form
+        ref={dialogRef}
         className="auth-modal"
         role="dialog"
         aria-modal="true"

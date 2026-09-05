@@ -137,6 +137,10 @@ test("password dialog portals to body, stays inline on wrong password, and tears
     assert.equal(await backdrop.count(), 1);
     assert.equal(await dialog.locator('input[name="currentPassword"]').evaluate(element => document.activeElement === element), true);
     assert.equal(await dialog.getAttribute("aria-modal"), "true");
+    assert.equal(await page.evaluate(() => document.body.style.overflow), "hidden");
+    await dialog.getByRole("button", { name: "关闭", exact: true }).focus();
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await dialog.getByRole("button", { name: "更新密码" }).evaluate(node => node === document.activeElement), true);
     assert.equal(await dialog.locator('input[name="currentPassword"]').getAttribute("autocomplete"), "current-password");
     assert.equal(await dialog.locator('input[name="newPassword"]').getAttribute("autocomplete"), "new-password");
     assert.equal(await dialog.locator('input[name="confirmation"]').getAttribute("autocomplete"), "new-password");
@@ -160,6 +164,7 @@ test("password dialog portals to body, stays inline on wrong password, and tears
 
     await page.keyboard.press("Escape");
     assert.equal(await backdrop.count(), 0);
+    assert.equal(await page.evaluate(() => document.body.style.overflow), "");
     assert.equal(await trigger.evaluate(element => document.activeElement === element), true);
     await trigger.click();
     assert.equal(await page.getByText("密码更新失败，请检查当前密码和新密码").count(), 0);
