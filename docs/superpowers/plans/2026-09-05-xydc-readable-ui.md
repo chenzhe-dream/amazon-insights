@@ -22,9 +22,9 @@
 **Interfaces:** 输入现有 products/families/market 不变；输出同一模块、同一抽屉。
 
 - [x] 基线回归：`node --test --import tsx tests/agent/xydc-variant-section.test.tsx`，原 6/6 通过。
-- [ ] RED：fixture 加载实际页面样式，断言 `parseFloat(getComputedStyle(card).fontSize) >= 14`、ASIN >= 12、图像 64–80、row 仅摘要/内容两列、按钮 >= 36、390px 不溢出。
-- [ ] GREEN：移动 dimensions 容器至 summary 内；按钮改为 `查看全部 {group.children.length} 个子体`；将独立 xydc CSS 块改为 `grid-template-columns: minmax(0,1fr) minmax(0,3fr)`，并实现上述字号/尺寸/窄屏覆盖。
-- [ ] 验证：重跑 UI 测试、`npx eslint app/xydc-variant-section.tsx tests/agent/xydc-variant-section.test.tsx`、`npm run build`。build 只在补丁 worktree，禁用对外遥测，不接正式数据库。
-- [ ] 查看独立 fixture 的桌面与手机截图，确认排版没有裁剪。
-- [ ] 独立审查（规格与质量），修复本任务问题。
-- [ ] `git diff --check`；仅提交本任务文件并报告 commit，正式更新留待受控启动授权。
+- [x] RED：fixture 加载实际页面样式，断言 `parseFloat(getComputedStyle(card).fontSize) >= 14`、ASIN >= 12、图像 64–80、row 仅摘要/内容两列、按钮 >= 36、390px 不溢出。
+- [x] GREEN：移动 dimensions 容器至 summary 内；按钮改为 `查看全部 {group.children.length} 个子体`；将独立 xydc CSS 块改为 `grid-template-columns: minmax(0,1fr) minmax(0,3fr)`，并实现上述字号/尺寸/窄屏覆盖。
+- [x] 验证：重跑 UI 测试、`npx eslint app/xydc-variant-section.tsx tests/agent/xydc-variant-section.test.tsx`、`npm run build`。build 只在补丁 worktree，禁用对外遥测，不接正式数据库。
+- [x] 查看独立 fixture 的桌面与手机截图，确认排版没有裁剪。
+- [x] 独立审查（规格与质量），修复本任务问题。
+- [x] `git diff --check`；仅提交本任务文件并报告 commit，正式更新留待受控启动授权。

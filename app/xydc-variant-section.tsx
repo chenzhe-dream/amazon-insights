@@ -155,13 +155,17 @@ function VariantChildCard({
   const childImage = child.imageUrl?.trim();
   return (
     <article className="xydc-variant-child-card">
-      {/* Product images come from the cached provider payload, not Next-managed local assets. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="xydc-variant-child-image" src={childImage ?? imagePlaceholder} alt={childImage ? `${child.asin} 主图` : `${child.asin} 主图数据源未提供`} />
+      <div className="xydc-variant-child-heading">
+        {/* Product images come from the cached provider payload, not Next-managed local assets. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="xydc-variant-child-image" src={childImage ?? imagePlaceholder} alt={childImage ? `${child.asin} 主图` : `${child.asin} 主图数据源未提供`} />
+        <div className="xydc-variant-child-identity">
+          <b>{attributeLabel(child)}</b>
+          <small className="xydc-variant-child-asin">{child.asin}</small>
+        </div>
+      </div>
       {!childImage ? <span className="xydc-variant-child-image-unavailable">主图：数据源未提供</span> : null}
-      <b>{attributeLabel(child)}</b>
-      <small className="xydc-variant-child-asin">{child.asin}</small>
-      <span>价格：{formatPrice(child)}</span>
+      <span>价格：<strong>{formatPrice(child)}</strong></span>
       <span>评分：{child.stars === null ? "暂无数据" : child.stars.toFixed(1)}</span>
       <span>商品页当前评论数：{displayNumber(child.productPageRatings)}</span>
       {updatedAt !== undefined ? <span>更新时间：{updatedAt ?? "数据源未提供"}</span> : null}
@@ -263,13 +267,13 @@ function XydcVariantSectionBody({
                   </div>
                   <div className="xydc-variant-input-asins">命中 ASIN：{group.inputAsins.map(asin => <code key={asin}>{asin}</code>)}</div>
                   <strong className="xydc-variant-child-count">子体总数：{group.children.length}</strong>
+                  <div className="xydc-variant-dimensions">
+                    {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
+                  </div>
                   {group.children.length <= 1 && group.status !== "unavailable" ? <em>单一商品/未发现其他变体</em> : null}
                   {group.cacheState === "stale" ? <em>{group.sourceUpdatedAt
                     ? `缓存数据 · 来源更新时间：${group.sourceUpdatedAt}`
                     : `缓存数据 · 来源更新时间未提供 · 缓存抓取时间：${group.fetchedAt}`}</em> : null}
-                </div>
-                <div className="xydc-variant-dimensions">
-                  {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
                 </div>
                 <div className="xydc-variant-content">
                   {group.status === "unavailable" ? (
@@ -280,7 +284,7 @@ function XydcVariantSectionBody({
                         {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
                       </div>
                       {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
-                      {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length}</button> : null}
+                      {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length} 个子体</button> : null}
                     </div>
                   )}
                   <p className="xydc-variant-listing-date">上架时间：数据源未提供</p>

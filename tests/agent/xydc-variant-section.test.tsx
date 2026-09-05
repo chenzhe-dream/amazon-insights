@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,7 +17,7 @@ const market = { label: "美国站", domain: "www.amazon.com" };
 const inputAsins = ["B000000001", "B000000002"];
 const reactServerCondition = process.execArgv.includes("--conditions=react-server");
 const execFile = promisify(execFileCallback);
-const fixtureImage = "data:,x";
+const fixtureImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72"><rect width="72" height="72" fill="#f2f6fa"/><rect x="17" y="12" width="38" height="48" rx="8" fill="#7185a0"/><rect x="23" y="18" width="26" height="28" rx="4" fill="#dbe6ee"/><circle cx="36" cy="53" r="3" fill="#dbe6ee"/></svg>')}`;
 
 function childFixture(index: number): XydcVariantFamily["children"][number] {
   return {
@@ -182,7 +182,22 @@ function isLoopbackHttpUrl(value: string) {
   return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname);
 }
 
+async function captureFixtureScreenshot(page: Page, name: string) {
+  const directory = process.env.XYDC_VARIANT_SCREENSHOT_DIR;
+  if (!directory) return;
+  mkdirSync(directory, { recursive: true });
+  if (name === "xydc-drawer") {
+    await page.screenshot({ path: join(directory, `${name}.png`) });
+  } else {
+    await page.locator(".xydc-variant-section").screenshot({ path: join(directory, `${name}.png`) });
+  }
+}
+
 async function startBrowserFixtureServer() {
+  // Keep the app/layout.tsx stylesheet order, including global descendant rules.
+  // Serve the CSS directly to avoid invoking a project-wide Tailwind build.
+  const stylesheets = ["globals.css", "warm-theme.css", "comparison-layout.css"];
+  const stylesheetLinks = stylesheets.map(name => `<link rel="stylesheet" href="/__xydc-css/${name}">`).join("");
   const families = [
     familyFixture(inputAsins[0]!),
     familyFixture(inputAsins[1]!),
@@ -211,10 +226,27 @@ createRoot(document.getElementById("root")).render(createElement(XydcVariantSect
       load(id) { return id === "\0xydc-variant-test-entry" ? entry : undefined; },
       configureServer(viteServer) {
         viteServer.middlewares.use((request, response, next) => {
+          const stylesheetName = request.url?.replace("/__xydc-css/", "");
+          if (request.url?.startsWith("/__xydc-css/") && stylesheetName && stylesheets.includes(stylesheetName)) {
+            const css = readFileSync(join(process.cwd(), "app", stylesheetName), "utf8")
+              .replace('@import "tailwindcss";', '@layer theme, base, components, utilities; @import url("/__xydc-tailwind/theme.css") layer(theme); @import url("/__xydc-tailwind/preflight.css") layer(base);');
+            response.setHeader("Content-Type", "text/css");
+            response.end(css);
+            return;
+          }
+          if (request.url === "/__xydc-tailwind/theme.css" || request.url === "/__xydc-tailwind/preflight.css") {
+            response.setHeader("Content-Type", "text/css");
+            response.end(readFileSync(join(process.cwd(), "node_modules", "tailwindcss", request.url.split("/").at(-1)!), "utf8"));
+            return;
+          }
           if (request.url === "/__xydc-variant-test.html") {
             response.statusCode = 200;
             response.setHeader("Content-Type", "text/html");
-            response.end('<!doctype html><html><body><div id="root"></div><script type="module" src="/__xydc-variant-test-entry.tsx"></script></body></html>');
+            response.end(`<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width, initial-scale=1">${stylesheetLinks}<style>
+              :root { --font-geist-sans: Arial; --font-geist-mono: monospace; }
+              .xydc-fixture-workspace { width: calc(100% - 288px); margin-left: 264px; padding: 24px; }
+              @media (max-width: 900px) { .xydc-fixture-workspace { width: 100%; margin-left: 0; padding: 16px; } }
+            </style></head><body><main id="root" class="page-content compare-page xydc-fixture-workspace"></main><script type="module" src="/__xydc-variant-test-entry.tsx"></script></body></html>`);
             return;
           }
           next();
@@ -228,20 +260,165 @@ createRoot(document.getElementById("root")).render(createElement(XydcVariantSect
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
+test("desktop preview remains readable within the workspace beside a sidebar", async t => {
+  const fixture = await startBrowserFixtureServer();
+  const browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  const forbiddenRequests: string[] = [];
+  try {
+    await page.route("**/*", async route => {
+      const request = route.request();
+      if (!isLoopbackHttpUrl(request.url()) || !["GET", "HEAD"].includes(request.method())) {
+        forbiddenRequests.push(`${request.method()} ${request.url()}`);
+        await route.abort("blockedbyclient");
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(`${fixture.baseUrl}/__xydc-variant-test.html`);
+    const row = page.locator(".xydc-variant-row").first();
+    await row.waitFor();
+    const section = await page.locator(".xydc-variant-section").boundingBox();
+    assert.ok(section && section.width >= 1080 && section.width <= 1120, "fixture must reproduce about 1100px of workspace width");
+    await captureFixtureScreenshot(page, "xydc-desktop");
+    const metrics = await row.evaluate(element => {
+      const [summary, content, button] = [".xydc-variant-summary", ".xydc-variant-content", ".xydc-variant-open-drawer"].map(selector => {
+        const bounds = element.querySelector(selector)!.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, right: bounds.right };
+      });
+      const cards = [...element.querySelectorAll(".xydc-variant-child-card")];
+      return {
+        directClasses: [...element.children].map(child => child.className),
+        dimensionsInSummary: !!element.querySelector(".xydc-variant-summary .xydc-variant-dimensions"),
+        summary: summary!,
+        content: content!,
+        cards: cards.map(card => ({
+          fontSize: Number.parseFloat(getComputedStyle(card).fontSize),
+          bodyFontSizes: [...card.querySelectorAll("b, span:not(.xydc-variant-child-image-unavailable)")].map(item => Number.parseFloat(getComputedStyle(item).fontSize)),
+          asinFontSize: Number.parseFloat(getComputedStyle(card.querySelector(".xydc-variant-child-asin")!).fontSize),
+          x: card.getBoundingClientRect().x,
+          y: card.getBoundingClientRect().y,
+        })),
+        images: [...element.querySelectorAll(".xydc-variant-parent-image, .xydc-variant-child-image")].map(item => {
+          const bounds = item.getBoundingClientRect();
+          return { width: bounds.width, height: bounds.height };
+        }),
+        button: { ...button!, text: element.querySelector(".xydc-variant-open-drawer")!.textContent },
+      };
+    });
+    await t.test("groups dimensions into the summary and uses a quarter/three-quarter desktop split", () => {
+      assert.deepEqual(metrics.directClasses, ["xydc-variant-summary", "xydc-variant-content"]);
+      assert.equal(metrics.dimensionsInSummary, true);
+      assert.ok(Math.abs(metrics.summary.y - metrics.content.y) <= 1);
+      assert.ok(metrics.content.x >= metrics.summary.right);
+      const summaryShare = metrics.summary.width / (metrics.summary.width + metrics.content.width);
+      assert.ok(summaryShare >= 0.23 && summaryShare <= 0.27, `summary share: ${summaryShare}`);
+    });
+    await t.test("keeps three previews with at least 14px body text and 12px ASINs", () => {
+      assert.equal(metrics.cards.length, 3);
+      assert.ok(metrics.cards.every(card => Math.abs(card.y - metrics.cards[0]!.y) <= 1), "desktop previews should share one row");
+      for (const card of metrics.cards) {
+        assert.ok(card.fontSize >= 14, `card body is ${card.fontSize}px`);
+        assert.ok(card.bodyFontSizes.every(size => size >= 14), `child text sizes: ${card.bodyFontSizes.join(", ")}`);
+        assert.ok(card.asinFontSize >= 12, `ASIN is ${card.asinFontSize}px`);
+      }
+    });
+    await t.test("uses readable parent and child thumbnails", () => {
+      assert.equal(metrics.images.length, 4);
+      for (const size of metrics.images) {
+        assert.ok(size.width >= 64 && size.width <= 80 && size.height >= 64 && size.height <= 80, `thumbnail bounds: ${JSON.stringify(size)}`);
+      }
+    });
+    await t.test("offers a clearly labelled control at least 36px high", () => {
+      assert.ok(metrics.button.height >= 36, `view-all control is ${metrics.button.height}px high`);
+      assert.match(metrics.button.text ?? "", /查看全部 28 个子体/);
+    });
+    assert.deepEqual(forbiddenRequests, []);
+  } finally {
+    await page.close();
+    await browser.close();
+    await fixture.server.close();
+  }
+});
+
+test("390px mobile preview stacks its cards without horizontal overflow", async t => {
+  const fixture = await startBrowserFixtureServer();
+  const browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const forbiddenRequests: string[] = [];
+  try {
+    await page.route("**/*", async route => {
+      const request = route.request();
+      if (!isLoopbackHttpUrl(request.url()) || !["GET", "HEAD"].includes(request.method())) {
+        forbiddenRequests.push(`${request.method()} ${request.url()}`);
+        await route.abort("blockedbyclient");
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto(`${fixture.baseUrl}/__xydc-variant-test.html`);
+    await page.locator(".xydc-variant-row").first().waitFor();
+    await captureFixtureScreenshot(page, "xydc-mobile");
+    const metrics = await page.evaluate(() => ({
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      overflowingElements: [...document.querySelectorAll(".xydc-variant-section, .xydc-variant-section *")]
+        .filter(element => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.width > 0 && (bounds.left < -1 || bounds.right > window.innerWidth + 1);
+        }).map(element => element.className || element.tagName),
+      rows: [...document.querySelectorAll(".xydc-variant-row")].map(row => {
+        const summary = row.querySelector(".xydc-variant-summary")!.getBoundingClientRect();
+        const content = row.querySelector(".xydc-variant-content")!.getBoundingClientRect();
+        return {
+          summary: { x: summary.x, width: summary.width, bottom: summary.bottom },
+          content: { x: content.x, width: content.width, y: content.y },
+        };
+      }),
+      cards: [...document.querySelector(".xydc-variant-row")!.querySelectorAll(".xydc-variant-child-card")].map(card => {
+        const bounds = card.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width, bottom: bounds.bottom };
+      }),
+    }));
+    await t.test("keeps all section content within the mobile viewport", () => {
+      assert.ok(metrics.documentWidth <= metrics.viewportWidth, `document is ${metrics.documentWidth}px at ${metrics.viewportWidth}px viewport`);
+      assert.deepEqual(metrics.overflowingElements, []);
+    });
+    await t.test("stacks summary above content and preserves three full-width preview cards", () => {
+      for (const row of metrics.rows) {
+        assert.ok(row.content.y >= row.summary.bottom, "mobile content should follow the summary vertically");
+        assert.ok(Math.abs(row.content.x - row.summary.x) <= 1);
+        assert.ok(Math.abs(row.content.width - row.summary.width) <= 1);
+      }
+      assert.equal(metrics.cards.length, 3);
+      for (const [index, card] of metrics.cards.entries()) {
+        assert.ok(Math.abs(card.x - metrics.cards[0]!.x) <= 1);
+        assert.ok(Math.abs(card.width - metrics.cards[0]!.width) <= 1);
+        if (index > 0) assert.ok(card.y >= metrics.cards[index - 1]!.bottom);
+      }
+    });
+    assert.deepEqual(forbiddenRequests, []);
+  } finally {
+    await page.close();
+    await browser.close();
+    await fixture.server.close();
+  }
+});
+
 test("drawer expands all children, supports allowed sorts, closes accessibly, and makes no provider request", async () => {
   let server: ViteDevServer | null = null;
   let browser: Browser | null = null;
   let page: Page | null = null;
-  const externalRequests: string[] = [];
+  const forbiddenRequests: string[] = [];
   try {
     const fixture = await startBrowserFixtureServer();
     server = fixture.server;
     browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
     page = await browser.newPage();
     await page.route("**/*", async route => {
-      const requestUrl = route.request().url();
-      if (!isLoopbackHttpUrl(requestUrl)) {
-        externalRequests.push(requestUrl);
+      const request = route.request();
+      if (!isLoopbackHttpUrl(request.url()) || !["GET", "HEAD"].includes(request.method())) {
+        forbiddenRequests.push(`${request.method()} ${request.url()}`);
         await route.abort("blockedbyclient");
         return;
       }
@@ -259,6 +436,7 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await page.getByRole("button", { name: "查看全部 28" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.waitFor();
+    await captureFixtureScreenshot(page, "xydc-drawer");
     const mainPreviewAsins = await page.locator(".xydc-variant-children .xydc-variant-child-asin").allTextContents();
     assert.equal(await dialog.locator(".xydc-variant-child-card").count(), 28);
     assert.equal(await dialog.locator(".xydc-variant-child-image").count(), 28);
@@ -284,7 +462,7 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await page.getByRole("button", { name: "查看全部 4" }).click();
     await dialog.waitFor();
     assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /更新时间：2026-09-04T12:34:56.000Z/);
-    assert.deepEqual(externalRequests, []);
+    assert.deepEqual(forbiddenRequests, []);
   } finally {
     await page?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
