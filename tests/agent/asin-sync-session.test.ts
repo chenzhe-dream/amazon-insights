@@ -45,6 +45,7 @@ const overviewHarnessModule = "\0task-2-real-overview-harness";
 const overviewCatalogModule = "\0task-2-overview-catalog";
 const overviewTrendModule = "\0task-2-overview-trends";
 const nextLinkModule = "\0task-2-next-link";
+const nextImageModule = "\0task-2-next-image";
 const nextNavigationModule = "\0task-2-next-navigation";
 
 function task2OverviewHarnessPlugin(): Plugin {
@@ -54,6 +55,7 @@ function task2OverviewHarnessPlugin(): Plugin {
     resolveId(id, importer) {
       if (id === overviewHarnessEntry) return overviewHarnessModule;
       if (id === "next/link") return nextLinkModule;
+      if (id === "next/image") return nextImageModule;
       if (id === "next/navigation") return nextNavigationModule;
       if (importer?.replace(/\\\\/g, "/").endsWith("/app/page.tsx")) {
         if (id === "./competitor-data") return overviewCatalogModule;
@@ -121,6 +123,15 @@ function task2OverviewHarnessPlugin(): Plugin {
           import { createElement } from "react";
           export default function Link({ href, children, ...props }) {
             return createElement("a", { ...props, href: typeof href === "string" ? href : href.pathname ?? "" }, children);
+          }
+        `;
+      }
+      if (id === nextImageModule) {
+        return `
+          import { createElement } from "react";
+          export default function Image({ src, alt = "", fill, priority, ...props }) {
+            const resolvedSrc = typeof src === "string" ? src : src?.src ?? "";
+            return createElement("img", { ...props, src: resolvedSrc, alt });
           }
         `;
       }
@@ -3175,11 +3186,11 @@ test("the production terminal owner restores progress without a reload loop unti
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { message: "not found" } }) });
     });
     await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
-    await page.waitForTimeout(100);
+    await waitForTestCondition(() => calls.get === 1);
     assert.equal(calls.get, 1);
     assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1");
     await page.reload();
-    await page.waitForTimeout(200);
+    await waitForTestCondition(() => calls.get === 2);
     assert.equal(calls.get, 2, "the retained URL restores the terminal snapshot once");
     assert.equal(calls.post, 0, "a durable matching tombstone blocks readiness-driven replacement");
     assert.equal(await page.getByText("reload-safe", { exact: true }).count(), 1);
