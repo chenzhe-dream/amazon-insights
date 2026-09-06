@@ -41,3 +41,15 @@ Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `
 - Scope: distinguish catalog/variant status, input-aligned family order, Chinese reasons and separate source/fetch timestamps. No live/provider/data changes.
 - Final verification: UI 18/18, runtime-data 10/10, new-build HTML 3/3, targeted lint/build/diff-check PASS; source fingerprint matches; desktop/mobile/drawer fixture images inspected.
 - Minor deferred: add explicit unmatched-groups ordering test; implementation reviewed correct. Evidence: `docs/verification/2026-09-06-xydc-status-order.md`. Not merged or deployed.
+
+## 2026-09-07 VOC import status repair
+
+- Base: d9d9d6e; branch codex/fix-voc-import-status-20260907.
+- Design/plan: docs/superpowers/specs/2026-09-07-voc-import-status-design.md; docs/superpowers/plans/2026-09-07-voc-import-status.md.
+- Baseline: client store/import-feedback/status 32/32 pass; Docker available.
+- Task 1: complete (57620ca..94f4534, independent final re-review Approved, no Critical/Important). Root fresh client/helper/mounted-browser combined 58/58 pass; stale-scope test forces valid late response delivery and prevents old callback/application. Screenshot is behavior-only, not production styling evidence.
+- Task 2: complete (9dfeafd..47ebdba, independent re-review Approved, no Critical/Important). Real-PG and SQLite store suites 45/45, targeted migration tests 3/3. Exact publication cause: empty legacy negatives allowed by shared schema but rejected by PG trigger 0020; forward 0027 now proven with actual pre-upgrade schema and cumulative legacy/new sibling data.
+- Task 2 Minor for final review: claim-eligibility predicate duplication between queue/status and PG/SQLite may drift with future worker-rule changes; currently consistent and behaviorally tested, no broad refactor performed.
+- Extended baseline: root ran 132 server tests, 128 pass / 4 fail. All four old semantic-conflict assertions also fail on unchanged d9d9d6e; migration 0023 added content_hash to VOC snapshot identity (08599a7). OpenSpec agreed to report these separately without expanding this repair into old test maintenance.
+- Task 3: final backend 130/134 (same four baseline failures), client 58/58, existing app browser 10/10, new-build tutorial 7/7, production build/fingerprint and changed-file lint PASS. Full tsc retains existing repository diagnostics; affected files show only pre-existing test TS2353. Pending whole-branch review and OpenSpec handoff.
+- Guardrails: isolated worktree/tests only, no production writes/replay/provider/restart/deploy/push.
