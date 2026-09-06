@@ -245,21 +245,33 @@ test("the panel terminates captured feedback and normalization when onImported r
 test("normalization keeps polling until its exact durable revision is readable and applied", () => {
   const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
   const polling = panel.slice(
-    panel.indexOf("const recordQuery ="),
-    panel.indexOf("await waitForPoll(controller.signal);", panel.indexOf("const recordQuery =")) + 42,
+    panel.indexOf("const observed = await pollAlexaVocNormalizationOnce"),
+    panel.indexOf("await waitForPoll(controller.signal);", panel.indexOf("const observed = await pollAlexaVocNormalizationOnce")) + 42,
   );
 
-  assert.match(polling, /selectCommittedAlexaVocRecordForPoll/);
-  assert.match(polling, /revision: observed\.status === "success" \? observed\.revision : null/);
-  assert.match(polling, /verifiedResponse\.ok && imported && onImported\(imported\)/);
+  assert.match(polling, /pollAlexaVocNormalizationOnce/);
+  assert.match(polling, /observed\.phase === "done"/);
   assert.match(polling, /await waitForPoll\(controller\.signal\)/);
+});
+
+test("pending UI names its target and truthful phase with accessible indeterminate progress", () => {
+  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  assert.match(panel, /role="progressbar"/);
+  assert.match(panel, /aria-label={`Alexa VOC 导入进度，目标 \$\{selectedAsin\}`}/);
+  assert.match(panel, /正在标准化处理/);
+  assert.match(panel, /正在应用 revision/);
+  assert.match(panel, /已等待/);
+  assert.match(panel, /当前已有版本：revision/);
+  assert.match(panel, /捕获于/);
+  assert.match(panel, /立即重试状态读取/);
+  assert.doesNotMatch(panel, /aria-valuenow|导入进度[^\n]*%/);
 });
 
 test("a polled normalization failure clears stale waiting feedback while retaining the failure card", () => {
   const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
   const polling = panel.slice(panel.indexOf("const observed ="), panel.indexOf("} catch (error)", panel.indexOf("const observed =")));
 
-  assert.match(polling, /observed\.status === "failure"/);
+  assert.match(polling, /observed\.phase === "failure"/);
   assert.match(polling, /setImportFeedbackState\([\s\S]*?type: "cleared"/);
   assert.match(polling, /projectId,\s*runId,\s*asin: record\.asin/);
   assert.match(polling, /pendingFingerprint: record\.fingerprint/);

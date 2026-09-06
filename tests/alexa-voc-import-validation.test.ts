@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import os from "node:os";
-import { hasManualAlexaVocText } from "../app/alexa-voc-import-validation";
+import { hasManualAlexaVocText, manualAlexaVocPrimaryAsinAdvisory } from "../app/alexa-voc-import-validation";
 import { processAlexaVocText, saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
 import { processAlexaVocText as processPureAlexaVocText } from "../scripts/lib/alexa-voc-processing.mjs";
 
@@ -70,11 +70,28 @@ test("rejects an empty manual report", () => {
   assert.equal(hasManualAlexaVocText(undefined), false);
 });
 
+test("recognizes a full-width primary title ASIN but excludes comparison ASINs from the advisory", () => {
+  assert.equal(
+    manualAlexaVocPrimaryAsinAdvisory(
+      "Floor lamp（B07VY9Q95Q）— 完整七维顾客分析\n对比 ASIN：B0COMPARE01",
+      "B0TARGET001",
+    ),
+    "报告标题识别为 B07VY9Q95Q；继续导入将写入当前目标 B0TARGET001。",
+  );
+  assert.equal(
+    manualAlexaVocPrimaryAsinAdvisory(
+      "Floor lamp 顾客洞察\n竞品 ASIN：B07VY9Q95Q\nComparison ASIN: B0COMPARE01",
+      "B0TARGET001",
+    ),
+    null,
+  );
+});
+
 test("manual import UI keeps presence validation while the proxy delegates strict text validation to the shared contract", () => {
   const panel = fs.readFileSync(new URL("../app/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
   const route = fs.readFileSync(new URL("../app/api/alexa-voc/import/route.ts", import.meta.url), "utf8");
 
-  assert.match(panel, /!hasManualAlexaVocText\(text\)/);
+  assert.match(panel, /!hasManualAlexaVocText\(selectedDraft\)/);
   assert.match(route, /ManualAlexaVocImportRequestSchema\.safeParse/);
   assert.doesNotMatch(panel, /length\s*<\s*600/);
   assert.doesNotMatch(route, /length\s*<\s*600/);

@@ -18,8 +18,9 @@ function extractManualAlexaVocPrimaryAsin(value: unknown) {
   const titleCandidate = openingLines
     .slice(0, 2)
     .join(" ")
-    .match(/\(([A-Z0-9]{10})\)/i)?.[1];
+    .match(/[（(]([A-Z0-9]{10})[）)]/i)?.[1];
   const explicitCandidate = openingLines
+    .filter(line => !/^(?:竞品|对比|comparison)\s*ASIN\b/i.test(line))
     .join("\n")
     .match(/\bASIN\s*[:：]?\s*[([]?([A-Z0-9]{10})[)\]]?/i)?.[1];
   return normalizeReportAsinCandidate(titleCandidate)

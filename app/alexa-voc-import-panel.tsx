@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlexaVocNormalizationStatusResponseSchema,
-  ManualAlexaVocListResponseSchema,
   ManualAlexaVocWriteResponseSchema,
   type ManualAlexaVocRecord,
 } from "../shared/agent-contracts";
@@ -11,7 +9,11 @@ import {
   hasManualAlexaVocText,
   manualAlexaVocPrimaryAsinAdvisory,
 } from "./alexa-voc-import-validation";
-import { readAlexaVocNormalizationStatuses } from "./lib/alexa-voc-normalization-status-client";
+import {
+  pollAlexaVocNormalizationOnce,
+  readAlexaVocNormalizationStatuses,
+  type AlexaVocPollResult,
+} from "./lib/alexa-voc-normalization-status-client";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
 import {
   alexaVocCardKey,
@@ -23,7 +25,6 @@ import {
   reduceAlexaVocImportFeedback,
   reduceAlexaVocState,
   reduceAlexaVocStatusResponse,
-  selectCommittedAlexaVocRecordForPoll,
   selectAlexaVocDraft,
   selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
@@ -55,6 +56,13 @@ type Props = Readonly<{
 
 const POLL_INTERVAL_MS = 1_000;
 
+type PollPresentation = Readonly<{
+  phase: AlexaVocPollResult["phase"];
+  startedAt: number;
+  revision?: string;
+  message?: string;
+}>;
+
 function waitForPoll(signal: AbortSignal) {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();
@@ -72,6 +80,9 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const [draftState, setDraftState] = useState(initialAlexaVocDraftState);
   const [importFeedbackState, setImportFeedbackState] = useState(initialAlexaVocImportFeedbackState);
   const [normalizationState, setNormalizationState] = useState(initialAlexaVocState);
+  const [pollPresentationByKey, setPollPresentationByKey] = useState<ReadonlyMap<string, PollPresentation>>(new Map());
+  const [pollRetryNonce, setPollRetryNonce] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const pollControllers = useRef(new Map<string, AbortController>());
 
   const selectedAsin = products.some(product => product.asin === asin) ? asin : defaultAsin;
@@ -94,6 +105,16 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
     ? selectAlexaVocStatus(normalizationState, projectId, runId, selectedAsin)
     : undefined;
   const normalizationAsinKey = products.map(product => product.asin.trim().toUpperCase()).join(",");
+  const selectedPollKey = normalizationStatus && projectId && runId
+    ? `${alexaVocCardKey(projectId, runId, selectedAsin)}:${normalizationStatus.fingerprint}`
+    : null;
+  const pollPresentation = selectedPollKey ? pollPresentationByKey.get(selectedPollKey) : undefined;
+
+  useEffect(() => {
+    if (!pollPresentation || pollPresentation.phase === "done" || pollPresentation.phase === "failure") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [pollPresentation]);
 
   useEffect(() => {
     if (!projectId || !runId || !pollingEnabled || !normalizationAsinKey) return;
@@ -140,22 +161,25 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       void (async () => {
         try {
           while (!controller.signal.aborted) {
-            const query = new URLSearchParams({ projectId, runId, marketplace: "US" });
-            query.append("asins", record.asin);
-            const response = await fetch(`/api/alexa-voc/pending?${query.toString()}`, {
-              credentials: "same-origin",
+            const observed = await pollAlexaVocNormalizationOnce({
+              projectId,
+              runId,
+              asin: record.asin,
+              fingerprint: record.fingerprint,
               signal: controller.signal,
             });
-            const payload: unknown = await response.json().catch(() => null);
-            if (!response.ok) return;
-            const parsed = AlexaVocNormalizationStatusResponseSchema.safeParse(payload);
-            if (!parsed.success) return;
-            const observed = parsed.data.records.find((item) => item.asin === record.asin && item.fingerprint === record.fingerprint);
-            if (!observed) {
-              await waitForPoll(controller.signal);
-              continue;
-            }
-            if (observed.status === "failure") {
+            setPollPresentationByKey(current => {
+              const next = new Map(current);
+              const previous = next.get(pollKey);
+              next.set(pollKey, {
+                phase: observed.phase,
+                startedAt: previous?.startedAt ?? Date.now(),
+                ...(observed.phase === "applying" ? { revision: observed.revision } : {}),
+                ...(observed.phase === "recoverable-error" ? { message: observed.message } : {}),
+              });
+              return next;
+            });
+            if (observed.phase === "failure") {
               setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
                 type: "cleared",
                 projectId,
@@ -163,31 +187,30 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
                 asin: record.asin,
                 pendingFingerprint: record.fingerprint,
               }));
-              setNormalizationState((current) => reduceAlexaVocStatusResponse(current, { projectId, runId }, parsed.data));
+              setNormalizationState((current) => reduceAlexaVocState(current, {
+                type: "setFailure", projectId, runId, asin: record.asin,
+                fingerprint: record.fingerprint, error: observed.error,
+              }));
               return;
             }
-            const recordQuery = new URLSearchParams({ projectId, marketplace: "US" });
-            recordQuery.append("asins", record.asin);
-            const verifiedResponse = await fetch(`/api/alexa-voc?${recordQuery.toString()}`, {
-              credentials: "same-origin",
-              signal: controller.signal,
-            });
-            const verifiedPayload: unknown = await verifiedResponse.json().catch(() => null);
-            const verified = ManualAlexaVocListResponseSchema.safeParse(verifiedPayload);
-            const imported = verified.success
-              ? selectCommittedAlexaVocRecordForPoll(verified.data.records, {
-                  asin: record.asin,
-                  fingerprint: record.fingerprint,
-                  revision: observed.status === "success" ? observed.revision : null,
-                })
-              : undefined;
-            if (verifiedResponse.ok && imported && onImported(imported)) {
+            if (observed.phase === "done" && !onImported(observed.record)) {
+              setImportFeedbackState(current => reduceAlexaVocImportFeedback(current, {
+                type: "cleared", projectId, runId, asin: record.asin,
+                pendingFingerprint: record.fingerprint,
+              }));
+              setNormalizationState(current => reduceAlexaVocState(current, {
+                type: "clear", projectId, runId, asin: record.asin,
+                fingerprint: record.fingerprint,
+              }));
+              return;
+            }
+            if (observed.phase === "done") {
               setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
                 type: "succeeded",
                 projectId,
                 runId,
                 asin: record.asin,
-                message: `导入成功 · PostgreSQL revision ${imported.revision}`,
+                message: `导入成功 · PostgreSQL revision ${observed.record.revision}`,
               }));
               setNormalizationState((current) => reduceAlexaVocState(current, {
                 type: "replaceWithImportSuccess",
@@ -195,11 +218,10 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
                 runId,
                 asin: record.asin,
                 fingerprint: record.fingerprint,
-                revision: imported.revision,
+                revision: observed.record.revision,
               }));
               return;
             }
-            setNormalizationState((current) => reduceAlexaVocStatusResponse(current, { projectId, runId }, parsed.data));
             await waitForPoll(controller.signal);
           }
         } catch (error) {
@@ -209,7 +231,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         }
       })();
     }
-  }, [normalizationState, onImported, pollingEnabled, projectId, runId]);
+  }, [normalizationState, onImported, pollingEnabled, pollRetryNonce, projectId, runId]);
 
   useEffect(() => () => {
       for (const controller of pollControllers.current.values()) controller.abort();
@@ -251,6 +273,11 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
           runId: submission.scope.runId,
           asin: submission.scope.asin,
           fingerprint: parsed.data.normalization.fingerprint,
+        }));
+        const pollKey = `${alexaVocCardKey(feedbackScope.projectId, feedbackScope.runId, feedbackScope.asin)}:${parsed.data.normalization.fingerprint}`;
+        setPollPresentationByKey(current => new Map(current).set(pollKey, {
+          phase: "processing",
+          startedAt: Date.now(),
         }));
         setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
           type: "succeeded",
@@ -369,7 +396,24 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         {!sourceBadge && effectiveStatus === "missing" ? <p className="pending-box">该 ASIN 尚未录入。</p> : null}
         {effectiveStatus === "source-error" ? <p className="pending-box">运行时 VOC 暂不可用；已保留页面上的较新版本，可重试读取。</p> : null}
         {effectiveStatus === "protocol-conflict" ? <p className="pending-box">服务器返回了冲突 revision；已保留页面上的较新版本，请重试。</p> : null}
-        {normalizationStatus?.status === "pending" ? <p className="pending-box">该 ASIN 正在标准化处理中。</p> : null}
+        {normalizationStatus?.status === "pending" ? (
+          <div className="pending-box">
+            <p role="progressbar" aria-label={`Alexa VOC 导入进度，目标 ${selectedAsin}`} aria-valuetext={pollPresentation?.phase === "applying" ? "正在应用新版本" : "正在标准化处理"}>
+              目标 {selectedAsin} · {pollPresentation?.phase === "applying" ? `正在应用 revision ${pollPresentation.revision}` : "正在标准化处理"}
+            </p>
+            <p>已等待 {Math.max(0, Math.floor((now - (pollPresentation?.startedAt ?? now)) / 1000))} 秒</p>
+            {effectiveRecord ? <p>当前已有版本：revision {effectiveRecord.revision} · 捕获于 {effectiveRecord.capturedAt}；新结果尚未应用。</p> : null}
+            {pollPresentation?.phase === "recoverable-error" ? (
+              <p>{pollPresentation.message}。<button type="button" onClick={() => {
+                if (selectedPollKey) {
+                  pollControllers.current.get(selectedPollKey)?.abort();
+                  pollControllers.current.delete(selectedPollKey);
+                }
+                setPollRetryNonce(value => value + 1);
+              }}>立即重试状态读取</button></p>
+            ) : null}
+          </div>
+        ) : null}
         {normalizationStatus?.status === "failure" ? <p className="pending-box">该 ASIN 标准化失败（{normalizationStatus.error}），可重新提交重试。</p> : null}
         {message ? (
           <div className={status === "error" ? "pending-box" : "launch-meta-row"}>{message}</div>
