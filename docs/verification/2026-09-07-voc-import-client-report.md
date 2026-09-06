@@ -1,44 +1,46 @@
-# Task 1 report: client identity advisory and truthful import progress
+# VOC import client repair report
 
-## Scope
+## Result
 
-- Branch: `codex/fix-voc-import-status-20260907`
-- Starting commit: `57620ca`
-- Client-only implementation. No server, provider, production data, restart, deploy, or push actions.
-- Selected ASIN remains authoritative. A primary-report mismatch changes only the confirmation copy/button; it never retargets the request.
+Client import identity and polling behavior were repaired without changing server code or contacting production/provider surfaces.
+
+- The selected ASIN remains the request target; full-width primary-title parentheses are recognized and comparison ASIN labels are excluded from mismatch detection.
+- Polling validates project, run, ASIN, fingerprint, and exact revision. Status success remains visibly `applying` until the matching committed record is readable and accepted.
+- Network, non-2xx, malformed status, and discovery errors use fixed bounded copy. Pending polling continues automatically; explicit retries restart only GET status reads and never resubmit the import POST.
+- Initial discovery success is converted to a pending client observation so it cannot stop an existing/read-lag poll or claim UI completion before exact-record application.
+- Both discovery and per-record results pass through the same abort-aware delivery guard. An aborted deferred operation cannot invoke state updates or `onImported`.
+- Pending UI names the target, distinguishes processing from applying, reports elapsed waiting, keeps any pre-existing revision/capture time distinct, and uses a native indeterminate `<progress>` without fake percentages.
 
 ## TDD evidence
 
-RED command:
+Initial Task 1 RED:
 
 `node_modules/.bin/tsx --conditions=react-server --test tests/alexa-voc-import-validation.test.ts tests/agent/alexa-voc-normalization-status-client.test.ts`
 
-Observed RED: the new poll-step export was absent; the full-width primary title fell through to a comparison ASIN. The run reported 12 passing and 3 failing tests (the third failure was an already-stale panel source assertion that still named `text` instead of the existing request-bound `selectedDraft`).
+Observed failures: missing poll-step API and full-width primary header falling through to a comparison ASIN.
 
-GREEN command:
+Independent-review RED:
 
-`node_modules/.bin/tsx --conditions=react-server --test tests/alexa-voc-import-validation.test.ts tests/agent/alexa-voc-normalization-status-client.test.ts tests/agent/manual-alexa-voc-import-feedback.test.ts tests/agent/manual-alexa-voc-client-store.test.ts`
+`node_modules/.bin/tsx --conditions=react-server --test tests/agent/alexa-voc-normalization-status-client.test.ts`
 
-Result: 51 tests passed, 0 failed, 0 skipped.
+Observed failure: missing abort-aware result delivery, discovery normalization, and recoverable discovery API.
 
-Behavior coverage includes full-width primary parentheses, mismatch confirmation, comparison-ASIN exclusion, network/non-2xx/malformed status reads, GET-only recovery, status-success/read-lag applying state, exact revision/fingerprint/ASIN selection, project/run query isolation, missing status processing, explicit terminal failure, stale fingerprint protection, scope changes, accessible indeterminate progress, elapsed waiting, and distinct pre-existing revision/capture-time copy.
+Final focused GREEN:
 
-## Verification
+`node_modules/.bin/tsx --conditions=react-server --test tests/agent/alexa-voc-normalization-status-client.test.ts tests/agent/manual-alexa-voc-import-feedback.test.ts tests/agent/manual-alexa-voc-client-store.test.ts tests/alexa-voc-import-validation.test.ts`
 
-`node_modules/.bin/eslint app/alexa-voc-import-validation.ts app/lib/alexa-voc-normalization-status-client.ts app/alexa-voc-import-panel.tsx tests/alexa-voc-import-validation.test.ts tests/agent/alexa-voc-normalization-status-client.test.ts tests/agent/manual-alexa-voc-import-feedback.test.ts`
+Result: 54 passed, 0 failed, 0 skipped.
 
-Result: exit 0, no lint errors.
+Targeted lint:
 
-`git diff --check`
+`node_modules/.bin/eslint app/alexa-voc-import-panel.tsx app/lib/alexa-voc-normalization-status-client.ts tests/agent/alexa-voc-normalization-status-client.test.ts tests/agent/manual-alexa-voc-import-feedback.test.ts`
 
-Result: exit 0; only repository line-ending warnings were printed.
+Result: exit 0, no errors.
 
-A whole-repository `tsc --noEmit` was attempted after implementation and failed on many pre-existing/unrelated files across app, server, tests, Cloudflare globals, and repository interfaces. It was not established as a clean baseline before this task, so it is not claimed as a Task 1 regression signal. Its generated `tsconfig.tsbuildinfo` change was restored and is not included.
+`git diff --check`: exit 0; only existing Windows line-ending warnings were emitted.
 
-## Implementation and limitations
+## Limitations
 
-- `pollAlexaVocNormalizationOnce` validates both status and committed-record payloads and returns a small truthful phase union. Recoverable read failures expose fixed safe copy and remain in the polling loop.
-- Completion requires the request-bound ASIN, fingerprint, and exact revision to be readable and accepted by `onImported`.
-- The status retry control aborts/restarts only the scoped GET poll; it never resubmits the import POST.
-- The UI reports target ASIN, processing/applying/failure/done transitions, elapsed seconds, and any existing revision/capture timestamp without synthetic percentage or queue position.
-- Server-side terminal derivation and publication cause/recovery are intentionally outside Task 1 and remain for Task 2.
+- Whole-branch build and combined server/client verification are owned by the coordinating task.
+- Server queue, terminal derivation, publication repair, and production recovery remain separate from this client report.
+- No live request, provider operation, browser control, restart, deployment, or push was performed.

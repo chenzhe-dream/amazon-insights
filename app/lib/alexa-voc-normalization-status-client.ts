@@ -59,6 +59,42 @@ const recoverablePollError = Object.freeze({
   message: "状态读取暂时失败，将继续重试" as const,
 });
 
+export type AlexaVocDiscoveryResult =
+  | Readonly<{ phase: "ready"; response: AlexaVocNormalizationStatusResponse }>
+  | Readonly<{ phase: "recoverable-error"; message: "状态发现暂时失败，请重试读取" }>;
+
+export async function deliverAlexaVocResultIfActive<T, TResult>(input: Readonly<{
+  signal: AbortSignal;
+  operation: () => Promise<T>;
+  onResult: (result: T) => TResult;
+}>): Promise<TResult | undefined> {
+  const result = await input.operation();
+  if (input.signal.aborted) return undefined;
+  return input.onResult(result);
+}
+
+export function prepareAlexaVocDiscoveryForPolling(
+  response: AlexaVocNormalizationStatusResponse,
+): AlexaVocNormalizationStatusResponse {
+  return {
+    records: response.records.map(record => record.status === "success"
+      ? { asin: record.asin, fingerprint: record.fingerprint, status: "pending", revision: null, error: null }
+      : record),
+  };
+}
+
+export async function discoverAlexaVocNormalizationStatuses(
+  input: Parameters<typeof readAlexaVocNormalizationStatuses>[0],
+): Promise<AlexaVocDiscoveryResult> {
+  try {
+    const response = await readAlexaVocNormalizationStatuses(input);
+    return { phase: "ready", response: prepareAlexaVocDiscoveryForPolling(response) };
+  } catch (error) {
+    if (input.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    return { phase: "recoverable-error", message: "状态发现暂时失败，请重试读取" };
+  }
+}
+
 export async function pollAlexaVocNormalizationOnce(input: Readonly<{
   projectId: string;
   runId: string;

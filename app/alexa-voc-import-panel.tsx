@@ -10,8 +10,9 @@ import {
   manualAlexaVocPrimaryAsinAdvisory,
 } from "./alexa-voc-import-validation";
 import {
+  deliverAlexaVocResultIfActive,
+  discoverAlexaVocNormalizationStatuses,
   pollAlexaVocNormalizationOnce,
-  readAlexaVocNormalizationStatuses,
   type AlexaVocPollResult,
 } from "./lib/alexa-voc-normalization-status-client";
 import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
@@ -82,6 +83,8 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   const [normalizationState, setNormalizationState] = useState(initialAlexaVocState);
   const [pollPresentationByKey, setPollPresentationByKey] = useState<ReadonlyMap<string, PollPresentation>>(new Map());
   const [pollRetryNonce, setPollRetryNonce] = useState(0);
+  const [discoveryRetryNonce, setDiscoveryRetryNonce] = useState(0);
+  const [discoveryIssue, setDiscoveryIssue] = useState<Readonly<{ scopeKey: string; message: string }> | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const pollControllers = useRef(new Map<string, AbortController>());
 
@@ -105,6 +108,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
     ? selectAlexaVocStatus(normalizationState, projectId, runId, selectedAsin)
     : undefined;
   const normalizationAsinKey = products.map(product => product.asin.trim().toUpperCase()).join(",");
+  const discoveryScopeKey = `${projectId ?? ""}:${runId ?? ""}:${normalizationAsinKey}`;
   const selectedPollKey = normalizationStatus && projectId && runId
     ? `${alexaVocCardKey(projectId, runId, selectedAsin)}:${normalizationStatus.fingerprint}`
     : null;
@@ -121,24 +125,33 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await readAlexaVocNormalizationStatuses({
-          projectId,
-          runId,
-          asins: normalizationAsinKey.split(","),
+        await deliverAlexaVocResultIfActive({
           signal: controller.signal,
+          operation: () => discoverAlexaVocNormalizationStatuses({
+            projectId,
+            runId,
+            asins: normalizationAsinKey.split(","),
+            signal: controller.signal,
+          }),
+          onResult: result => {
+            if (result.phase === "recoverable-error") {
+              setDiscoveryIssue({ scopeKey: discoveryScopeKey, message: result.message });
+              return;
+            }
+            setDiscoveryIssue(current => current?.scopeKey === discoveryScopeKey ? null : current);
+            setNormalizationState(current => reduceAlexaVocStatusResponse(
+              current,
+              { projectId, runId },
+              result.response,
+            ));
+          },
         });
-        if (controller.signal.aborted) return;
-        setNormalizationState(current => reduceAlexaVocStatusResponse(
-          current,
-          { projectId, runId },
-          response,
-        ));
       } catch (error) {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
       }
     })();
     return () => controller.abort();
-  }, [normalizationAsinKey, pollingEnabled, projectId, runId]);
+  }, [discoveryRetryNonce, discoveryScopeKey, normalizationAsinKey, pollingEnabled, projectId, runId]);
 
   useEffect(() => {
     if (!projectId || !runId || !pollingEnabled) {
@@ -161,67 +174,64 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       void (async () => {
         try {
           while (!controller.signal.aborted) {
-            const observed = await pollAlexaVocNormalizationOnce({
-              projectId,
-              runId,
-              asin: record.asin,
-              fingerprint: record.fingerprint,
+            const shouldStop = await deliverAlexaVocResultIfActive({
               signal: controller.signal,
-            });
-            setPollPresentationByKey(current => {
-              const next = new Map(current);
-              const previous = next.get(pollKey);
-              next.set(pollKey, {
-                phase: observed.phase,
-                startedAt: previous?.startedAt ?? Date.now(),
-                ...(observed.phase === "applying" ? { revision: observed.revision } : {}),
-                ...(observed.phase === "recoverable-error" ? { message: observed.message } : {}),
-              });
-              return next;
-            });
-            if (observed.phase === "failure") {
-              setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
-                type: "cleared",
-                projectId,
-                runId,
-                asin: record.asin,
-                pendingFingerprint: record.fingerprint,
-              }));
-              setNormalizationState((current) => reduceAlexaVocState(current, {
-                type: "setFailure", projectId, runId, asin: record.asin,
-                fingerprint: record.fingerprint, error: observed.error,
-              }));
-              return;
-            }
-            if (observed.phase === "done" && !onImported(observed.record)) {
-              setImportFeedbackState(current => reduceAlexaVocImportFeedback(current, {
-                type: "cleared", projectId, runId, asin: record.asin,
-                pendingFingerprint: record.fingerprint,
-              }));
-              setNormalizationState(current => reduceAlexaVocState(current, {
-                type: "clear", projectId, runId, asin: record.asin,
-                fingerprint: record.fingerprint,
-              }));
-              return;
-            }
-            if (observed.phase === "done") {
-              setImportFeedbackState((current) => reduceAlexaVocImportFeedback(current, {
-                type: "succeeded",
-                projectId,
-                runId,
-                asin: record.asin,
-                message: `导入成功 · PostgreSQL revision ${observed.record.revision}`,
-              }));
-              setNormalizationState((current) => reduceAlexaVocState(current, {
-                type: "replaceWithImportSuccess",
+              operation: () => pollAlexaVocNormalizationOnce({
                 projectId,
                 runId,
                 asin: record.asin,
                 fingerprint: record.fingerprint,
-                revision: observed.record.revision,
-              }));
-              return;
-            }
+                signal: controller.signal,
+              }),
+              onResult: observed => {
+                setPollPresentationByKey(current => {
+                  const next = new Map(current);
+                  const previous = next.get(pollKey);
+                  next.set(pollKey, {
+                    phase: observed.phase,
+                    startedAt: previous?.startedAt ?? Date.now(),
+                    ...(observed.phase === "applying" ? { revision: observed.revision } : {}),
+                    ...(observed.phase === "recoverable-error" ? { message: observed.message } : {}),
+                  });
+                  return next;
+                });
+                if (observed.phase === "failure") {
+                  setImportFeedbackState(current => reduceAlexaVocImportFeedback(current, {
+                    type: "cleared", projectId, runId, asin: record.asin,
+                    pendingFingerprint: record.fingerprint,
+                  }));
+                  setNormalizationState(current => reduceAlexaVocState(current, {
+                    type: "setFailure", projectId, runId, asin: record.asin,
+                    fingerprint: record.fingerprint, error: observed.error,
+                  }));
+                  return true;
+                }
+                if (observed.phase === "done" && !onImported(observed.record)) {
+                  setImportFeedbackState(current => reduceAlexaVocImportFeedback(current, {
+                    type: "cleared", projectId, runId, asin: record.asin,
+                    pendingFingerprint: record.fingerprint,
+                  }));
+                  setNormalizationState(current => reduceAlexaVocState(current, {
+                    type: "clear", projectId, runId, asin: record.asin,
+                    fingerprint: record.fingerprint,
+                  }));
+                  return true;
+                }
+                if (observed.phase === "done") {
+                  setImportFeedbackState(current => reduceAlexaVocImportFeedback(current, {
+                    type: "succeeded", projectId, runId, asin: record.asin,
+                    message: `导入成功 · PostgreSQL revision ${observed.record.revision}`,
+                  }));
+                  setNormalizationState(current => reduceAlexaVocState(current, {
+                    type: "replaceWithImportSuccess", projectId, runId, asin: record.asin,
+                    fingerprint: record.fingerprint, revision: observed.record.revision,
+                  }));
+                  return true;
+                }
+                return false;
+              },
+            });
+            if (shouldStop === undefined || shouldStop) return;
             await waitForPoll(controller.signal);
           }
         } catch (error) {
@@ -396,9 +406,13 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         {!sourceBadge && effectiveStatus === "missing" ? <p className="pending-box">该 ASIN 尚未录入。</p> : null}
         {effectiveStatus === "source-error" ? <p className="pending-box">运行时 VOC 暂不可用；已保留页面上的较新版本，可重试读取。</p> : null}
         {effectiveStatus === "protocol-conflict" ? <p className="pending-box">服务器返回了冲突 revision；已保留页面上的较新版本，请重试。</p> : null}
+        {discoveryIssue?.scopeKey === discoveryScopeKey ? (
+          <p className="pending-box">{discoveryIssue.message}。<button type="button" onClick={() => setDiscoveryRetryNonce(value => value + 1)}>重试状态读取</button></p>
+        ) : null}
         {normalizationStatus?.status === "pending" ? (
           <div className="pending-box">
-            <p role="progressbar" aria-label={`Alexa VOC 导入进度，目标 ${selectedAsin}`} aria-valuetext={pollPresentation?.phase === "applying" ? "正在应用新版本" : "正在标准化处理"}>
+            <progress aria-label={`Alexa VOC 导入进度，目标 ${selectedAsin}`} />
+            <p>
               目标 {selectedAsin} · {pollPresentation?.phase === "applying" ? `正在应用 revision ${pollPresentation.revision}` : "正在标准化处理"}
             </p>
             <p>已等待 {Math.max(0, Math.floor((now - (pollPresentation?.startedAt ?? now)) / 1000))} 秒</p>

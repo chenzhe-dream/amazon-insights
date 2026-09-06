@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  deliverAlexaVocResultIfActive,
+  discoverAlexaVocNormalizationStatuses,
+  prepareAlexaVocDiscoveryForPolling,
   pollAlexaVocNormalizationOnce,
   readAlexaVocNormalizationStatuses,
 } from "../../app/lib/alexa-voc-normalization-status-client";
@@ -140,4 +143,51 @@ test("a missing fingerprint remains processing and a matching terminal failure i
     ] }),
   });
   assert.deepEqual(failure, { phase: "failure", error: "schema" });
+});
+
+test("an aborted deferred poll cannot deliver a result or invoke an apply callback", async () => {
+  const controller = new AbortController();
+  let resolve!: (value: string) => void;
+  const deferred = new Promise<string>(done => { resolve = done; });
+  const delivered: string[] = [];
+  const delivery = deliverAlexaVocResultIfActive({
+    signal: controller.signal,
+    operation: () => deferred,
+    onResult: value => { delivered.push(value); return "applied"; },
+  });
+
+  controller.abort();
+  resolve("late result");
+  assert.equal(await delivery, undefined);
+  assert.deepEqual(delivered, []);
+});
+
+test("discovery success for a pending fingerprint stays pending until exact-record polling applies it", () => {
+  const response = prepareAlexaVocDiscoveryForPolling({ records: [
+    { asin: ASIN, fingerprint: FINGERPRINT, status: "success", revision: "7", error: null },
+    { asin: "B0B95XH99V", fingerprint: "b".repeat(64), status: "failure", revision: null, error: "schema" },
+  ] });
+  assert.deepEqual(response.records, [
+    { asin: ASIN, fingerprint: FINGERPRINT, status: "pending", revision: null, error: null },
+    { asin: "B0B95XH99V", fingerprint: "b".repeat(64), status: "failure", revision: null, error: "schema" },
+  ]);
+});
+
+test("failed discovery is visible and retry remains GET-only", async () => {
+  const calls: Array<{ input: string; method: string }> = [];
+  let attempt = 0;
+  const request = async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ input: String(input), method: init?.method ?? "GET" });
+    attempt += 1;
+    if (attempt === 1) throw new Error("offline secret");
+    return Response.json({ records: [] });
+  };
+  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({
+    projectId: PROJECT_ID, runId: RUN_ID, asins: [ASIN], request,
+  }), { phase: "recoverable-error", message: "状态发现暂时失败，请重试读取" });
+  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({
+    projectId: PROJECT_ID, runId: RUN_ID, asins: [ASIN], request,
+  }), { phase: "ready", response: { records: [] } });
+  assert.deepEqual(calls.map(call => call.method), ["GET", "GET"]);
+  assert.equal(calls.every(call => call.input.includes("/api/alexa-voc/pending?")), true);
 });
