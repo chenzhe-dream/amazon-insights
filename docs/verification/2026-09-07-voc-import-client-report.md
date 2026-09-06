@@ -63,6 +63,8 @@ Final stale-scope discrimination rerun:
 
 Result: 4 passed, 0 failed, 0 skipped. The stale-scope case now route-discriminates normalization status from the record list, holds a valid exact old-scope LIST record, removes the abort signal only for that controlled fixture fetch, switches project/run, releases the valid response, and waits for fulfillment plus two animation frames before asserting zero `onImported` calls and no old applying/success state.
 
+Final compiler follow-up: the root compiler gate identified one new test-only `TS2345` because the `beforeGoto` callback returned Playwright's `Disposable` from `addInitScript` instead of `void`. The callback now awaits `addInitScript` inside an async block. A fresh mounted run passed 4/4, targeted ESLint exited 0, and a full `tsc --noEmit --incremental false --pretty false` diagnostic capture contained no diagnostics for `tests/agent/alexa-voc-import-panel-browser.test.ts`. Unrelated whole-repository TypeScript diagnostics remain outside this client-test correction.
+
 Follow-up lint command:
 
 `node_modules/.bin/eslint app/alexa-voc-import-panel.tsx tests/agent/alexa-voc-import-panel-browser.test.ts tests/agent/helpers/alexa-voc-import-panel-browser-harness.tsx`

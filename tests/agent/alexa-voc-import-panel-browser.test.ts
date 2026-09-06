@@ -146,18 +146,20 @@ test("a deferred old-scope result cannot apply after project and run switch", as
     await gate;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: [record()] }) });
     markFulfilled();
-  }, page => page.addInitScript(() => {
-    const browserFetch = window.fetch.bind(window);
-    window.fetch = (input, init) => {
-      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.origin);
-      if (url.pathname === "/api/alexa-voc" && !url.pathname.endsWith("/pending")) {
-        const fixtureInit = { ...init };
-        delete fixtureInit.signal;
-        return browserFetch(input, fixtureInit);
-      }
-      return browserFetch(input, init);
-    };
-  }));
+  }, async page => {
+    await page.addInitScript(() => {
+      const browserFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.origin);
+        if (url.pathname === "/api/alexa-voc" && !url.pathname.endsWith("/pending")) {
+          const fixtureInit = { ...init };
+          delete fixtureInit.signal;
+          return browserFetch(input, fixtureInit);
+        }
+        return browserFetch(input, init);
+      };
+    });
+  });
   try {
     await page.getByText(new RegExp(`目标 ${ASIN_A}`)).waitFor();
     await started;
