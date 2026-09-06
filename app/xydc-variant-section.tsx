@@ -39,6 +39,22 @@ type ChildCandidate = Readonly<{
 
 const imagePlaceholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23f2f6fa'/%3E%3Cpath d='M16 44l10-11 8 7 7-9 7 13z' fill='%239aabba'/%3E%3Ccircle cx='25' cy='23' r='5' fill='%239aabba'/%3E%3C/svg%3E";
 
+const variantStatusLabels = {
+  ready: "变体数据可用",
+  partial: "部分变体数据可用",
+  unavailable: "变体数据暂不可用",
+} satisfies Record<XydcVariantFamily["status"], string>;
+
+const variantReasonLabels = {
+  NOT_CONFIGURED: "西柚数据源未配置",
+  AUTH_FAILED: "西柚数据源认证失败",
+  TIMEOUT: "西柚请求超时",
+  RPC_ERROR: "西柚服务暂不可用",
+  SCHEMA_INVALID: "数据源返回格式异常",
+  NOT_FOUND: "数据源未返回该商品变体",
+  PARTIAL_CHILD_INFO: "部分子体详情暂未返回",
+} satisfies Record<NonNullable<XydcVariantFamily["reasonCode"]>, string>;
+
 function timeValue(value: string | null) {
   return value ? Date.parse(value) : Number.NEGATIVE_INFINITY;
 }
@@ -129,7 +145,18 @@ function formatPrice(child: XydcVariantFamily["children"][number]) {
 }
 
 function reasonLabel(reasonCode: XydcVariantFamily["reasonCode"]) {
-  return reasonCode ?? "未返回具体原因";
+  return reasonCode ? variantReasonLabels[reasonCode] : "数据源未返回具体原因";
+}
+
+function childStatusLabel(status: XydcVariantFamily["children"][number]["infoStatus"]) {
+  return status === "pending" ? "详情待补充" : "详情暂不可用";
+}
+
+function VariantTimeDetails({ sourceUpdatedAt, fetchedAt }: Pick<XydcVariantFamilyGroup, "sourceUpdatedAt" | "fetchedAt">) {
+  return <>
+    <span>来源更新时间：{sourceUpdatedAt ?? "数据源未提供"}</span>
+    <span>本次采集时间：{fetchedAt}</span>
+  </>;
 }
 
 function sortChildren(children: readonly XydcVariantFamily["children"][number][], sort: DrawerSort) {
@@ -147,10 +174,12 @@ function imageSource(...sources: Array<string | null | undefined>) {
 
 function VariantChildCard({
   child,
-  updatedAt,
+  sourceUpdatedAt,
+  fetchedAt,
 }: {
   child: XydcVariantFamily["children"][number];
-  updatedAt?: string | null;
+  sourceUpdatedAt?: string | null;
+  fetchedAt?: string;
 }) {
   const childImage = child.imageUrl?.trim();
   return (
@@ -168,9 +197,9 @@ function VariantChildCard({
       <span>价格：<strong>{formatPrice(child)}</strong></span>
       <span>评分：{child.stars === null ? "暂无数据" : child.stars.toFixed(1)}</span>
       <span>商品页当前评论数：{displayNumber(child.productPageRatings)}</span>
-      {updatedAt !== undefined ? <span>更新时间：{updatedAt ?? "数据源未提供"}</span> : null}
-      {updatedAt !== undefined ? <span>上架时间：数据源未提供</span> : null}
-      {child.infoStatus !== "ready" ? <em>子体信息：{child.infoStatus}</em> : null}
+      {fetchedAt !== undefined ? <VariantTimeDetails sourceUpdatedAt={sourceUpdatedAt ?? null} fetchedAt={fetchedAt} /> : null}
+      {fetchedAt !== undefined ? <span>上架时间：数据源未提供</span> : null}
+      {child.infoStatus !== "ready" ? <em>子体信息：{childStatusLabel(child.infoStatus)}</em> : null}
     </article>
   );
 }
@@ -211,7 +240,7 @@ function VariantDrawer({ group, onClose }: { group: XydcVariantFamilyGroup; onCl
           </select>
         </label>
         <div className="xydc-variant-drawer-children">
-          {children.map(child => <VariantChildCard child={child} updatedAt={group.sourceUpdatedAt ?? group.fetchedAt} key={child.asin} />)}
+          {children.map(child => <VariantChildCard child={child} sourceUpdatedAt={group.sourceUpdatedAt} fetchedAt={group.fetchedAt} key={child.asin} />)}
         </div>
       </aside>
     </div>
@@ -236,6 +265,17 @@ function XydcVariantSectionBody({
   productByAsin: ReadonlyMap<string, XydcVariantProduct>;
   onOpen?: (group: XydcVariantFamilyGroup) => void;
 }) {
+  const productIndexByAsin = new Map([...productByAsin.keys()].map((asin, index) => [asin, index]));
+  const orderedInputAsins = (group: XydcVariantFamilyGroup) => [...group.inputAsins].sort((left, right) =>
+    (productIndexByAsin.get(left) ?? Number.POSITIVE_INFINITY) - (productIndexByAsin.get(right) ?? Number.POSITIVE_INFINITY)
+      || left.localeCompare(right),
+  );
+  const orderedGroups = [...groups].sort((left, right) => {
+    const leftIndex = Math.min(...left.inputAsins.map(asin => productIndexByAsin.get(asin) ?? Number.POSITIVE_INFINITY));
+    const rightIndex = Math.min(...right.inputAsins.map(asin => productIndexByAsin.get(asin) ?? Number.POSITIVE_INFINITY));
+    return leftIndex - rightIndex || `${left.country}:${left.parentAsin}`.localeCompare(`${right.country}:${right.parentAsin}`);
+  });
+
   return (
     <section className="card variant-section xydc-variant-section">
       <div className="section-head">
@@ -247,43 +287,52 @@ function XydcVariantSectionBody({
       <p className="xydc-variant-review-note">同一商品页的评论数为页面当前口径，不代表每个子体自身的单独沉淀。</p>
       {groups.length === 0 ? <p className="xydc-variant-empty">暂无已授权范围内的西柚变体缓存。</p> : (
         <div className="xydc-variant-rows">
-          {groups.map(group => {
-            const product = group.inputAsins.map(asin => productByAsin.get(asin)).find(Boolean);
+          {orderedGroups.map(group => {
+            const displayInputAsins = orderedInputAsins(group);
+            const product = displayInputAsins.map(asin => productByAsin.get(asin)).find(Boolean);
             const competitorNumber = product ? [...productByAsin.keys()].indexOf(product.asin) + 1 : null;
             const parentImage = imageSource(product?.image, ...group.children.map(child => child.imageUrl));
             const groupKey = `${group.country}:${group.parentAsin}`;
+            const brand = product
+              ? (!product.brand.trim() || product.brand === "等待同步" ? "品牌资料待补充" : product.brand)
+              : undefined;
+            const title = product
+              ? (!product.title.trim() || product.title === "等待卖家精灵与 SIF MCP 返回商品数据"
+                  ? "商品资料待补充，不影响已获取的变体展示"
+                  : product.title)
+              : undefined;
             return (
               <article className="xydc-variant-row" key={groupKey}>
                 <div className="xydc-variant-summary">
                   <div className="xydc-variant-parent-product">
                     {/* Product images come from the cached provider payload, not Next-managed local assets. */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img className="xydc-variant-parent-image" src={parentImage} alt={`${product?.title ?? group.parentAsin} 主图`} />
+                    <img className="xydc-variant-parent-image" src={parentImage} alt={`${title ?? group.parentAsin} 主图`} />
                     <div>
                       <span>{competitorNumber ? `竞品 ${competitorNumber} · ` : ""}父体 {group.parentAsin}</span>
-                      <b>{product?.brand ?? "未匹配竞品"}</b>
-                      <small>{product?.title ?? "当前输入 ASIN 的变体缓存"}</small>
+                      <b>{product ? brand : "未匹配竞品"}</b>
+                      <small>{product ? title : "当前输入 ASIN 的变体缓存"}</small>
                     </div>
                   </div>
-                  <div className="xydc-variant-input-asins">命中 ASIN：{group.inputAsins.map(asin => <code key={asin}>{asin}</code>)}</div>
+                  <div className="xydc-variant-input-asins">命中 ASIN：{displayInputAsins.map(asin => <code key={asin}>{asin}</code>)}</div>
                   <strong className="xydc-variant-child-count">子体总数：{group.children.length}</strong>
                   <div className="xydc-variant-dimensions">
                     {group.dimensions.map(dimension => <span key={dimension}>{dimension}</span>)}
                   </div>
                   {group.children.length <= 1 && group.status !== "unavailable" ? <em>单一商品/未发现其他变体</em> : null}
-                  {group.cacheState === "stale" ? <em>{group.sourceUpdatedAt
-                    ? `缓存数据 · 来源更新时间：${group.sourceUpdatedAt}`
-                    : `缓存数据 · 来源更新时间未提供 · 缓存抓取时间：${group.fetchedAt}`}</em> : null}
+                  {group.cacheState === "stale" ? <em>缓存数据</em> : null}
+                  <VariantTimeDetails sourceUpdatedAt={group.sourceUpdatedAt} fetchedAt={group.fetchedAt} />
                 </div>
                 <div className="xydc-variant-content">
+                  <p>{variantStatusLabels[group.status]}</p>
                   {group.status === "unavailable" ? (
-                    <p className="xydc-variant-unavailable">变体数据不可用：{reasonLabel(group.reasonCode)}</p>
+                    <p className="xydc-variant-unavailable">原因：{reasonLabel(group.reasonCode)}</p>
                   ) : (
                     <div className="xydc-variant-children-wrap">
                       <div className="xydc-variant-children">
                         {group.children.slice(0, 3).map(child => <VariantChildCard child={child} key={child.asin} />)}
                       </div>
-                      {group.status === "partial" ? <p className="xydc-variant-partial">部分子体信息可用；缺口：{reasonLabel(group.reasonCode)}</p> : null}
+                      {group.status === "partial" ? <p className="xydc-variant-partial">原因：{reasonLabel(group.reasonCode)}</p> : null}
                       {group.children.length > 3 ? <button type="button" className="xydc-variant-open-drawer" onClick={() => onOpen?.(group)}>查看全部 {group.children.length} 个子体</button> : null}
                     </div>
                   )}

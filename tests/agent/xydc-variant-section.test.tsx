@@ -93,6 +93,45 @@ test("groups matching input ASINs into one compact parent row with three child p
   assert.doesNotMatch(html, /独立评论数|评论占比/);
 });
 
+test("separates ready variant status from placeholder catalog details", async () => {
+  const waiting = [{ ...products[0]!, brand: "等待同步", title: "等待卖家精灵与 SIF MCP 返回商品数据" }];
+  const html = await renderSection([familyFixture(inputAsins[0]!)], waiting);
+
+  assert.match(html, /变体数据可用/);
+  assert.match(html, /品牌资料待补充/);
+  assert.match(html, /商品资料待补充，不影响已获取的变体展示/);
+  assert.doesNotMatch(html, /等待同步|等待卖家精灵/);
+
+  const catalogHtml = await renderSection(
+    [familyFixture(inputAsins[0]!), familyFixture(inputAsins[1]!, { parentAsin: "B000000011" })],
+    [{ ...products[0]!, brand: "", title: "" }, products[1]!],
+  );
+  assert.match(catalogHtml, /品牌资料待补充/);
+  assert.match(catalogHtml, /商品资料待补充，不影响已获取的变体展示/);
+  assert.match(catalogHtml, /Brand 2/);
+  assert.match(catalogHtml, /Fixture product 2/);
+});
+
+test("orders parent rows, representative products, and hit ASINs by products input order", async () => {
+  const reversedProducts = [products[1]!, products[0]!];
+  const merged = [
+    familyFixture(inputAsins[0]!, { parentAsin: "B000000099" }),
+    familyFixture(inputAsins[1]!, { parentAsin: "B000000099" }),
+  ];
+  const laterInputRow = familyFixture(inputAsins[0]!, { parentAsin: "B000000010" });
+  const html = await renderSection([...merged, laterInputRow], reversedProducts);
+  const rows = html.match(/<article class="xydc-variant-row">[\s\S]*?<\/article>/g) ?? [];
+
+  assert.equal(rows.length, 2);
+  assert.match(rows[0]!, /父体 B000000099/);
+  assert.match(rows[0]!, /竞品 1/);
+  assert.match(rows[0]!, /Brand 2/);
+  assert.match(rows[0]!, /命中 ASIN：[\s\S]*B000000002[\s\S]*B000000001/);
+  assert.match(rows[1]!, /父体 B000000010/);
+  assert.match(rows[1]!, /竞品 2/);
+  assert.match(rows[1]!, /Brand 1/);
+});
+
 test("merges duplicate children deterministically without letting incomplete cache records overwrite ready data", () => {
   const ready = familyFixture(inputAsins[0]!, {
     sourceUpdatedAt: "2026-09-02T00:00:00.000Z",
@@ -151,11 +190,13 @@ test("renders partial, unavailable, stale, and single-product cache states truth
   const html = await renderSection([partial, unavailable, freshFirst, staleSecond, freshBeforeUnknownStale, staleWithoutSourceTime]);
   const unavailableRow = html.match(/<article class="xydc-variant-row">[\s\S]*?父体 B000000011[\s\S]*?<\/article>/)?.[0] ?? "";
 
-  assert.match(html, /部分子体信息可用；缺口：PARTIAL_CHILD_INFO/);
-  assert.match(unavailableRow, /变体数据不可用：TIMEOUT/);
+  assert.match(html, /部分变体数据可用/);
+  assert.match(html, /部分子体详情暂未返回/);
+  assert.match(unavailableRow, /变体数据暂不可用/);
+  assert.match(unavailableRow, /西柚请求超时/);
   assert.match(unavailableRow, /上架时间：数据源未提供/);
-  assert.match(html, /缓存数据 · 来源更新时间：2026-09-01T00:00:00.000Z/);
-  assert.match(html, /父体 B000000013[\s\S]*缓存数据 · 来源更新时间未提供 · 缓存抓取时间：2026-09-02T12:34:56.000Z/);
+  assert.match(html, /来源更新时间：2026-09-01T00:00:00.000Z/);
+  assert.match(html, /父体 B000000013[\s\S]*来源更新时间：数据源未提供[\s\S]*本次采集时间：2026-09-02T12:34:56.000Z/);
   assert.doesNotMatch(html, /父体 B000000013[\s\S]*来源更新时间：2026-09-05T00:00:00.000Z/);
 });
 
@@ -290,6 +331,8 @@ test("desktop preview remains readable within the workspace beside a sidebar", a
       return {
         directClasses: [...element.children].map(child => child.className),
         dimensionsInSummary: !!element.querySelector(".xydc-variant-summary .xydc-variant-dimensions"),
+        statusFontSize: Number.parseFloat(getComputedStyle(element.querySelector(".xydc-variant-content > p")!).fontSize),
+        timeFontSizes: [...element.querySelectorAll(".xydc-variant-summary > span")].map(item => Number.parseFloat(getComputedStyle(item).fontSize)),
         summary: summary!,
         content: content!,
         cards: cards.map(card => ({
@@ -323,6 +366,11 @@ test("desktop preview remains readable within the workspace beside a sidebar", a
         assert.ok(card.asinFontSize >= 12, `ASIN is ${card.asinFontSize}px`);
       }
     });
+    await t.test("keeps status and time explanations readable", () => {
+      assert.ok(metrics.statusFontSize >= 14, `status text is ${metrics.statusFontSize}px`);
+      assert.ok(metrics.timeFontSizes.length >= 2);
+      assert.ok(metrics.timeFontSizes.every(size => size >= 12), `time text sizes: ${metrics.timeFontSizes.join(", ")}`);
+    });
     await t.test("uses readable parent and child thumbnails", () => {
       assert.equal(metrics.images.length, 4);
       for (const size of metrics.images) {
@@ -339,6 +387,37 @@ test("desktop preview remains readable within the workspace beside a sidebar", a
     await browser.close();
     await fixture.server.close();
   }
+});
+
+test("renders every reason and non-ready child status in Chinese", async () => {
+  const reasonCases: Array<[XydcVariantFamily["reasonCode"], string]> = [
+    ["NOT_CONFIGURED", "西柚数据源未配置"],
+    ["AUTH_FAILED", "西柚数据源认证失败"],
+    ["TIMEOUT", "西柚请求超时"],
+    ["RPC_ERROR", "西柚服务暂不可用"],
+    ["SCHEMA_INVALID", "数据源返回格式异常"],
+    ["NOT_FOUND", "数据源未返回该商品变体"],
+    ["PARTIAL_CHILD_INFO", "部分子体详情暂未返回"],
+    [null, "数据源未返回具体原因"],
+  ];
+  const families = reasonCases.map(([reasonCode], index) => familyFixture(`B${String(10_000_000 + index).padStart(9, "0")}`, {
+    parentAsin: `B${String(20_000_000 + index).padStart(9, "0")}`,
+    status: "unavailable",
+    reasonCode,
+    children: [],
+  }));
+  families.push(familyFixture(inputAsins[0]!, {
+    parentAsin: "B300000001",
+    children: [
+      { ...childFixture(1), infoStatus: "pending" },
+      { ...childFixture(2), infoStatus: "unavailable" },
+    ],
+  }));
+  const html = await renderSection(families);
+
+  for (const [, label] of reasonCases) assert.match(html, new RegExp(label));
+  assert.match(html, /子体信息：详情待补充/);
+  assert.match(html, /子体信息：详情暂不可用/);
 });
 
 test("390px mobile preview stacks its cards without horizontal overflow", async t => {
@@ -441,7 +520,8 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     assert.equal(await dialog.locator(".xydc-variant-child-card").count(), 28);
     assert.equal(await dialog.locator(".xydc-variant-child-image").count(), 28);
     assert.ok((await dialog.locator(".xydc-variant-child-image").first().getAttribute("src"))?.length);
-    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /更新时间：2026-09-04T00:00:00.000Z/);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /来源更新时间：2026-09-04T00:00:00.000Z/);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /本次采集时间：2026-09-04T00:00:00.000Z/);
     assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /上架时间：数据源未提供/);
     assert.equal(await dialog.locator(".xydc-variant-child-asin").first().textContent(), "B000000001");
     await page.getByLabel("抽屉排序").selectOption("price");
@@ -461,7 +541,8 @@ test("drawer expands all children, supports allowed sorts, closes accessibly, an
     await assert.rejects(() => dialog.waitFor({ state: "visible", timeout: 250 }));
     await page.getByRole("button", { name: "查看全部 4" }).click();
     await dialog.waitFor();
-    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /更新时间：2026-09-04T12:34:56.000Z/);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /来源更新时间：数据源未提供/);
+    assert.match(await dialog.locator(".xydc-variant-child-card").first().textContent() ?? "", /本次采集时间：2026-09-04T12:34:56.000Z/);
     assert.deepEqual(forbiddenRequests, []);
   } finally {
     await page?.close().catch(() => undefined);
