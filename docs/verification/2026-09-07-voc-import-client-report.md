@@ -57,6 +57,12 @@ Result: 4 passed, 0 failed, 0 skipped. The mounted tests cover visible discovery
 
 Fixture screenshot: `test-results/voc-client-applying.png` (untracked test artifact, applying state with existing revision visible).
 
+Final stale-scope discrimination rerun:
+
+`node_modules/.bin/tsx --conditions=react-server --test tests/agent/alexa-voc-import-panel-browser.test.ts`
+
+Result: 4 passed, 0 failed, 0 skipped. The stale-scope case now route-discriminates normalization status from the record list, holds a valid exact old-scope LIST record, removes the abort signal only for that controlled fixture fetch, switches project/run, releases the valid response, and waits for fulfillment plus two animation frames before asserting zero `onImported` calls and no old applying/success state.
+
 Follow-up lint command:
 
 `node_modules/.bin/eslint app/alexa-voc-import-panel.tsx tests/agent/alexa-voc-import-panel-browser.test.ts tests/agent/helpers/alexa-voc-import-panel-browser-harness.tsx`
@@ -65,4 +71,5 @@ Follow-up lint command:
 
 - Whole-branch build and combined server/client verification are owned by the coordinating task.
 - Server queue, terminal derivation, publication repair, and production recovery remain separate from this client report.
+- The screenshot verifies rendered behavior and text only. The small harness imports global styles but not every page-scoped presentation stylesheet, so it is not visual-regression evidence.
 - No live request, provider operation, user-browser attachment, restart, deployment, or push was performed. Browser activity was limited to the isolated local headless fixture harness.

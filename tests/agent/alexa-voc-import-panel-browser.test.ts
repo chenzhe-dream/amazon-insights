@@ -42,7 +42,10 @@ after(async () => {
   await server?.close();
 });
 
-async function openPanel(handler: (route: Route) => Promise<void> | void) {
+async function openPanel(
+  handler: (route: Route) => Promise<void> | void,
+  beforeGoto?: (page: import("playwright").Page) => Promise<void>,
+) {
   const page = await browser.newPage();
   const requests: Array<{ method: string; path: string }> = [];
   await page.route("**/*", async route => {
@@ -55,6 +58,7 @@ async function openPanel(handler: (route: Route) => Promise<void> | void) {
     if (url.origin !== baseUrl) return route.abort();
     return route.continue();
   });
+  await beforeGoto?.(page);
   const response = await page.goto(`${baseUrl}/tests/agent/helpers/alexa-voc-import-panel-browser-harness.html`);
   assert.equal(response?.status(), 200);
   await page.getByRole("heading", { name: "Alexa 七问 · 快速录入" }).waitFor();
@@ -121,23 +125,49 @@ test("a deferred old-scope result cannot apply after project and run switch", as
   const gate = new Promise<void>(resolve => { release = resolve; });
   let markStarted!: () => void;
   const started = new Promise<void>(resolve => { markStarted = resolve; });
-  let reads = 0;
+  let markFulfilled!: () => void;
+  const fulfilled = new Promise<void>(resolve => { markFulfilled = resolve; });
+  let oldStatusReads = 0;
   const { page } = await openPanel(async route => {
-    reads += 1;
-    if (reads === 2) {
-      markStarted();
-      await gate;
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/alexa-voc/pending" && url.searchParams.get("projectId") === PROJECT_B) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: [] }) });
     }
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: [status(reads === 1 ? "pending" : "success", reads === 1 ? null : "7")] }) });
-  });
+    if (url.pathname === "/api/alexa-voc/pending") {
+      oldStatusReads += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ records: [status(oldStatusReads === 1 ? "pending" : "success", oldStatusReads === 1 ? null : "7")] }),
+      });
+    }
+    assert.equal(url.pathname, "/api/alexa-voc");
+    markStarted();
+    await gate;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ records: [record()] }) });
+    markFulfilled();
+  }, page => page.addInitScript(() => {
+    const browserFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.origin);
+      if (url.pathname === "/api/alexa-voc" && !url.pathname.endsWith("/pending")) {
+        const fixtureInit = { ...init };
+        delete fixtureInit.signal;
+        return browserFetch(input, fixtureInit);
+      }
+      return browserFetch(input, init);
+    };
+  }));
   try {
     await page.getByText(new RegExp(`目标 ${ASIN_A}`)).waitFor();
     await started;
     await page.evaluate(({ projectId, runId }) => window.switchVocScope?.(projectId, runId), { projectId: PROJECT_B, runId: RUN_B });
     release();
-    await page.waitForTimeout(300);
+    await fulfilled;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     assert.equal(await page.evaluate(() => window.vocImported?.length ?? 0), 0);
     assert.equal(await page.getByText(/导入成功/).count(), 0);
+    assert.equal(await page.getByText(/正在应用 revision 7/).count(), 0);
   } finally { release(); await page.close(); }
 });
 
