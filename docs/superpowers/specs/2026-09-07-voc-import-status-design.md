@@ -19,4 +19,6 @@ The long B0CDW797MM result is a saved same-ASIN report from September 1, not a b
 
 ## Boundaries
 
+Investigation addendum: the old CD report has an empty negatives array, valid under the shared normalized-record schema. PG's snapshot trigger still requires at least one item per dimension. Align snapshot storage with the existing schema via a forward-only migration, preserving empty dimensions honestly (do not invent negative feedback or invalidate historical records). Reproduce this in real isolated PostgreSQL before the fix; retain all identity/provenance/hash checks.
+
 No production data changes, automatic replay of submitted inputs, live provider calls, restart, deployment, push, role/auth changes, generated-data edits, or unrelated architecture changes. In particular never replay the wrong-target fourth snapshot. Coordinate final tested HEAD with the OpenSpec window before integration/release.

@@ -27,12 +27,12 @@ Files: app/alexa-voc-import-validation.ts, app/alexa-voc-import-panel.tsx, app/l
 
 ## Task 2: Server queue/status and publication repair
 
-Files: server/db/postgres/manual-alexa-voc-store.ts, server/db/manual-alexa-voc-repository.ts (SQLite parity where applicable), server/runtime/alexa-voc-normalization-runtime.ts and the verified publication dependency only as required; tests/agent/postgres-manual-alexa-voc-store*.test.ts, normalization worker/attempt tests and a focused real-PG publication regression.
+Files: server/db/postgres/manual-alexa-voc-store.ts, server/db/sqlite-repository.ts (mandatory behavioral parity), server/runtime/alexa-voc-normalization-runtime.ts and the verified publication dependency only as required; tests/agent/postgres-manual-alexa-voc-store*.test.ts, tests/agent/manual-alexa-voc-sqlite-repository.test.ts, normalization worker/attempt tests and a focused real-PG publication regression.
 
 1. Reproduce superseded failed-attempt reuse and missing-terminal failure status with isolated database tests. Inspect job-store claim rules before choosing the reuse predicate.
-2. Exclude unclaimable/superseded/exhausted failed attempts; preserve queued/running/live-retry reuse and concurrency. New submissions must have a claimable attempt.
-3. Derive truthful failed status without misclassifying active retry or a different/new fingerprint. Add SQLite parity if it implements this path.
-4. Reproduce initial cumulative publication using isolated PostgreSQL and fake provider/repository fixtures. Fix only a verified root cause; preserve durable revision and replay semantics.
+2. Exclude unclaimable/superseded/exhausted failed attempts; preserve queued/running/live-retry reuse and concurrency. New submissions must have a claimable attempt. Do not blindly filter attempt_number >= max_attempts: worker recovery can legally reuse a durable result for report-only/completion-only recovery at that limit, without another provider call.
+3. Derive truthful failed status without misclassifying active retry or a different/new fingerprint. Both PG and SQLite must consider the latest effective retry, not an arbitrary historical failed/retryable attempt. Test a terminal failure followed by superseded retryable history and final exhaustion, as well as missing-terminal exhaustion and a newly queued fingerprint.
+4. Reproduce initial cumulative publication using isolated PostgreSQL: valid new B07 plus an old CD record with negatives: []. JS accepts empty dimensions but PG migration 0020 rejects them. Add a forward migration aligning snapshot acceptance with the existing shared schema (empty is valid, malformed/non-string/oversize is not), without mutating old migrations or inventing missing text. Verify SQLite parity and preserve all provenance, hash, identity, durable revision and replay checks.
 5. Run red/green regression, scoped integration suite, targeted lint and record evidence. Commit owned files; independent review and fixes.
 
 ## Task 3: Verification and OpenSpec handoff
