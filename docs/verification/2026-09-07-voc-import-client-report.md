@@ -39,8 +39,30 @@ Result: exit 0, no errors.
 
 `git diff --check`: exit 0; only existing Windows line-ending warnings were emitted.
 
+## Mounted panel follow-up
+
+The production `AlexaVocImportPanel` was mounted through an isolated Vite server and headless Playwright Chromium with every `/api/*` request intercepted locally and non-loopback traffic blocked.
+
+RED command:
+
+`node_modules/.bin/tsx --conditions=react-server --test tests/agent/alexa-voc-import-panel-browser.test.ts`
+
+Observed RED: 0 passed and 4 failed because the production-panel harness did not yet exist.
+
+GREEN command:
+
+`node_modules/.bin/tsx --conditions=react-server --test tests/agent/alexa-voc-import-panel-browser.test.ts`
+
+Result: 4 passed, 0 failed, 0 skipped. The mounted tests cover visible discovery failure plus GET-only retry, native valueless progress and existing-version copy, success/list-read lag through exact application, an explicitly deferred old-scope response released after scope switch, visible terminal failure, and card-specific draft preservation without implicit POST.
+
+Fixture screenshot: `test-results/voc-client-applying.png` (untracked test artifact, applying state with existing revision visible).
+
+Follow-up lint command:
+
+`node_modules/.bin/eslint app/alexa-voc-import-panel.tsx tests/agent/alexa-voc-import-panel-browser.test.ts tests/agent/helpers/alexa-voc-import-panel-browser-harness.tsx`
+
 ## Limitations
 
 - Whole-branch build and combined server/client verification are owned by the coordinating task.
 - Server queue, terminal derivation, publication repair, and production recovery remain separate from this client report.
-- No live request, provider operation, browser control, restart, deployment, or push was performed.
+- No live request, provider operation, user-browser attachment, restart, deployment, or push was performed. Browser activity was limited to the isolated local headless fixture harness.

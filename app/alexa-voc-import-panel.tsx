@@ -148,6 +148,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         });
       } catch (error) {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        setDiscoveryIssue({ scopeKey: discoveryScopeKey, message: "状态发现暂时失败，请重试读取" });
       }
     })();
     return () => controller.abort();
