@@ -215,12 +215,14 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                   AND (
                     newest_attempt.status IN ('queued', 'running')
                     OR (newest_attempt.status = 'failed' AND newest_attempt.retryable
-                        AND newest_attempt.retry_scheduled_at IS NULL)
+                        AND newest_attempt.retry_scheduled_at IS NULL
+                        AND newest_attempt.claim_eligible)
                   )
                 ) AS retry_pending,
                 revision.revision::text AS revision,
                 newest_attempt.status AS newest_attempt_status,
-                newest_attempt.retryable AS newest_attempt_retryable
+                newest_attempt.retryable AS newest_attempt_retryable,
+                newest_attempt.claim_eligible AS newest_attempt_claim_eligible
            FROM latest
            LEFT JOIN LATERAL (
              SELECT current_terminal.*, attempt.attempt_number
@@ -234,7 +236,39 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
            ) terminal ON true
            LEFT JOIN LATERAL (
              SELECT attempt.attempt_number, attempt.status, attempt.retryable,
-                    attempt.retry_scheduled_at
+                    attempt.retry_scheduled_at,
+                    (
+                      EXISTS (
+                        SELECT 1 FROM agent_runs agent_run
+                         WHERE agent_run.stage_id = attempt.stage_id
+                           AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+                           AND (
+                             agent_run.validation_status = 'pending'
+                             OR (agent_run.validation_status = 'passed'
+                                 AND agent_run.terminal_status = 'succeeded'
+                                 AND agent_run.terminal_metadata_json ->> 'kind' = 'succeeded')
+                           )
+                      )
+                      OR (
+                        attempt.attempt_number < attempt.max_attempts
+                        AND (
+                          NOT EXISTS (
+                            SELECT 1 FROM agent_runs agent_run
+                             WHERE agent_run.stage_id = attempt.stage_id
+                               AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+                          )
+                          OR EXISTS (
+                            SELECT 1 FROM agent_runs agent_run
+                             WHERE agent_run.stage_id = attempt.stage_id
+                               AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+                               AND agent_run.validation_status = 'failed'
+                               AND agent_run.terminal_metadata_json ->> 'kind' = 'failed'
+                               AND agent_run.terminal_metadata_json ->> 'classification'
+                                   IN ('upstream-temporary', 'rate-limit')
+                          )
+                        )
+                      )
+                    ) AS claim_eligible
                FROM job_attempts attempt
                JOIN run_stages stage ON stage.id = attempt.stage_id
               WHERE stage.run_id = $1
@@ -264,7 +298,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       return Object.freeze(result.rows.map((row) => {
         const terminalStatus = row.terminal_status;
         const exhaustedWithoutTerminal = terminalStatus == null &&
-          row.newest_attempt_status === "failed" && row.newest_attempt_retryable === false;
+          row.newest_attempt_status === "failed" &&
+          (row.newest_attempt_retryable === false || row.newest_attempt_claim_eligible === false);
         const status = terminalStatus === "failure" && row.retry_pending === true
           ? "pending"
           : terminalStatus === "failure" || exhaustedWithoutTerminal
@@ -1297,6 +1332,37 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
             SELECT MAX(latest_attempt.attempt_number)
               FROM job_attempts latest_attempt
              WHERE latest_attempt.stage_id = attempt.stage_id
+          )
+          AND (
+            attempt.status <> 'failed'
+            OR EXISTS (
+              SELECT 1 FROM agent_runs agent_run
+               WHERE agent_run.stage_id = attempt.stage_id
+                 AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+                 AND (
+                   agent_run.validation_status = 'pending'
+                   OR (
+                     agent_run.validation_status = 'passed'
+                     AND agent_run.terminal_status = 'succeeded'
+                     AND agent_run.terminal_metadata_json ->> 'kind' = 'succeeded'
+                   )
+                   OR (
+                     attempt.attempt_number < attempt.max_attempts
+                     AND agent_run.validation_status = 'failed'
+                     AND agent_run.terminal_metadata_json ->> 'kind' = 'failed'
+                     AND agent_run.terminal_metadata_json ->> 'classification'
+                         IN ('upstream-temporary', 'rate-limit')
+                   )
+                 )
+            )
+            OR (
+              attempt.attempt_number < attempt.max_attempts
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_runs agent_run
+                 WHERE agent_run.stage_id = attempt.stage_id
+                   AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+              )
+            )
           )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal

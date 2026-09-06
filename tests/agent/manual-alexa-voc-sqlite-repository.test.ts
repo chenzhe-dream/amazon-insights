@@ -364,6 +364,18 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   assert.notEqual(requeued.jobId, first.jobId);
   assert.equal(requeued.jobId, immediateRetry.jobId);
   assert.deepEqual((await repository.listRunStages(runId)).map(stage => stage.stage), ["alexa-voc-normalization"]);
+
+  const injector = new DatabaseSync(temporary.path);
+  injector.prepare(
+    `UPDATE job_attempts
+        SET status = 'failed', max_attempts = attempt_number, retryable = 1,
+            retry_scheduled_at = NULL, leased_by = NULL, lease_expires_at = NULL
+      WHERE id = ?`,
+  ).run(immediateRetry.jobId);
+  injector.close();
+  const exhaustedReplacement = await queue(addMilliseconds(CREATED_AT, 7));
+  assert.equal(exhaustedReplacement.jobCreated, true);
+  assert.notEqual(exhaustedReplacement.jobId, immediateRetry.jobId);
 });
 
 test("normalization status selects the latest fingerprint inside the exact project run", async (t) => {
@@ -534,6 +546,8 @@ test("reuses only same-organization successful latest-skill normalization finger
     outputSchemaVersion: "1.0.0", dataCutoffAt: CREATED_AT,
     startedAt: addMilliseconds(CREATED_AT, 1), leaseOwnerId: "normalizer",
     leaseGeneration: claimed!.leaseGeneration, claimToken,
+    logicalExecutionLineage: hash("c"),
+    logicalExecutionCycleId: claimed!.logicalExecutionCycleId,
     claimAcquiredAt: addMilliseconds(CREATED_AT, 1),
     claimExpiresAt: addMilliseconds(CREATED_AT, 60_001),
   });
@@ -779,6 +793,42 @@ test("reuses only same-organization successful latest-skill normalization finger
     projectId,
     runId: replayRunId,
   })).length, 2);
+
+  const durableInjector = new DatabaseSync(temporary.path);
+  durableInjector.prepare(
+    `UPDATE job_attempts
+        SET status = 'failed', max_attempts = attempt_number, retryable = 1,
+            retry_scheduled_at = NULL, leased_by = NULL, lease_expires_at = NULL
+      WHERE id = ?`,
+  ).run(queued.jobId);
+  const durableState = durableInjector.prepare(
+    `SELECT attempt.attempt_number, attempt.max_attempts,
+            agent_run.validation_status, agent_run.terminal_status,
+            json_extract(agent_run.terminal_metadata_json, '$.kind') AS terminal_kind
+       FROM job_attempts attempt
+       JOIN agent_runs agent_run
+         ON agent_run.stage_id = attempt.stage_id
+        AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+      WHERE attempt.id = ?`,
+  ).get(queued.jobId);
+  assert.deepEqual({ ...durableState }, {
+    attempt_number: 1, max_attempts: 1, validation_status: "passed",
+    terminal_status: "succeeded", terminal_kind: "succeeded",
+  });
+  durableInjector.close();
+  const durableRecovery = await repository.transaction(() => repository.manualAlexaVoc.queueNormalizationInput({
+    actorUserId, actorOrganizationId: organizationId, projectId, runId,
+    marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(),
+    jobId: randomUUID(), rawReportSha256: hash("e"), plaintextBytes: 8,
+    executionFingerprint, executionIdentity: NORMALIZATION_EXECUTION_IDENTITY,
+    envelope: {
+      algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
+      nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
+      plaintextBytes: 8, plaintextSha256: hash("e"),
+    }, queuedAt: addMilliseconds(CREATED_AT, 9),
+  }));
+  assert.equal(durableRecovery.jobCreated, false);
+  assert.equal(durableRecovery.jobId, queued.jobId);
 });
 
 test("real SQLite reader is DB-first, persists exact provenance, isolates organizations, and owner-gates misses", async (t) => {

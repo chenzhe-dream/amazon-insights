@@ -64,6 +64,15 @@ const POSTGRES_MIGRATIONS_THROUGH_VOC_PROVENANCE = [
   ...POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC,
   [20, "voc_snapshot_per_asin_provenance"],
 ] as const;
+const POSTGRES_MIGRATIONS_THROUGH_DINGTALK = [
+  ...POSTGRES_MIGRATIONS_THROUGH_VOC_PROVENANCE,
+  [21, "comparison_project_scope"],
+  [22, "alexa_voc_normalization_stage"],
+  [23, "alexa_voc_agent_run_budget"],
+  [24, "alexa_voc_normalization_attempts"],
+  [25, "sync_stage_partial_outputs"],
+  [26, "dingtalk_authentication"],
+] as const;
 const TRAFFIC_ASINS = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"] as const;
 
 before(async () => {
@@ -903,6 +912,114 @@ test("PostgreSQL 0020 replaces the VOC insert function with per-ASIN provenance 
     sql,
     /jsonb_typeof\(provenance_value -> 'parserVersion'\).*string/i,
   );
+});
+
+test("PostgreSQL 0027 upgrades legacy empty dimensions for cumulative publication", async () => {
+  const pool = await freshSchemaPool();
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_MANUAL_VOC) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  const cutoff = "2026-09-01T00:00:00.000Z";
+  const legacySubject = await seedSnapshotRun(pool, { asins: ["B000000001"], cutoff });
+  const legacy = structuredClone(vocSnapshotFixture(cutoff));
+  legacy.payload.records.alexaVoc[0]!.negatives = [];
+  legacy.sources[0]!.checksum = canonicalJsonSha256({
+    sourceId: "alexa-voc", marketplace: "US", records: legacy.payload.records.alexaVoc,
+  });
+  const legacyRecord = AlexaVocSnapshotRecordSchema.parse(legacy.payload.records.alexaVoc[0]);
+  const legacyRecordHash = canonicalJsonSha256(legacyRecord);
+  await pool.query(
+    `INSERT INTO manual_alexa_voc_revisions (
+       organization_id, marketplace, asin, revision, content_hash, captured_at,
+       normalized_record, normalized_schema_version, parser_version,
+       raw_report_sha256, raw_report_plaintext_bytes, created_by, created_at
+     ) VALUES ($1, 'US', $2, 1, $3, $4, $5::jsonb,
+               'alexa-voc-record/v2', 'deterministic-alexa-parser/v3',
+               $6, 100, $7, $4)`,
+    [legacySubject.organizationId, legacyRecord.asin, legacyRecordHash, cutoff,
+      JSON.stringify(legacyRecord), "d".repeat(64), legacySubject.userId],
+  );
+  for (const [version, name] of POSTGRES_MIGRATIONS_THROUGH_DINGTALK.filter(([version]) => version > 19)) {
+    await applyPostgresMigrationSource(pool, version, name);
+  }
+  assert.equal((await pool.query<{ version: number }>(
+    "SELECT MAX(version) AS version FROM schema_migrations",
+  )).rows[0]?.version, 26);
+  assert.deepEqual((await pool.query<{ version: number }>(
+    "SELECT version FROM schema_migrations ORDER BY version",
+  )).rows.map(row => row.version), Array.from({ length: 26 }, (_, index) => index + 1));
+
+  const oldRecord = legacyRecord;
+  const siblingRecord = AlexaVocSnapshotRecordSchema.parse({
+    ...oldRecord, asin: "B000000002", positives: ["new sibling"], negatives: ["sibling issue"],
+    alexaReport: { ...oldRecord.alexaReport, asin: "B000000002", title: "Sibling" },
+  });
+  const records = [oldRecord, siblingRecord];
+  const candidate = buildVocSnapshotCandidate({
+    marketplace: "US", asins: records.map(record => record.asin), dataCutoffAt: cutoff,
+    sourceBundles: [{
+      sourceId: "alexa-voc", type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
+      marketplace: "US", capturedAt: cutoff, records,
+      recordProvenance: records.map((record) => ({
+        asin: record.asin, revision: "1", contentHash: canonicalJsonSha256(record),
+        normalizedSchemaVersion: "alexa-voc-record/v2",
+        parserVersion: "deterministic-alexa-parser/v3",
+        source: "repository" as const, generation: null, capturedAt: cutoff,
+      })),
+    }],
+  });
+  const subject = await seedSnapshotRun(pool, {
+    organizationId: legacySubject.organizationId, asins: candidate.asins, cutoff,
+  });
+  for (const [index, record] of records.entries()) {
+    if (index === 0) continue;
+    const provenance = candidate.sources[0]!.recordProvenance![index]!;
+    await pool.query(
+      `INSERT INTO manual_alexa_voc_revisions (
+         organization_id, marketplace, asin, revision, content_hash, captured_at,
+         normalized_record, normalized_schema_version, parser_version,
+         raw_report_sha256, raw_report_plaintext_bytes, created_by, created_at
+       ) VALUES ($1, 'US', $2, 1, $3, $4, $5::jsonb, $6, $7, $8, 100, $9, $4)`,
+      [subject.organizationId, record.asin, provenance.contentHash, cutoff,
+        JSON.stringify(record), provenance.normalizedSchemaVersion, provenance.parserVersion,
+        "d".repeat(64), subject.userId],
+    );
+  }
+  const insert = (id: string, value: typeof candidate) => pool.query(
+    `INSERT INTO data_snapshots (
+       id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace,
+       asins_json, data_cutoff_at, sources_json, payload_json, content_hash, created_at
+     ) VALUES ($1, $2, 'voc', 'voc', $3, $4, $5::jsonb, $6::timestamptz,
+               $7::jsonb, $8::jsonb, $9, $6::timestamptz)`,
+    [id, subject.runId, value.schemaVersion, value.marketplace, JSON.stringify(value.asins),
+      value.dataCutoffAt, JSON.stringify(value.sources), JSON.stringify(value.payload), value.contentHash],
+  );
+  await assert.rejects(insert("before-0027", candidate), /invalid Alexa VOC snapshot record/);
+  await applyPostgresMigrationSource(pool, 27, "allow_empty_voc_dimensions");
+  await insert("after-0027", candidate);
+  assert.deepEqual((await pool.query<{ payload_json: typeof candidate.payload }>(
+    "SELECT payload_json FROM data_snapshots WHERE id = 'after-0027'",
+  )).rows[0]?.payload_json.records.alexaVoc.map(record => [record.asin, record.negatives]), [
+    ["B000000001", []], ["B000000002", ["sibling issue"]],
+  ]);
+
+  for (const [name, negatives] of [
+    ["non-string", [1]],
+    ["oversize-text", ["x".repeat(16_385)]],
+    ["oversize-count", Array.from({ length: 257 }, () => "x")],
+  ] as const) {
+    const invalid = structuredClone(candidate);
+    invalid.payload.records.alexaVoc[0]!.negatives = negatives as never;
+    invalid.contentHash = canonicalJsonSha256({
+      schemaVersion: invalid.schemaVersion, marketplace: invalid.marketplace,
+      asins: invalid.asins, dataCutoffAt: invalid.dataCutoffAt,
+      sources: invalid.sources, payload: invalid.payload,
+    });
+    await assert.rejects(insert(`invalid-${name}`, invalid), /invalid Alexa VOC snapshot record/);
+  }
+  const applied = await runPostgresMigrations(pool);
+  assert.equal(applied.at(-1)?.version, 27);
 });
 
 test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () => {

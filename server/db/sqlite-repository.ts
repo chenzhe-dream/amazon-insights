@@ -916,6 +916,37 @@ export class SqliteAgentRepository
               FROM job_attempts latest_attempt
              WHERE latest_attempt.stage_id = attempt.stage_id
           )
+          AND (
+            attempt.status <> 'failed'
+            OR EXISTS (
+              SELECT 1 FROM agent_runs agent_run
+               WHERE agent_run.stage_id = attempt.stage_id
+                 AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+                 AND (
+                   agent_run.validation_status = 'pending'
+                   OR (
+                     agent_run.validation_status = 'passed'
+                     AND agent_run.terminal_status = 'succeeded'
+                     AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'succeeded'
+                   )
+                   OR (
+                     attempt.attempt_number < attempt.max_attempts
+                     AND agent_run.validation_status = 'failed'
+                     AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'failed'
+                     AND json_extract(agent_run.terminal_metadata_json, '$.classification')
+                         IN ('upstream-temporary', 'rate-limit')
+                   )
+                 )
+            )
+            OR (
+              attempt.attempt_number < attempt.max_attempts
+              AND NOT EXISTS (
+                SELECT 1 FROM agent_runs agent_run
+                 WHERE agent_run.stage_id = attempt.stage_id
+                   AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
+              )
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = ?
@@ -1101,7 +1132,39 @@ export class SqliteAgentRepository
                  AND (
                    newest_attempt.status IN ('queued', 'running')
                    OR (newest_attempt.status = 'failed' AND newest_attempt.retryable = 1
-                       AND newest_attempt.retry_scheduled_at IS NULL)
+                       AND newest_attempt.retry_scheduled_at IS NULL
+                       AND (
+                         EXISTS (
+                           SELECT 1 FROM agent_runs agent_run
+                            WHERE agent_run.stage_id = newest_attempt.stage_id
+                              AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                              AND (
+                                agent_run.validation_status = 'pending'
+                                OR (agent_run.validation_status = 'passed'
+                                    AND agent_run.terminal_status = 'succeeded'
+                                    AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'succeeded')
+                              )
+                         )
+                         OR (
+                           newest_attempt.attempt_number < newest_attempt.max_attempts
+                           AND (
+                             NOT EXISTS (
+                               SELECT 1 FROM agent_runs agent_run
+                                WHERE agent_run.stage_id = newest_attempt.stage_id
+                                  AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                             )
+                             OR EXISTS (
+                               SELECT 1 FROM agent_runs agent_run
+                                WHERE agent_run.stage_id = newest_attempt.stage_id
+                                  AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                                  AND agent_run.validation_status = 'failed'
+                                  AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'failed'
+                                  AND json_extract(agent_run.terminal_metadata_json, '$.classification')
+                                      IN ('upstream-temporary', 'rate-limit')
+                             )
+                           )
+                         )
+                       ))
                  )
               THEN 1 ELSE 0 END AS retry_pending,
               (
@@ -1115,7 +1178,37 @@ export class SqliteAgentRepository
                  LIMIT 1
               ) AS revision,
               newest_attempt.status AS newest_attempt_status,
-              newest_attempt.retryable AS newest_attempt_retryable
+              newest_attempt.retryable AS newest_attempt_retryable,
+              CASE WHEN EXISTS (
+                   SELECT 1 FROM agent_runs agent_run
+                    WHERE agent_run.stage_id = newest_attempt.stage_id
+                      AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                      AND (
+                        agent_run.validation_status = 'pending'
+                        OR (agent_run.validation_status = 'passed'
+                            AND agent_run.terminal_status = 'succeeded'
+                            AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'succeeded')
+                      )
+                 )
+                 OR (
+                   newest_attempt.attempt_number < newest_attempt.max_attempts
+                   AND (
+                     NOT EXISTS (
+                       SELECT 1 FROM agent_runs agent_run
+                        WHERE agent_run.stage_id = newest_attempt.stage_id
+                          AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM agent_runs agent_run
+                        WHERE agent_run.stage_id = newest_attempt.stage_id
+                          AND agent_run.logical_execution_cycle_id = newest_attempt.logical_execution_cycle_id
+                          AND agent_run.validation_status = 'failed'
+                          AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'failed'
+                          AND json_extract(agent_run.terminal_metadata_json, '$.classification')
+                              IN ('upstream-temporary', 'rate-limit')
+                     )
+                   )
+                 ) THEN 1 ELSE 0 END AS newest_attempt_claim_eligible
          FROM ranked
         LEFT JOIN latest_terminal terminal
           ON terminal.snapshot_id = ranked.snapshot_id
@@ -1144,7 +1237,8 @@ export class SqliteAgentRepository
     return Object.freeze(rows.map((row) => {
       const terminalStatus = row.terminal_status;
       const exhaustedWithoutTerminal = terminalStatus == null &&
-        row.newest_attempt_status === "failed" && Number(row.newest_attempt_retryable) === 0;
+        row.newest_attempt_status === "failed" &&
+        (Number(row.newest_attempt_retryable) === 0 || Number(row.newest_attempt_claim_eligible) === 0);
       const status = terminalStatus === "failure" && Number(row.retry_pending) === 1
         ? "pending"
         : terminalStatus === "failure" || exhaustedWithoutTerminal

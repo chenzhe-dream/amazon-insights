@@ -472,6 +472,148 @@ test("publishes a schema-valid VOC snapshot with an empty Alexa dimension", asyn
   );
 });
 
+test("normalization queue replaces exhausted work but reuses at-max durable recovery", async (t) => {
+  const { pool, repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const actorUserId = await seedUser(repository, organizationId);
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  await repository.createProject({
+    id: projectId, organizationId, name: "Queue recovery", marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN], createdBy: actorUserId,
+    createdAt: CREATED_AT, updatedAt: CREATED_AT,
+  });
+  await repository.createAnalysisRun({
+    id: runId, projectId, mode: "existing-data", status: "queued", createdBy: actorUserId,
+    dataCutoffAt: CREATED_AT, idempotencyScope: `queue-recovery:${runId}`,
+    idempotencyKey: "create", createdAt: CREATED_AT, updatedAt: CREATED_AT,
+  });
+  const fingerprint = hash("f");
+  const queue = (queuedAt: string, executionFingerprint = fingerprint) => repository.transaction(() =>
+    repository.manualAlexaVoc.queueNormalizationInput({
+      actorUserId, actorOrganizationId: organizationId, projectId, runId,
+      marketplace: "US", asin: ASIN, snapshotId: randomUUID(), stageId: randomUUID(),
+      jobId: randomUUID(), rawReportSha256: hash("e"), plaintextBytes: 8,
+      executionFingerprint,
+      executionIdentity: {
+        providerName: "openai:responses-strict",
+        model: { name: "gpt-test", estimatedInputTokens: 100, maxOutputTokens: 200,
+          timeoutMs: 1_000, pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 } },
+      },
+      envelope: {
+        algVersion: "AES-256-GCM/v1", keyId: "normalization-test", wrappedDek: "AA",
+        nonce: "AA", ciphertext: "AA", tag: "AA", aadSha256: hash("a"),
+        plaintextBytes: 8, plaintextSha256: hash("e"),
+      },
+      queuedAt,
+    }));
+  const first = await queue(CREATED_AT);
+  await pool.query(
+    `UPDATE job_attempts
+        SET status = 'failed', max_attempts = attempt_number, retryable = TRUE,
+            retry_scheduled_at = NULL
+      WHERE id = $1`,
+    [first.jobId],
+  );
+  const readStatus = () => repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: organizationId, projectId, runId, marketplace: "US", asins: [ASIN],
+  });
+  assert.deepEqual((await readStatus())[0], {
+    asin: ASIN, fingerprint, status: "failure", revision: null, error: "persistence",
+  });
+  await repository.transaction(() => repository.manualAlexaVoc.putNormalizationTerminal({
+    snapshotId: first.snapshot.id, runId, jobAttemptId: first.jobId, agentRunId: null,
+    asin: ASIN, executionFingerprint: fingerprint, status: "failure",
+    category: "model-output", completedAt: addMilliseconds(CREATED_AT, 1),
+  }));
+  const replacement = await queue(addMilliseconds(CREATED_AT, 1));
+  assert.equal(replacement.jobCreated, true);
+  assert.notEqual(replacement.jobId, first.jobId);
+  assert.equal((await readStatus())[0]?.status, "pending");
+
+  const claimInput = {
+    ownerId: "normalizer", stage: "alexa-voc-normalization",
+    claimedAt: addMilliseconds(CREATED_AT, 2), leaseDurationMs: 60_000,
+  } as const;
+  assert.equal(await repository.claimNextJob(claimInput), null);
+  const claimed = await repository.claimNextJob(claimInput);
+  assert.equal(claimed?.id, replacement.jobId);
+  const skill = await repository.registerSkillVersion({
+    id: randomUUID(), skillId: ALEXA_VOC_NORMALIZATION_SKILL.id,
+    version: ALEXA_VOC_NORMALIZATION_SKILL.version,
+    contentHash: ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
+    manifest: {
+      ...ALEXA_VOC_NORMALIZATION_SKILL, entry: "SKILL.md",
+      allowedReferences: ["references/examples.md", "references/matrix-format.md"],
+      inputSchema: "AlexaVocNormalizationInput@1.0.0",
+      outputSchema: "AlexaVocNormalizationOutput@1.0.0",
+      fixtures: ["alexa-voc-normalization-complete-v1"],
+    }, createdAt: CREATED_AT,
+  });
+  const agentRunId = randomUUID();
+  const claimToken = randomUUID();
+  await repository.beginAgentRun({
+    id: agentRunId, organizationId, runId, stageId: replacement.stageId,
+    jobAttemptId: replacement.jobId, skillVersionId: skill.id,
+    snapshotIds: [replacement.snapshot.id], executionFingerprint: fingerprint,
+    outputSchemaDigest: hash("d"), provider: "openai", model: "gpt-5",
+    inputSummary: { contentHash: fingerprint, recordCount: 1 },
+    outputSchemaVersion: "1.0.0", dataCutoffAt: CREATED_AT,
+    startedAt: addMilliseconds(CREATED_AT, 2), leaseOwnerId: "normalizer",
+    leaseGeneration: claimed!.leaseGeneration, claimToken,
+    claimAcquiredAt: addMilliseconds(CREATED_AT, 2),
+    claimExpiresAt: addMilliseconds(CREATED_AT, 60_002),
+    logicalExecutionLineage: hash("c"),
+    logicalExecutionCycleId: claimed!.logicalExecutionCycleId,
+  });
+  await repository.finalizeAgentRun({
+    agentRunId, organizationId, leaseOwnerId: "normalizer",
+    leaseGeneration: claimed!.leaseGeneration, claimToken,
+    completedAt: addMilliseconds(CREATED_AT, 3),
+    outcome: {
+      terminalStatus: "succeeded", validationStatus: "passed", responseId: "resp_recovery",
+      output: { schemaVersion: "1.0.0", kind: "alexa-voc-normalization-result" },
+      error: null, inputTokens: 1, outputTokens: 1, estimatedCostMicros: 1,
+      durationMs: 1, attemptCount: 1, usageCompleteness: "complete",
+      attempts: [{ ordinal: 0, kind: "initial", transientRetryCount: 0,
+        formatRepair: false, accounting: "settled", errorClassification: null }],
+      terminalMetadata: { kind: "succeeded" },
+    },
+  });
+  await pool.query(
+    `UPDATE job_attempts
+        SET status = 'failed', max_attempts = attempt_number, retryable = TRUE,
+            retry_scheduled_at = NULL, leased_by = NULL, lease_expires_at = NULL
+      WHERE id = $1`,
+    [replacement.jobId],
+  );
+  const durableRecovery = await queue(addMilliseconds(CREATED_AT, 4));
+  assert.equal(durableRecovery.jobCreated, false);
+  assert.equal(durableRecovery.jobId, replacement.jobId);
+  assert.equal((await readStatus())[0]?.status, "pending");
+
+  await pool.query(
+    `INSERT INTO job_attempts (
+       id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+       logical_execution_cycle_id, status, available_at, lease_generation,
+       retryable, retry_scheduled_at, created_at, updated_at
+     ) VALUES ($1, $2, 3, 3, 3, $3, 'failed', $4, 0, FALSE, NULL, $4, $4)`,
+    [randomUUID(), replacement.stageId, hash("b"), addMilliseconds(CREATED_AT, 5)],
+  );
+  assert.deepEqual((await readStatus())[0], {
+    asin: ASIN, fingerprint, status: "failure", revision: null, error: "model-output",
+  });
+  assert.deepEqual(await repository.manualAlexaVoc.listNormalizationStatuses({
+    actorOrganizationId: randomUUID(), projectId, runId, marketplace: "US", asins: [ASIN],
+  }), []);
+  const newFingerprint = hash("a");
+  const fresh = await queue(addMilliseconds(CREATED_AT, 6), newFingerprint);
+  assert.equal(fresh.jobCreated, true);
+  assert.deepEqual((await readStatus())[0], {
+    asin: ASIN, fingerprint: newFingerprint, status: "pending", revision: null, error: null,
+  });
+});
+
 test("deduplicates only the current hash and repairs missing or failed outbox work", async (t) => {
   const { pool, repository } = openRepository(t, await createSchema());
   const organizationId = randomUUID();

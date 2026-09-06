@@ -132,6 +132,8 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   assert.match(activeJobRead.sql, /status = 'queued'[\s\S]*status = 'running'/);
   assert.match(activeJobRead.sql, /status = 'failed'[\s\S]*retry_scheduled_at IS NULL/);
   assert.match(activeJobRead.sql, /attempt\.attempt_number = \([\s\S]*MAX\(latest_attempt\.attempt_number\)/);
+  assert.match(activeJobRead.sql, /agent_run\.validation_status = 'passed'[\s\S]*agent_run\.terminal_status = 'succeeded'/);
+  assert.match(activeJobRead.sql, /attempt\.attempt_number < attempt\.max_attempts[\s\S]*NOT EXISTS/);
   assert.match(activeJobRead.sql, /NOT EXISTS[\s\S]*terminal\.snapshot_id = \$3/);
   assert.deepEqual(activeJobRead.values, [STAGE_ID, true, SNAPSHOT_ID]);
   assert.doesNotMatch(activeJobRead.sql, /FOR UPDATE/);

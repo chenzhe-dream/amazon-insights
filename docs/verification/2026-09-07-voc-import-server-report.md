@@ -24,3 +24,12 @@ GREEN:
 - Combined repository run before stale fixture correction: 43/44 passed; the only failure was the known missing `agent_run_id` fixture, whose focused rerun passed after correction.
 
 The root integrator owns the final full server suite and browser/build verification.
+
+## Review follow-up
+
+- RED: the PostgreSQL queue unit rejected reuse SQL that did not distinguish at-max durable recovery from exhausted no-artifact work; the new SQLite durable-recovery fixture also initially created replacement work.
+- `npx tsx --conditions=react-server --test tests/agent/manual-alexa-voc-sqlite-repository.test.ts tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/postgres-manual-alexa-voc-store-unit.test.ts` — 45/45 passed.
+- `npx tsx --conditions=react-server --test --test-name-pattern="migrate a fresh database once|concurrent PostgreSQL migration runners|0027 upgrades legacy empty dimensions" tests/agent/postgres-migrations.test.ts` — 3/3 passed.
+- Real PostgreSQL coverage now verifies missing-terminal exhaustion, terminal failure with superseded retry history, durable at-max report-only recovery, final exhaustion, new-fingerprint pending state, tenant isolation, and exact revision provenance.
+- The 0019-to-0026 fixture proves the 0020 trigger rejects cumulative publication containing a stored empty-negative legacy revision before applying 0027; after upgrade the old empty dimension and nonempty sibling publish unchanged, while non-string, 16,385-character, and 257-item dimensions remain rejected.
+- Targeted ESLint completed with 0 errors and 0 warnings; `git diff --check` completed successfully.
