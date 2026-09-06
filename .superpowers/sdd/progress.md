@@ -32,3 +32,12 @@ Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `
 - Task 2: complete (`9fd32af..06922ae`, review clean after Important repair)
 - Task 3: complete (`06922ae..a3120b7`, review clean after Important repair)
 - Task 4: complete (`806822c`, final review PASS) — focused 64/64, production build, and BASE-to-HEAD diff-check PASS; PostgreSQL integration blocked by unavailable Docker API; changed-source ESLint retains the known `app/page.tsx` baseline hooks/ref findings.
+
+## 2026-09-06 西柚展示语义微调
+
+- Branch: `codex/fix-xydc-status-order-20260906`; baseline `1eb1d4e`; approved design/plan `8d71943`.
+- Task 1: complete (`8d71943..939a4cc`); independent spec/quality Approved and whole-branch Ready to merge Yes; no Critical/Important.
+- Baseline: XiYou UI 14/14; isolated runtime data contract 10/10 with `--conditions=react-server`.
+- Scope: distinguish catalog/variant status, input-aligned family order, Chinese reasons and separate source/fetch timestamps. No live/provider/data changes.
+- Final verification: UI 18/18, runtime-data 10/10, new-build HTML 3/3, targeted lint/build/diff-check PASS; source fingerprint matches; desktop/mobile/drawer fixture images inspected.
+- Minor deferred: add explicit unmatched-groups ordering test; implementation reviewed correct. Evidence: `docs/verification/2026-09-06-xydc-status-order.md`. Not merged or deployed.

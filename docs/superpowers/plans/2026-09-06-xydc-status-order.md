@@ -25,7 +25,7 @@
 **Interfaces:** Consumes existing products/families/market props; outputs unchanged public component API. `groupXydcVariantFamilies` remains deterministic and preserves existing merge semantics.
 
 - [x] **Step 1: Isolate and baseline.** 新分支 `codex/fix-xydc-status-order-20260906` 已建立于非正式补丁工作树，基线测试 14/14。
-- [ ] **Step 2: RED.** 在已有 fixture 增加下列行为断言；先运行确认语义失败而非环境错误。
+- [x] **Step 2: RED.** 在已有 fixture 增加下列行为断言；先运行确认语义失败而非环境错误。
 
 ```ts
 const waiting = [{ ...products[0]!, brand: "等待同步", title: "等待卖家精灵与 SIF MCP 返回商品数据" }];
@@ -39,7 +39,7 @@ assert.doesNotMatch(html, /等待同步|等待卖家精灵/);
 
 Run: `node --test --import tsx tests/agent/xydc-variant-section.test.tsx`
 
-- [ ] **Step 3: Minimal implementation.** 在组件中加入纯展示映射：
+- [x] **Step 3: Minimal implementation.** 在组件中加入纯展示映射：
 
 ```ts
 const variantStatusLabels = {
@@ -60,7 +60,7 @@ const variantReasonLabels = {
 
 在 SectionBody 的展示边界建立 Map<ASIN,index>，复制后按最早命中索引排序 groups，fallback country:parentAsin；命中 ASIN 与代表 product 也使用输入顺序，禁止修改传入数组。目录占位和空值只在此组件映射，真实品牌/标题保留。使用同一小型时间说明组件，在主行及抽屉显示 sourceUpdatedAt 与 fetchedAt 两行；不得用 `sourceUpdatedAt ?? fetchedAt`。时间原值用 React 文本渲染，保持未知上架时间说明。中文原因和 child status 映射不改变 family status。
 
-- [ ] **Step 4: GREEN and review.** 上述全文件测试通过后，报告 RED/GREEN，提交仅涉及代码与测试。主审核执行 HTML 测试、定向 lint、生产 build，独立审查代码。
+- [x] **Step 4: GREEN and review.** 上述全文件测试通过后，报告 RED/GREEN，提交仅涉及代码与测试。主审核执行 HTML 测试、定向 lint、生产 build，独立审查代码。
 
 ```powershell
 node --test --import tsx tests/agent/xydc-variant-section.test.tsx
@@ -70,4 +70,6 @@ npm run build
 git diff --check
 ```
 
-- [ ] **Step 5: Deliver.** 保存验证记录和 commit；不合入正式分支、不切换服务。用户下一步可看本地 fixture 预览，再明确安排受控更新。
+- [x] **Step 5: Deliver.** 保存验证记录和 commit；不合入正式分支、不切换服务。用户下一步可看本地 fixture 预览，再明确安排受控更新。
+
+验收记录：`docs/verification/2026-09-06-xydc-status-order.md`。代码提交 `939a4cc`；主审核 31 项通过、构建/定向 lint/独立审查通过。
