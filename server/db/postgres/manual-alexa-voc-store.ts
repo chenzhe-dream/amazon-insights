@@ -214,10 +214,13 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                   AND newest_attempt.attempt_number > terminal.attempt_number
                   AND (
                     newest_attempt.status IN ('queued', 'running')
-                    OR (newest_attempt.status = 'failed' AND newest_attempt.retryable)
+                    OR (newest_attempt.status = 'failed' AND newest_attempt.retryable
+                        AND newest_attempt.retry_scheduled_at IS NULL)
                   )
                 ) AS retry_pending,
-                revision.revision::text AS revision
+                revision.revision::text AS revision,
+                newest_attempt.status AS newest_attempt_status,
+                newest_attempt.retryable AS newest_attempt_retryable
            FROM latest
            LEFT JOIN LATERAL (
              SELECT current_terminal.*, attempt.attempt_number
@@ -230,7 +233,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
               LIMIT 1
            ) terminal ON true
            LEFT JOIN LATERAL (
-             SELECT attempt.attempt_number, attempt.status, attempt.retryable
+             SELECT attempt.attempt_number, attempt.status, attempt.retryable,
+                    attempt.retry_scheduled_at
                FROM job_attempts attempt
                JOIN run_stages stage ON stage.id = attempt.stage_id
               WHERE stage.run_id = $1
@@ -259,9 +263,11 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       );
       return Object.freeze(result.rows.map((row) => {
         const terminalStatus = row.terminal_status;
+        const exhaustedWithoutTerminal = terminalStatus == null &&
+          row.newest_attempt_status === "failed" && row.newest_attempt_retryable === false;
         const status = terminalStatus === "failure" && row.retry_pending === true
           ? "pending"
-          : terminalStatus === "failure"
+          : terminalStatus === "failure" || exhaustedWithoutTerminal
           ? "failure"
           : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
             ? "success"
@@ -271,7 +277,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           fingerprint: row.execution_fingerprint,
           status,
           revision: status === "success" ? row.revision : null,
-          error: status === "failure" ? row.error_category : null,
+          error: status === "failure" ? (row.error_category ?? "persistence") : null,
         });
       }));
     });
@@ -1284,8 +1290,14 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
         WHERE attempt.stage_id = $1 AND (
           status = 'queued'
           OR (status = 'running' AND $2::boolean = FALSE)
-          OR (status = 'failed' AND retryable = TRUE)
+          OR (status = 'failed' AND retryable = TRUE
+              AND retry_scheduled_at IS NULL)
         )
+          AND attempt.attempt_number = (
+            SELECT MAX(latest_attempt.attempt_number)
+              FROM job_attempts latest_attempt
+             WHERE latest_attempt.stage_id = attempt.stage_id
+          )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = $3

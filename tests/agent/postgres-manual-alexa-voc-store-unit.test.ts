@@ -130,6 +130,8 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   );
   assert.ok(activeJobRead);
   assert.match(activeJobRead.sql, /status = 'queued'[\s\S]*status = 'running'/);
+  assert.match(activeJobRead.sql, /status = 'failed'[\s\S]*retry_scheduled_at IS NULL/);
+  assert.match(activeJobRead.sql, /attempt\.attempt_number = \([\s\S]*MAX\(latest_attempt\.attempt_number\)/);
   assert.match(activeJobRead.sql, /NOT EXISTS[\s\S]*terminal\.snapshot_id = \$3/);
   assert.deepEqual(activeJobRead.values, [STAGE_ID, true, SNAPSHOT_ID]);
   assert.doesNotMatch(activeJobRead.sql, /FOR UPDATE/);
@@ -225,6 +227,7 @@ test("PostgreSQL normalization status query is exact-run scoped and returns only
   assert.match(calls[0]!.sql, /ds\.run_id = \$1 AND project\.id = \$2/);
   assert.match(calls[0]!.sql, /project\.organization_id = \$3/);
   assert.match(calls[0]!.sql, /LATERAL[\s\S]*attempt_number DESC/);
+  assert.match(calls[0]!.sql, /newest_attempt\.retry_scheduled_at IS NULL/);
   assert.deepEqual(calls[0]!.values, [RUN_ID, PROJECT_ID, ORGANIZATION_ID, "US", [ASIN]]);
   assert.doesNotMatch(JSON.stringify(records), /rawText|ciphertext|wrappedDek|modelResponse/i);
 });

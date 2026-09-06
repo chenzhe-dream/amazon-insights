@@ -908,8 +908,14 @@ export class SqliteAgentRepository
         WHERE attempt.stage_id = ? AND (
           status = 'queued'
           OR (status = 'running' AND ? = 0)
-          OR (status = 'failed' AND retryable = 1)
+          OR (status = 'failed' AND retryable = 1
+              AND retry_scheduled_at IS NULL)
         )
+          AND attempt.attempt_number = (
+            SELECT MAX(latest_attempt.attempt_number)
+              FROM job_attempts latest_attempt
+             WHERE latest_attempt.stage_id = attempt.stage_id
+          )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = ?
@@ -1090,18 +1096,14 @@ export class SqliteAgentRepository
        SELECT ranked.asin, ranked.execution_fingerprint,
               terminal.status AS terminal_status,
               terminal.error_category,
-              CASE WHEN terminal.status = 'failure' AND EXISTS (
-                SELECT 1
-                  FROM job_attempts retry_attempt
-                  JOIN run_stages retry_stage ON retry_stage.id = retry_attempt.stage_id
-                 WHERE retry_stage.run_id = ?
-                   AND retry_stage.stage = 'alexa-voc-normalization'
-                   AND retry_attempt.attempt_number > terminal.attempt_number
-                   AND (
-                     retry_attempt.status IN ('queued', 'running')
-                     OR (retry_attempt.status = 'failed' AND retry_attempt.retryable = 1)
-                   )
-              ) THEN 1 ELSE 0 END AS retry_pending,
+              CASE WHEN terminal.status = 'failure'
+                 AND newest_attempt.attempt_number > terminal.attempt_number
+                 AND (
+                   newest_attempt.status IN ('queued', 'running')
+                   OR (newest_attempt.status = 'failed' AND newest_attempt.retryable = 1
+                       AND newest_attempt.retry_scheduled_at IS NULL)
+                 )
+              THEN 1 ELSE 0 END AS retry_pending,
               (
                 SELECT CAST(revision.revision AS TEXT)
                   FROM manual_alexa_voc_revisions revision
@@ -1111,11 +1113,23 @@ export class SqliteAgentRepository
                    AND revision.content_hash = ranked.execution_fingerprint
                  ORDER BY revision.revision DESC
                  LIMIT 1
-              ) AS revision
+              ) AS revision,
+              newest_attempt.status AS newest_attempt_status,
+              newest_attempt.retryable AS newest_attempt_retryable
          FROM ranked
-         LEFT JOIN latest_terminal terminal
-           ON terminal.snapshot_id = ranked.snapshot_id
+        LEFT JOIN latest_terminal terminal
+          ON terminal.snapshot_id = ranked.snapshot_id
           AND terminal.terminal_position = 1
+        LEFT JOIN job_attempts newest_attempt
+          ON newest_attempt.id = (
+            SELECT candidate.id
+              FROM job_attempts candidate
+              JOIN run_stages candidate_stage ON candidate_stage.id = candidate.stage_id
+             WHERE candidate_stage.run_id = ?
+               AND candidate_stage.stage = 'alexa-voc-normalization'
+             ORDER BY candidate.attempt_number DESC
+             LIMIT 1
+          )
         WHERE ranked.position = 1
         ORDER BY ranked.asin`,
     ).all(
@@ -1124,14 +1138,16 @@ export class SqliteAgentRepository
       organizationId,
       input.marketplace,
       JSON.stringify(asins),
-      runId,
       organizationId,
+      runId,
     ) as SqliteRow[];
     return Object.freeze(rows.map((row) => {
       const terminalStatus = row.terminal_status;
+      const exhaustedWithoutTerminal = terminalStatus == null &&
+        row.newest_attempt_status === "failed" && Number(row.newest_attempt_retryable) === 0;
       const status = terminalStatus === "failure" && Number(row.retry_pending) === 1
         ? "pending"
-        : terminalStatus === "failure"
+        : terminalStatus === "failure" || exhaustedWithoutTerminal
         ? "failure"
         : terminalStatus === "success" && row.revision !== null && row.revision !== undefined
           ? "success"
@@ -1141,7 +1157,7 @@ export class SqliteAgentRepository
         fingerprint: row.execution_fingerprint,
         status,
         revision: status === "success" ? row.revision : null,
-        error: status === "failure" ? row.error_category : null,
+        error: status === "failure" ? (row.error_category ?? "persistence") : null,
       });
     }));
   }

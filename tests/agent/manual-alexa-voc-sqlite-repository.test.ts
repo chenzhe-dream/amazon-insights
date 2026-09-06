@@ -415,6 +415,57 @@ test("normalization status selects the latest fingerprint inside the exact proje
   assert.deepEqual(await repository.manualAlexaVoc.listNormalizationStatuses({
     actorOrganizationId: randomUUID(), projectId, runId: runA, marketplace: "US", asins: [ASIN],
   }), []);
+
+  const injector = new DatabaseSync(temporary.path);
+  const latest = injector.prepare(
+    `SELECT ds.id AS snapshot_id, attempt.id AS job_id, attempt.stage_id
+       FROM data_snapshots ds
+       JOIN run_stages stage ON stage.run_id = ds.run_id AND stage.stage = 'alexa-voc-normalization'
+       JOIN job_attempts attempt ON attempt.stage_id = stage.id
+      WHERE ds.run_id = ? AND ds.content_hash = ?
+      ORDER BY attempt.attempt_number DESC LIMIT 1`,
+  ).get(runA, hash("b")) as { snapshot_id: string; job_id: string; stage_id: string };
+  injector.prepare(
+    `UPDATE job_attempts SET status = 'failed', retryable = 0, completed_at = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(addMilliseconds(CREATED_AT, 3), addMilliseconds(CREATED_AT, 3), latest.job_id);
+  assert.deepEqual((await status(runA))[0], {
+    asin: ASIN, fingerprint: hash("b"), status: "failure", revision: null, error: "persistence",
+  });
+
+  injector.prepare(
+    `INSERT INTO alexa_voc_normalization_terminals (
+       snapshot_id, run_id, job_attempt_id, agent_run_id, asin,
+       execution_fingerprint, status, error_category, completed_at
+     ) VALUES (?, ?, ?, NULL, ?, ?, 'failure', 'model-output', ?)`,
+  ).run(latest.snapshot_id, runA, latest.job_id, ASIN, hash("b"), addMilliseconds(CREATED_AT, 3));
+  const retryId = randomUUID();
+  const exhaustedId = randomUUID();
+  injector.prepare(
+    `INSERT INTO job_attempts (
+       id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+       logical_execution_cycle_id, status, available_at, lease_generation,
+       retryable, retry_scheduled_at, created_at, updated_at
+     ) VALUES (?, ?, 2, 3, 1, ?, 'failed', ?, 0, 1, ?, ?, ?)`,
+  ).run(retryId, latest.stage_id, hash("a"), addMilliseconds(CREATED_AT, 4),
+    addMilliseconds(CREATED_AT, 4), addMilliseconds(CREATED_AT, 4), addMilliseconds(CREATED_AT, 4));
+  injector.prepare(
+    `INSERT INTO job_attempts (
+       id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
+       logical_execution_cycle_id, status, available_at, lease_generation,
+       retryable, retry_scheduled_at, created_at, updated_at
+     ) VALUES (?, ?, 3, 3, 1, ?, 'failed', ?, 0, 0, NULL, ?, ?)`,
+  ).run(exhaustedId, latest.stage_id, hash("b"), addMilliseconds(CREATED_AT, 5),
+    addMilliseconds(CREATED_AT, 5), addMilliseconds(CREATED_AT, 5));
+  injector.close();
+  assert.deepEqual((await status(runA))[0], {
+    asin: ASIN, fingerprint: hash("b"), status: "failure", revision: null, error: "model-output",
+  });
+  const newFingerprint = await queue(runA, hash("d"), addMilliseconds(CREATED_AT, 6));
+  assert.equal(newFingerprint.jobCreated, true);
+  assert.deepEqual((await status(runA))[0], {
+    asin: ASIN, fingerprint: hash("d"), status: "pending", revision: null, error: null,
+  });
 });
 
 test("reuses only same-organization successful latest-skill normalization fingerprints", async (t) => {

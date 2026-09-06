@@ -400,6 +400,78 @@ test("serializes concurrent revisions by tenant scope and binds the runtime capa
   assert.equal(outboxForHead.rows[0]?.count, "1");
 });
 
+test("publishes a schema-valid VOC snapshot with an empty Alexa dimension", async (t) => {
+  const { pool, repository } = openRepository(t, await createSchema());
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const projectId = randomUUID();
+  const runId = randomUUID();
+  await repository.createProject({
+    id: projectId,
+    organizationId,
+    name: "Empty Alexa dimension",
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    createdBy: actor,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  await repository.createAnalysisRun({
+    id: runId,
+    projectId,
+    mode: "existing-data",
+    status: "queued",
+    createdBy: actor,
+    dataCutoffAt: CREATED_AT,
+    idempotencyScope: `empty-dimension:${runId}`,
+    idempotencyKey: "create",
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  });
+  const candidate = buildVocSnapshotCandidate({
+    marketplace: "US",
+    asins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    dataCutoffAt: CREATED_AT,
+    sourceBundles: [{
+      sourceId: "alexa-voc",
+      type: "manual-voc",
+      reference: VOC_SOURCE_REFERENCES.alexaVoc,
+      marketplace: "US",
+      capturedAt: CREATED_AT,
+      records: [{ ...normalizedRecord(ASIN, "empty-negatives"), negatives: [] }],
+    }],
+  });
+
+  const created = await repository.createDataSnapshotForRun({
+    actorId: actor,
+    actorOrganizationId: organizationId,
+    runId,
+    expectedProjectId: projectId,
+    expectedMarketplace: "US",
+    expectedAsins: [ASIN, OTHER_ASIN, THIRD_ASIN],
+    expectedRunCutoffAt: CREATED_AT,
+    candidateId: randomUUID(),
+    createdAt: CREATED_AT,
+    candidate,
+  });
+  assert.deepEqual(created.snapshot.payload.records.alexaVoc[0]?.negatives, []);
+
+  await assert.rejects(
+    pool.query(
+      `INSERT INTO data_snapshots (
+         id, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+         sources_json, payload_json, content_hash, created_at, snapshot_kind, artifact_kind
+       ) SELECT $1, run_id, schema_version, marketplace, asins_json, data_cutoff_at,
+                sources_json,
+                jsonb_set(payload_json, '{records,alexaVoc,0,negatives}', $2::jsonb),
+                content_hash, created_at, snapshot_kind, artifact_kind
+           FROM data_snapshots WHERE id = $3`,
+      [randomUUID(), JSON.stringify(Array.from({ length: 257 }, () => "oversized")), created.snapshot.id],
+    ),
+    /invalid Alexa VOC snapshot record/,
+  );
+});
+
 test("deduplicates only the current hash and repairs missing or failed outbox work", async (t) => {
   const { pool, repository } = openRepository(t, await createSchema());
   const organizationId = randomUUID();
@@ -962,6 +1034,7 @@ test("queries committed normalization reuse through successful latest-skill agen
         normalized_record: expected,
         normalized_schema_version: NORMALIZED_SCHEMA_VERSION,
         parser_version: PARSER_VERSION,
+        agent_run_id: randomUUID(),
       } as unknown as Row]);
     },
     async transaction<Result>(operation: () => Promise<Result>) {
@@ -989,6 +1062,7 @@ test("queries committed normalization reuse through successful latest-skill agen
     "US",
     JSON.stringify([ASIN]),
     executionFingerprint,
+    null,
     ALEXA_VOC_NORMALIZATION_SKILL.id,
     ALEXA_VOC_NORMALIZATION_SKILL.version,
     ALEXA_VOC_NORMALIZATION_SKILL.contentHash,
