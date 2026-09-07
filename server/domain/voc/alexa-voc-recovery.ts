@@ -3,6 +3,7 @@ import {
   Sha256Schema,
 } from "../../../shared/agent-contracts";
 import type { JobAttemptRecord } from "../../db/repository";
+import { ALEXA_VOC_NORMALIZATION_SKILL } from "./alexa-voc-normalization-contracts";
 
 type Row = Record<string, unknown>;
 export type NormalizationTerminalRepair = Readonly<{
@@ -47,7 +48,34 @@ export function normalizationRecoveryQueries(job: NormalizationRecoveryJob) {
       values: [job.runId],
     },
     {
-      sql: `SELECT * FROM alexa_voc_normalization_terminals WHERE run_id = ?`,
+      sql: `SELECT terminal.*, j.id AS terminal_job_id, j.stage_id AS terminal_job_stage_id,
+              stage.run_id AS terminal_job_run_id, stage.stage AS terminal_job_stage,
+              ar.id AS source_audit_id, ar.run_id AS source_audit_run_id,
+              ar.stage_id AS source_audit_stage_id, ar.job_attempt_id AS source_audit_job_id,
+              ar.execution_fingerprint AS source_audit_fingerprint,
+              ar.validation_status AS source_validation_status, ar.terminal_status AS source_terminal_status,
+              ar.snapshot_ids_json AS source_audit_snapshot_ids_json,
+              source_job.stage_id AS source_job_stage_id,
+              source_stage.run_id AS source_job_run_id, source_stage.stage AS source_job_stage,
+              source.id AS source_snapshot_id, source.run_id AS source_snapshot_run_id,
+              source.marketplace AS source_marketplace, source.asins_json AS source_asins_json,
+              source.snapshot_kind AS source_snapshot_kind, source.artifact_kind AS source_artifact_kind,
+              source.content_hash AS source_content_hash, source.payload_json AS source_payload_json,
+              source_project.organization_id AS source_organization_id,
+              skill.skill_id AS source_skill_id,
+              (SELECT COUNT(*) FROM agent_run_snapshots links WHERE links.agent_run_id = ar.id) AS source_link_count
+           FROM alexa_voc_normalization_terminals terminal
+           LEFT JOIN job_attempts j ON j.id = terminal.job_attempt_id
+           LEFT JOIN run_stages stage ON stage.id = j.stage_id
+           LEFT JOIN agent_runs ar ON ar.id = terminal.agent_run_id
+           LEFT JOIN job_attempts source_job ON source_job.id = ar.job_attempt_id
+           LEFT JOIN run_stages source_stage ON source_stage.id = source_job.stage_id
+           LEFT JOIN agent_run_snapshots link ON link.agent_run_id = ar.id
+           LEFT JOIN data_snapshots source ON source.id = link.snapshot_id
+           LEFT JOIN analysis_runs source_run ON source_run.id = source.run_id
+           LEFT JOIN projects source_project ON source_project.id = source_run.project_id
+           LEFT JOIN skill_versions skill ON skill.id = ar.skill_version_id
+          WHERE terminal.run_id = ?`,
       values: [job.runId],
     },
   ];
@@ -171,9 +199,58 @@ export function normalizationRecoveryDisposition(
       terminal.run_id !== job.runId ||
       terminal.asin !== input.asin ||
       terminal.execution_fingerprint !== input.fingerprint ||
+      terminal.job_attempt_id !== terminal.terminal_job_id ||
+      terminal.terminal_job_stage_id !== job.stageId ||
+      terminal.terminal_job_run_id !== job.runId ||
+      terminal.terminal_job_stage !== "alexa-voc-normalization" ||
       !["success", "failure"].includes(String(terminal.status))
     )
       return invalid();
+    if (terminal.agent_run_id !== null) {
+      const sourceIds = json(terminal.source_audit_snapshot_ids_json);
+      const sourceAsins = json(terminal.source_asins_json);
+      const sourcePayload = json(terminal.source_payload_json) as Row | null;
+      if (
+        terminal.agent_run_id !== terminal.source_audit_id ||
+        terminal.source_audit_fingerprint !== input.fingerprint ||
+        terminal.source_organization_id !== input.organizationId ||
+        terminal.source_marketplace !== "US" ||
+        !Array.isArray(sourceAsins) ||
+        sourceAsins.length !== 1 ||
+        sourceAsins[0] !== input.asin ||
+        !Array.isArray(sourceIds) ||
+        sourceIds.length !== 1 ||
+        sourceIds[0] !== terminal.source_snapshot_id ||
+        Number(terminal.source_link_count) !== 1 ||
+        terminal.source_snapshot_kind !== "alexa-voc-normalization-input" ||
+        terminal.source_artifact_kind !== "alexa-voc-normalization-input" ||
+        terminal.source_content_hash !== input.fingerprint ||
+        sourcePayload?.executionFingerprint !== input.fingerprint ||
+        sourcePayload?.asin !== input.asin ||
+        terminal.source_audit_run_id !== terminal.source_snapshot_run_id ||
+        terminal.source_audit_run_id !== terminal.source_job_run_id ||
+        terminal.source_audit_stage_id !== terminal.source_job_stage_id ||
+        terminal.source_job_stage !== "alexa-voc-normalization" ||
+        terminal.source_skill_id !== ALEXA_VOC_NORMALIZATION_SKILL.id
+      )
+        return invalid();
+      // Historical success can originate in another run/project/cycle. Validate
+      // immutable provenance, not the currently deployed skill version/hash.
+      if (terminal.status === "success") {
+        if (
+          terminal.source_validation_status !== "passed" ||
+          terminal.source_terminal_status !== "succeeded"
+        )
+          return invalid();
+      } else if (
+        terminal.source_validation_status !== "failed" ||
+        terminal.source_audit_run_id !== job.runId ||
+        terminal.source_audit_stage_id !== job.stageId ||
+        terminal.source_audit_job_id !== terminal.job_attempt_id ||
+        terminal.source_snapshot_id !== terminal.snapshot_id
+      )
+        return invalid();
+    } else if (terminal.status === "success") return invalid();
     if (terminal.status === "success" || terminal.job_attempt_id === job.id)
       completed.add(String(terminal.snapshot_id));
   }

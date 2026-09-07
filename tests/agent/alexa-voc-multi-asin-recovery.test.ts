@@ -195,18 +195,23 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           keys: { fixture: randomBytes(32).toString("base64url") },
         }),
       });
-      const queueInput = async (asin: string) => {
+      const queueInput = async (
+        asin: string,
+        destination = { projectId, runId },
+      ) => {
         const snapshotId =
-          asin === A
-            ? "10000000-0000-4000-8000-000000000001"
-            : asin === B
-              ? "20000000-0000-4000-8000-000000000002"
-              : "30000000-0000-4000-8000-000000000003";
+          destination.runId !== runId
+            ? randomUUID()
+            : asin === A
+              ? "10000000-0000-4000-8000-000000000001"
+              : asin === B
+                ? "20000000-0000-4000-8000-000000000002"
+                : "30000000-0000-4000-8000-000000000003";
         const envelope = cipher.encrypt({
           identity: {
             organizationId,
-            projectId,
-            runId,
+            projectId: destination.projectId,
+            runId: destination.runId,
             snapshotId,
             marketplace: "US",
             asin,
@@ -230,8 +235,8 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           ).manualAlexaVoc.queueNormalizationInput({
             actorUserId: actorId,
             actorOrganizationId: organizationId,
-            projectId,
-            runId,
+            projectId: destination.projectId,
+            runId: destination.runId,
             marketplace: "US",
             asin,
             snapshotId,
@@ -634,6 +639,21 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           (rows: typeof records) => {
             rows[2]![0]!.execution_fingerprint = "f".repeat(64);
           },
+          (rows: typeof records) => {
+            rows[2]![0]!.agent_run_id = audits.find(
+              (audit) => audit.snapshotIds[0] === queued[1]!.snapshot.id,
+            )!.id;
+          },
+          (rows: typeof records) => {
+            rows[2]![0]!.terminal_job_stage_id = randomUUID();
+          },
+          (rows: typeof records) => {
+            // A B-shaped terminal retaining A's actual joined audit provenance.
+            rows[2]![0]!.snapshot_id = queued[1]!.snapshot.id;
+            rows[2]![0]!.asin = B;
+            rows[2]![0]!.execution_fingerprint =
+              queued[1]!.snapshot.executionFingerprint;
+          },
         ];
         for (const corrupt of corruptions) {
           const rows = structuredClone(records);
@@ -849,6 +869,91 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         } finally {
           db.close();
         }
+      }
+      if (scenario === "publication") {
+        // A repository-written success in a different project/run legitimately
+        // points back to the source audit; recovery must preserve that replay.
+        const replayProjectId = randomUUID(),
+          replayRunId = randomUUID();
+        await repository.createProject({
+          id: replayProjectId,
+          organizationId,
+          name: "Replay",
+          marketplace: "US",
+          asins: [A, B, C],
+          createdBy: actorId,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await repository.createAnalysisRun({
+          id: replayRunId,
+          projectId: replayProjectId,
+          mode: "existing-data",
+          status: "queued",
+          createdBy: actorId,
+          dataCutoffAt: cutoff,
+          idempotencyScope: replayRunId,
+          idempotencyKey: "create",
+          createdAt: now,
+          updatedAt: now,
+        });
+        const replay = await queueInput(A, {
+          projectId: replayProjectId,
+          runId: replayRunId,
+        });
+        const sourceAudit = audits.find(
+          (audit) => audit.snapshotIds[0] === queued[0]!.snapshot.id,
+        )!;
+        await repository.manualAlexaVoc.putNormalizationTerminal({
+          snapshotId: replay.snapshot.id,
+          runId: replayRunId,
+          jobAttemptId: replay.jobId,
+          agentRunId: sourceAudit.id,
+          asin: A,
+          executionFingerprint: replay.snapshot.executionFingerprint,
+          status: "success",
+          category: null,
+          completedAt: now,
+        });
+        const replayJob = (
+          await repository.listJobAttempts(replay.stageId)
+        )[0]!;
+        const rows: Record<string, unknown>[][] = [];
+        for (const query of normalizationRecoveryQueries(replayJob)) {
+          if (pool) {
+            let index = 0;
+            rows.push(
+              (
+                await pool.query(
+                  query.sql.replace(/\?/g, () => `$${++index}`),
+                  query.values,
+                )
+              ).rows,
+            );
+          } else {
+            const db = new DatabaseSync(path);
+            try {
+              rows.push(db.prepare(query.sql).all(...query.values));
+            } finally {
+              db.close();
+            }
+          }
+        }
+        assert.deepEqual(normalizationRecoveryDisposition(replayJob, rows), {
+          kind: "recover",
+          mode: "completion-only",
+        });
+        assert.notEqual(rows[2]![0]!.source_audit_run_id, replayRunId);
+        const mismatchedSource = structuredClone(rows);
+        mismatchedSource[2]![0]!.source_organization_id = randomUUID();
+        assert.throws(() =>
+          normalizationRecoveryDisposition(replayJob, mismatchedSource),
+        );
+        const wrongSourceAsin = structuredClone(rows);
+        wrongSourceAsin[2]![0]!.source_asins_json = JSON.stringify([B]);
+        assert.throws(() =>
+          normalizationRecoveryDisposition(replayJob, wrongSourceAsin),
+        );
       }
     });
   }

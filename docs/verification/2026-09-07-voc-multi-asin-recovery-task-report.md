@@ -89,3 +89,27 @@ Production: `server/domain/voc/alexa-voc-recovery.ts`; `server/db/postgres/job-s
 Tests: `tests/agent/alexa-voc-multi-asin-recovery.test.ts`; `tests/agent/postgres-manual-alexa-voc-store-unit.test.ts`. Report: this file.
 
 No migration, global retry limit, public repository/API signature, ordinary-stage audit semantics or UI changes. No live provider, formal database, historical input replay, service restart, artifact activation, merge, push or deployment. Coordinator-owned progress/final report, historical task reports and unrelated `test-results/` are excluded from the implementation commit.
+
+## Review follow-up: terminal reference provenance
+
+Review of `eed1f3d` identified that terminal values were validated but their referenced job/audit associations were not. The read-only terminal query now LEFT JOINs terminal job/stage plus source audit/job/stage, linked snapshot, organization and skill identity. Reduction rejects a wrong-stage/run job, wrong audit, fingerprint/ASIN/organization mismatch, invalid single-input linkage or non-normalization provenance. Failure with a nonnull audit must reference that terminal's exact job/run/stage/input and a failed audit; null-audit failures remain allowed.
+
+Success provenance deliberately permits a prior run/project/logical cycle in the same organization with matching marketplace/ASIN/fingerprint. The guard checks the normalization skill ID, not today's version/hash, so immutable historical successful terminals do not become invalid after a skill upgrade. Existing new-replay selection retains its own current-version/cutoff rules unchanged.
+
+RED and focused GREEN command:
+
+```powershell
+node --conditions=react-server --import tsx --test --test-reporter=spec --test-name-pattern='two-ASIN publication recovery' tests/agent/alexa-voc-multi-asin-recovery.test.ts
+```
+
+Before the guard, both real-database-loaded corruption fixtures failed with `AssertionError: Missing expected exception` (2 tests, 0 pass, 2 fail). After the guard, 2/2 passed. The same cases also create a second real project/run, queue the same fingerprint and write a legitimate success through `putNormalizationTerminal` referencing A's original audit; the reducer accepts completion-only, while altered source organization/ASIN are rejected. Tests do not force job failures or mutate real production data.
+
+Follow-up full covering command:
+
+```powershell
+node --conditions=react-server --import tsx --test --test-reporter=spec tests/agent/alexa-voc-multi-asin-recovery.test.ts tests/agent/manual-alexa-voc-sqlite-repository.test.ts tests/agent/postgres-manual-alexa-voc-store.test.ts tests/agent/postgres-manual-alexa-voc-store-unit.test.ts
+npx eslint server/domain/voc/alexa-voc-recovery.ts tests/agent/alexa-voc-multi-asin-recovery.test.ts
+git diff --check
+```
+
+Result: **75/75 PASS**, 0 failed/canceled/skipped, `duration_ms 59527.9479`, exit 0 (30 recovery + 45 manual-store/unit cases). ESLint and diff check exit 0. The SQLite experimental warning and previously documented newly exposed PostgreSQL concurrent-query deprecation remain visible. Only the helper, recovery test and this report belong to the follow-up commit.
