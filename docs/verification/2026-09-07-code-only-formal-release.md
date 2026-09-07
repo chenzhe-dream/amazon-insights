@@ -42,4 +42,54 @@ Fresh coordinator checks on that locked implementation:
 
 Independent Task review: spec compliant / Task quality Approved; no Critical/Important. Reviewer confirmed lease-based cross-CLI reservation lifetime, exact durable identity, unchanged legacy startup/rollback and epoch-only Alexa compatibility. Nonblocking coverage suggestion: add a dedicated successful prepare-CLI exit/prune/new-CLI-submit process test; actual lease logic and function-level persistence are covered.
 
-Whole-branch review and guarded activation remain pending. This document does not yet claim the repaired version is live.
+Whole-branch review (`bd7d783..deab0aa`): Ready to merge **Yes**; no Critical/Important. The same process-test coverage suggestion remains Minor. The final reviewer additionally verified PowerShell stderr/stdout capture behavior with a read-only probe.
+
+Fresh coordinator TypeScript check: whole repository remains non-green (exit 2, 341 diagnostics); **0 diagnostics in this increment's changed TS/TSX files**. This is not a whole-repository green claim.
+
+## Target integration and final verification
+
+- Fast-forwarded the approved target only: `14111df..deab0aae8f7d5a04fd7787a0292f4285fa7cabae`. Incoming changes had no overlap with the 15 dirty generated files; index was empty; all 15 hashes matched before and after merge and after activation.
+- Fresh target publication/manager suites: **132/132**, 32,509.2546 ms. Fresh target health tests: **16/16**, 1,890.3759 ms.
+- Target production build passed; source/dist fingerprint: `47d0235c16d15ac517e4173bc65ceb9de6782887a77f0f61b1b7fa59010f7628`.
+- Initial target browser run was **6/7**: the first case timed out at `page.goto(..., waitUntil: "networkidle")` after 5 seconds, before its business assertions. The script suites were also running during that initial run. No code or timeout was changed. Isolated first-case replay passed **1/1** (7,756.3832 ms total), then a fresh serial whole-file replay passed **7/7** (15,958.2831 ms). This records an observed navigation-timeout flake; resource contention is a plausible inference, not a proven root cause.
+- Branch-range diff check passed. The isolated-source and target scoped final results are each 155 tests, not 310 unique tests.
+
+## Actual formal activation
+
+The coordinator ran the unmodified guarded entry from the integration code root:
+
+```powershell
+& './scripts/manage-formal-stack.ps1' -ProjectRoot (Get-Location).Path -PublishCode
+```
+
+It completed with exit 0. Preparation built under the formal environment before stopping the old owned stack; existing live gates were checked again. Only then did the manager restart the owned supervisor/Agent, validate the new Agent source identity, submit the prepared code request and wait for exact applied/current/health agreement. Formal build output also noted configured proxy environment variables; no credential values were printed.
+
+Post-activation identity was independently read from Web health, Agent health, immutable artifact fingerprint, durable control, exact request acknowledgement and current source:
+
+| Evidence | Actual value |
+| --- | --- |
+| Running source / manager commit | `deab0aae8f7d5a04fd7787a0292f4285fa7cabae` |
+| New Web artifact | `043a0f072ffa0fa74f4d8228bc6bfe579fd01e6d5228c9d94cd499cbdbacea6a` |
+| Applied request | `bdb00981ab929f9e96dd6d5099cb273678f2defcba1a3c8f1b40ac36a14fa30e` |
+| Source / dist / immutable fingerprint | `47d0235c16d15ac517e4173bc65ceb9de6782887a77f0f61b1b7fa59010f7628` |
+| Retained prior base artifact | `248b941d2dcbcf0670697cf81f0586b89ce3cdda7b2a8b4be19c3ece5bd15349` |
+| New supervisor PID | `22004` |
+
+- Durable current is v2 with `kind: code`. Its `dataCurrent` deep-equals the backup's real business current; streams deep-equal the backup streams. No business provenance was fabricated or advanced.
+- Code root, data root and runtime root remain the canonical paths above. Actual Agent `codeSource` matches the running commit and source fingerprint; Web `codeRelease` matches the exact durable current.
+- Post-release guards: active 0, owned true, Web/Agent healthy, PostgreSQL listener 1, port 3000 listener 0, pending/processing reload requests 0.
+- Normal Agent startup applied only the pending reviewed migration **0027**. All **27** applied checksums match source; the function no longer rejects empty VOC dimension arrays.
+- Counts after activation are unchanged: VOC revisions 21, VOC heads 21, snapshots 79, analysis runs 61, Agent runs 73, job attempts 79. No historical input replay or real Provider/business POST was submitted.
+- Backup archive size/hash remain equal. PostgreSQL was not stopped. The old package remains protected by real business provenance.
+- Local `/` returned HTTP 200. The LAN address health endpoint returned the same new artifact. LAN reachability was checked from this host, not from a second physical computer.
+- Local main remains `6caebaf0a3e5198f4d6c1962ca58e3b28e18d878`; cached origin/main remains `9690ab532c1f98a337e782a40686cf011adf6a10`. No push, main merge, worktree/branch deletion or unrelated data changes.
+
+## OpenSpec handoff
+
+Independent OpenSpec joint verification: **Approved**, no blocking findings, scoped to this code-only release's runtime identity, publication consistency and data protection.
+
+The other task freshly and independently checked target HEAD/index/refs; both actual health responses; recalculated source/dist/immutable fingerprints; normalized the exact applied request and recomputed its request hash; verified v2 code control/v3 manifest with no business identity fields; compared retained real business current and streams with backup; checked all 15 generated file hashes; validated manifest roots/ownership and all required/forbidden ports; and queried migrations/counts under a read-only repeatable-read transaction followed by rollback. It confirmed all 27 migration checksums and removal of the old empty-array rejection while retaining the 256-item / 16,384-character bounds. Backup size/hash were independently equal.
+
+The joint reviewer did not rerun suites, build, decode/restore the backup, deploy, invoke a Provider or run real business tasks. The initial browser timeout, global type-check debt, no-restore-test boundary and no-second-physical-LAN-client boundary remain explicit. The existing cross-CLI regression suggestion remains nonblocking.
+
+The final evidence/progress update is documentation-only on the source branch. The integration target and actual formal service stay at verified `deab0aa`; no further restart or target mutation is required. Test-results remains local and untracked; the coordinator's compiler-generated cache was returned to its prior tracked bytes and was not included in the release.

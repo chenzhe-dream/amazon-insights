@@ -74,8 +74,8 @@ if ($PublishCode) {
 
 ## Coordinator finish and deployment checklist
 
-- [ ] Perform independent task review (spec and quality), fix blocking findings and re-review; then perform whole-branch review. No repeated user approval between these steps.
-- [ ] Verify target HEAD/15 before hashes, integrate only the increment, rerun focused integration checks and production build. Confirm source/dist fingerprints match; do not overwrite generated data with the isolated source copy.
-- [ ] Check formal guards and backup/preflight for the already-reviewed additive VOC migration as appropriate, then invoke the explicit manager code-update option. Never bypass active/ownership checks or stop PostgreSQL.
-- [ ] Read actual applied Web artifact/source fingerprint, Agent source identity, manifest commit/canonical roots and 31900/31901/58258 health with no 3000. Verify generated hashes and no unexpected business work. Preserve known-good and report any failure honestly.
-- [ ] Save deployment evidence, share exact increment/activation identities with OpenSpec for joint verification, and hand the user the test URL only once the new version is actually active.
+- [x] Perform independent task review (spec and quality), fix blocking findings and re-review; then perform whole-branch review. No repeated user approval between these steps.
+- [x] Verify target HEAD/15 before hashes, integrate only the increment, rerun focused integration checks and production build. Confirm source/dist fingerprints match; do not overwrite generated data with the isolated source copy.
+- [x] Check formal guards and backup/preflight for the already-reviewed additive VOC migration as appropriate, then invoke the explicit manager code-update option. Never bypass active/ownership checks or stop PostgreSQL.
+- [x] Read actual applied Web artifact/source fingerprint, Agent source identity, manifest commit/canonical roots and 31900/31901/58258 health with no 3000. Verify generated hashes and no unexpected business work. Preserve known-good and report any failure honestly.
+- [x] Save deployment evidence, share exact increment/activation identities with OpenSpec for joint verification, and hand the user the test URL only once the new version is actually active.
