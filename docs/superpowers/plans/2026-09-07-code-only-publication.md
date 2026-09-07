@@ -32,7 +32,7 @@
 - CLI modes `prepare`, `submit <artifactId>`, `status <artifactId>` operate on cwd and formal environment; JSON result on stdout, bounded sanitized errors/nonzero exit on failure. Build logs must not corrupt machine-readable output.
 - Manager explicit `-PublishCode` option calls prepare before Stop-OwnedStack, repeats active/owned/health gates after preparation, starts the new supervisor using actual source identity, submits, and waits boundedly for exact applied identity before reporting completion. Default manager behavior remains compatible. Never send code requests to a supervisor predating this contract.
 
-- [ ] **Step 1: Write a natural failing lifecycle test and observe RED.** Seed a real business immutable current plus an Alexa stream, build a new directory through the normal artifact path, prepare and submit code release, and consume with real control/request persistence. The core expected assertions are:
+- [x] **Step 1: Write a natural failing lifecycle test and observe RED.** Seed a real business immutable current plus an Alexa stream, build a new directory through the normal artifact path, prepare and submit code release, and consume with real control/request persistence. The core expected assertions are:
 
 ```js
 assert.equal(result.status, 'applied');
@@ -47,7 +47,7 @@ assert.equal(createWebArtifactStore({worktree}).current(target).id, prepared.art
 
 Run `node --test --test-reporter=spec tests/scripts/code-web-publication.test.mjs`. Capture the expected missing-code-contract failure before implementation. Add separate negative cases with deepEqual previous persisted control after rejection, not mock-only assertions.
 
-- [ ] **Step 2: Implement strict identity and durable lifecycle incrementally.** Code artifact manifest version 3 and code request version 5 distinguish the new shape; preserve old version validation unchanged. Add shared strict validator and use it at all boundaries. Durable control may use version 2 with dataCurrent, accepting old version 1 unchanged. The code commit selects dataCurrent from previous business current or previous code dataCurrent and never mutates streams. Validate baseArtifactId again under the existing consumer commit callback. Use the same atomic writer/lock/reservation primitives and update retention references. Tests must reject mixed code/business fields and malformed commit/hash/base.
+- [x] **Step 2: Implement strict identity and durable lifecycle incrementally.** Code artifact manifest version 3 and code request version 5 distinguish the new shape; preserve old version validation unchanged. Add shared strict validator and use it at all boundaries. Durable control may use version 2 with dataCurrent, accepting old version 1 unchanged. The code commit selects dataCurrent from previous business current or previous code dataCurrent and never mutates streams. Validate baseArtifactId again under the existing consumer commit callback. Use the same atomic writer/lock/reservation primitives and update retention references. Tests must reject mixed code/business fields and malformed commit/hash/base.
 
 ```js
 const codeRelease = validateCodeRelease(input.codeRelease);
@@ -58,9 +58,9 @@ const dataCurrent = previous.current.kind === 'code' ? previous.dataCurrent : pr
 // Write the strict code current and retained dataCurrent using the existing atomic control writer.
 ```
 
-- [ ] **Step 3: Integrate supervisor and operator handoff with failing tests first.** Compare code identity in candidate manifest/request before spawn; preserve the legacy content comparison for business requests. Supply actual startup/source identity and code Web metadata without secret output. Reuse replaceWeb, commitHighWater and rollback. Prepare uses real git/fingerprint checks and a reservation-backed private record; submit/status use exact saved target/request identity. Test existing durable old current plus fresh source, source drift, build failure, stale base, wrong target, mismatched artifact, failed preflight/final-health, durable commit failure and later business publication. For process behavior extend the existing fake-child seam instead of inventing mock persistence.
+- [x] **Step 3: Integrate supervisor and operator handoff with failing tests first.** Compare code identity in candidate manifest/request before spawn; preserve the legacy content comparison for business requests. Supply actual startup/source identity and code Web metadata without secret output. Reuse replaceWeb, commitHighWater and rollback. Prepare uses real git/fingerprint checks and a reservation-backed private record; submit/status use exact saved target/request identity. Test existing durable old current plus fresh source, source drift, build failure, stale base, wrong target, mismatched artifact, failed preflight/final-health, durable commit failure and later business publication. For process behavior extend the existing fake-child seam instead of inventing mock persistence.
 
-- [ ] **Step 4: Integrate the explicit PowerShell manager option.** Tests dot-source the manager and replace bounded process/HTTP/preflight seams only; no live ports are stopped. Assert that failed prepare does not call Stop-OwnedStack, post-build active>0/foreign ownership blocks stop, default restart stays unchanged, new code requests are submitted only after startup, failed activation is not logged as completed, and successful completion requires actual artifact/source identity. Avoid paths/secret output in error bodies. Keep all existing ownership, config, no-3000 and canonical-root checks.
+- [x] **Step 4: Integrate the explicit PowerShell manager option.** Tests dot-source the manager and replace bounded process/HTTP/preflight seams only; no live ports are stopped. Assert that failed prepare does not call Stop-OwnedStack, post-build active>0/foreign ownership blocks stop, default restart stays unchanged, new code requests are submitted only after startup, failed activation is not logged as completed, and successful completion requires actual artifact/source identity. Avoid paths/secret output in error bodies. Keep all existing ownership, config, no-3000 and canonical-root checks.
 
 ```powershell
 if ($PublishCode) {
@@ -70,7 +70,7 @@ if ($PublishCode) {
 # Existing verified owned restart, then submit prepared.artifactId only to the new supervisor.
 ```
 
-- [ ] **Step 5: Verify and commit.** Run the combined new/existing publication/manager suites once, changed-file ESLint and git diff --check. Record actual RED/GREEN commands, counts and known warnings in the task report. Stage only the named source/tests/report; the coordinator owns this plan/spec/progress. Commit with `feat: add guarded code-only Web publication`. Self-review for protocol downgrade, lost provenance, false ack, reservation leakage and accidental runtime changes; report concerns rather than hiding them.
+- [x] **Step 5: Verify and commit.** Run the combined new/existing publication/manager suites once, changed-file ESLint and git diff --check. Record actual RED/GREEN commands, counts and known warnings in the task report. Stage only the named source/tests/report; the coordinator owns this plan/spec/progress. Commit with `feat: add guarded code-only Web publication`. Self-review for protocol downgrade, lost provenance, false ack, reservation leakage and accidental runtime changes; report concerns rather than hiding them.
 
 ## Coordinator finish and deployment checklist
 
