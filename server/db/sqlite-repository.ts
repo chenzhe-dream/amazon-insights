@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { normalizationRecoveryDisposition, normalizationRecoveryQueries, normalizationSettlementQueries, type NormalizationTerminalRepair } from "../domain/voc/alexa-voc-recovery";
 
 import {
   AgentRunAttemptSchema,
@@ -355,6 +356,7 @@ type DurableCycleDisposition =
       kind: "settle";
       attemptStatus: "failed" | "cancelled";
       stageStatus: "failed" | "budget-exceeded" | "cancelled";
+      normalizationTerminals?: readonly NormalizationTerminalRepair[];
       error: Record<string, unknown>;
     }>;
 
@@ -904,7 +906,7 @@ export class SqliteAgentRepository
     if (!stage) throw new ManualAlexaVocRepositoryError("conflict");
 
     const active = this.#database.prepare(
-      `SELECT attempt.id FROM job_attempts attempt
+      `SELECT attempt.* FROM job_attempts attempt
         WHERE attempt.stage_id = ? AND (
           status = 'queued'
           OR (status = 'running' AND ? = 0)
@@ -915,37 +917,6 @@ export class SqliteAgentRepository
             SELECT MAX(latest_attempt.attempt_number)
               FROM job_attempts latest_attempt
              WHERE latest_attempt.stage_id = attempt.stage_id
-          )
-          AND (
-            attempt.status <> 'failed'
-            OR EXISTS (
-              SELECT 1 FROM agent_runs agent_run
-               WHERE agent_run.stage_id = attempt.stage_id
-                 AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
-                 AND (
-                   agent_run.validation_status = 'pending'
-                   OR (
-                     agent_run.validation_status = 'passed'
-                     AND agent_run.terminal_status = 'succeeded'
-                     AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'succeeded'
-                   )
-                   OR (
-                     attempt.attempt_number < attempt.max_attempts
-                     AND agent_run.validation_status = 'failed'
-                     AND json_extract(agent_run.terminal_metadata_json, '$.kind') = 'failed'
-                     AND json_extract(agent_run.terminal_metadata_json, '$.classification')
-                         IN ('upstream-temporary', 'rate-limit')
-                   )
-                 )
-            )
-            OR (
-              attempt.attempt_number < attempt.max_attempts
-              AND NOT EXISTS (
-                SELECT 1 FROM agent_runs agent_run
-                 WHERE agent_run.stage_id = attempt.stage_id
-                   AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
-              )
-            )
           )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
@@ -959,6 +930,12 @@ export class SqliteAgentRepository
       snapshot.id,
     ) as SqliteRow | undefined;
     let jobId = active ? String(active.id) : null;
+    if (active && Number(insertedSnapshot.changes) === 1 && (active.report_publication_max_attempts !== null || (active.status === "failed" && Number(active.attempt_number) >= Number(active.max_attempts)))) jobId = null;
+    if (active?.status === "failed") {
+      const candidate = this.#findJob(String(active.id))!;
+      const disposition = this.#durableCycleDisposition(candidate);
+      if (disposition.kind === "settle" || (disposition.kind === "retry-new-cycle" && candidate.attemptNumber >= candidate.maxAttempts) || (disposition.kind === "recover" && disposition.mode === "unstarted" && candidate.attemptNumber >= candidate.maxAttempts)) jobId = null;
+    }
     let jobCreated = false;
     if (!jobId) {
       const latest = this.#database.prepare(
@@ -6193,6 +6170,11 @@ export class SqliteAgentRepository
   #durableCycleDisposition(
     current: JobAttemptRecord,
   ): DurableCycleDisposition {
+    if (current.stage === "alexa-voc-normalization") {
+      return normalizationRecoveryDisposition(current, normalizationRecoveryQueries(current).map(
+        (query) => this.#database.prepare(query.sql).all(...query.values) as SqliteRow[],
+      ));
+    }
     const rows = this.#database
       .prepare(
         `SELECT ar.validation_status, ar.terminal_status,
@@ -6325,6 +6307,9 @@ export class SqliteAgentRepository
     disposition: Extract<DurableCycleDisposition, { kind: "settle" }>,
     settledAt: string,
   ) {
+    if (current.stage === "alexa-voc-normalization") {
+      for (const query of normalizationSettlementQueries(current, disposition.normalizationTerminals, settledAt)) this.#database.prepare(query.sql).run(...query.values);
+    }
     this.#database
       .prepare(
         `UPDATE job_attempts
@@ -6496,20 +6481,24 @@ export class SqliteAgentRepository
         const publication = reportOnlyRecovery
           ? nextReportPublicationFailure(current!, input, transactionNow)
           : null;
-        const retryable = publication?.retryable ?? input.retryable;
+        const terminalSettlement = current?.stage === "alexa-voc-normalization" && disposition?.kind === "settle" ? disposition : null;
+        if (terminalSettlement) {
+          for (const query of normalizationSettlementQueries(current!, terminalSettlement.normalizationTerminals, transactionNow)) this.#database.prepare(query.sql).run(...query.values);
+        }
+        const retryable = terminalSettlement ? false : publication?.retryable ?? input.retryable;
         const availableAt = retryable
           ? (publication?.retryAt ?? input.retryAt ?? input.failedAt)
           : input.failedAt;
         const attemptStatus = reportOnlyRecovery
           ? "failed"
-          : (input.attemptStatus ?? "failed");
+          : (terminalSettlement?.attemptStatus ?? input.attemptStatus ?? "failed");
         const stageStatus =
           reportOnlyRecovery
             ? retryable
               ? "queued"
               : "failed"
-            : (input.stageStatus ?? (retryable ? "queued" : "failed"));
-        const persistedError = publication?.error ?? input.error;
+            : (terminalSettlement?.stageStatus ?? input.stageStatus ?? (retryable ? "queued" : "failed"));
+        const persistedError = terminalSettlement?.error ?? publication?.error ?? input.error;
         if (
           retryable !== (stageStatus === "queued") ||
           (retryable && attemptStatus !== "failed")

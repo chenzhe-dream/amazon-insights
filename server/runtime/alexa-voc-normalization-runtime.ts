@@ -96,10 +96,52 @@ export async function createAlexaVocNormalizationRuntime(
       options.normalizationInputCipher ?? createAlexaVocNormalizationInputCipher(),
     auditedRunner,
   });
+  // The worker is serial. Keep only its current lease decision, so appended
+  // inputs in a fresh final attempt retain permission while a reclaimed lease
+  // cannot inherit that permission from the prior owner/generation.
+  let preparedLease: { key: string; reconciliationOnly: boolean } | undefined;
   const handler = createAlexaVocNormalizationJobHandler({
     service,
     prepare: async (job) => {
       const subject = await trustedNormalizationSubject(options.repository, job.runId);
+      const leaseKey = `${job.id}:${job.leasedBy}:${job.leaseGeneration}`;
+      const audits = await options.repository.listAgentRuns({
+        organizationId: subject.organizationId,
+        runId: job.runId,
+      });
+      const stageAttempts = await options.repository.listJobAttempts(job.stageId);
+      const attempts = stageAttempts
+        .filter((attempt) => attempt.logicalExecutionCycleId === job.logicalExecutionCycleId);
+      const cycleJobs = new Set(attempts.map((attempt) => attempt.id));
+      const cycleAudits = audits.filter((audit) =>
+        audit.stageId === job.stageId && cycleJobs.has(audit.jobAttemptId ?? "")
+      );
+      const hasDurableAudit = (snapshot: { id: string; executionFingerprint: string }) =>
+        cycleAudits.some((audit) =>
+          audit.snapshotIds.length === 1 && audit.snapshotIds[0] === snapshot.id &&
+          audit.executionFingerprint === snapshot.executionFingerprint &&
+          audit.validationStatus === "passed" && audit.status === "succeeded"
+        );
+      const hasTerminalAbort = cycleAudits.some((audit) =>
+        audit.terminalMetadata?.kind === "budget-exceeded" ||
+        audit.terminalMetadata?.kind === "cancelled"
+      );
+      const hasSuccessor = stageAttempts.some((attempt) =>
+        attempt.attemptNumber > job.attemptNumber
+      );
+      if (preparedLease?.key !== leaseKey) {
+        const predecessorGeneration = Math.max(0, ...stageAttempts
+          .filter((attempt) => attempt.attemptNumber >= job.retryCycleStartAttempt &&
+            attempt.attemptNumber < job.attemptNumber)
+          .map((attempt) => attempt.leaseGeneration));
+        preparedLease = {
+          key: leaseKey,
+          reconciliationOnly: job.reportPublicationMaxAttempts !== null ||
+            (job.attemptNumber >= job.maxAttempts &&
+              job.leaseGeneration > predecessorGeneration + 1),
+        };
+      }
+      const reconciliationOnly = preparedLease.reconciliationOnly;
       const snapshots = await options.repository.manualAlexaVoc
         .listNormalizationInputSnapshots({
           actorOrganizationId: subject.organizationId,
@@ -115,6 +157,8 @@ export async function createAlexaVocNormalizationRuntime(
       const pendingSnapshots = (
         await Promise.all(
           snapshots
+            .filter((snapshot) => !(job.reportPublicationMaxAttempts !== null &&
+              hasSuccessor && !cycleAudits.some((audit) => audit.snapshotIds.includes(snapshot.id))))
             .filter((snapshot) => shouldProcessAlexaVocNormalizationSnapshot({
               snapshotId: snapshot.id,
               jobAttemptId: job.id,
@@ -134,10 +178,15 @@ export async function createAlexaVocNormalizationRuntime(
         )
       );
       return {
-        snapshots: pendingSnapshots.map(({ snapshot, replay }) => ({
+        snapshots: pendingSnapshots.toSorted((left, right) => {
+          const durable = (item: typeof left) => Boolean(item.replay) || hasDurableAudit(item.snapshot);
+          return Number(durable(right)) - Number(durable(left));
+        }).map(({ snapshot, replay }) => ({
           id: snapshot.id,
           asin: snapshot.asin,
           executionFingerprint: snapshot.executionFingerprint,
+          reconciliationBlocked: (reconciliationOnly || hasTerminalAbort) &&
+            !replay && !hasDurableAudit(snapshot),
           ...(replay
             ? { replay: {
                 agentRunId: replay.agentRunId,
@@ -274,7 +323,7 @@ async function trustedNormalizationCommitSubject(
     Date.parse(job.leaseExpiresAt) <= Date.parse(committedAt) ||
     !agentRun ||
     agentRun.stageId !== input.stageId ||
-    agentRun.jobAttemptId !== input.jobAttemptId ||
+    !jobs.some((attempt) => attempt.id === agentRun.jobAttemptId && attempt.logicalExecutionCycleId === job.logicalExecutionCycleId) ||
     agentRun.executionFingerprint !== input.contentHash ||
     agentRun.validationStatus !== "passed" ||
     agentRun.status !== "succeeded" ||
@@ -623,7 +672,27 @@ async function finalizeNormalizationJob(
     const terminalSnapshotIds = new Set(
       terminals.map((terminal) => terminal.snapshotId),
     );
-    if (snapshots.some((snapshot) => !terminalSnapshotIds.has(snapshot.id))) return false;
+    const jobs = await scoped.listJobAttempts(job.stageId);
+    const current = jobs.find((attempt) => attempt.id === job.id);
+    const cycleJobs = new Set(jobs.filter((attempt) => attempt.logicalExecutionCycleId === current?.logicalExecutionCycleId).map((attempt) => attempt.id));
+    const audits = (await scoped.listAgentRuns({ organizationId: subject.organizationId, runId: job.runId }))
+      .filter((audit) => audit.stageId === job.stageId && cycleJobs.has(audit.jobAttemptId ?? ""));
+    const hasSuccessor = current && jobs.some((attempt) => attempt.attemptNumber > current.attemptNumber);
+    if (snapshots.some((snapshot) => !terminalSnapshotIds.has(snapshot.id) && !(current?.reportPublicationMaxAttempts !== null && hasSuccessor && !audits.some((audit) => audit.snapshotIds.includes(snapshot.id))))) return false;
+    const cancelled = audits.some((audit) => audit.terminalMetadata?.kind === "cancelled");
+    const budget = audits.find((audit) => audit.terminalMetadata?.kind === "budget-exceeded")?.terminalMetadata;
+    if (cancelled || budget?.kind === "budget-exceeded") {
+      await scoped.failJob({
+        jobId: job.id, ownerId, leaseGeneration: job.leaseGeneration,
+        failedAt: completedAt, retryable: false, retryAt: null,
+        attemptStatus: cancelled ? "cancelled" : "failed",
+        stageStatus: cancelled ? "cancelled" : "budget-exceeded",
+        error: cancelled
+          ? { classification: "cancelled", code: "CANCELLED", message: "Skill execution was cancelled" }
+          : { ...budget, classification: "configuration", code: "CONFIGURATION_ERROR", message: "Configured model budget was exceeded" },
+      });
+      return true;
+    }
     await scoped.completeJob({
       jobId: job.id,
       ownerId,

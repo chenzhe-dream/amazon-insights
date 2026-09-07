@@ -17,6 +17,7 @@ import {
 } from "../../../shared/agent-contracts";
 import { ALEXA_VOC_NORMALIZATION_SKILL } from "../../domain/voc/alexa-voc-normalization-contracts";
 import { AlexaVocNormalizationExecutionIdentitySchema } from "../../domain/voc/alexa-voc-normalization-contracts";
+import { normalizationRecoveryDisposition, normalizationRecoveryQueries, type NormalizationRecoveryJob } from "../../domain/voc/alexa-voc-recovery";
 import {
   createRunCreationFingerprint,
   ManualAlexaVocRepositoryError,
@@ -1321,7 +1322,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     }
 
     const active = await this.#queries.query<QueryResultRow>(
-      `SELECT attempt.id FROM job_attempts attempt
+      `SELECT attempt.* FROM job_attempts attempt
         WHERE attempt.stage_id = $1 AND (
           status = 'queued'
           OR (status = 'running' AND $2::boolean = FALSE)
@@ -1333,37 +1334,6 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
               FROM job_attempts latest_attempt
              WHERE latest_attempt.stage_id = attempt.stage_id
           )
-          AND (
-            attempt.status <> 'failed'
-            OR EXISTS (
-              SELECT 1 FROM agent_runs agent_run
-               WHERE agent_run.stage_id = attempt.stage_id
-                 AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
-                 AND (
-                   agent_run.validation_status = 'pending'
-                   OR (
-                     agent_run.validation_status = 'passed'
-                     AND agent_run.terminal_status = 'succeeded'
-                     AND agent_run.terminal_metadata_json ->> 'kind' = 'succeeded'
-                   )
-                   OR (
-                     attempt.attempt_number < attempt.max_attempts
-                     AND agent_run.validation_status = 'failed'
-                     AND agent_run.terminal_metadata_json ->> 'kind' = 'failed'
-                     AND agent_run.terminal_metadata_json ->> 'classification'
-                         IN ('upstream-temporary', 'rate-limit')
-                   )
-                 )
-            )
-            OR (
-              attempt.attempt_number < attempt.max_attempts
-              AND NOT EXISTS (
-                SELECT 1 FROM agent_runs agent_run
-                 WHERE agent_run.stage_id = attempt.stage_id
-                   AND agent_run.logical_execution_cycle_id = attempt.logical_execution_cycle_id
-              )
-            )
-          )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = $3
@@ -1373,6 +1343,24 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       [stage.id, insertedSnapshot.rowCount === 1, snapshot.id],
     );
     let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
+    const activeRow = active.rows[0];
+    if (activeRow && insertedSnapshot.rowCount === 1 && (activeRow.report_publication_max_attempts !== null || (activeRow.status === "failed" && Number(activeRow.attempt_number) >= Number(activeRow.max_attempts)))) jobId = null;
+    if (activeRow?.status === "failed") {
+      const candidate: NormalizationRecoveryJob = {
+        id: String(activeRow.id), stageId: String(stage.id), runId: normalized.runId,
+        logicalExecutionCycleId: String(activeRow.logical_execution_cycle_id),
+        attemptNumber: Number(activeRow.attempt_number), maxAttempts: Number(activeRow.max_attempts),
+        status: "failed", error: activeRow.error_json as Record<string, unknown> | null,
+        reportPublicationMaxAttempts: activeRow.report_publication_max_attempts === null ? null : Number(activeRow.report_publication_max_attempts),
+      };
+      const records = [];
+      for (const query of normalizationRecoveryQueries(candidate)) {
+        let index = 0;
+        records.push((await this.#queries.query(query.sql.replace(/\?/g, () => `$${++index}`), query.values)).rows);
+      }
+      const disposition = normalizationRecoveryDisposition(candidate, records);
+      if (disposition.kind === "settle" || ((disposition.kind === "retry-new-cycle" || disposition.mode === "unstarted") && candidate.attemptNumber >= candidate.maxAttempts)) jobId = null;
+    }
     let jobCreated = false;
     if (!jobId) {
       const latest = await this.#queries.query<{ attempt_number: unknown; max_attempts: unknown }>(

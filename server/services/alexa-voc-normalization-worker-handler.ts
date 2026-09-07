@@ -20,6 +20,7 @@ export interface PreparedAlexaVocNormalizationJob {
     id: string;
     asin: string;
     executionFingerprint?: string;
+    reconciliationBlocked?: boolean;
     replay?: Readonly<{
       agentRunId: string;
       revision: string;
@@ -95,6 +96,14 @@ export function createAlexaVocNormalizationJobHandler(
       for (const snapshot of page) {
         processedSnapshotIds.add(snapshot.id);
         try {
+          if (snapshot.reconciliationBlocked) {
+            await options.onTerminal({
+              job, snapshotId: snapshot.id, asin: snapshot.asin,
+              executionFingerprint: snapshot.executionFingerprint ?? null,
+              status: "failure", category: "persistence", agentRunId: null,
+            });
+            continue;
+          }
           if (snapshot.replay) {
             if (!options.onReplay || !snapshot.executionFingerprint) {
               throw new WorkerTaskError(

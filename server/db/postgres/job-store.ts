@@ -19,6 +19,7 @@ import type {
 } from "../repository";
 import { JobLeaseLostError } from "../repository";
 import { PostgresQueryContext } from "./query-context";
+import { normalizationRecoveryDisposition, normalizationRecoveryQueries, normalizationSettlementQueries, type NormalizationTerminalRepair } from "../../domain/voc/alexa-voc-recovery";
 
 type JobRepositoryContract = {
   enqueueJob(input: EnqueueJobInput): Promise<JobAttemptRecord>;
@@ -71,6 +72,7 @@ type DurableCycleDisposition =
       kind: "settle";
       attemptStatus: "failed" | "cancelled";
       stageStatus: "failed" | "budget-exceeded" | "cancelled";
+      normalizationTerminals?: readonly NormalizationTerminalRepair[];
       error: Record<string, unknown>;
     }>;
 
@@ -392,19 +394,26 @@ export class PostgresJobStore implements JobRepositoryContract {
         const publication = reportOnlyRecovery
           ? nextReportPublicationFailure(current, input, transactionNow)
           : null;
-        const retryable = publication?.retryable ?? input.retryable;
+        const terminalSettlement = current.stage === "alexa-voc-normalization" && disposition.kind === "settle" ? disposition : null;
+        if (terminalSettlement) {
+          for (const query of normalizationSettlementQueries(current, terminalSettlement.normalizationTerminals, transactionNow)) {
+            let index = 0;
+            await this.#queries.query(query.sql.replace(/\?/g, () => `$${++index}`), query.values);
+          }
+        }
+        const retryable = terminalSettlement ? false : publication?.retryable ?? input.retryable;
         const availableAt = retryable
           ? (publication?.retryAt ?? input.retryAt ?? input.failedAt)
           : input.failedAt;
         const attemptStatus = reportOnlyRecovery
           ? "failed"
-          : (input.attemptStatus ?? "failed");
+          : (terminalSettlement?.attemptStatus ?? input.attemptStatus ?? "failed");
         const stageStatus = reportOnlyRecovery
           ? retryable
             ? "queued"
             : "failed"
-          : (input.stageStatus ?? (retryable ? "queued" : "failed"));
-        const persistedError = publication?.error ?? input.error;
+          : (terminalSettlement?.stageStatus ?? input.stageStatus ?? (retryable ? "queued" : "failed"));
+        const persistedError = terminalSettlement?.error ?? publication?.error ?? input.error;
         if (
           retryable !== (stageStatus === "queued") ||
           (retryable && attemptStatus !== "failed")
@@ -487,6 +496,14 @@ export class PostgresJobStore implements JobRepositoryContract {
   async #durableCycleDisposition(
     current: JobAttemptRecord,
   ): Promise<DurableCycleDisposition> {
+    if (current.stage === "alexa-voc-normalization") {
+      const records = [];
+      for (const query of normalizationRecoveryQueries(current)) {
+        let index = 0;
+        records.push((await this.#queries.query(query.sql.replace(/\?/g, () => `$${++index}`), query.values)).rows);
+      }
+      return normalizationRecoveryDisposition(current, records);
+    }
     const result = await this.#queries.query<
       QueryResultRow & {
         validation_status: "pending" | "passed" | "failed";
@@ -618,6 +635,12 @@ export class PostgresJobStore implements JobRepositoryContract {
     disposition: Extract<DurableCycleDisposition, { kind: "settle" }>,
     settledAt: string,
   ) {
+    if (current.stage === "alexa-voc-normalization") {
+      for (const query of normalizationSettlementQueries(current, disposition.normalizationTerminals, settledAt)) {
+        let index = 0;
+        await this.#queries.query(query.sql.replace(/\?/g, () => `$${++index}`), query.values);
+      }
+    }
     await this.#queries.query(
       `UPDATE job_attempts
           SET status = $1, retryable = FALSE, leased_by = NULL,
