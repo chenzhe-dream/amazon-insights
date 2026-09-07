@@ -71,3 +71,11 @@ Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `
 - Independent re-review at 45c1d7d: spec compliant, task quality Approved; whole-branch 23f9f4a..45c1d7d Ready to merge Yes, no Critical/Important. Existing PG warning remains Minor. Source locked for OpenSpec joint re-review; final coordinator documentation commit waits for that verdict. No merge/release activation.
 - Final OpenSpec joint gate: Approved at locked code45c1d7d; completed-permanent-sibling Important cleared, no new Critical/Important. OpenSpec freshly reran focused SQLite/isolated-PG cases 2/2 (duration_ms7623.6322), checked runtime/reducer retry-chain bounds and explicit enqueue preservation, recomputed matching65585e96660f932000d940926bbb5496c2ea9df7f887e58695c30f7734ad7020 fingerprint and diff check. Task complete; final commit updates only coordinator evidence/progress. No formal switch, merge, push, restart, deployment, historical replay or live-provider use.
 - Guardrails unchanged: isolated tests, no live providers or formal-state changes, preserve history and parallel integration edits.
+
+## 2026-09-07 Code-only publication entry
+
+- User explicitly confirmed the minimal entry design after the 17-commit VOC integration and 214 scoped integration tests. Formal update/restart is separately already authorized, contingent on guards and verified code activation.
+- Implementation base bd7d783; isolated existing worktree fix-voc-import-status-20260907 reused on new branch codex/feat-code-only-publication-20260907. Original VOC branch preserved. Target integration remains14111df with15 generated dirty files; do not edit it during implementation.
+- Design/plan: docs/superpowers/specs/2026-09-07-code-only-publication-design.md; docs/superpowers/plans/2026-09-07-code-only-publication.md.
+- Fresh publication baseline: artifact/control/request/supervisor 95/95 (30923.7492 ms), no skips/cancellations. Main/GitHub/formal runtime unchanged.
+- Task1: pending implementation and independent review. Root owns live preflight/backup preparation, final verification and deployment, not implementer.
