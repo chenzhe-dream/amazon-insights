@@ -54,3 +54,12 @@ Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `
 - Task 3: final backend 130/134 (same four baseline failures), client 58/58, existing app browser 10/10, new-build tutorial 7/7, production build/fingerprint and changed-file lint PASS. Test-only callback typing correction de67e4c reran mounted tests 4/4 and targeted lint PASS. Fresh coordinator compiler diagnostics at de67e4c show only the pre-existing test TS2353 in affected files; full-project TypeScript remains non-green.
 - Whole-branch review: d9d9d6e..de67e4c Approved, no Critical/Important; repeated eligibility predicates retained as a non-blocking Minor. Final evidence: docs/verification/2026-09-07-voc-import-status.md. Source stays locked; handoff to OpenSpec for joint review, not unilateral merge/release.
 - Guardrails: isolated worktree/tests only, no production writes/replay/provider/restart/deploy/push.
+
+## 2026-09-07 VOC multi-ASIN recovery follow-up
+
+- User approved minimal design and execution. Base 23f9f4a; branch codex/fix-voc-multi-asin-recovery-20260907; original branch remains locked at base.
+- Design/plan: docs/superpowers/specs/2026-09-07-voc-multi-asin-recovery-design.md; docs/superpowers/plans/2026-09-07-voc-multi-asin-recovery.md.
+- Baseline focused normalization/attempts/SQLite/PG-unit tests: 34/34 pass, expected Node experimental SQLite warning.
+- Evidence correction: prior multi-audit review fixture manually injected failure and only compared the base queue SELECT, not a complete base/natural-path run.
+- Task 1: not started. Natural normalization runtime failure/claim regression must precede production edits; other stages retain their single-audit behavior.
+- Guardrails unchanged: isolated tests, no live providers or formal-state changes, preserve history and parallel integration edits.
