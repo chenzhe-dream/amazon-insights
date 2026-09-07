@@ -13,6 +13,30 @@ Status: the approved VOC delivery has been integrated and freshly verified. Form
 
 ## Fresh tests in the integration worktree
 
+### Generated-data preservation evidence
+
+The following byte-level hashes were captured before the fast-forward, then verified equal after merge, build, and the final preflight. These files remain unstaged modifications.
+
+| File | Before SHA256 | After merge/build/final preflight |
+| --- | --- | --- |
+| `app/competitor-data.ts` | `397d5e990465f7219d5fd3b7f61c529b95a796de5e8e2cdd441be64b67012753` | unchanged |
+| `app/listing-image-remarks.ts` | `58b78c6f88d99adf4464dda2c1cf4ccbc478350f7457805001f38a4b0de4774d` | unchanged |
+| `app/sif-keyword-analysis-data.ts` | `1fa00b0f836d9be0a82c902bdad44ce3c08ed910661292bce80adda58a79ee1e` | unchanged |
+| `app/sif-keyword-enrichment-data.ts` | `7a28255abe3f7bf4a0dd8f6028b37d78908e3056c081085554231448d22fa245` | unchanged |
+| `app/sif-listing-traffic-raw-data.ts` | `100c69d7132b50cc569576168e1984b25744c3ec326c40d7edf4c022d7836cb7` | unchanged |
+| `app/sif-monthly-traffic-trend-raw-data.ts` | `b4c92e2280a1fd7bda90990c3a698f1dcd6740f6fe41b4489d4f90875123bfab` | unchanged |
+| `app/sorftime-category-trend-data.ts` | `8e6432a13a9decc8f94c3a3228266e99ef9d000fd2ca1d3079b7fbc68af46b47` | unchanged |
+| `app/sorftime-child-sales-data.ts` | `411037b89df0322d9640ba3e82c3b4bffc27daca90dc337225f6eb0714d8766e` | unchanged |
+| `app/sorftime-fba-fee-data.ts` | `33ab2b12d8779984aff22b7180f532b97cb674648c783c853a154c9bd519a27d` | unchanged |
+| `app/sorftime-listing-content-data.ts` | `be70a42f8d2b0cd0cc58b6e5558b3bf3e9be2d337a02350788c299fc40c87c55` | unchanged |
+| `app/sorftime-price-strategy-data.ts` | `aa1c4f80bc3418f656ee371c78f2bff42d85b44808a19b222189b6bd85705a61` | unchanged |
+| `app/sorftime-rating-data.ts` | `c0d8ce31076023d1f7a19a9c29206a74c9362b36aeb2417fba73ffa9584aaecc` | unchanged |
+| `app/sorftime-review-analysis-data.ts` | `4fb3a86116ff141b2748e20a586c99fddf165b047ed4c204ba9492dac8f080f5` | unchanged |
+| `app/sorftime-sales-trend-data.ts` | `6557413554b2932243e80c33ee8fbf6984eed81022e69388e612bc18984d8bad` | unchanged |
+| `app/sorftime-variant-data.ts` | `65b27302d3a6ed8f4ae87d4b8bc92c70cb2e7b92b837cf1e4f436e51f6ba2017` | unchanged |
+
+### Regression ledger
+
 All four runs below completed with zero failures, cancellations, skips, or todos. These are 214 scoped tests, not a claim that the entire repository is green.
 
 | Run | Result | Duration |
