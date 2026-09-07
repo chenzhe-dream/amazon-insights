@@ -124,12 +124,17 @@ for (const adapter of ["sqlite", "postgres"] as const) {
     "publication-then-budget",
     "fresh-final-attempt",
     "transient-final-attempt",
+    "permanent-sibling-final-attempt",
     "new-input-during-publication",
     "cancelled-audit",
     "publication-then-cancelled-audit",
   ] as const) {
     test(`${adapter}: ${scenario.includes("cancelled") ? "audit-seeded" : "natural"} two-ASIN ${scenario} recovery`, async (t) => {
       const expired = scenario === "expired" || scenario === "pending-at-limit";
+      const permanentSibling = scenario === "permanent-sibling-final-attempt";
+      const transientRetry =
+        scenario === "transient-final-attempt" || permanentSibling;
+      let explicitRetry = false;
       const directory = mkdtempSync(join(tmpdir(), "voc-recovery-"));
       const path = join(directory, "test.sqlite");
       const schema = `test_${randomUUID().replaceAll("-", "")}`;
@@ -404,6 +409,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
                 "budget",
                 "cancelled-audit",
                 "transient-final-attempt",
+                "permanent-sibling-final-attempt",
               ].includes(scenario)
             )
               return new Proxy({} as typeof base.manualAlexaVoc, {
@@ -458,6 +464,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
                     "budget",
                     "cancelled-audit",
                     "transient-final-attempt",
+                    "permanent-sibling-final-attempt",
                   ].includes(scenario) &&
                   injectFailure &&
                   terminals.some(
@@ -483,57 +490,60 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           },
         });
       const calls: Record<string, number> = { [A]: 0, [B]: 0 };
-      const runtime = await createAlexaVocNormalizationRuntime({
-        repository: wrap(repository),
-        config: {
-          ...config,
-          ...(scenario.includes("budget")
-            ? {
-                budgetLimits: {
-                  ...config.budgetLimits,
-                  run: { maxTokens: 4100, maxCostMicros: 100000 },
-                },
-              }
-            : {}),
-          worker: {
-            ...config.worker,
-            ...(expired
-              ? { leaseDurationMs: 3000, heartbeatIntervalMs: 1000 }
+      const createRuntime = () =>
+        createAlexaVocNormalizationRuntime({
+          repository: wrap(repository),
+          config: {
+            ...config,
+            ...(scenario.includes("budget")
+              ? {
+                  budgetLimits: {
+                    ...config.budgetLimits,
+                    run: { maxTokens: 4100, maxCostMicros: 100000 },
+                  },
+                }
               : {}),
+            worker: {
+              ...config.worker,
+              ...(expired
+                ? { leaseDurationMs: 3000, heartbeatIntervalMs: 1000 }
+                : {}),
+            },
           },
-        },
-        normalizationInputCipher: cipher,
-        provider: {
-          async generateStructured<T>(request: { input: unknown }) {
-            const asin = (request.input as { asin: string }).asin;
-            calls[asin]++;
-            if (
-              scenario === "transient-final-attempt" &&
-              asin === B &&
-              calls[asin]! <= 3
-            )
-              throw new ModelProviderError(
-                "transient",
-                "B temporary provider outage",
-              );
-            if (scenario === "permanent" && asin === B)
-              throw new ModelProviderError(
-                "permanent",
-                "B is permanently unavailable",
-              );
-            return {
-              value: {
-                schemaVersion: "1.0.0",
-                kind: "alexa-voc-normalization-result",
-                record: facts,
-              } as T,
-              responseId: `response-${asin}`,
-              inputTokens: 100,
-              outputTokens: 100,
-            };
+          normalizationInputCipher: cipher,
+          provider: {
+            async generateStructured<T>(request: { input: unknown }) {
+              const asin = (request.input as { asin: string }).asin;
+              calls[asin]++;
+              if (transientRetry && asin === B && calls[asin]! <= 3)
+                throw new ModelProviderError(
+                  "transient",
+                  "B temporary provider outage",
+                );
+              if (scenario === "permanent" && asin === B)
+                throw new ModelProviderError(
+                  "permanent",
+                  "B is permanently unavailable",
+                );
+              if (permanentSibling && asin === A && !explicitRetry)
+                throw new ModelProviderError(
+                  "permanent",
+                  "A is permanently unavailable",
+                );
+              return {
+                value: {
+                  schemaVersion: "1.0.0",
+                  kind: "alexa-voc-normalization-result",
+                  record: facts,
+                } as T,
+                responseId: `response-${asin}`,
+                inputTokens: 100,
+                outputTokens: 100,
+              };
+            },
           },
-        },
-      });
+        });
+      const runtime = await createRuntime();
       t.after(() => runtime.stop());
       runtime.start();
       await Promise.race([
@@ -722,7 +732,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             terminals.map((terminal) => [terminal.asin, terminal.status]),
           ),
           {
-            [A]: "success",
+            [A]: permanentSibling ? "failure" : "success",
             [B]: [
               "absent-at-limit",
               "permanent",
@@ -742,7 +752,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       const lastJob = (await repository.listJobAttempts(queued[0]!.stageId)).at(
         -1,
       )!;
-      if (scenario === "transient-final-attempt") {
+      if (transientRetry) {
         assert.equal(lastJob.attemptNumber, 2);
         assert.equal(lastJob.maxAttempts, 2);
         assert.notEqual(
@@ -782,23 +792,25 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         Object.fromEntries(
           revisions.map((revision) => [revision.asin, revision.revision]),
         ),
-        [
-          "absent-at-limit",
-          "permanent",
-          "pending-at-limit",
-          "budget",
-          "publication-then-budget",
-          "cancelled-audit",
-          "publication-then-cancelled-audit",
-        ].includes(scenario)
-          ? { [A]: "1" }
-          : {
-              [A]: "1",
-              [B]: "1",
-              ...(scenario === "new-input-during-publication"
-                ? { [C]: "1" }
-                : {}),
-            },
+        permanentSibling
+          ? { [B]: "1" }
+          : [
+                "absent-at-limit",
+                "permanent",
+                "pending-at-limit",
+                "budget",
+                "publication-then-budget",
+                "cancelled-audit",
+                "publication-then-cancelled-audit",
+              ].includes(scenario)
+            ? { [A]: "1" }
+            : {
+                [A]: "1",
+                [B]: "1",
+                ...(scenario === "new-input-during-publication"
+                  ? { [C]: "1" }
+                  : {}),
+              },
       );
       assert.deepEqual(calls, {
         [A]: 1,
@@ -807,7 +819,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           scenario.includes("budget") ||
           scenario.includes("cancelled")
             ? 0
-            : scenario === "transient-final-attempt"
+            : transientRetry
               ? 4
               : 1,
         ...(scenario === "new-input-during-publication" ? { [C]: 1 } : {}),
@@ -826,6 +838,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         false,
       );
       const expectedPublications = [
+        "permanent-sibling-final-attempt",
         "exhausted",
         "absent-at-limit",
         "permanent",
@@ -953,6 +966,95 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         wrongSourceAsin[2]![0]!.source_asins_json = JSON.stringify([B]);
         assert.throws(() =>
           normalizationRecoveryDisposition(replayJob, wrongSourceAsin),
+        );
+      }
+      if (permanentSibling) {
+        assert.equal(
+          terminals.filter((terminal) => terminal.asin === A).length,
+          1,
+        );
+        assert.equal(
+          terminals.find((terminal) => terminal.asin === A)!.jobAttemptId,
+          firstClaim!.id,
+        );
+        assert.deepEqual(
+          Object.fromEntries(
+            statuses.map((status) => [status.asin, status.status]),
+          ),
+          { [A]: "failure", [B]: "success" },
+        );
+        assert.equal(
+          (await repository.listRunStages(runId)).find(
+            (stage) => stage.id === queued[0]!.stageId,
+          )?.status,
+          "succeeded",
+        );
+        assert.equal(
+          lastJob.retryCycleStartAttempt,
+          firstClaim!.retryCycleStartAttempt,
+        );
+        const retried = await queueInput(A);
+        assert.equal(retried.jobCreated, true);
+        assert.equal(retried.snapshot.id, queued[0]!.snapshot.id);
+        const newJob = (await repository.listJobAttempts(retried.stageId)).find(
+          (job) => job.id === retried.jobId,
+        )!;
+        assert.equal(newJob.retryCycleStartAttempt, newJob.attemptNumber);
+        assert.ok(newJob.retryCycleStartAttempt > lastJob.attemptNumber);
+        explicitRetry = true;
+        permitClaims = true;
+        const explicitRuntime = await createRuntime();
+        t.after(() => explicitRuntime.stop());
+        explicitRuntime.start();
+        const retryDeadline = Date.now() + 10000;
+        while (Date.now() < retryDeadline) {
+          if (
+            (await repository.listJobAttempts(retried.stageId)).find(
+              (job) => job.id === retried.jobId,
+            )?.status === "succeeded"
+          )
+            break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        await explicitRuntime.stop();
+        assert.equal(
+          (await repository.listJobAttempts(retried.stageId)).find(
+            (job) => job.id === retried.jobId,
+          )?.status,
+          "succeeded",
+        );
+        assert.deepEqual(calls, { [A]: 2, [B]: 4 });
+        const afterRetry =
+          await repository.manualAlexaVoc.listNormalizationTerminals({
+            actorOrganizationId: organizationId,
+            projectId,
+            runId,
+          });
+        assert.deepEqual(
+          afterRetry
+            .filter((terminal) => terminal.asin === A)
+            .map((terminal) => terminal.status)
+            .sort(),
+          ["failure", "success"],
+        );
+        assert.equal(
+          afterRetry.filter((terminal) => terminal.asin === B).length,
+          1,
+        );
+        const finalRevisions = await repository.manualAlexaVoc.listAtCutoff({
+          organizationId,
+          marketplace: "US",
+          asins: [A, B],
+          dataCutoffAt: cutoff,
+        });
+        assert.deepEqual(
+          Object.fromEntries(
+            finalRevisions.map((revision) => [
+              revision.asin,
+              revision.revision,
+            ]),
+          ),
+          { [A]: "1", [B]: "1" },
         );
       }
     });

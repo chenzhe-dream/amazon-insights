@@ -1350,6 +1350,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
         id: String(activeRow.id), stageId: String(stage.id), runId: normalized.runId,
         logicalExecutionCycleId: String(activeRow.logical_execution_cycle_id),
         attemptNumber: Number(activeRow.attempt_number), maxAttempts: Number(activeRow.max_attempts),
+        retryCycleStartAttempt: Number(activeRow.retry_cycle_start_attempt),
         status: "failed", error: activeRow.error_json as Record<string, unknown> | null,
         reportPublicationMaxAttempts: activeRow.report_publication_max_attempts === null ? null : Number(activeRow.report_publication_max_attempts),
       };

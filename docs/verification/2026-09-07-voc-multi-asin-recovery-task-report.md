@@ -113,3 +113,29 @@ git diff --check
 ```
 
 Result: **75/75 PASS**, 0 failed/canceled/skipped, `duration_ms 59527.9479`, exit 0 (30 recovery + 45 manual-store/unit cases). ESLint and diff check exit 0. The SQLite experimental warning and previously documented newly exposed PostgreSQL concurrent-query deprecation remain visible. Only the helper, recovery test and this report belong to the follow-up commit.
+
+## Joint-review follow-up: completed failure in an automatic sibling retry
+
+Fix base: `5bc0bb4b4f3598776a267514398263f67545079b`. The new `permanent-sibling-final-attempt` scenario makes A's fake provider permanently fail once and durably records A's failed audit/terminal. B exhausts its three transient provider calls, then the exact B failure-terminal write throws. The real worker persists failure and claims a bounded retry-new-cycle successor. No failed job status is injected.
+
+RED command, before production changes:
+
+```powershell
+node --conditions=react-server --import tsx --test --test-reporter=spec --test-name-pattern='permanent-sibling-final-attempt' tests/agent/alexa-voc-multi-asin-recovery.test.ts
+```
+
+Both adapters reproduced the review finding: `actual { B0NORM0001: 2, B0NORM0002: 4 }`, `expected { B0NORM0001: 1, B0NORM0002: 4 }`; 2 tests, 0 pass, 2 fail, `duration_ms 7724.9025`. The same focused command after the correction and explicit-retry positive case passed 2/2, `duration_ms 7839.5299`.
+
+The existing `retryCycleStartAttempt` is the automatic-chain boundary: SQLite and PostgreSQL automatic successors copy it, even when a transient failure creates another logical cycle; explicit normalization enqueue starts it at the new attempt number. Runtime and reducer now both accept completed failure terminals only from a trusted same-stage job with that same retry-chain start and attempt number within `[retryCycleStartAttempt, currentAttemptNumber]`. Existing terminal job/audit provenance validation precedes reduction. Success replay is unchanged. The PostgreSQL queue candidate merely maps this existing field into the internal recovery fact type; there is no database state-machine/schema or public API change.
+
+The regression asserts A=1/B=4 after automatic recovery, exactly one original A failure terminal, no A revision, final A=failure/B=success readback and succeeded job/stage. It then calls the existing same-input queue entry, verifies a genuinely new retry-chain boundary and runs another real fixture runtime: A succeeds on its second total provider call, B remains at four calls with one terminal and revision1, A's old failure is preserved alongside the new success, and A receives its first revision. This is explicit authorization, not a blanket ban on retrying historical failures.
+
+Full covering command:
+
+```powershell
+node --conditions=react-server --import tsx --test --test-reporter=spec tests/agent/alexa-voc-multi-asin-recovery.test.ts tests/agent/alexa-voc-normalization-worker.test.ts tests/agent/alexa-voc-normalization-attempts-contract.test.ts tests/agent/postgres-manual-alexa-voc-store.test.ts
+npx eslint server/runtime/alexa-voc-normalization-runtime.ts server/domain/voc/alexa-voc-recovery.ts server/db/postgres/manual-alexa-voc-store.ts tests/agent/alexa-voc-multi-asin-recovery.test.ts
+git diff --check
+```
+
+Full result: **63/63 PASS**, 0 failed/canceled/skipped, `duration_ms 64192.1182`, exit 0 (32 recovery scenarios plus 31 worker/attempt/PostgreSQL-store cases). Changed-file ESLint and diff check exit 0. The known visible SQLite experimental/PG concurrent-query warnings are not suppressed. Files changed: runtime snapshot selection/helper, pure recovery reducer and internal job fact type, PostgreSQL candidate field mapping, recovery test, and this report. No unrelated old audit tests, formal database/provider access, live service restart, global limits, UI, merge/push/deploy or parallel worktree changes.

@@ -19,6 +19,7 @@ export type NormalizationRecoveryJob = Pick<
   | "runId"
   | "logicalExecutionCycleId"
   | "attemptNumber"
+  | "retryCycleStartAttempt"
   | "maxAttempts"
   | "status"
   | "error"
@@ -49,6 +50,8 @@ export function normalizationRecoveryQueries(job: NormalizationRecoveryJob) {
     },
     {
       sql: `SELECT terminal.*, j.id AS terminal_job_id, j.stage_id AS terminal_job_stage_id,
+              j.attempt_number AS terminal_job_attempt_number,
+              j.retry_cycle_start_attempt AS terminal_retry_cycle_start_attempt,
               stage.run_id AS terminal_job_run_id, stage.stage AS terminal_job_stage,
               ar.id AS source_audit_id, ar.run_id AS source_audit_run_id,
               ar.stage_id AS source_audit_stage_id, ar.job_attempt_id AS source_audit_job_id,
@@ -251,7 +254,14 @@ export function normalizationRecoveryDisposition(
       )
         return invalid();
     } else if (terminal.status === "success") return invalid();
-    if (terminal.status === "success" || terminal.job_attempt_id === job.id)
+    if (
+      terminal.status === "success" ||
+      (Number(terminal.terminal_retry_cycle_start_attempt) ===
+        job.retryCycleStartAttempt &&
+        Number(terminal.terminal_job_attempt_number) >=
+          job.retryCycleStartAttempt &&
+        Number(terminal.terminal_job_attempt_number) <= job.attemptNumber)
+    )
       completed.add(String(terminal.snapshot_id));
   }
   const remaining = [...inputs.keys()].filter((id) => !completed.has(id));

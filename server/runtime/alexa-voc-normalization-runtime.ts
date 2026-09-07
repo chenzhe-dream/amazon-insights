@@ -110,6 +110,13 @@ export async function createAlexaVocNormalizationRuntime(
         runId: job.runId,
       });
       const stageAttempts = await options.repository.listJobAttempts(job.stageId);
+      // Automatic successors retain this boundary even across logical cycles;
+      // an explicit enqueue starts a new chain and may retry a failed input.
+      const completedChainJobIds = stageAttempts
+        .filter((attempt) => attempt.retryCycleStartAttempt === job.retryCycleStartAttempt &&
+          attempt.attemptNumber >= job.retryCycleStartAttempt &&
+          attempt.attemptNumber <= job.attemptNumber)
+        .map((attempt) => attempt.id);
       const attempts = stageAttempts
         .filter((attempt) => attempt.logicalExecutionCycleId === job.logicalExecutionCycleId);
       const cycleJobs = new Set(attempts.map((attempt) => attempt.id));
@@ -162,6 +169,7 @@ export async function createAlexaVocNormalizationRuntime(
             .filter((snapshot) => shouldProcessAlexaVocNormalizationSnapshot({
               snapshotId: snapshot.id,
               jobAttemptId: job.id,
+              completedChainJobIds,
               terminals,
             }))
             .map(async (snapshot) => ({
@@ -245,6 +253,7 @@ export async function createAlexaVocNormalizationRuntime(
 export function shouldProcessAlexaVocNormalizationSnapshot(input: Readonly<{
   snapshotId: string;
   jobAttemptId: string;
+  completedChainJobIds?: readonly string[];
   terminals: readonly Readonly<{
     snapshotId: string;
     jobAttemptId: string;
@@ -255,7 +264,8 @@ export function shouldProcessAlexaVocNormalizationSnapshot(input: Readonly<{
     (terminal) => terminal.snapshotId === input.snapshotId,
   );
   return !terminals.some((terminal) => terminal.status === "success") &&
-    !terminals.some((terminal) => terminal.jobAttemptId === input.jobAttemptId);
+    !terminals.some((terminal) => terminal.jobAttemptId === input.jobAttemptId ||
+      input.completedChainJobIds?.includes(terminal.jobAttemptId));
 }
 
 async function trustedNormalizationSubject(
