@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertCodeOnly, codeReleasesMatch, validateCodeRelease } from "./code-publication-identity.mjs";
 
 import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 import {
@@ -83,6 +84,14 @@ function validateStream(stream) {
 
 function validatePayload(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Invalid reload request");
+  if (candidate.version === 5) {
+    if (Object.keys(candidate).sort().join(",") !== "artifactId,buildCompletedAt,codeRelease,kind,target,version") throw new Error("Invalid reload request");
+    const codeRelease = assertCodeOnly(candidate);
+    assertArtifactId(candidate.artifactId);
+    validateTarget(candidate.target);
+    if (typeof candidate.buildCompletedAt !== "string" || Number.isNaN(Date.parse(candidate.buildCompletedAt))) throw new Error("Invalid reload request");
+    return Object.freeze({ version: 5, kind: "code", artifactId: candidate.artifactId, codeRelease, buildCompletedAt: candidate.buildCompletedAt, target: Object.freeze({ ...candidate.target }) });
+  }
   const hasStream = candidate.version === WEB_RELOAD_STREAM_REQUEST_VERSION;
   const expectedKeys = hasStream
     ? "artifactId,buildCompletedAt,jobId,jobVersion,stageContentHashes,stream,target,version"
@@ -120,6 +129,14 @@ function validatePayload(candidate) {
 function validatePublicationReference(candidate) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     throw new Error("Invalid Web publication reference");
+  }
+  if (candidate.kind === "code") {
+    if (Object.keys(candidate).sort().join(",") !== "artifactId,codeRelease,kind,requestId,requestedAt,target") throw new Error("Invalid Web publication reference");
+    assertArtifactId(candidate.artifactId);
+    assertArtifactId(candidate.requestId);
+    validateTarget(candidate.target);
+    if (typeof candidate.requestedAt !== "string" || Number.isNaN(Date.parse(candidate.requestedAt))) throw new Error("Invalid Web publication reference");
+    return Object.freeze({ ...candidate, codeRelease: validateCodeRelease(candidate.codeRelease) });
   }
   if (Object.keys(candidate).sort().join(",") !== "artifactId,jobId,jobVersion,requestId,requestedAt,stageContentHashes") {
     throw new Error("Invalid Web publication reference");
@@ -345,20 +362,23 @@ function coalescePendingStreamSync(directory, payload, ownId) {
   }
 }
 
+function publicationPayload(input) {
+  const { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream } = input;
+  if (input.kind !== undefined || input.codeRelease !== undefined) {
+    const codeRelease = assertCodeOnly(input);
+    return validatePayload({ version: 5, kind: "code", artifactId, codeRelease, buildCompletedAt, target });
+  }
+  return validatePayload({ version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
+    jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, ...(stream ? { stream } : {}) });
+}
+
+export { publicationPayload as createWebReloadRequestPayload, requestId as webReloadRequestId };
+
 export async function writeWebReloadRequest(
-  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
+  input,
   { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
 ) {
-  const payload = validatePayload({
-    version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
-    jobId,
-    jobVersion,
-    artifactId,
-    stageContentHashes,
-    buildCompletedAt,
-    target,
-    ...(stream ? { stream } : {}),
-  });
+  const payload = publicationPayload(input);
   const paths = await ensureSpool(spoolDir);
   const id = requestId(payload);
   const requestPath = path.join(paths.pending, `${id}.json`);
@@ -375,7 +395,7 @@ export async function writeWebReloadRequest(
 }
 
 export function writeWebReloadRequestSync(
-  { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
+  input,
   {
     spoolDir = path.join(process.cwd(), "data", "web-reload-requests"),
     reservation,
@@ -385,23 +405,14 @@ export function writeWebReloadRequestSync(
   if (reservation && !referenceEstablished) {
     return establishWebArtifactReferenceSync({
       ...reservation,
-      artifactId,
+      artifactId: input.artifactId,
       write: () => writeWebReloadRequestSync(
-        { jobId, jobVersion, artifactId, stageContentHashes, buildCompletedAt, target, stream },
+        input,
         { spoolDir, referenceEstablished: true },
       ),
     });
   }
-  const payload = validatePayload({
-    version: stream ? WEB_RELOAD_STREAM_REQUEST_VERSION : WEB_RELOAD_REQUEST_VERSION,
-    jobId,
-    jobVersion,
-    artifactId,
-    stageContentHashes,
-    buildCompletedAt,
-    target,
-    ...(stream ? { stream } : {}),
-  });
+  const payload = publicationPayload(input);
   const paths = spoolPaths(spoolDir);
   for (const directory of Object.values(paths)) fsSync.mkdirSync(directory, { recursive: true });
   const id = requestId(payload);
@@ -448,9 +459,10 @@ export async function readWebReloadPublication(
     if (
       requestId(payload) !== safe.requestId
       || payload.artifactId !== safe.artifactId
-      || payload.jobId !== safe.jobId
+      || payload.kind !== safe.kind
+      || (safe.kind === "code" ? (!codeReleasesMatch(payload.codeRelease, safe.codeRelease) || !targetsMatch(payload.target, safe.target)) : (payload.jobId !== safe.jobId
       || payload.jobVersion !== safe.jobVersion
-      || !stageContentHashesMatch(payload.stageContentHashes, safe.stageContentHashes)
+      || !stageContentHashesMatch(payload.stageContentHashes, safe.stageContentHashes)))
       || payload.buildCompletedAt !== safe.requestedAt
     ) {
       return failedPublication(safe, timestamp, "WEB_PUBLICATION_CONTENT_MISMATCH");
@@ -697,6 +709,10 @@ async function consumeWebReloadRequestUnlocked({
   if (durableCurrent?.committedRequestId === id) {
     await archive(claimPath, appliedPath);
     return Object.freeze({ status: "duplicate" });
+  }
+  if (payload.kind === "code" && durableCurrent?.current.artifactId !== payload.codeRelease.baseArtifactId) {
+    await archive(claimPath, failedPath);
+    return Object.freeze({ status: "failed" });
   }
 
   let highWater = null;

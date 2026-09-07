@@ -3,7 +3,8 @@ param(
   [string]$ProjectRoot,
   [string]$SharedRoot,
   [string]$DataRoot,
-  [string]$RuntimeRoot
+  [string]$RuntimeRoot,
+  [switch]$PublishCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -343,6 +344,60 @@ function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$Targ
   throw "正式服务启动失败，请查看脱敏日志目录：$logs"
 }
 
+function Invoke-CodePublication([string]$Root, [string]$Mode, [string]$ArtifactId) {
+  $arguments = @((Join-Path $Root 'scripts\publish-code-web.mjs'), $Mode)
+  if ($ArtifactId) { $arguments += $ArtifactId }
+  Push-Location -LiteralPath $Root
+  try {
+    $output = & node @arguments
+    if ($LASTEXITCODE -ne 0) { throw '代码发布操作失败' }
+    return ($output | ConvertFrom-Json)
+  } finally { Pop-Location }
+}
+
+function Assert-CodePublicationQueueIdle([string]$Root) {
+  foreach ($directory in @('pending', 'processing')) {
+    $queue = Join-Path $Root "data\web-reload-requests\$directory"
+    if (Test-Path -LiteralPath $queue) {
+      if (@(Get-ChildItem -LiteralPath $queue -Filter '*.json' -File -Force).Count -gt 0) { throw '存在 Web 发布交接，已拒绝代码更新' }
+    }
+  }
+}
+
+function Read-CodeRuntimeHealth([string]$Url) {
+  $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 -MaximumRedirection 0
+  if ($response.Content.Length -gt 16384) { throw '版本健康响应无效' }
+  return ($response.Content | ConvertFrom-Json)
+}
+
+function Test-CodeReleaseMatch($Actual, $Expected) {
+  return ($null -ne $Actual -and $null -ne $Expected -and
+    $Actual.sourceCommit -cmatch '^[a-f0-9]{40}$' -and $Actual.sourceHash -cmatch '^[a-f0-9]{64}$' -and
+    $Actual.baseArtifactId -cmatch '^[a-f0-9]{64}$' -and
+    $Actual.sourceCommit -ceq $Expected.sourceCommit -and $Actual.sourceHash -ceq $Expected.sourceHash -and
+    $Actual.baseArtifactId -ceq $Expected.baseArtifactId)
+}
+
+function Wait-CodePublication([string]$Root, $Prepared, [int]$TimeoutSeconds = 90) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $status = Invoke-CodePublication $Root 'status' $Prepared.artifactId
+    if ($status.status -eq 'failed') { throw '代码版本激活失败，已保留已知可用版本' }
+    if ($status.status -eq 'applied' -and $status.artifactId -ceq $Prepared.artifactId -and
+      $status.requestId -ceq $Prepared.requestId -and (Test-CodeReleaseMatch $status.codeRelease $Prepared.codeRelease)) {
+      $web = Read-CodeRuntimeHealth 'http://127.0.0.1:31900/api/health'
+      $agent = Read-CodeRuntimeHealth 'http://127.0.0.1:31901/health'
+      if ($web.status -eq 'ok' -and $agent.status -eq 'ok' -and $web.artifactId -ceq $Prepared.artifactId -and
+        (Test-CodeReleaseMatch $web.codeRelease $Prepared.codeRelease) -and
+        $agent.codeSource.sourceCommit -ceq $Prepared.codeRelease.sourceCommit -and
+        $agent.codeSource.sourceHash -ceq $Prepared.codeRelease.sourceHash) { return $status }
+    }
+    if ([DateTime]::UtcNow -ge $deadline) { break }
+    Start-Sleep -Milliseconds 300
+  } while ($true)
+  throw '代码版本未获得精确激活确认'
+}
+
 function Invoke-FormalStackManager {
   $roots = Resolve-FormalRoots
   $resolvedRoot = $roots.codeRoot
@@ -373,6 +428,23 @@ function Invoke-FormalStackManager {
     healthy = $present
   })
 
+  $prepared = $null
+  if ($PublishCode) {
+    if ($decision.action -ne 'restart' -or -not (Test-HttpOk 'http://127.0.0.1:31900/api/health') -or
+      -not (Test-HttpOk 'http://127.0.0.1:31901/health')) { throw '代码更新需要空闲且健康的受管服务' }
+    Assert-CodePublicationQueueIdle $resolvedRoot
+    $prepared = Invoke-CodePublication $resolvedRoot 'prepare'
+    if ($prepared.status -ne 'prepared' -or $prepared.artifactId -cnotmatch '^[a-f0-9]{64}$' -or
+      $prepared.requestId -cnotmatch '^[a-f0-9]{64}$' -or -not (Test-CodeReleaseMatch $prepared.codeRelease $prepared.codeRelease)) { throw '代码准备身份无效' }
+    # The build can take minutes: every live stop gate is checked again afterwards.
+    $preflight = Invoke-PostgresPreflight $resolvedRoot
+    $state = Read-ManagerState $statePath
+    if ([int]$preflight.active -ne 0 -or -not (Test-ManagedStackIdentity $state $resolvedRoot $resolvedData $resolvedRuntime) -or
+      -not (Test-HttpOk 'http://127.0.0.1:31900/api/health') -or -not (Test-HttpOk 'http://127.0.0.1:31901/health') -or
+      (Get-ListenerProcessIds 58258).Count -eq 0 -or (Get-ListenerProcessIds 3000).Count -gt 0) { throw '构建后运行状态变化，已拒绝代码更新' }
+    Assert-CodePublicationQueueIdle $resolvedRoot
+  }
+
   switch ($decision.action) {
     'refuse-active' { throw '存在正在运行的分析任务，已拒绝重启' }
     'refuse-foreign' { throw '现有 Web/Agent 不属于本启动器，请先在原终端停止服务' }
@@ -389,6 +461,16 @@ function Invoke-FormalStackManager {
   $commit = (& git -C $resolvedRoot rev-parse HEAD).Trim()
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) { throw '无法解析正式代码版本' }
   $newState = Start-FormalStack $resolvedRoot $resolvedData $resolvedRuntime $commit $statePath
+  if ($prepared) {
+    $agent = Read-CodeRuntimeHealth 'http://127.0.0.1:31901/health'
+    if ($newState.commit -cne $prepared.codeRelease.sourceCommit -or $agent.status -ne 'ok' -or
+      $agent.codeSource.sourceCommit -cne $prepared.codeRelease.sourceCommit -or
+      $agent.codeSource.sourceHash -cne $prepared.codeRelease.sourceHash) { throw '新服务源码身份不匹配，未提交代码请求' }
+    $submitted = Invoke-CodePublication $resolvedRoot 'submit' $prepared.artifactId
+    if ($submitted.status -notin @('pending', 'applied') -or $submitted.artifactId -cne $prepared.artifactId -or
+      $submitted.requestId -cne $prepared.requestId -or -not (Test-CodeReleaseMatch $submitted.codeRelease $prepared.codeRelease)) { throw '代码发布交接失败' }
+    Wait-CodePublication $resolvedRoot $prepared | Out-Null
+  }
   Invoke-PostgresPreflight $resolvedRoot | Out-Null
   Write-Host "[完成] 正式系统已启动：Web 31900 / Agent 31901 / PostgreSQL 58258"
   Write-Host "[版本] $($newState.commit)"

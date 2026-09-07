@@ -7,6 +7,13 @@ import { webArtifactId } from "../../app/lib/web-artifact-id";
 
 const ARTIFACT_ID = "a".repeat(64);
 
+test("Web health exposes the running code artifact identity without arbitrary environment text", async () => {
+  const codeRelease = { sourceCommit: "b".repeat(40), sourceHash: "c".repeat(64), baseArtifactId: ARTIFACT_ID };
+  const env = { WEB_CODE_SOURCE_COMMIT: codeRelease.sourceCommit, WEB_CODE_SOURCE_HASH: codeRelease.sourceHash, WEB_CODE_BASE_ARTIFACT_ID: codeRelease.baseArtifactId };
+  assert.deepEqual((await (await probeAgentReadiness({ env })).json()).codeRelease, codeRelease);
+  assert.equal("codeRelease" in await (await probeAgentReadiness({ env: { ...env, WEB_CODE_SOURCE_HASH: "secret garbage" } })).json(), false);
+});
+
 function readyReadiness() {
   return {
     schemaVersion: "1.0.0",

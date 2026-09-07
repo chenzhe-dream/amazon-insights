@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -32,6 +32,56 @@ function invokeDecision({ owned, healthy, active }) {
   const result = invokePowerShell(command);
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.trim());
+}
+
+for (const scenario of ["success", "prepare-failure", "active-after-build", "foreign-after-build", "activation-failure", "wrong-runtime-identity", "old-supervisor", "default"]) {
+  test(`code manager guarded handoff: ${scenario}`, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "code-manager-"));
+    const dataRoot = path.join(directory, "data"), runtimeRoot = path.join(directory, "runtime");
+    await mkdir(path.join(runtimeRoot, "state"), { recursive: true });
+    await writeFile(path.join(directory, "formal-stack.env"), [
+      "AGENT_DATABASE_URL=postgresql://unused", "AGENT_VOC_LOCAL_FAKE=0", "WEB_HOST=0.0.0.0", "WEB_PORT=31900",
+      "AGENT_SERVICE_HOST=127.0.0.1", "AGENT_SERVICE_PORT=31901", "AGENT_SERVICE_INTERNAL_URL=http://127.0.0.1:31901",
+      "AGENT_SERVICE_TRUSTED_ORIGINS=http://127.0.0.1:31900", "AGENT_AUTH_ALLOW_INSECURE_PRIVATE_NETWORK_COOKIE=1",
+      `AGENT_DATA_ROOT=${dataRoot}`, `AGENT_RUNTIME_ROOT=${runtimeRoot}`,
+    ].join("\n"));
+    await writeFile(path.join(runtimeRoot, "state", "stack.json"), JSON.stringify({ supervisorPid: 123 }));
+    try {
+      const result = invokePowerShell(`
+        $ProjectRoot=${psLiteral(root)}; $SharedRoot=${psLiteral(directory)}; $DataRoot=${psLiteral(dataRoot)}; $RuntimeRoot=${psLiteral(runtimeRoot)}
+        $PublishCode=$${scenario !== "default"}; $script:events=@(); $script:prepared=$false
+        function Invoke-PostgresPreflight { if ($script:prepared -and '${scenario}' -eq 'active-after-build') { return @{active=1} }; return @{active=0} }
+        function Get-ListenerProcessIds([int]$Port) { if ($Port -eq 3000) { return @() }; return @(123) }
+        function Test-ManagedStackIdentity { return -not ($script:prepared -and '${scenario}' -eq 'foreign-after-build') }
+        function Test-HttpOk { return $true }
+        function Stop-OwnedStack { $script:events += 'stop' }
+        function Start-FormalStack { $script:events += 'start'; return @{commit=('c'*40)} }
+        function Invoke-CodePublication([string]$Root, [string]$Mode, [string]$ArtifactId) {
+          $script:events += $Mode
+          if ($Mode -eq 'prepare') { if ('${scenario}' -eq 'prepare-failure') { throw 'prepare failed' }; $script:prepared=$true }
+          $status=if($Mode -eq 'prepare'){'prepared'}elseif($Mode -eq 'submit'){'pending'}elseif('${scenario}' -eq 'activation-failure'){'failed'}else{'applied'}
+          return @{status=$status;artifactId=('a'*64);kind='code';requestId=('d'*64);codeRelease=@{sourceCommit=('c'*40);sourceHash=('b'*64);baseArtifactId=('e'*64)}}
+        }
+        function Read-CodeRuntimeHealth([string]$Url) {
+          if ('${scenario}' -eq 'old-supervisor') { return @{status='ok'} }
+          $hash=if('${scenario}' -eq 'wrong-runtime-identity'){'f'*64}else{'b'*64}
+          return @{status='ok';artifactId=('a'*64);codeRelease=@{sourceCommit=('c'*40);sourceHash=$hash;baseArtifactId=('e'*64)};codeSource=@{sourceCommit=('c'*40);sourceHash=('b'*64)}}
+        }
+        $script:realWait = (Get-Command Wait-CodePublication).ScriptBlock
+        function Wait-CodePublication { & $script:realWait @args -TimeoutSeconds 0 }
+        $failed=$false
+        try { Invoke-FormalStackManager *> $null } catch { $failed=$true }
+        @{failed=$failed;events=@($script:events)} | ConvertTo-Json -Compress
+      `);
+      assert.equal(result.status, 0, result.stderr);
+      const observed = JSON.parse(result.stdout.trim());
+      assert.equal(observed.failed, !["success", "default"].includes(scenario));
+      if (["prepare-failure", "active-after-build", "foreign-after-build"].includes(scenario)) assert.deepEqual(observed.events, ["prepare"]);
+      else if (scenario === "default") assert.deepEqual(observed.events, ["stop", "start"]);
+      else if (scenario === "old-supervisor") assert.deepEqual(observed.events, ["prepare", "stop", "start"]);
+      else assert.deepEqual(observed.events, ["prepare", "stop", "start", "submit", "status"]);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
 }
 
 test("missing configuration fails closed", () => {

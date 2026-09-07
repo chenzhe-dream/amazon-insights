@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { assertCodeOnly, validateCodeRelease } from "./code-publication-identity.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
@@ -43,6 +44,11 @@ function stageHashes(value) {
 }
 
 function currentArtifact(value) {
+  if (value?.kind === "code") {
+    if (Object.keys(value).sort().join(",") !== "artifactId,codeRelease,kind,storageName"
+      || !HASH.test(value.artifactId) || value.storageName !== `publication-${value.artifactId}`) throw new Error();
+    return Object.freeze({ ...value, codeRelease: validateCodeRelease(value.codeRelease) });
+  }
   if (
     !value
     || typeof value !== "object"
@@ -81,8 +87,10 @@ function parseControl(value, expectedTarget) {
       !value
       || typeof value !== "object"
       || Array.isArray(value)
-      || Object.keys(value).sort().join(",") !== "committedAt,committedRequestId,current,streams,target,version"
-      || value.version !== 1
+      || Object.keys(value).sort().join(",") !== (value.version === 2
+        ? "committedAt,committedRequestId,current,dataCurrent,streams,target,version"
+        : "committedAt,committedRequestId,current,streams,target,version")
+      || ![1, 2].includes(value.version)
       || !validTarget(value.target)
       || (expectedTarget && !targetsMatch(value.target, expectedTarget))
       || typeof value.committedAt !== "string"
@@ -95,13 +103,17 @@ function parseControl(value, expectedTarget) {
       || Object.keys(value.streams).some((key) => key !== "alexa_voc")
     ) throw new Error();
     const current = currentArtifact(value.current);
+    if ((current.kind === "code") !== (value.version === 2)) throw new Error();
+    const dataCurrent = value.version === 2 ? currentArtifact(value.dataCurrent) : null;
+    if (dataCurrent?.kind === "code") throw new Error();
     const streams = Object.freeze({
       ...(value.streams.alexa_voc ? { alexa_voc: alexaStream(value.streams.alexa_voc) } : {}),
     });
     return Object.freeze({
-      version: 1,
+      version: value.version,
       target: Object.freeze({ ...value.target }),
       current,
+      ...(dataCurrent ? { dataCurrent } : {}),
       streams,
       committedRequestId: value.committedRequestId,
       committedAt: value.committedAt,
@@ -130,7 +142,13 @@ export async function readWebPublicationControl({ controlPath, expectedTarget } 
 export async function commitWebPublicationControl({ controlPath, payload, requestId, now = () => new Date() } = {}) {
   if (!validTarget(payload?.target)) throw new Error("Invalid durable Web publication current");
   if (typeof requestId !== "string" || !HASH.test(requestId)) throw new Error("Invalid durable Web publication current");
-  const current = currentArtifact({
+  const isCode = payload.kind === "code";
+  if (isCode) assertCodeOnly(payload);
+  else if (payload.kind !== undefined || payload.codeRelease !== undefined) throw new Error("Invalid durable Web publication current");
+  const current = currentArtifact(isCode ? {
+    artifactId: payload.artifactId, kind: "code", codeRelease: payload.codeRelease,
+    storageName: payload.storageName ?? `publication-${payload.artifactId}`,
+  } : {
     artifactId: payload.artifactId,
     jobId: payload.jobId,
     jobVersion: payload.jobVersion,
@@ -138,7 +156,10 @@ export async function commitWebPublicationControl({ controlPath, payload, reques
     storageName: payload.storageName ?? `publication-${payload.artifactId}`,
   });
   const previous = await readWebPublicationControl({ controlPath, expectedTarget: payload.target });
+  if (isCode && previous?.current.artifactId !== current.codeRelease.baseArtifactId) throw new Error("Code publication base changed");
+  const dataCurrent = isCode ? (previous.current.kind === "code" ? previous.dataCurrent : previous.current) : null;
   const streams = { ...(previous?.streams ?? {}) };
+  let retainCodeCurrent = false;
   if (payload.stream) {
     if (
       payload.stream.id !== "alexa_voc"
@@ -158,17 +179,22 @@ export async function commitWebPublicationControl({ controlPath, payload, reques
       nextStream.artifactId !== streams.alexa_voc.artifactId
       || nextStream.stageContentHash !== streams.alexa_voc.stageContentHash
     )) throw new Error("Durable Web publication generation conflicts");
+    // An epoch-only retry acknowledges content already present beneath the code
+    // release. It must not repoint current to that older business package.
+    retainCodeCurrent = previous?.current.kind === "code"
+      && streams.alexa_voc?.generation === nextStream.generation;
     streams.alexa_voc = streams.alexa_voc && streams.alexa_voc.generation === nextStream.generation
       ? alexaStream({ ...nextStream, epoch: Math.max(streams.alexa_voc.epoch, nextStream.epoch) })
       : nextStream;
   }
   const record = parseControl({
-    version: 1,
+    version: isCode || retainCodeCurrent ? 2 : 1,
     target: payload.target,
-    current,
+    current: retainCodeCurrent ? previous.current : current,
+    ...(retainCodeCurrent ? { dataCurrent: previous.dataCurrent } : dataCurrent ? { dataCurrent } : {}),
     streams,
-    committedRequestId: requestId,
-    committedAt: now().toISOString(),
+    committedRequestId: retainCodeCurrent ? previous.committedRequestId : requestId,
+    committedAt: retainCodeCurrent ? previous.committedAt : now().toISOString(),
   }, payload.target);
   await fs.mkdir(path.dirname(controlPath), { recursive: true });
   const temporary = `${controlPath}.tmp-${randomUUID()}`;
@@ -195,7 +221,7 @@ export async function commitWebPublicationControl({ controlPath, payload, reques
     if (renamed) {
       try {
         const observed = await readWebPublicationControl({ controlPath, expectedTarget: payload.target });
-        if (observed?.committedRequestId === requestId) return observed;
+        if (JSON.stringify(observed) === JSON.stringify(record)) return observed;
       } catch {}
     }
     throw error;

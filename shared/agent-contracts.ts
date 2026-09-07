@@ -777,6 +777,10 @@ export const ConnectorCircuitResetParamsSchema = strictObject({
 export const HealthResponseSchema = strictObject({
   status: z.literal("ok"),
   service: z.literal("agent-service"),
+  codeSource: strictObject({
+    sourceCommit: z.string().regex(/^[a-f0-9]{40}$/),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  }).optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 

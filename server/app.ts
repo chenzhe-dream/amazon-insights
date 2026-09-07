@@ -419,6 +419,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   app.get("/health", async () => ({
     status: "ok",
     service: "agent-service",
+    ...(boundedCodeSource(env.AGENT_CODE_SOURCE_COMMIT, env.AGENT_CODE_SOURCE_HASH)
+      ? { codeSource: boundedCodeSource(env.AGENT_CODE_SOURCE_COMMIT, env.AGENT_CODE_SOURCE_HASH) } : {}),
   }));
 
   registerCapabilitiesRoutes(app, env, {
@@ -559,3 +561,4 @@ function hasConcurrencyAdminStore(
     typeof candidate.resetConnectorCircuit === "function"
   );
 }
+import { boundedCodeSource } from "../scripts/lib/code-publication-identity.mjs";

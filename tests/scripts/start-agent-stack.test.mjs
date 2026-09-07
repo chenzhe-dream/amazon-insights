@@ -17,6 +17,8 @@ import {
   resolveStackSettings,
   waitForHealth,
 } from "../../scripts/start-agent-stack.mjs";
+import { commitWebPublicationControl, readWebPublicationControl, webPublicationControlPath } from "../../scripts/lib/web-publication-control.mjs";
+import { createWebReloadTarget, writeWebReloadRequest } from "../../scripts/lib/web-reload-request.mjs";
 
 const ARTIFACT_A = "a".repeat(64);
 const ARTIFACT_B = "b".repeat(64);
@@ -58,6 +60,61 @@ class FakeChild extends EventEmitter {
 }
 
 FakeChild.nextPid = 1;
+
+for (const failure of [null, "preflight", "final", "commit", "manifest"]) {
+  test(`code supervisor uses real persistence and retains known-good on ${failure ?? "successful activation"}`, async () => {
+    const worktree = await mkdtemp(path.join(os.tmpdir(), "code-supervisor-"));
+    const target = createWebReloadTarget({ worktree, webHost: "127.0.0.1", webPort: 43123 });
+    const controlPath = webPublicationControlPath(worktree);
+    const children = [], environments = [];
+    const codeRelease = { sourceCommit: "1".repeat(40), sourceHash: "2".repeat(64), baseArtifactId: ARTIFACT_A };
+    let launcher;
+    try {
+      const build = async () => { await mkdir(path.join(worktree, "dist"), { recursive: true }); await writeFile(path.join(worktree, "dist", "index.html"), "test build"); };
+      await publishImmutableWebArtifact({ worktree, ...reconciliation(ARTIFACT_A), build });
+      await commitWebPublicationControl({ controlPath, requestId: ARTIFACT_A, payload: { ...reconciliation(ARTIFACT_A), target } });
+      const previous = await readWebPublicationControl({ controlPath });
+      await publishImmutableWebArtifact({ worktree, artifactId: ARTIFACT_B, kind: "code", codeRelease, build });
+      await writeWebReloadRequest({ artifactId: ARTIFACT_B, kind: "code", codeRelease: failure === "manifest" ? { ...codeRelease, sourceHash: ARTIFACT_C } : codeRelease, target, buildCompletedAt: new Date().toISOString() }, { spoolDir: path.join(worktree, "data", "web-reload-requests") });
+      launcher = createStackLauncherImplementation({
+        worktree,
+        platform: "linux",
+        env: { WEB_HOST: "127.0.0.1", WEB_PORT: "43123", AGENT_CODE_SOURCE_COMMIT: codeRelease.sourceCommit, AGENT_CODE_SOURCE_HASH: codeRelease.sourceHash },
+        artifactStore: createWebArtifactStore({ worktree }),
+        spawn: (_cmd, _args, options) => { const child = new FakeChild(`child-${children.length}`); child.exitOnKill = true; children.push(child); environments.push(options.env); return child; },
+        waitForHealth: async (_url, options) => {
+          if (options?.expectedArtifactId !== ARTIFACT_B) return;
+          if (failure === "preflight" || failure === "final" && children.length === 4) throw new Error("health failed");
+          if (failure === "commit" && children.length === 4) {
+            // Simulate an intervening publisher at the final-health/commit boundary.
+            await commitWebPublicationControl({ controlPath, requestId: ARTIFACT_C, payload: { ...reconciliation(ARTIFACT_C), target } });
+          }
+        },
+        allocatePreflightPort: async () => 43124,
+        terminateProcessTree: async ({ child }) => { child.exit(); return true; },
+        publicationRecovery: async () => {},
+        setIntervalImplementation: () => ({ unref() {} }),
+        clearIntervalImplementation: () => {},
+        onceProcessSignal: () => {},
+      });
+      await launcher.start();
+      const result = await launcher.processReloadRequests();
+      assert.equal(result.status, failure ? "failed" : "applied");
+      const control = await readWebPublicationControl({ controlPath });
+      if (!failure) {
+        assert.equal(control.current.artifactId, ARTIFACT_B);
+        assert.deepEqual(control.dataCurrent, previous.current);
+        assert.equal(environments[3].WEB_CODE_SOURCE_COMMIT, codeRelease.sourceCommit);
+        assert.equal(environments[3].WEB_CODE_SOURCE_HASH, codeRelease.sourceHash);
+      } else if (failure !== "commit") assert.deepEqual(control, previous);
+      if (failure === "manifest") assert.equal(children.length, 2);
+      if (failure === "preflight") assert.equal(children.length, 3);
+      if (failure === "commit") assert.equal(control.current.artifactId, ARTIFACT_C);
+      if (failure === "final" || failure === "commit") assert.equal(children.length, 5);
+      if (failure === "final" || failure === "commit") assert.equal(environments.at(-1).WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_A);
+    } finally { await launcher?.cleanup("SIGTERM"); await rm(worktree, { recursive: true, force: true }); }
+  });
+}
 
 function createControlledClock() {
   const sleepers = [];

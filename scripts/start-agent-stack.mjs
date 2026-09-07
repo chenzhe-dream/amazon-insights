@@ -13,6 +13,8 @@ import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
 import { createProcessTreeIdentity, terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
+import { assertCodeOnly, codeReleasesMatch } from "./lib/code-publication-identity.mjs";
+import { readCodeSourceIdentity } from "./lib/code-web-publication.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
@@ -454,6 +456,13 @@ export function createStackLauncher({
       WEB_ARTIFACT_ROOT: artifactPath,
       WEB_PUBLICATION_ARTIFACT_ID: artifact.publicationArtifactId ?? artifact.id,
     };
+    for (const key of ["WEB_CODE_SOURCE_COMMIT", "WEB_CODE_SOURCE_HASH", "WEB_CODE_BASE_ARTIFACT_ID"]) delete childEnv[key];
+    if (artifact.kind === "code") {
+      const identity = assertCodeOnly(artifact);
+      childEnv.WEB_CODE_SOURCE_COMMIT = identity.sourceCommit;
+      childEnv.WEB_CODE_SOURCE_HASH = identity.sourceHash;
+      childEnv.WEB_CODE_BASE_ARTIFACT_ID = identity.baseArtifactId;
+    }
     delete childEnv.AGENT_SERVICE_READINESS_ORIGIN;
     if (readinessOrigin !== undefined) {
       childEnv.AGENT_SERVICE_READINESS_ORIGIN = readinessOrigin;
@@ -481,13 +490,15 @@ export function createStackLauncher({
     }
     const candidateHashes = candidateArtifact.stageContentHashes;
     const requestedHashes = request?.stageContentHashes;
-    if (
-      candidateArtifact.jobId !== request?.jobId ||
+    const codeMatches = request?.kind === "code" && candidateArtifact.kind === "code"
+      && codeReleasesMatch(assertCodeOnly(candidateArtifact), assertCodeOnly(request));
+    if (request?.kind === "code" ? !codeMatches : (
+      candidateArtifact.kind !== undefined || candidateArtifact.jobId !== request?.jobId ||
       candidateArtifact.jobVersion !== request?.jobVersion ||
       !candidateHashes || !requestedHashes ||
       Object.keys(candidateHashes).length !== Object.keys(requestedHashes).length ||
       !Object.entries(candidateHashes).every(([stage, hash]) => requestedHashes[stage] === hash)
-    ) {
+    )) {
       const error = new Error("Web artifact content does not match reload request");
       error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
       throw error;
@@ -667,7 +678,12 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   loadLocalEnv();
-  const launcher = createStackLauncher();
+  const source = await readCodeSourceIdentity(root);
+  const launcher = createStackLauncher({ env: {
+    ...process.env,
+    AGENT_CODE_SOURCE_COMMIT: source.sourceCommit,
+    AGENT_CODE_SOURCE_HASH: source.sourceHash,
+  } });
   launcher.start().catch((error) => {
     console.error(error instanceof Error ? error.message : "Stack failed to start");
     process.exit(1);

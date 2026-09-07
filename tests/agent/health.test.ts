@@ -3,6 +3,16 @@ import test from "node:test";
 
 import { buildAgentApp } from "../../server/app";
 import { loadAgentConfig } from "../../server/config";
+import { HealthResponseSchema } from "../../shared/agent-contracts";
+
+test("Agent health exposes only bounded startup source identity", async (t) => {
+  const codeSource = { sourceCommit: "a".repeat(40), sourceHash: "b".repeat(64) };
+  const app = buildAgentApp({ env: { AGENT_CODE_SOURCE_COMMIT: codeSource.sourceCommit, AGENT_CODE_SOURCE_HASH: codeSource.sourceHash } });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "GET", url: "/health" });
+  assert.deepEqual(response.json().codeSource, codeSource);
+  assert.equal(HealthResponseSchema.safeParse(response.json()).success, true);
+});
 
 test("GET /health reports the Agent Service status", async (t) => {
   const app = buildAgentApp();
