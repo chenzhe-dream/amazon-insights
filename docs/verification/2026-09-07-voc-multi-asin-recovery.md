@@ -1,10 +1,44 @@
 # VOC multi-ASIN recovery verification
 
-Status: implemented, verified, and independently approved at code HEAD `215f71f`; ready for read-only OpenSpec joint review. This is not a deployment or release activation approval.
+Status: implemented, freshly verified, independently approved and accepted by OpenSpec joint re-review at code HEAD `45c1d7d`. The additional Important from `5bc0bb4` is cleared. No merge or release activation is authorized by these results.
+
+## OpenSpec joint-review follow-up
+
+- OpenSpec independently repeated the eight-file suite at `5bc0bb4`: 115/115 passed, `duration_ms 64419.6535`; same source/build fingerprint and static-check results. No checkout changes beyond the pre-existing `test-results/` were reported.
+- Important: A permanent provider failure is durably terminal, then B exhausts transient provider retries and its failure-terminal write encounters a temporary DB failure. The real failure/claim path creates a new logical cycle for B. Runtime selection only skips success/current-job terminals, so A's older failure is selected again. OpenSpec's natural in-memory fixture variant on both adapters observed calls A=2/B=4 instead of A=1/B=4. The coordinator also verified the reducer/current-job-only selection interaction in source.
+- Fix requirement: preserve completed permanent failures within the automatic recovery chain, while retaining B's bounded retry and the user's legitimate explicit new submission/re-execution path. A global historical-failure skip is not acceptable. Formal two-adapter regression and explicit-retry positive coverage are required before re-review.
+- Sole-implementer follow-up brief: `.superpowers/sdd/voc-recovery-sibling-fix-brief.md`. Correction committed as `45c1d7d2cff8b65936246da4bc0b7c61f8a20f86`; implementation evidence is appended to the task report. Independent re-review and subsequent OpenSpec joint re-review approved the correction. The formal runtime remains untouched.
+
+## Sibling-retry correction: locked-code verification
+
+Code HEAD: `45c1d7d2cff8b65936246da4bc0b7c61f8a20f86`. Existing `retryCycleStartAttempt`, trusted same-stage job identity and the bounded `[start, current]` attempt interval now identify completed failures belonging to the same automatic recovery chain. Runtime selection and the pure reducer agree; an explicit new enqueue starts a different retry chain. The PostgreSQL candidate only maps the already existing field into the internal recovery fact. No schema/public API/global retry changes.
+
+- Formal natural RED in both adapters: A=2/B=4 where A=1/B=4 is required, 0/2 passed before the production correction. Focused GREEN: 2/2. Both tests subsequently use the real same-input enqueue entry to authorize a fresh chain: A then succeeds on its second total call, B remains at four with its original terminal/revision; A's old failure is preserved. Full implementer covering run: 63/63.
+- Coordinator independently reran the same eight-file command recorded below on locked `45c1d7d`: **117/117 passed**, zero failed/cancelled/skipped, `duration_ms 68032.2019`, exit 0. This includes the two new mixed-state/explicit-retry cases, not just the earlier 115.
+- Fresh production build: exit 0. Source and built artifact fingerprint agree exactly: **`65585e96660f932000d940926bbb5496c2ea9df7f887e58695c30f7734ad7020`**. This supersedes the earlier fingerprints in this historical report. No artifact was activated.
+- Fresh changed-file ESLint (`--max-warnings 0`): exit 0. Compiler API: **343 global diagnostics; zero in the same eight changed TypeScript files**. The six pre-edit extended audit-contract failures remain separate debt, not part of a claimed full-repository pass.
+- HEAD/diff checks confirm the source is committed and the original `codex/fix-voc-import-status-20260907` branch still points to `23f9f4a`. Pending coordinator documents and the pre-existing `test-results/` are preserved. Known SQLite, PostgreSQL concurrent-query and build notices remain visible; no warning suppression or unrelated repair.
+- Independent task re-review: spec compliant, task quality Approved; the completed-sibling Important is cleared. Whole-branch gate `23f9f4a..45c1d7d`: Ready to merge Yes, no Critical/Important; the documented PostgreSQL warning remains a Minor. Reviewer checked both adapters' copy-versus-reset retry-chain SQL and the existing fenced finalizer, and inspected regression assertions without rerunning the suites. Prior approval of `215f71f` did not cover this subsequently discovered scenario.
+
+## Final OpenSpec joint acceptance
+
+The existing `[OpenSpec] 同步流水线稳定化 指令窗口` task (`01a023cf-9b63-7f22-bbad-ebbdd57d0c00`) returned **Approved** for code HEAD `45c1d7d2cff8b65936246da4bc0b7c61f8a20f86`, clearing the completed-permanent-sibling Important with no new Critical/Important findings.
+
+OpenSpec freshly executed:
+
+```powershell
+node --conditions=react-server --import tsx --test --test-reporter=spec --test-name-pattern='permanent-sibling-final-attempt' tests/agent/alexa-voc-multi-asin-recovery.test.ts
+```
+
+Result: SQLite and isolated real PostgreSQL **2/2 PASS**, zero failed/cancelled/skipped, `duration_ms 7623.6322`, exit 0. It verified automatic A=1/B=4, preserved failure/no A revision, correct final per-input statuses, and the real explicit enqueue subsequently allowing A's second total call without re-executing B. It did not rerun the other 115 cases or claim a new full-suite/build/lint/compiler run.
+
+OpenSpec and its original read-only reviewer checked the production/test increment and matching same-stage retry-chain bounds. Source and existing build fingerprints were independently recomputed and matched `65585e96660f932000d940926bbb5496c2ea9df7f887e58695c30f7734ad7020`; diff check passed and the original repair branch remained at `23f9f4a`. No handoff source/index/HEAD edits or formal environment changes were made by that task. Only the documented coordinator report/ledger updates remained for the final documentation-only commit.
+
+Delivery is code acceptance and preservation of the isolated branch, not activation. Known PG warning, six pre-edit audit-contract failures, 343 whole-project TypeScript diagnostics and the cancellation/expiry coverage limits remain disclosed; no full-repository clean-bill-of-health is claimed.
 
 Base: `23f9f4a3cb24896e94c94cba0108301c8c1250b4`; design-only dispatch commit: `9b1f690ad7506c5691eda62032708cfa5e6663a6`. Branch: `codex/fix-voc-multi-asin-recovery-20260907` in the existing `fix-voc-import-status-20260907` isolated worktree. The old repair branch remains at base.
 
-## Final implementation verification
+## Earlier terminal-association implementation verification
 
 Code HEAD: `215f71fdaf019c9ebb486fe0884e8bc61af0bc5b` (initial implementation plus terminal-association review fix). The coordinator repeated the eight-file command below on this locked HEAD: **115/115 passed**, zero failed/skipped/cancelled, `duration_ms 64840.1407`.
 
@@ -15,7 +49,7 @@ Code HEAD: `215f71fdaf019c9ebb486fe0884e8bc61af0bc5b` (initial implementation pl
 - The follow-up validates terminal job/audit provenance while preserving a real cross-project/run same-fingerprint success written through the existing repository. Corruption checks include a B-shaped terminal retaining A's complete joined audit source, wrong job, wrong source organization/ASIN, and null audit for success.
 - Final independent task re-review and whole-branch review passed; no formal-state mutation, release activation or merge is authorized by these results.
 
-## Final independent review and handoff boundary
+## Earlier independent review and handoff boundary
 
 - Task re-review of `eed1f3d..215f71f`: spec compliant and task quality Approved. The Important terminal-association finding below is cleared; valid historical success across runs/projects/cycles in the same organization remains supported.
 - Whole-branch read-only review of `23f9f4a..215f71f`: Ready to merge Yes; no Critical or Important findings. The reviewer consumed the full branch package and checked the relevant claim generation, terminal persistence and finalization context. The reviewer did not rerun tests; the coordinator's fresh locked-HEAD results are recorded above.
