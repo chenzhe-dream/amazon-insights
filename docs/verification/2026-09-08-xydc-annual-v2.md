@@ -1,9 +1,9 @@
-# XYDC-ANNUAL-V2 验证记录（进行中）
+# XYDC-ANNUAL-V2 本地实施与验证记录
 
 ## 范围与状态
 
 - 整体基线：`ef6867848e4e56c4450bf20946ca9f88973b43ca`。工作树 `fix-voc-import-status-20260907`，分支 `codex/feat-xydc-parent-orders-12m-20260908`。
-- A1/A2、B1、B2均已完成任务复审；整分支审查与修正后的最终组合验证进行中。本文不是整体完成、正式发布或真实 Provider 复测声明。
+- A1/A2、B1、B2均已完成任务复审；最终219项定点测试、隔离构建和整分支技术审查通过。本轮本地实施完成，不代表正式发布、全仓历史问题清零或真实Provider复测。
 - 保留原有固定近12个完整UTC月、年度汇总、现有月度图及无障碍数据。没有新增月度悬浮、月份选择、月度投影或饼图。
 - 不改正式服务、共享数据或并行工作树；没有主分支合并、远端推送、正式重启或新的真实西柚查询。
 
@@ -83,3 +83,30 @@
 - 实施者单独协调文件30/30（108.666s，自然退出）、runner24/24、变更lint/diff通过。Root最终matrix改为server文件串行、之后UI，原失败仍记录而不是被重跑抹除。
 - 独立增量复审2e60366..e52d9b5（23160字节）：Spec compliant / Approved，无Critical/Important/新增Minor，原诊断Minor已解决。A、B1、B2任务门均完成；最终V2 gate仍独立。
 - 最终source-only指纹为 `2d45a66d6e5403b8d84cc9a63367778c07f56f89ae96edc42f518c5a7be6fedb`。此前dist对应旧源，最终build不可借用其通过结论。
+
+## Root最终固定版本验证
+
+固定源e52d9b5，协调文档HEADdd65779；测试期间没有源代码修改。最终服务端按文件串行，结束后运行正常React UI、runner，再执行lint/类型对照和隔离构建；没有调整生产超时或重试。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 13文件服务端/实际HTTP/临时PG/进程矩阵 | 169/169，失败/取消/跳过0，自然退出0，212998.0295ms |
+| 4文件正常React UI与mounted hook | 26/26，失败/取消/跳过0，17525.6834ms |
+| 同步runner与真实安全诊断 | 24/24，失败/取消/跳过0，724.0705ms |
+| 非page的39个变更TS/TSX/MJS文件ESLint | 退出0，无诊断 |
+| V2完整范围diff检查 | 退出0 |
+| 全仓TypeScript | 341项；相对ef68678的文件/错误码/完整消息hash多重集合精确相同，新增0/移除0 |
+| page ESLint | 原10错误/7警告；17条规范化诊断多重集合精确相同 |
+| 新源隔离npm run build | 退出0，7.8530907s；仍有bundle大小、静态路由分类提示 |
+
+最终219项定点测试通过，不能外推为全仓无历史问题或真实Provider验收。构建使用Root此前唯一OS Temp隔离目录，假DB为loopback:1、Provider配置为空，不读取实际.env、不启动服务器。新dist和当前源指纹均为 `2d45a66d6e5403b8d84cc9a63367778c07f56f89ae96edc42f518c5a7be6fedb`。
+
+服务端实际命令在B2实施report的13文件命令中增加 `--test-concurrency=1`；UI使用报告的4文件正常React命令；runner为 `node --test tests/scripts/asin-sync-job-postconditions.test.mjs`。先前167/168及人工收尾没有省略，也没有把未知Windows初始化原因归结为已修复的生产缺陷。
+
+最终只读守卫再次确认：正式HEAD仍deab0aa，Web31900 health=ok且artifact043a0f07不变；共享项目、B07R56PTMS/B0F18D9B5V/B0CDW797MM四份输入hash仍等于基线。当前工作树只留下用户test-results及协调文档；没有真实西柚调用、共享缓存写入、正式重启、主分支合并、GitHub推送或并行工作树修改。真实进程测试在Windows执行，POSIX只做代码审查，未运行实机验证。
+
+整分支独立审查范围ef68678..dd65779，383651字节/5939行/11提交：**Ready to merge: Yes（技术审查通过）**。无Critical、Important或新增Minor。reviewer完整读取审查包，并针对实际调用路径检查租约/IPC/最后发送授权、检查点、同父输入mergeFamilies、鉴权GET/实际setter/poll owner及A/K1保持；未重跑套件或改变状态。
+
+四项既有非阻断Minor保留：无名称非法schema测试循环、原有9–11px文字、超过8个子体颜色循环、SSR/client跨UTC月界的极窄时钟差异。它们不是本轮新增缺陷，也不以测试通过宣称不存在。
+
+收尾只提交协调文档，源代码锁定e52d9b5及上述指纹，保留当前分支/工作树及用户test-results。只读验收入口为 `http://127.0.0.1:31911/`，展示已有三个ASIN快照，刷新不采集；不是正式服务或新任务的全链路入口。正式发布、主分支合并和远端推送需要另行明确授权。

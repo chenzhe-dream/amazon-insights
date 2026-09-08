@@ -66,7 +66,7 @@
 
 以下检查由root在两项任务审查通过后执行，不属于B2实现者的提交或自我验收权限。B2实现者只报告自己的测试与边界，不标记整体任务Approved或触碰正式环境。
 
-- [ ] 回归范围：B新增测试 + 当前订单server67基线 + 年度UI；不混用react-server与浏览器React条件。
-- [ ] V2整体代码范围从 ef6867848e4e56c4450bf20946ca9f88973b43ca 审查；检查没有新的月度交互/投影和没有越界生成数据。
-- [ ] 使用 test-results/xydc-current-asins-20260908 已有快照验收，绝不自动collect：LEPOWER5900+、OYEARS3750+、SUNMORY59450+，固定2025-09..2026-08。
-- [ ] 完整记录模拟测试和真实Provider未复测边界、既有全仓类型诊断；验证正式状态和共享输入hash未改变后再交付。
+- [x] 回归范围：B新增测试 + 当前订单server67基线 + 年度UI；不混用react-server与浏览器React条件。
+- [x] V2整体代码范围从 ef6867848e4e56c4450bf20946ca9f88973b43ca 审查；检查没有新的月度交互/投影和没有越界生成数据。
+- [x] 使用 test-results/xydc-current-asins-20260908 已有快照验收，绝不自动collect：LEPOWER5900+、OYEARS3750+、SUNMORY59450+，固定2025-09..2026-08。
+- [x] 完整记录模拟测试和真实Provider未复测边界、既有全仓类型诊断；验证正式状态和共享输入hash未改变后再交付。
