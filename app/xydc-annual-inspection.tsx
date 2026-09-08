@@ -55,7 +55,7 @@ function XydcAnnualInspectionRegion({
 }) {
   const regionRef = React.useRef<HTMLElement>(null);
   const titleId = `${controller.panelId}-title`;
-  const [position, setPosition] = React.useState<Readonly<{ left: number; top: number; maxHeight: number }> | null>(null);
+  const [position, setPosition] = React.useState<Readonly<{ left: number; top: number; width: number; maxHeight: number }> | null>(null);
   const summary = model.snapshot ? summarizeXydcOrders(model.snapshot) : null;
   const orderWindow = model.snapshot?.window ?? model.window;
   const row = summary?.rows.find(candidate => candidate.asin === active.asin) ?? {
@@ -76,29 +76,44 @@ function XydcAnnualInspectionRegion({
       const gap = 8;
       const triggerBounds = active.trigger.getBoundingClientRect();
       const regionBounds = region.getBoundingClientRect();
-      const maxHeight = Math.max(0, window.innerHeight - viewportPadding * 2);
-      const height = Math.min(region.scrollHeight || regionBounds.height, maxHeight);
-      const width = Math.min(regionBounds.width, window.innerWidth - viewportPadding * 2);
-      const below = window.innerHeight - triggerBounds.bottom - gap - viewportPadding;
-      const above = triggerBounds.top - gap - viewportPadding;
-      const top = below >= Math.min(height, 220) || below >= above
-        ? Math.min(triggerBounds.bottom + gap, window.innerHeight - height - viewportPadding)
-        : Math.max(viewportPadding, triggerBounds.top - gap - height);
-      const left = Math.min(
-        Math.max(viewportPadding, triggerBounds.left),
-        Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+      const visualViewport = window.visualViewport;
+      const viewportLeft = Math.max(0, visualViewport?.offsetLeft ?? 0);
+      const viewportTop = Math.max(0, visualViewport?.offsetTop ?? 0);
+      const viewportRight = Math.min(
+        document.documentElement.clientWidth || window.innerWidth,
+        visualViewport ? visualViewport.offsetLeft + visualViewport.width : Number.POSITIVE_INFINITY,
       );
-      setPosition({ left, top: Math.max(viewportPadding, top), maxHeight });
+      const viewportBottom = Math.min(
+        document.documentElement.clientHeight || window.innerHeight,
+        visualViewport ? visualViewport.offsetTop + visualViewport.height : Number.POSITIVE_INFINITY,
+      );
+      const width = Math.min(340, Math.max(0, viewportRight - viewportLeft - viewportPadding * 2));
+      const maxHeight = Math.max(0, viewportBottom - viewportTop - viewportPadding * 2);
+      const height = Math.min(region.scrollHeight || regionBounds.height, maxHeight);
+      const below = viewportBottom - triggerBounds.bottom - gap - viewportPadding;
+      const above = triggerBounds.top - viewportTop - gap - viewportPadding;
+      const top = below >= Math.min(height, 220) || below >= above
+        ? Math.min(triggerBounds.bottom + gap, viewportBottom - height - viewportPadding)
+        : Math.max(viewportTop + viewportPadding, triggerBounds.top - gap - height);
+      const left = Math.min(
+        Math.max(viewportLeft + viewportPadding, triggerBounds.left),
+        Math.max(viewportLeft + viewportPadding, viewportRight - width - viewportPadding),
+      );
+      setPosition({ left, top: Math.max(viewportTop + viewportPadding, top), width, maxHeight });
     };
     updatePosition();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updatePosition);
     observer?.observe(region);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
+    window.visualViewport?.addEventListener("resize", updatePosition);
+    window.visualViewport?.addEventListener("scroll", updatePosition);
     return () => {
       observer?.disconnect();
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
+      window.visualViewport?.removeEventListener("resize", updatePosition);
+      window.visualViewport?.removeEventListener("scroll", updatePosition);
     };
   }, [active.trigger, model]);
 
@@ -113,6 +128,7 @@ function XydcAnnualInspectionRegion({
       style={{
         left: position?.left ?? 8,
         top: position?.top ?? 8,
+        width: position?.width,
         maxHeight: position?.maxHeight ?? "calc(100vh - 16px)",
         overflowY: "auto",
         visibility: position ? "visible" : "hidden",
@@ -154,6 +170,7 @@ export function XydcAnnualInspectionProvider({
   const [active, setActive] = React.useState<ActiveInspection | null>(null);
   const activeRef = React.useRef<ActiveInspection | null>(null);
   const dismissTimerRef = React.useRef<number | null>(null);
+  const invalidationTimersRef = React.useRef(new Set<number>());
   const suppressedTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const reactId = React.useId();
   const panelId = `xydc-annual-inspection-${reactId.replaceAll(":", "")}`;
@@ -200,7 +217,7 @@ export function XydcAnnualInspectionProvider({
     cancelPreviewDismiss();
     suppressedTriggerRef.current = null;
     const current = activeRef.current;
-    if (current?.identity === identity && current.asin === asin && current.pinned) {
+    if (current?.identity === identity && current.asin === asin && current.pinned && current.trigger === trigger) {
       suppressedTriggerRef.current = trigger;
       setActive(null);
       return;
@@ -213,15 +230,24 @@ export function XydcAnnualInspectionProvider({
   }, []);
 
   const activeModel = active ? models.find(model => xydcAnnualInspectionIdentity(model) === active.identity) ?? null : null;
-  const visibleActive = active && activeModel?.group.children.some(child => child.asin === active.asin) ? active : null;
+  const visibleActive = active
+    && active.trigger.isConnected
+    && activeModel?.group.children.some(child => child.asin === active.asin)
+    ? active
+    : null;
   React.useEffect(() => {
     if (!active || visibleActive) return;
     const absentActive = active;
     const timeout = window.setTimeout(() => {
+      invalidationTimersRef.current.delete(timeout);
       setActive(current => current === absentActive ? null : current);
     }, 0);
-    return () => window.clearTimeout(timeout);
+    invalidationTimersRef.current.add(timeout);
   }, [active, visibleActive]);
+  React.useEffect(() => () => {
+    for (const timeout of invalidationTimersRef.current) window.clearTimeout(timeout);
+    invalidationTimersRef.current.clear();
+  }, []);
 
   const controller = React.useMemo<AnnualInspectionController>(() => ({
     active: visibleActive,

@@ -263,6 +263,7 @@ async function startBrowserFixtureServer() {
     orderFamilies: orders.map((snapshot, index) => index === 0 ? { ...snapshot, childAsins: snapshot.childAsins.slice(0, 3), children: snapshot.children.slice(0, 3) } : snapshot),
     market,
   };
+  const withoutFirstFixtureProps = { products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market };
   const serverMarkup = renderToStaticMarkup(createElement(XydcVariantSection, fixtureProps));
   const entry = `
 import { createElement } from "react";
@@ -274,7 +275,30 @@ window.rerenderEquivalentXydcFixture = () => root.render(createElement(XydcVaria
 window.rerenderUpdatedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(updatedFixtureProps)}));
 window.rerenderReorderedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(reorderedFixtureProps)}));
 window.rerenderChangedChildSetXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(changedChildSetFixtureProps)}));
-window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })}));
+window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(withoutFirstFixtureProps)}));
+window.commitRemoveRestoreAndClickFirstAnnual = async (label) => {
+  const findTrigger = () => [...document.querySelectorAll('[data-parent-asin="B000000010"] .xydc-order-legend button')]
+    .find(element => element.getAttribute('aria-label') === label);
+  const oldTrigger = findTrigger();
+  flushSync(() => root.render(createElement(XydcVariantSection, ${JSON.stringify(withoutFirstFixtureProps)})));
+  const absentCommitted = document.querySelector('[data-parent-asin="B000000010"]') === null;
+  flushSync(() => root.render(createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)})));
+  const replacementTrigger = findTrigger();
+  const result = {
+    absentCommitted,
+    oldTriggerDisconnected: Boolean(oldTrigger && !oldTrigger.isConnected),
+    replacementIsNew: Boolean(replacementTrigger && replacementTrigger !== oldTrigger),
+    expandedBeforeClick: replacementTrigger?.getAttribute('aria-expanded') ?? null,
+    regionBeforeClick: Boolean(document.querySelector('.xydc-annual-inspection')),
+  };
+  replacementTrigger?.click();
+  await new Promise(resolve => window.setTimeout(resolve, 0));
+  return {
+    ...result,
+    expandedAfterCleanup: replacementTrigger?.getAttribute('aria-expanded') ?? null,
+    regionAfterCleanup: Boolean(document.querySelector('.xydc-annual-inspection')),
+  };
+};
 window.removeFirstAndOpenSecondXydcFixture = () => {
   flushSync(() => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })})));
   document.querySelector('[data-parent-asin="B000000020"] .xydc-order-open-detail').click();
@@ -321,7 +345,11 @@ window.restoreXydcFixture = () => root.render(createElement(XydcVariantSection, 
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-async function withFixture(run: (page: Page) => Promise<void>, viewport = { width: 1440, height: 1100 }) {
+async function withFixture(
+  run: (page: Page) => Promise<void>,
+  viewport = { width: 1440, height: 1100 },
+  options: Readonly<{ hasTouch?: boolean }> = {},
+) {
   let server: ViteDevServer | null = null;
   let browser: Browser | null = null;
   let page: Page | null = null;
@@ -330,7 +358,7 @@ async function withFixture(run: (page: Page) => Promise<void>, viewport = { widt
     const fixture = await startBrowserFixtureServer();
     server = fixture.server;
     browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
-    page = await browser.newPage({ viewport, hasTouch: viewport.width <= 390 });
+    page = await browser.newPage({ viewport, hasTouch: options.hasTouch ?? false });
     await page.clock.setFixedTime(new Date("2026-09-08T12:00:00.000Z"));
     const hydrationErrors: string[] = [];
     page.on("console", message => {
@@ -496,25 +524,72 @@ test("annual inspection supports preview, pinning, suppression, replacement, and
   });
 });
 
-test("annual inspection stays inside the viewport on touch width and retains full text", async t => {
+test("committed identity absence invalidates a disconnected trigger before immediate reintroduction", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
-    const trigger = page.locator("[data-parent-asin='B000000040'] .xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const card = page.locator("[data-parent-asin='B000000010']");
+    const trigger = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    await trigger.click();
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+    const result = await page.evaluate(() => (window as typeof window & {
+      commitRemoveRestoreAndClickFirstAnnual(label: string): Promise<{
+        absentCommitted: boolean;
+        oldTriggerDisconnected: boolean;
+        replacementIsNew: boolean;
+        expandedBeforeClick: string | null;
+        regionBeforeClick: boolean;
+        expandedAfterCleanup: string | null;
+        regionAfterCleanup: boolean;
+      }>;
+    }).commitRemoveRestoreAndClickFirstAnnual("查看 Sand Black 年度订单明细"));
+    assert.equal(result.absentCommitted, true);
+    assert.equal(result.oldTriggerDisconnected, true);
+    assert.equal(result.replacementIsNew, true);
+    assert.equal(result.regionBeforeClick, false);
+    assert.equal(result.expandedBeforeClick, "false", "replacement trigger has no phantom expanded state");
+    assert.equal(result.regionAfterCleanup, true, "first click opens the replacement before old cleanup runs");
+    assert.equal(result.expandedAfterCleanup, "true", "old cleanup cannot close the new activation");
+    assert.equal(await page.getByRole("region", { name: "Sand Black · 年度订单明细" }).count(), 1);
+  });
+});
+
+test("annual inspection stays inside the usable viewport gutter in an expanded mobile dialog", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    await page.addStyleTag({ content: "html { overflow-y: scroll; scrollbar-gutter: stable; }" });
+    const initialViewport = await page.evaluate(() => ({
+      clientHeight: document.documentElement.clientHeight,
+      clientWidth: (() => {
+        const usableWidth = document.documentElement.clientWidth - 15;
+        Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: usableWidth });
+        return document.documentElement.clientWidth;
+      })(),
+      innerWidth: window.innerWidth,
+    }));
+    assert.ok(initialViewport.clientWidth < initialViewport.innerWidth, "fixture reserves a non-overlay scrollbar gutter");
+    await page.locator("[data-parent-asin='B000000010']").getByRole("button", { name: "查看全部 4 个子体与月度趋势" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "展开年度明细" }).click();
+    const trigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
     await trigger.scrollIntoViewIfNeeded();
-    await trigger.tap();
-    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    await trigger.click();
+    const region = dialog.getByRole("region", { name: "Sand Black · 年度订单明细" });
     const box = await region.boundingBox();
     assert.ok(box);
-    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 300);
+    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= initialViewport.clientWidth && box.y + box.height <= initialViewport.clientHeight);
     assert.ok(Number.parseFloat(await region.evaluate(element => getComputedStyle(element).fontSize)) >= 12);
-    assert.match(await region.textContent() ?? "", /B000000011/);
+    assert.match(await region.textContent() ?? "", /B000000001/);
+    assert.match(await region.textContent() ?? "", /4,000\+/);
     assert.equal(await region.evaluate(element => element.scrollWidth <= element.clientWidth), true);
     await page.setViewportSize({ width: 390, height: 260 });
     await page.waitForFunction(() => {
       const element = document.querySelector<HTMLElement>("[role='region'][aria-labelledby]");
       if (!element) return false;
       const bounds = element.getBoundingClientRect();
-      return bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight;
+      return bounds.left >= 0
+        && bounds.top >= 0
+        && bounds.right <= document.documentElement.clientWidth
+        && bounds.bottom <= document.documentElement.clientHeight;
     });
     await page.evaluate(() => window.scrollBy(0, -40));
     await page.waitForFunction(() => {
@@ -522,16 +597,33 @@ test("annual inspection stays inside the viewport on touch width and retains ful
       if (!element) return false;
       const bounds = element.getBoundingClientRect();
       return getComputedStyle(element).overflowY === "auto"
-        && bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight;
+        && bounds.left >= 0
+        && bounds.top >= 0
+        && bounds.right <= document.documentElement.clientWidth
+        && bounds.bottom <= document.documentElement.clientHeight;
     });
     assert.equal(await region.evaluate(element => getComputedStyle(element).overflowY), "auto");
     const screenshot = join(process.cwd(), "test-results", "xydc-orders-annual-mobile.png");
     mkdirSync(join(process.cwd(), "test-results"), { recursive: true });
     await page.screenshot({ path: screenshot });
     await t.test("annual mobile screenshot exists", () => assert.ok(existsSync(screenshot)));
+    const fixScreenshot = join(process.cwd(), "test-results", "xydc-v2-annual-fix-mobile.png");
+    await page.screenshot({ path: fixScreenshot });
+    await t.test("annual gutter screenshot exists", () => assert.ok(existsSync(fixScreenshot)));
     await page.mouse.click(2, 2);
     await region.waitFor({ state: "detached" });
-  }, { width: 390, height: 300 });
+  }, { width: 390, height: 300 }, { hasTouch: false });
+});
+
+test("annual inspection pins from touch input", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    const trigger = page.locator("[data-parent-asin='B000000010'] .xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    await trigger.tap();
+    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.equal(await region.getAttribute("data-pinned"), "true");
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+  }, { width: 390, height: 844 }, { hasTouch: true });
 });
 
 test("opens only the selected parent's accessible detail dialog and restores focus", async t => {
