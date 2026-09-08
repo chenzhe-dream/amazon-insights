@@ -122,7 +122,7 @@ test("renders fixed-window annual parent cards from the complete family denomina
   assert.match(html, /子体汇总/);
   assert.match(html, /5,900\+/);
   assert.match(html, /67\.80%/);
-  assert.match(html, /title="Sand Black 67\.80%"/);
+  assert.match(html, /title="砂黑色 67\.80%"/);
   assert.match(html, /19\.49%/);
   assert.match(html, /11\.02%/);
   assert.match(html, /查看全部 4 个子体与月度趋势/);
@@ -430,9 +430,9 @@ test("annual inspection exposes derived annual rows for complete, raw-zero, inco
     assert.equal(await partialCard.locator(".xydc-order-legend").getByRole("button").count(), 3);
     assert.equal(await pendingCard.locator(".xydc-order-legend").getByRole("button").count(), 2);
 
-    const completeTrigger = completeCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const completeTrigger = completeCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
     await completeTrigger.hover();
-    const completeRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const completeRegion = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.match(await completeRegion.textContent() ?? "", /B000000001/);
     assert.match(await completeRegion.textContent() ?? "", /2025-09 — 2026-08/);
     assert.match(await completeRegion.textContent() ?? "", /12个月订单量\s*4,000\+/);
@@ -442,8 +442,8 @@ test("annual inspection exposes derived annual rows for complete, raw-zero, inco
     await page.mouse.move(0, 0);
     await completeRegion.waitFor({ state: "detached" });
 
-    await zeroCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
-    const zeroRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    await zeroCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" }).click();
+    const zeroRegion = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.match(await zeroRegion.textContent() ?? "", /B000000011/);
     assert.match(await zeroRegion.textContent() ?? "", /12个月订单量\s*未披露/);
     assert.match(await zeroRegion.textContent() ?? "", /年度份额\s*—/);
@@ -451,15 +451,15 @@ test("annual inspection exposes derived annual rows for complete, raw-zero, inco
     assert.match(await zeroRegion.textContent() ?? "", /订单缓存数据/);
     assert.match(await zeroRegion.textContent() ?? "", /2026-09-04T12:34:56\.000Z/);
 
-    await partialCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
-    const partialRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    await partialCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" }).click();
+    const partialRegion = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.match(await partialRegion.textContent() ?? "", /B000000007/);
     assert.match(await partialRegion.textContent() ?? "", /12个月订单量\s*—/);
     assert.match(await partialRegion.textContent() ?? "", /年度份额\s*—/);
     assert.match(await partialRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*1 \/ 1/);
 
-    await pendingCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
-    const pendingRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    await pendingCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" }).click();
+    const pendingRegion = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.match(await pendingRegion.textContent() ?? "", /B000000013/);
     assert.match(await pendingRegion.textContent() ?? "", /12个月订单量\s*—/);
     assert.match(await pendingRegion.textContent() ?? "", /年度份额\s*—/);
@@ -472,10 +472,10 @@ test("annual inspection supports preview, pinning, suppression, replacement, and
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
     const card = page.locator("[data-parent-asin='B000000010']");
-    const sandBlack = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
-    const black = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Black 年度订单明细" });
+    const sandBlack = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
+    const black = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 黑色 年度订单明细" });
     await sandBlack.hover();
-    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const region = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     await region.hover();
     assert.equal(await region.count(), 1, "moving from trigger into the region keeps the preview open");
     await page.mouse.move(0, 0);
@@ -493,7 +493,7 @@ test("annual inspection supports preview, pinning, suppression, replacement, and
     await sandBlack.hover();
     assert.equal(await region.getAttribute("data-pinned"), "true", "hovering the same trigger does not downgrade a pinned inspection");
     await black.click();
-    const blackRegion = page.getByRole("region", { name: "Black · 年度订单明细" });
+    const blackRegion = page.getByRole("region", { name: "黑色 · 年度订单明细" });
     assert.equal(await region.count(), 0);
     assert.match(await blackRegion.textContent() ?? "", /B000000002/);
 
@@ -528,7 +528,7 @@ test("committed identity absence invalidates a disconnected trigger before immed
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
     const card = page.locator("[data-parent-asin='B000000010']");
-    const trigger = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const trigger = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
     await trigger.click();
     assert.equal(await trigger.getAttribute("aria-expanded"), "true");
     const result = await page.evaluate(() => (window as typeof window & {
@@ -541,7 +541,7 @@ test("committed identity absence invalidates a disconnected trigger before immed
         expandedAfterCleanup: string | null;
         regionAfterCleanup: boolean;
       }>;
-    }).commitRemoveRestoreAndClickFirstAnnual("查看 Sand Black 年度订单明细"));
+    }).commitRemoveRestoreAndClickFirstAnnual("查看 砂黑色 年度订单明细"));
     assert.equal(result.absentCommitted, true);
     assert.equal(result.oldTriggerDisconnected, true);
     assert.equal(result.replacementIsNew, true);
@@ -549,7 +549,7 @@ test("committed identity absence invalidates a disconnected trigger before immed
     assert.equal(result.expandedBeforeClick, "false", "replacement trigger has no phantom expanded state");
     assert.equal(result.regionAfterCleanup, true, "first click opens the replacement before old cleanup runs");
     assert.equal(result.expandedAfterCleanup, "true", "old cleanup cannot close the new activation");
-    assert.equal(await page.getByRole("region", { name: "Sand Black · 年度订单明细" }).count(), 1);
+    assert.equal(await page.getByRole("region", { name: "砂黑色 · 年度订单明细" }).count(), 1);
   });
 });
 
@@ -570,10 +570,10 @@ test("annual inspection stays inside the usable viewport gutter in an expanded m
     await page.locator("[data-parent-asin='B000000010']").getByRole("button", { name: "查看全部 4 个子体与月度趋势" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: "展开年度明细" }).click();
-    const trigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const trigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
     await trigger.scrollIntoViewIfNeeded();
     await trigger.click();
-    const region = dialog.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const region = dialog.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     const box = await region.boundingBox();
     assert.ok(box);
     assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= initialViewport.clientWidth && box.y + box.height <= initialViewport.clientHeight);
@@ -618,9 +618,9 @@ test("annual inspection stays inside the usable viewport gutter in an expanded m
 test("annual inspection pins from touch input", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
-    const trigger = page.locator("[data-parent-asin='B000000010'] .xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const trigger = page.locator("[data-parent-asin='B000000010'] .xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
     await trigger.tap();
-    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const region = page.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.equal(await region.getAttribute("data-pinned"), "true");
     assert.equal(await trigger.getAttribute("aria-expanded"), "true");
   }, { width: 390, height: 844 }, { hasTouch: true });
@@ -641,9 +641,9 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     assert.equal(await dialog.locator("[data-order-asin='B000000001']").first().getAttribute("data-order-color"), await dialog.locator("[data-order-asin='B000000001']").last().getAttribute("data-order-color"));
     const plottedHeights = await dialog.locator(".xydc-order-month-bar").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height));
     assert.ok(plottedHeights[3]! > plottedHeights[8]!, `December ${plottedHeights[3]} should exceed May ${plottedHeights[8]}`);
-    const dialogAnnualTrigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const dialogAnnualTrigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" });
     await dialogAnnualTrigger.click();
-    const dialogAnnualRegion = dialog.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const dialogAnnualRegion = dialog.getByRole("region", { name: "砂黑色 · 年度订单明细" });
     assert.equal(await dialogAnnualRegion.count(), 1, "the annual region remains in the dialog focus scope");
     await page.keyboard.press("Escape");
     assert.equal(await dialogAnnualRegion.count(), 0);

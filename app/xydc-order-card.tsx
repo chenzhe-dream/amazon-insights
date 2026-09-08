@@ -2,6 +2,7 @@ import type { XydcOrderSnapshot, XydcOrderSummary, XydcOrderWindow } from "../sh
 import { summarizeXydcOrders } from "../shared/xydc-order-summary";
 import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
 import type { XydcVariantFamilyGroup, XydcVariantMarket, XydcVariantProduct } from "./xydc-variant-section";
+import { xydcVariantAttributeLabel } from "./xydc-variant-label";
 
 const imagePlaceholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Crect width='72' height='72' fill='%23f2f6fa'/%3E%3Cpath d='M17 50l12-13 9 8 8-10 10 15z' fill='%239aabba'/%3E%3Ccircle cx='28' cy='26' r='6' fill='%239aabba'/%3E%3C/svg%3E";
 const orderColors = ["#10a5a5", "#1769d3", "#f0a000", "#8756d8", "#e85d75", "#2b8a3e", "#52677f", "#d96c1f"];
@@ -36,7 +37,7 @@ export function orderColorMap(asins: readonly string[]) {
 
 export function orderAttributeLabel(child: XydcVariantFamilyGroup["children"][number] | undefined) {
   return child?.attributes.length
-    ? child.attributes.map(attribute => attribute.value).join(" · ")
+    ? child.attributes.map(xydcVariantAttributeLabel).join(" · ")
     : "属性待补充";
 }
 
