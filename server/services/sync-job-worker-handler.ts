@@ -475,6 +475,9 @@ export function createDetachedRunner(
           AGENT_EXECUTION_ORGANIZATION_ID: lease.job.organizationId,
           AGENT_SYNC_JOB_ID: lease.job.jobId,
           AGENT_RESOURCE_GOVERNOR_OWNER_ID: context.workerId,
+          AGENT_XYDC_PROJECT_ID: lease.job.projectId ?? "",
+          AGENT_XYDC_RUN_ID: lease.job.runId ?? "",
+          AGENT_XYDC_LEASE_GENERATION: String(lease.leaseGeneration),
           AGENT_RESOURCE_ATTEMPT_KIND:
             lease.job.error?.code === "SYNC_JOB_EXPLICIT_RESUME" &&
             safeResumeStages(lease.job.error.resumeStages).length > 0

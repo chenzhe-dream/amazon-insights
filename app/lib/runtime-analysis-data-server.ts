@@ -14,6 +14,9 @@ import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import { XydcOrderSnapshotSchema, type XydcOrderSnapshot, type XydcOrderWindow } from "../../shared/xydc-order-contract";
 import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
+import type { XydcOrderReadScope, XydcOrderProgressView } from "../../shared/xydc-order-progress";
+import { createXydcJobAuthority, createXydcProgressPool, readXydcOrderProgress } from "../../scripts/lib/xydc-order-job-progress";
+import { resolveRuntimeRoots } from "../../scripts/lib/runtime-roots.mjs";
 import type { AgentServiceClient } from "./agent-service-client";
 import {
   RuntimeAnalysisDataSnapshotSchema,
@@ -24,6 +27,7 @@ import {
 type RuntimeAnalysisDataDependencies = Readonly<{
   client: AgentServiceClient;
   readSnapshot: (asins: readonly string[], country: string) => RuntimeAnalysisDataSnapshotInput;
+  readProgress?: (scope: XydcOrderReadScope, families: readonly XydcVariantFamily[]) => Promise<XydcOrderProgressView | null>;
 }>;
 
 const RuntimeAnalysisDataQuerySchema = z.strictObject({
@@ -32,6 +36,16 @@ const RuntimeAnalysisDataQuerySchema = z.strictObject({
 });
 
 const catalogPath = path.join(getProjectRoot(), "app", "competitor-data.ts");
+
+export async function readGeneratedXydcOrderProgress(scope: XydcOrderReadScope, families: readonly XydcVariantFamily[]) {
+  if (!scope.currentRunId || !process.env.AGENT_DATABASE_URL) return null;
+  const pool = createXydcProgressPool(process.env);
+  try {
+    const roots = resolveRuntimeRoots({ codeRoot: getProjectRoot(), formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT), env: process.env, commit: undefined });
+    return await readXydcOrderProgress(roots.runtimeRoot, scope, families, createXydcJobAuthority(pool));
+  } catch { return null; }
+  finally { await pool.end(); }
+}
 
 function parseRuntimeQuery(url: URL) {
   return {
@@ -73,13 +87,19 @@ export function createRuntimeAnalysisDataHandler(dependencies: RuntimeAnalysisDa
 
     const project = GetProjectResponseSchema.safeParse(projectResult.body);
     if (!project.success) return Response.json({ error: "项目数据暂不可用" }, { status: 502 });
-    if (!sameAsinSet(project.data.project.asins, parsed.data.asins)) {
+    if (project.data.project.id !== parsed.data.projectId || !sameAsinSet(project.data.project.asins, parsed.data.asins)) {
       return Response.json({ error: "当前项目与 ASIN 范围不匹配" }, { status: 409 });
     }
 
-    return Response.json(RuntimeAnalysisDataSnapshotSchema.parse(
+    const snapshot = RuntimeAnalysisDataSnapshotSchema.parse(
       dependencies.readSnapshot(parsed.data.asins, project.data.project.marketplace),
-    ));
+    );
+    const authorized = project.data.project;
+    snapshot.xydcOrderProgress = await dependencies.readProgress?.({
+      organizationId: authorized.organizationId, projectId: authorized.id, currentRunId: authorized.currentRunId,
+      country: authorized.marketplace, asins: authorized.asins,
+    }, snapshot.variants.families) ?? null;
+    return Response.json(RuntimeAnalysisDataSnapshotSchema.parse(snapshot));
   };
 }
 

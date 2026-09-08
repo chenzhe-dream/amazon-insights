@@ -478,3 +478,22 @@ test("production detached runner settles only after close cleanup and diagnostic
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("detached XYDC envelope is fixed from the lease rather than inherited overrides", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "xydc-fixed-envelope-"));
+  try {
+    const output = join(directory, "envelope.json");
+    const runnerPath = join(directory, "envelope.mjs");
+    await writeFile(runnerPath, `import fs from 'node:fs'; fs.writeFileSync(process.env.XYDC_ENVELOPE_OUTPUT, JSON.stringify(Object.fromEntries(['AGENT_EXECUTION_ORGANIZATION_ID','AGENT_XYDC_PROJECT_ID','AGENT_XYDC_RUN_ID','AGENT_SYNC_JOB_ID','AGENT_RESOURCE_GOVERNOR_OWNER_ID','AGENT_XYDC_LEASE_GENERATION'].map(key=>[key,process.env[key]]))));`);
+    const lease = runningLease();
+    const fixed = { ...lease, leaseGeneration: 7, job: { ...lease.job, projectId: "trusted-project", runId: "trusted-run" } };
+    await createDetachedRunner(process.cwd(), { runnerPath, environment: { XYDC_ENVELOPE_OUTPUT: output,
+      AGENT_XYDC_PROJECT_ID: "forged", AGENT_XYDC_RUN_ID: "forged", AGENT_XYDC_LEASE_GENERATION: "99" } })(fixed, {
+      workerId: "lifecycle-worker", leaseGeneration: 999, mirrorPath: join(directory, "mirror.json"), async writeMirror() {},
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(output, "utf8")), {
+      AGENT_EXECUTION_ORGANIZATION_ID: "lifecycle-organization", AGENT_XYDC_PROJECT_ID: "trusted-project", AGENT_XYDC_RUN_ID: "trusted-run",
+      AGENT_SYNC_JOB_ID: "lifecycle-job", AGENT_RESOURCE_GOVERNOR_OWNER_ID: "lifecycle-worker", AGENT_XYDC_LEASE_GENERATION: "7",
+    });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

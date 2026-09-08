@@ -11,6 +11,7 @@ import { callXydcTool, XydcProviderError } from "./lib/xydc-mcp-client";
 import { syncXydcOrderFamilies } from "./lib/xydc-order-sync";
 import { createXydcVariantCache, isFreshXydcVariantCache } from "./lib/xydc-variant-cache";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
+import { createXydcOrderJobLifetime } from "./lib/xydc-order-job-lifetime";
 
 type Cache = {
   readMany(country: string, asins: readonly string[]): Promise<Record<string, XydcVariantFamily>>;
@@ -27,6 +28,8 @@ export interface SyncXydcVariantInput {
   force?: boolean;
   batchSize?: number;
   callTool?: ToolCall;
+  signal?: AbortSignal;
+  beforeRequest?: () => void | Promise<void>;
 }
 
 type RawRecord = Record<string, unknown>;
@@ -455,8 +458,17 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
       drafts.set(asin, { ...prior, cacheState: "fresh" });
     }
   }
-  const request = input.callTool ?? (async ({ toolName, args }) => callXydcTool(input.token, toolName, args));
+  const request: ToolCall = async ({ toolName, args }) => {
+    input.signal?.throwIfAborted();
+    if (input.callTool) {
+      await input.beforeRequest?.();
+      input.signal?.throwIfAborted();
+      return input.callTool({ toolName, args });
+    }
+    return callXydcTool(input.token, toolName, args, { signal: input.signal, beforeRequest: input.beforeRequest });
+  };
   for (const asin of asins.filter(asin => !ready.has(asin) && (!drafts.has(asin) || input.force))) {
+    input.signal?.throwIfAborted();
     try {
       const draft = projectXydcVariationFamily({
         inputAsin: asin, country: input.country,
@@ -476,6 +488,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   }
   const unresolved = [...new Set([...drafts.values()].flatMap(family => family.children.filter(child => child.infoStatus !== "ready").map(child => child.asin)))];
   for (const queuedBatch of chunk(unresolved, boundedBatchSize(input.batchSize ?? 20))) {
+    input.signal?.throwIfAborted();
     const batch = queuedBatch.filter(childAsin => [...drafts.values()].some(family => family.children.some(child => child.asin === childAsin && child.infoStatus !== "ready")));
     if (!batch.length) continue;
     try {
@@ -525,9 +538,17 @@ async function main() {
   });
   const asins = (process.env.XYDC_ASINS ?? "").split(",").map(value => value.trim()).filter(Boolean);
   const fixturePath = process.env.XYDC_FIXTURE_PATH?.trim();
+  if (!fixturePath && process.env.XYDC_MCP_TOKEN?.trim() && !path.isAbsolute(process.env.XYDC_COORDINATION_ROOT ?? "")) {
+    throw new Error("XYDC_COORDINATION_ROOT_REQUIRED");
+  }
+  const country = process.env.XYDC_COUNTRY ?? "US";
+  const lifetime = await createXydcOrderJobLifetime(process.env, roots.runtimeRoot, asins, country);
+  try {
   const families = await syncXydcVariantFamilies({
     asins,
-    country: process.env.XYDC_COUNTRY ?? "US",
+    country,
+    signal: lifetime.signal,
+    beforeRequest: lifetime.beforeRequest,
     token: process.env.XYDC_MCP_TOKEN ?? "",
     force: process.env.FORCE_REFRESH === "1" || process.argv.includes("--force"),
     batchSize: Number(process.env.XYDC_INFO_BATCH_SIZE ?? "20"),
@@ -542,6 +563,9 @@ async function main() {
       token: process.env.XYDC_MCP_TOKEN ?? "",
       now: new Date(),
       dataRoot: roots.dataRoot,
+      signal: lifetime.signal,
+      beforeRequest: lifetime.beforeRequest,
+      onProgress: (facts, context) => lifetime.progress(families, facts, context),
       force: process.env.FORCE_REFRESH === "1" || process.argv.includes("--force"),
       ...(fixturePath ? {
         callTool: async ({ toolName, args }) => fixtureToolCall(fixturePath, toolName, args),
@@ -552,8 +576,13 @@ async function main() {
     // Order history is optional enrichment and cannot change core variant sync success.
   }
   process.stdout.write(`[xydc] ${families.length} family snapshots cached; ${orderCount} order snapshots cached\n`);
+  } finally { await lifetime.close(); }
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  main().catch(() => { process.exitCode = 1; });
+  main().catch((error: unknown) => {
+    const safe = error instanceof Error && /^XYDC_[A-Z_]+$/.test(error.message) ? error.message : "XYDC_COLLECTION_STOPPED";
+    process.stderr.write(`[xydc] ${safe}\n`);
+    process.exitCode = 1;
+  });
 }

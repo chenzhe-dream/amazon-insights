@@ -243,6 +243,12 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Optional XYDC order collection
+
+Set `XYDC_MCP_TOKEN` and an explicit absolute `XYDC_COORDINATION_ROOT` in the process environment. Tasks on one host using the same credential must share that coordination directory; their `AGENT_DATA_ROOT` caches and `AGENT_RUNTIME_ROOT` task progress remain independently scoped. No production directory is selected automatically. Missing coordination configuration prevents paid requests.
+
+The worker passes its fixed job lease identity to the optional XYDC child. Direct Node IPC, process signals and a bounded one-second read-only database fence cancel collection when its parent or lease is lost. Project progress lives under `AGENT_RUNTIME_ROOT/xydc-order-progress/v1`, is authenticated against the current project/run and job generation, and expires visually after 45 seconds without a heartbeat. Terminal sidecars are retained for at most 24 hours when cleanup runs; reads enforce the limit independently. Do not supply the internal `AGENT_XYDC_*` job envelope manually. A genuinely standalone `npm run variant:xydc:sync` can generate diagnostic cache results but cannot publish project job progress. Partial job envelopes fail closed.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)

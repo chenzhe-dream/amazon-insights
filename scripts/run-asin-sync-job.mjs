@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -603,12 +603,36 @@ function tryRunProviderCommand(label, command, args, env = {}) {
   }
 }
 
-export function runOptionalXydcVariantEnrichment({ asins, marketplace, run = tryRunProviderCommand }) {
-  const result = run("variant:xydc:sync", "npm", ["run", "variant:xydc:sync"], {
+export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env = process.env }) {
+  const childEnvironment = {
     XYDC_ASINS: asins.join(","),
     XYDC_COUNTRY: marketplace,
+  };
+  if (run) {
+    const result = run("variant:xydc:sync", "npm", ["run", "variant:xydc:sync"], childEnvironment);
+    return Object.freeze({ succeeded: Boolean(result?.succeeded) });
+  }
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, ["--import", "tsx", path.join(root, "scripts", "build-xydc-variant-data.ts")], {
+      cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+      env: { ...env, ...childEnvironment, AGENT_XYDC_PARENT_IPC: "1" },
+    });
+    let terminationSignal;
+    const cancel = signal => { terminationSignal = signal; if (child.connected) child.disconnect(); };
+    const interrupt = () => cancel("SIGINT");
+    const terminate = () => cancel("SIGTERM");
+    process.on("SIGINT", interrupt);
+    process.on("SIGTERM", terminate);
+    child.once("error", () => {});
+    child.once("close", code => {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
+      // Preserve the runner's original termination semantics after its directly owned child has drained.
+      if (terminationSignal) { process.kill(process.pid, terminationSignal); return; }
+      if (code !== 0) console.error("[warn] optional XYDC collection stopped");
+      resolve(Object.freeze({ succeeded: code === 0 }));
+    });
   });
-  return Object.freeze({ succeeded: Boolean(result?.succeeded) });
 }
 
 export function diagnosticStatusesByAsin(asins, diagnostics) {
@@ -880,7 +904,7 @@ async function main() {
       setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
     }
 
-    runCatalogPhase({
+    await runCatalogPhase({
       jobId,
       job,
       asins,

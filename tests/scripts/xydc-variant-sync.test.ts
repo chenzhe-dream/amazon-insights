@@ -24,6 +24,17 @@ const inputAsin = "B0CHILD001";
 const parentAsin = "B0PARENT01";
 const now = new Date("2026-09-04T08:00:00.000Z");
 
+test("variant collection stops before a paid call when its job lifetime is cancelled", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("fixture cancelled"));
+  let calls = 0;
+  const input = { asins: [inputAsin], country: "US", token: "fixture", now, signal: controller.signal,
+    cache: { readMany: async () => ({}), write: async () => {} },
+    callTool: async () => { calls += 1; throw new Error("fixture"); } };
+  await syncXydcVariantFamilies(input).catch(() => {});
+  assert.equal(calls, 0);
+});
+
 function variationResponse(children = [
   { asin: "B0CHILD001", attributes: [{ dimension: "Color", value: "Red" }] },
   { asin: "B0CHILD002", attributes: [{ dimension: "Color", value: "Blue" }] },

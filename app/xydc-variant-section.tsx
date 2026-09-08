@@ -12,6 +12,8 @@ import {
 } from "./xydc-annual-inspection";
 import { XydcOrderCard, type XydcOrderCardModel } from "./xydc-order-card";
 import { XydcOrderDetail } from "./xydc-order-detail";
+import { XydcOrderProgress } from "./xydc-order-progress";
+import type { XydcOrderProgressView } from "../shared/xydc-order-progress";
 
 export type XydcVariantProduct = Readonly<{ asin: string; brand: string; title: string; image: string }>;
 export type XydcVariantMarket = Readonly<{ label: string; domain: string }>;
@@ -100,6 +102,7 @@ export function groupXydcVariantFamilies(families: readonly XydcVariantFamily[])
 }
 
 type XydcVariantSectionProps = {
+  progress?: XydcOrderProgressView | null;
   products: readonly XydcVariantProduct[];
   families: readonly XydcVariantFamily[];
   orderFamilies?: readonly XydcOrderSnapshot[];
@@ -168,6 +171,7 @@ function XydcVariantSectionBody({
         <span className="xydc-order-source-badge">西柚洞察 · 子体汇总</span>
       </div>
       <p className="xydc-order-scope-note">按当前变体关系汇总全部子体；总量、份额与排序使用同一12个月窗口。</p>
+      <XydcOrderProgress value={props.progress ?? null} />
       {models.length === 0 ? <p className="xydc-order-section-empty">暂无已授权范围内的西柚变体缓存。</p> : (
         <div className="xydc-order-grid">
           {models.map(model => <XydcOrderCard

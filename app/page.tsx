@@ -101,7 +101,8 @@ import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { resolveAlexaVocPageScope } from "./lib/alexa-voc-page-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { buildStageOutputView } from "./lib/stage-output-view";
-import { readRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
+import { createRuntimeAnalysisScopeGuard, readAndCommitRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
+import { useXydcOrderProgress } from "./lib/use-xydc-order-progress";
 import { StageOutputGapCard } from "./stage-output-gap-card";
 import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
@@ -118,7 +119,7 @@ const ROOT_PATH_DIAGNOSTIC =
 const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面已保留现有结果";
 
 type RuntimeAnalysisRefreshResult =
-  | Readonly<{ ok: true }>
+  | Readonly<{ ok: true; snapshot: RuntimeAnalysisDataSnapshot }>
   | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
 
 type HistoricalSyncPointer = Readonly<{
@@ -1750,20 +1751,43 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const flyoutPinnedRef = useRef(false);
   const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
   const [runtimeAnalysisData, setRuntimeAnalysisData] = useState<RuntimeAnalysisDataSnapshot | null>(null);
+  const [runtimeAnalysisDataScope, setRuntimeAnalysisDataScope] = useState<string | null>(null);
   const runtimeAnalysisRequest = useRef(0);
+  const runtimeCommitGuard = useRef(createRuntimeAnalysisScopeGuard());
+  const syncJobId = syncJobIdFromSearch(searchParams.toString());
+  const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
+  const runtimeSessionKey = `${authSession.sessionIdentity}:${authSession.user.organizationId}`;
+  const runtimeAsinKey = [...activeAsins].sort().join(",");
+  const runtimeScopeKey = `${runtimeSessionKey}:${currentProjectId}:${market}:${runtimeAsinKey}:${syncJobId}:${baseSyncRunId}`;
+  const runtimeScope = useRef<{ sessionKey: string; projectId: string | null; asins: string; enabled: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const guard = runtimeCommitGuard.current;
+    guard.activate(authSession.logoutPending ? null : runtimeScopeKey);
+    runtimeScope.current = { sessionKey: runtimeSessionKey, projectId: currentProjectId, asins: runtimeAsinKey, enabled: !authSession.logoutPending };
+    return () => { runtimeScope.current = null; guard.activate(null); };
+  }, [runtimeSessionKey, runtimeScopeKey, currentProjectId, runtimeAsinKey, authSession.logoutPending]);
   const refreshRuntimeAnalysisData = useCallback(async (
     projectId: string,
     asins: readonly string[],
+    signal?: AbortSignal,
+    isCurrent?: () => boolean,
   ): Promise<RuntimeAnalysisRefreshResult> => {
     const request = ++runtimeAnalysisRequest.current;
+    const captured = runtimeCommitGuard.current.capture();
+    const sessionKey = runtimeScope.current?.sessionKey;
+    const asinKey = [...asins].sort().join(",");
     try {
-      const snapshot = await readRuntimeAnalysisData(projectId, asins);
-      if (request !== runtimeAnalysisRequest.current) {
+      const snapshot = await readAndCommitRuntimeAnalysisData(projectId, asins, {
+        signal,
+        isCurrent: () => runtimeCommitGuard.current.isCurrent(captured) && request === runtimeAnalysisRequest.current && (!isCurrent || isCurrent())
+          && runtimeScope.current?.enabled === true && runtimeScope.current.sessionKey === sessionKey
+          && runtimeScope.current.projectId === projectId && runtimeScope.current.asins === asinKey,
+        commit: snapshot => { setRuntimeAnalysisData(snapshot); setRuntimeAnalysisDataScope(captured!.key); setCatalogItems(snapshot.catalog as Product[]); },
+      });
+      if (!snapshot) {
         return { ok: false, reason: "superseded", message: RUNTIME_ANALYSIS_REFRESH_FAILED };
       }
-      setRuntimeAnalysisData(snapshot);
-      setCatalogItems(snapshot.catalog as Product[]);
-      return { ok: true };
+      return { ok: true, snapshot };
     } catch {
       return {
         ok: false,
@@ -1787,13 +1811,23 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, [activeAsins, currentProjectId, refreshRuntimeAnalysisData, setMessage]);
   const [workspaces, setWorkspaces] = useState<AnalysisProject[]>([]);
   const [workspaceLabel, setWorkspaceLabel] = useState("");
-  const syncJobId = syncJobIdFromSearch(searchParams.toString());
-  const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
   const resumedSyncScope = useResumedSyncScope({
     runId: baseSyncRunId,
     fallbackContext: syncRunContext,
   });
   const workspaceReady = !workspaceKey || hydratedWorkspaceKey === workspaceKey;
+  const refreshXydcProgress = useCallback(async (signal: AbortSignal, isCurrent: () => boolean) => {
+    if (!currentProjectId) return undefined;
+    const result = await refreshRuntimeAnalysisData(currentProjectId, activeAsins, signal, isCurrent);
+    if (!result.ok && result.reason === "failed" && !signal.aborted && isCurrent()) setMessage(result.message);
+    return result.ok ? result.snapshot.xydcOrderProgress : undefined;
+  }, [currentProjectId, activeAsins, refreshRuntimeAnalysisData, setMessage]);
+  useXydcOrderProgress({
+    scopeKey: runtimeScopeKey,
+    enabled: workspaceReady && Boolean(currentProjectId) && !authSession.logoutPending,
+    view: runtimeAnalysisDataScope === runtimeScopeKey ? runtimeAnalysisData?.xydcOrderProgress ?? null : null,
+    refresh: refreshXydcProgress,
+  });
   const alexaVocPageScope = resolveAlexaVocPageScope({
     currentProjectId,
     workspaceReady,
@@ -2324,9 +2358,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
-        void refreshRuntimeAnalysisData(project.id, project.asins).then(result => {
-          if (!cancelled && !result.ok && result.reason === "failed") setMessage(result.message);
-        });
         if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
           setWorkspaceLabel(project.name);
         } else {
@@ -3231,6 +3262,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           }))}
           families={runtimeAnalysisData?.variants.families ?? []}
           orderFamilies={runtimeAnalysisData?.variantOrders.families ?? []}
+          progress={runtimeAnalysisDataScope === runtimeScopeKey ? runtimeAnalysisData?.xydcOrderProgress ?? null : null}
           market={markets[market]}
         />
       </div>}
