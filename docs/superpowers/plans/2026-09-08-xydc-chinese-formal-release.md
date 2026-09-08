@@ -20,17 +20,19 @@ Files:
 - Create tests/agent/xydc-variant-label.test.ts; update existing xydc UI assertions only where their expected displayed English becomes Chinese.
 - If another source file is actually necessary, ask coordinator before expanding scope.
 
-- [ ] Inspect current attribute shape and known values in test-results/xydc-current-asins-20260908/preview-props.json read-only. Translate common Color/Shape/size display values without changing raw title/identity.
-- [ ] RED: add meaningful tests against existing orderAttributeLabel for Sand Black, compound 22/26 inch colors, remote/RGB/dimmable/shade/Arc variants. Include case/whitespace, unknown values, no mutation and distinct ASIN identity expectations. Run focused test and record expected failures before implementation.
-- [ ] GREEN: add minimal bounded dictionary/parser. Never broad substring translation of arbitrary unknown strings, never network/AI dependency. Preserve numbers and meaningful separators. All components reuse existing seam.
-- [ ] Run focused tests plus the existing 4-file UI matrix once: node --import tsx --test tests/agent/xydc-variant-label.test.ts tests/agent/xydc-order-section.test.tsx tests/agent/xydc-variant-section.test.tsx tests/agent/xydc-order-progress-ui.test.tsx tests/agent/xydc-order-poll-owner.test.ts
-- [ ] Lint only changed source/test files, git diff --check; self-review; commit only owned source/tests.
-- [ ] Write .superpowers/sdd/xydc-chinese-task-1-report.md with RED/GREEN outputs and exact verification. Do not claim formal release complete.
+- [x] Inspect current attribute shape and known values in test-results/xydc-current-asins-20260908/preview-props.json read-only. Translate common Color/Shape/size display values without changing raw title/identity.
+- [x] RED: add meaningful tests against existing orderAttributeLabel for Sand Black, compound 22/26 inch colors, remote/RGB/dimmable/shade/Arc variants. Include case/whitespace, unknown values, no mutation and distinct ASIN identity expectations. Run focused test and record expected failures before implementation.
+- [x] GREEN: add minimal bounded dictionary/parser. Never broad substring translation of arbitrary unknown strings, never network/AI dependency. Preserve numbers and meaningful separators. All components reuse existing seam.
+- [x] Run focused tests plus the existing 4-file UI matrix once: node --import tsx --test tests/agent/xydc-variant-label.test.ts tests/agent/xydc-order-section.test.tsx tests/agent/xydc-variant-section.test.tsx tests/agent/xydc-order-progress-ui.test.tsx tests/agent/xydc-order-poll-owner.test.ts
+- [x] Lint only changed source/test files, git diff --check; self-review; commit only owned source/tests.
+- [x] Write .superpowers/sdd/xydc-chinese-task-1-report.md with RED/GREEN outputs and exact verification. Do not claim formal release complete.
 
 ### Task 2: Coordinator verification and guarded local publication
 
-- [ ] Independently review Task 1 exact diff/report, fix blocking findings if any; perform final scoped release review carrying previously approved V2 evidence (219 tests), not reimplementing V2.
-- [ ] Verify localized real-cache preview, source build and relevant regressions. Confirm no new TS/lint debt against known existing baselines.
-- [ ] Resolve OpenSpec parallel release ownership; verify target ancestry, generated-data hashes, current health/active work/ownership, exact roots, config needs, actual annual cache coverage and backup/rollback reference.
-- [ ] Integrate only reviewed source into the authorized formal worktree without overwriting dirty generated files, then invoke unmodified guarded -PublishCode. If a safety gate blocks, stop publication and report the concrete reason.
-- [ ] Verify actual 31900 health/source/artifact and original-module Chinese presentation (or explicit auth/data limitation), unchanged business data and existing generated files. Record evidence and no-main/no-push boundary. Preserve both worktrees.
+- [x] Independently review Task 1 exact diff/report, fix blocking findings if any; perform final scoped release review carrying previously approved V2 evidence (219 tests), not reimplementing V2.
+- [x] Verify localized real-cache preview, source build and relevant regressions. Confirm no new TS/lint debt against known existing baselines.
+- [x] Resolve OpenSpec parallel release ownership; verify target ancestry, generated-data hashes, current health/active work/ownership, exact roots, config needs, actual annual cache coverage and backup/rollback reference.
+- [x] Integrate only reviewed source into the authorized formal worktree without overwriting dirty generated files, then invoke unmodified guarded -PublishCode. If a safety gate blocks, stop publication and report the concrete reason.
+- [x] Verify actual 31900 health/source/artifact and original-module Chinese presentation (or explicit auth/data limitation), unchanged business data and existing generated files. Record evidence and no-main/no-push boundary. Preserve both worktrees.
+
+Result: source/formal 8f70e7d, live artifact 337affd0..., exact identities and data-preservation checks passed. See docs/verification/2026-09-08-xydc-chinese-formal-release.md. Yearly snapshots remain outside formal data pending the user's separate import choice; authenticated formal UI confirmation remains a manual handoff, not a bypassed test.
