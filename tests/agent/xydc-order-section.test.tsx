@@ -122,6 +122,7 @@ test("renders fixed-window annual parent cards from the complete family denomina
   assert.match(html, /子体汇总/);
   assert.match(html, /5,900\+/);
   assert.match(html, /67\.80%/);
+  assert.match(html, /title="Sand Black 67\.80%"/);
   assert.match(html, /19\.49%/);
   assert.match(html, /11\.02%/);
   assert.match(html, /查看全部 4 个子体与月度趋势/);
@@ -207,7 +208,15 @@ function isLoopbackHttpUrl(value: string) {
 async function startBrowserFixtureServer() {
   const secondAsins = ["B000000005", "B000000006"];
   const partialAsins = ["B000000007", "B000000008", "B000000009"];
-  const families = [familyFixture(), familyFixture("B000000020", "B000000005", secondAsins), familyFixture("B000000030", "B000000007", partialAsins)];
+  const zeroAsins = ["B000000011", "B000000012"];
+  const pendingAsins = ["B000000013", "B000000014"];
+  const families = [
+    familyFixture(),
+    familyFixture("B000000020", "B000000005", secondAsins),
+    familyFixture("B000000030", "B000000007", partialAsins),
+    familyFixture("B000000040", "B000000011", zeroAsins),
+    familyFixture("B000000050", "B000000013", pendingAsins),
+  ];
   const mixedValues = [
     [1, 0, ...months.slice(2).map(() => 80)],
     [0, 0, ...months.slice(2).map(() => 40)],
@@ -227,6 +236,7 @@ async function startBrowserFixtureServer() {
       },
       reasonCode: "PARTIAL_DATA",
     }),
+    orderFixture({ parentAsin: "B000000040", childAsins: zeroAsins, values: zeroAsins.map(() => months.map(() => 0)), cacheState: "stale" }),
   ];
   const fixtureProps = { products, families, orderFamilies: orders, market };
   const updatedFixtureProps = {
@@ -241,6 +251,18 @@ async function startBrowserFixtureServer() {
     } : snapshot),
     market,
   };
+  const reorderedFixtureProps = {
+    products,
+    families: families.map((family, index) => index === 0 ? { ...family, children: [...family.children].reverse() } : family),
+    orderFamilies: orders.map((snapshot, index) => index === 0 ? { ...snapshot, childAsins: [...snapshot.childAsins].reverse(), children: [...snapshot.children].reverse() } : snapshot),
+    market,
+  };
+  const changedChildSetFixtureProps = {
+    products,
+    families: families.map((family, index) => index === 0 ? { ...family, children: family.children.slice(0, 3) } : family),
+    orderFamilies: orders.map((snapshot, index) => index === 0 ? { ...snapshot, childAsins: snapshot.childAsins.slice(0, 3), children: snapshot.children.slice(0, 3) } : snapshot),
+    market,
+  };
   const serverMarkup = renderToStaticMarkup(createElement(XydcVariantSection, fixtureProps));
   const entry = `
 import { createElement } from "react";
@@ -250,6 +272,8 @@ import { XydcVariantSection } from "/app/xydc-variant-section.tsx";
 const root = hydrateRoot(document.getElementById("root"), createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));
 window.rerenderEquivalentXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));
 window.rerenderUpdatedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(updatedFixtureProps)}));
+window.rerenderReorderedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(reorderedFixtureProps)}));
+window.rerenderChangedChildSetXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(changedChildSetFixtureProps)}));
 window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })}));
 window.removeFirstAndOpenSecondXydcFixture = () => {
   flushSync(() => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })})));
@@ -306,7 +330,7 @@ async function withFixture(run: (page: Page) => Promise<void>, viewport = { widt
     const fixture = await startBrowserFixtureServer();
     server = fixture.server;
     browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
-    page = await browser.newPage({ viewport });
+    page = await browser.newPage({ viewport, hasTouch: viewport.width <= 390 });
     await page.clock.setFixedTime(new Date("2026-09-08T12:00:00.000Z"));
     const hydrationErrors: string[] = [];
     page.on("console", message => {
@@ -337,7 +361,7 @@ test("desktop and 390px layouts keep order cards in-bounds", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
     const cards = page.locator(".xydc-order-card");
-    assert.equal(await cards.count(), 3);
+    assert.equal(await cards.count(), 5);
     const boxes = await cards.evaluateAll(elements => elements.map(element => {
       const box = element.getBoundingClientRect();
       return { x: box.x, y: box.y, width: box.width };
@@ -365,6 +389,151 @@ test("desktop and 390px layouts keep order cards in-bounds", async t => {
   }, { width: 390, height: 844 });
 });
 
+test("annual inspection exposes derived annual rows for complete, raw-zero, incomplete, and pending children", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    const completeCard = page.locator("[data-parent-asin='B000000010']");
+    const zeroCard = page.locator("[data-parent-asin='B000000040']");
+    const partialCard = page.locator("[data-parent-asin='B000000030']");
+    const pendingCard = page.locator("[data-parent-asin='B000000050']");
+    assert.equal(await completeCard.locator(".xydc-order-legend").getByRole("button").count(), 4);
+    assert.equal(await completeCard.locator(".xydc-order-share").getByRole("button").count(), 4);
+    assert.equal(await zeroCard.locator(".xydc-order-legend").getByRole("button").count(), 2);
+    assert.equal(await partialCard.locator(".xydc-order-legend").getByRole("button").count(), 3);
+    assert.equal(await pendingCard.locator(".xydc-order-legend").getByRole("button").count(), 2);
+
+    const completeTrigger = completeCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    await completeTrigger.hover();
+    const completeRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.match(await completeRegion.textContent() ?? "", /B000000001/);
+    assert.match(await completeRegion.textContent() ?? "", /2025-09 — 2026-08/);
+    assert.match(await completeRegion.textContent() ?? "", /12个月订单量\s*4,000\+/);
+    assert.match(await completeRegion.textContent() ?? "", /年度份额\s*67\.80%/);
+    assert.match(await completeRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*0 \/ 0/);
+    assert.doesNotMatch(await completeRegion.textContent() ?? "", /510\+/);
+    await page.mouse.move(0, 0);
+    await completeRegion.waitFor({ state: "detached" });
+
+    await zeroCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
+    const zeroRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.match(await zeroRegion.textContent() ?? "", /B000000011/);
+    assert.match(await zeroRegion.textContent() ?? "", /12个月订单量\s*未披露/);
+    assert.match(await zeroRegion.textContent() ?? "", /年度份额\s*—/);
+    assert.match(await zeroRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*0 \/ 12/);
+    assert.match(await zeroRegion.textContent() ?? "", /订单缓存数据/);
+    assert.match(await zeroRegion.textContent() ?? "", /2026-09-04T12:34:56\.000Z/);
+
+    await partialCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
+    const partialRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.match(await partialRegion.textContent() ?? "", /B000000007/);
+    assert.match(await partialRegion.textContent() ?? "", /12个月订单量\s*—/);
+    assert.match(await partialRegion.textContent() ?? "", /年度份额\s*—/);
+    assert.match(await partialRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*1 \/ 1/);
+
+    await pendingCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" }).click();
+    const pendingRegion = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.match(await pendingRegion.textContent() ?? "", /B000000013/);
+    assert.match(await pendingRegion.textContent() ?? "", /12个月订单量\s*—/);
+    assert.match(await pendingRegion.textContent() ?? "", /年度份额\s*—/);
+    assert.match(await pendingRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*12 \/ 0/);
+    assert.match(await pendingRegion.textContent() ?? "", /订单数据待采集/);
+  });
+});
+
+test("annual inspection supports preview, pinning, suppression, replacement, and current identity data", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    const card = page.locator("[data-parent-asin='B000000010']");
+    const sandBlack = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    const black = card.locator(".xydc-order-legend").getByRole("button", { name: "查看 Black 年度订单明细" });
+    await sandBlack.hover();
+    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    await region.hover();
+    assert.equal(await region.count(), 1, "moving from trigger into the region keeps the preview open");
+    await page.mouse.move(0, 0);
+    await region.waitFor({ state: "detached" });
+
+    await sandBlack.focus();
+    await region.waitFor();
+    await region.getByRole("button", { name: "关闭年度悬浮明细" }).click();
+    assert.equal(await sandBlack.evaluate(element => element === document.activeElement), true);
+    assert.equal(await region.count(), 0, "explicit close suppresses focus-driven reopening");
+    await sandBlack.click();
+    await region.waitFor();
+    await page.mouse.move(0, 0);
+    assert.equal(await region.count(), 1, "pinned inspection survives pointer leave");
+    await sandBlack.hover();
+    assert.equal(await region.getAttribute("data-pinned"), "true", "hovering the same trigger does not downgrade a pinned inspection");
+    await black.click();
+    const blackRegion = page.getByRole("region", { name: "Black · 年度订单明细" });
+    assert.equal(await region.count(), 0);
+    assert.match(await blackRegion.textContent() ?? "", /B000000002/);
+
+    await sandBlack.focus();
+    await page.keyboard.press("Enter");
+    await region.waitFor();
+    await page.keyboard.press("Space");
+    await region.waitFor({ state: "detached" });
+    await page.keyboard.press("Space");
+    await region.waitFor();
+    await page.evaluate(() => (window as typeof window & { rerenderReorderedXydcFixture(): void }).rerenderReorderedXydcFixture());
+    await page.waitForFunction(() => document.querySelector("[role='region']")?.textContent?.includes("4,000+"));
+    assert.equal(await region.count(), 1, "reordered equivalent child sets retain the active member");
+    await page.evaluate(() => (window as typeof window & { rerenderUpdatedXydcFixture(): void }).rerenderUpdatedXydcFixture());
+    await page.waitForFunction(() => document.querySelector("[role='region']")?.textContent?.includes("4,001+"));
+    assert.match(await region.textContent() ?? "", /4,001\+/);
+
+    const bodyOverflowBefore = await page.evaluate(() => document.body.style.overflow);
+    await page.getByRole("button", { name: "查看全部 4 个子体与月度趋势" }).click();
+    assert.equal(await region.count(), 0, "opening detail closes the external annual inspection");
+    assert.equal(await page.evaluate(() => document.body.style.overflow), bodyOverflowBefore);
+    await page.getByRole("button", { name: "关闭订单明细" }).click();
+
+    await sandBlack.click();
+    await region.waitFor();
+    await page.evaluate(() => (window as typeof window & { removeFirstXydcFixture(): void }).removeFirstXydcFixture());
+    await region.waitFor({ state: "detached" });
+  });
+});
+
+test("annual inspection stays inside the viewport on touch width and retains full text", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    const trigger = page.locator("[data-parent-asin='B000000040'] .xydc-order-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.tap();
+    const region = page.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    const box = await region.boundingBox();
+    assert.ok(box);
+    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 300);
+    assert.ok(Number.parseFloat(await region.evaluate(element => getComputedStyle(element).fontSize)) >= 12);
+    assert.match(await region.textContent() ?? "", /B000000011/);
+    assert.equal(await region.evaluate(element => element.scrollWidth <= element.clientWidth), true);
+    await page.setViewportSize({ width: 390, height: 260 });
+    await page.waitForFunction(() => {
+      const element = document.querySelector<HTMLElement>("[role='region'][aria-labelledby]");
+      if (!element) return false;
+      const bounds = element.getBoundingClientRect();
+      return bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight;
+    });
+    await page.evaluate(() => window.scrollBy(0, -40));
+    await page.waitForFunction(() => {
+      const element = document.querySelector<HTMLElement>("[role='region'][aria-labelledby]");
+      if (!element) return false;
+      const bounds = element.getBoundingClientRect();
+      return getComputedStyle(element).overflowY === "auto"
+        && bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight;
+    });
+    assert.equal(await region.evaluate(element => getComputedStyle(element).overflowY), "auto");
+    const screenshot = join(process.cwd(), "test-results", "xydc-orders-annual-mobile.png");
+    mkdirSync(join(process.cwd(), "test-results"), { recursive: true });
+    await page.screenshot({ path: screenshot });
+    await t.test("annual mobile screenshot exists", () => assert.ok(existsSync(screenshot)));
+    await page.mouse.click(2, 2);
+    await region.waitFor({ state: "detached" });
+  }, { width: 390, height: 300 });
+});
+
 test("opens only the selected parent's accessible detail dialog and restores focus", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
@@ -380,20 +549,51 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     assert.equal(await dialog.locator("[data-order-asin='B000000001']").first().getAttribute("data-order-color"), await dialog.locator("[data-order-asin='B000000001']").last().getAttribute("data-order-color"));
     const plottedHeights = await dialog.locator(".xydc-order-month-bar").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height));
     assert.ok(plottedHeights[3]! > plottedHeights[8]!, `December ${plottedHeights[3]} should exceed May ${plottedHeights[8]}`);
+    const dialogAnnualTrigger = dialog.locator(".xydc-order-dialog-legend").getByRole("button", { name: "查看 Sand Black 年度订单明细" });
+    await dialogAnnualTrigger.click();
+    const dialogAnnualRegion = dialog.getByRole("region", { name: "Sand Black · 年度订单明细" });
+    assert.equal(await dialogAnnualRegion.count(), 1, "the annual region remains in the dialog focus scope");
+    await page.keyboard.press("Escape");
+    assert.equal(await dialogAnnualRegion.count(), 0);
+    assert.equal(await dialog.count(), 1, "Escape closes annual inspection before the outer dialog");
+    assert.equal(await dialog.getByLabel("订单明细排序").count(), 0);
+    const expandAnnualDetail = dialog.getByRole("button", { name: "展开年度明细" });
+    assert.equal(await expandAnnualDetail.getAttribute("aria-expanded"), "false");
+    await expandAnnualDetail.click();
+    assert.equal(await dialog.getByLabel("订单明细排序").count(), 1);
     await page.getByLabel("订单明细排序").selectOption("asin");
     assert.equal(await dialog.locator("[data-order-asin='B000000001']").first().getAttribute("data-order-color"), await dialog.locator("[data-order-asin='B000000001']").last().getAttribute("data-order-color"));
+    const closeDetailButton = page.getByRole("button", { name: "关闭订单明细" });
+    await closeDetailButton.focus();
     await page.keyboard.press("Shift+Tab");
     assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true);
     await page.keyboard.press("Tab");
-    assert.equal(await page.getByRole("button", { name: "关闭订单明细" }).evaluate(element => element === document.activeElement), true);
+    assert.equal(await closeDetailButton.evaluate(element => element === document.activeElement), true);
 
     await page.evaluate(() => (window as typeof window & { rerenderEquivalentXydcFixture(): void }).rerenderEquivalentXydcFixture());
     assert.equal(await page.getByRole("dialog").count(), 1, "equivalent new arrays and objects keep the selected parent open");
     assert.match(await dialog.textContent() ?? "", /5,900/);
+    assert.equal(await dialog.getByLabel("订单明细排序").inputValue(), "asin");
+    await page.evaluate(() => (window as typeof window & { rerenderReorderedXydcFixture(): void }).rerenderReorderedXydcFixture());
+    assert.equal(await dialog.getByLabel("订单明细排序").inputValue(), "asin");
+    assert.match(await dialog.locator(".xydc-order-detail-table tbody tr").first().textContent() ?? "", /B000000001/);
     await page.evaluate(() => (window as typeof window & { rerenderUpdatedXydcFixture(): void }).rerenderUpdatedXydcFixture());
     assert.equal(await page.getByRole("dialog").count(), 1, "updated current-parent data keeps the selected parent open");
-    assert.match(await dialog.textContent() ?? "", /LEPOWER UPDATED/);
-    assert.match(await dialog.textContent() ?? "", /5,901/);
+    await page.waitForFunction(() => document.querySelector("[role='dialog']")?.textContent?.includes("LEPOWER UPDATED"));
+    await page.waitForFunction(() => document.querySelector("[role='dialog']")?.textContent?.includes("5,901"));
+    assert.equal(await dialog.getByLabel("订单明细排序").inputValue(), "asin");
+    const collapseAnnualDetail = dialog.getByRole("button", { name: "收起年度明细" });
+    await collapseAnnualDetail.click();
+    assert.equal(await dialog.getByLabel("订单明细排序").count(), 0);
+    const reexpandAnnualDetail = dialog.getByRole("button", { name: "展开年度明细" });
+    assert.equal(await reexpandAnnualDetail.evaluate(element => element === document.activeElement), true);
+    await reexpandAnnualDetail.click();
+    await page.evaluate(() => (window as typeof window & { rerenderChangedChildSetXydcFixture(): void }).rerenderChangedChildSetXydcFixture());
+    await page.waitForFunction(() => document.querySelector("[role='dialog']")?.textContent?.includes("3 个子体"));
+    assert.equal(await dialog.getByRole("button", { name: "展开年度明细" }).getAttribute("aria-expanded"), "false", "new child-set identity resets annual expansion");
+    assert.equal(await dialog.getByLabel("订单明细排序").count(), 0);
+    await page.evaluate(() => (window as typeof window & { restoreXydcFixture(): void }).restoreXydcFixture());
+    await page.waitForFunction(() => document.querySelector("[role='dialog']")?.textContent?.includes("4 个子体"));
 
     const screenshot = join(process.cwd(), "test-results", "xydc-orders-dialog.png");
     await page.screenshot({ path: screenshot });
@@ -428,10 +628,11 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     await page.evaluate(() => (window as typeof window & { removeFirstXydcFixture(): void }).removeFirstXydcFixture());
     await page.locator("[data-parent-asin='B000000010']").waitFor({ state: "detached" });
 
-    await page.getByRole("button", { name: "查看全部 2 个子体与月度趋势" }).click();
+    await page.locator("[data-parent-asin='B000000020']").getByRole("button", { name: "查看全部 2 个子体与月度趋势" }).click();
     assert.match(await dialog.textContent() ?? "", /B000000020/);
     assert.match(await dialog.textContent() ?? "", /1,800/);
     assert.doesNotMatch(await dialog.textContent() ?? "", /5,900/);
+    assert.equal(await dialog.getByLabel("订单明细排序").count(), 0, "a new parent dialog starts collapsed");
     await page.getByRole("button", { name: "关闭订单明细" }).click();
     assert.equal(await page.getByRole("dialog").count(), 0);
 

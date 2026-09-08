@@ -4,6 +4,7 @@ import * as React from "react";
 import * as ReactDom from "react-dom";
 
 import { summarizeXydcOrders } from "../shared/xydc-order-summary";
+import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
 import {
   formatOrderCount,
   formatOrderShare,
@@ -18,7 +19,7 @@ type DetailSort = "orders" | "asin";
 
 function focusableElements(element: HTMLElement) {
   return [...element.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], select:not([disabled]), [tabindex]:not([tabindex="-1"])')]
-    .filter(candidate => !candidate.hasAttribute("hidden"));
+    .filter(candidate => !candidate.closest('[hidden],[inert],[aria-hidden="true"]'));
 }
 
 function monthDisclosedTotal(snapshot: NonNullable<XydcOrderCardModel["snapshot"]>, month: string) {
@@ -46,8 +47,10 @@ export function XydcOrderDetail({
   const childAsins = snapshot?.childAsins ?? group.children.map(child => child.asin);
   const colors = React.useMemo(() => orderColorMap(childAsins), [childAsins]);
   const [sort, setSort] = React.useState<DetailSort>("orders");
+  const [expanded, setExpanded] = React.useState(false);
   const dialogRef = React.useRef<HTMLElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
+  const tableRegionId = `xydc-order-annual-table-${React.useId().replaceAll(":", "")}`;
   const orderWindow = snapshot?.window ?? model.window;
   const maximum = Math.max(1, ...orderWindow.months.map(month => snapshot ? monthDisclosedTotal(snapshot, month) : 0));
   const rows = [...(summary?.rows ?? group.children.map(child => ({
@@ -153,29 +156,42 @@ export function XydcOrderDetail({
           })}</tbody>
         </table>
         <div className="xydc-order-dialog-legend">
-          {childAsins.map(asin => <span key={asin} data-order-asin={asin} data-order-color={colors.get(asin)}><i style={{ background: colors.get(asin) }} />{orderAttributeLabel(childByAsin.get(asin))}</span>)}
+          {childAsins.map(asin => <XydcAnnualInspectionTrigger
+            key={asin}
+            model={model}
+            asin={asin}
+            dataOrderColor={colors.get(asin)}
+          ><i style={{ background: colors.get(asin) }} />{orderAttributeLabel(childByAsin.get(asin))}</XydcAnnualInspectionTrigger>)}
         </div>
 
         <div className="xydc-order-detail-headline">
           <b>全部子体 · 年度份额</b>
-          <label>排序
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={tableRegionId}
+            onClick={() => setExpanded(value => !value)}
+          >{expanded ? "收起年度明细" : "展开年度明细"}</button>
+        </div>
+        {expanded ? <div id={tableRegionId} className="xydc-order-annual-table-region">
+          <label className="xydc-order-detail-sort">排序
             <select aria-label="订单明细排序" value={sort} onChange={event => setSort(event.target.value as DetailSort)}>
               <option value="orders">12个月订单量</option>
               <option value="asin">ASIN</option>
             </select>
           </label>
-        </div>
-        <div className="xydc-order-detail-table-wrap" role="region" aria-label={`${group.parentAsin} 全部子体年度订单`} tabIndex={0}>
-          <table className="xydc-order-detail-table">
-            <thead><tr><th>变体 / ASIN</th><th>12个月订单量</th><th>年度份额</th><th>缺失 / 未披露月份</th></tr></thead>
-            <tbody>{rows.map(row => <tr key={row.asin} data-order-asin={row.asin} data-order-color={colors.get(row.asin)}>
-              <th scope="row"><span><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a></th>
-              <td>{formatOrderCount(row.total, row.complete)}</td>
-              <td>{formatOrderShare(row.share)}</td>
-              <td>{row.missingMonths.length} / {row.undisclosedMonths}</td>
-            </tr>)}</tbody>
-          </table>
-        </div>
+          <div className="xydc-order-detail-table-wrap" role="region" aria-label={`${group.parentAsin} 全部子体年度订单`} tabIndex={0}>
+            <table className="xydc-order-detail-table">
+              <thead><tr><th>变体 / ASIN</th><th>12个月订单量</th><th>年度份额</th><th>缺失 / 未披露月份</th></tr></thead>
+              <tbody>{rows.map(row => <tr key={row.asin} data-order-asin={row.asin} data-order-color={colors.get(row.asin)}>
+                <th scope="row"><span><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a></th>
+                <td>{formatOrderCount(row.total, row.complete)}</td>
+                <td>{formatOrderShare(row.share)}</td>
+                <td>{row.missingMonths.length} / {row.undisclosedMonths}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </div> : null}
         <footer>来源：西柚洞察 · 子体汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}</footer>
       </section>
     </div>

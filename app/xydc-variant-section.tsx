@@ -5,6 +5,11 @@ import * as React from "react";
 import type { XydcOrderSnapshot, XydcOrderWindow } from "../shared/xydc-order-contract";
 import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../shared/xydc-variant-contract";
+import {
+  useXydcAnnualInspection,
+  XydcAnnualInspectionProvider,
+  xydcAnnualInspectionIdentity,
+} from "./xydc-annual-inspection";
 import { XydcOrderCard, type XydcOrderCardModel } from "./xydc-order-card";
 import { XydcOrderDetail } from "./xydc-order-detail";
 
@@ -177,11 +182,10 @@ function XydcVariantSectionBody({
   );
 }
 
-function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
-  const { families, market, orderFamilies, products } = props;
-  const models = React.useMemo(() => buildModels({ families, market, orderFamilies, products }), [families, market, orderFamilies, products]);
+function InteractiveXydcVariantSectionBody({ props, models }: { props: XydcVariantSectionProps; models: readonly XydcOrderCardModel[] }) {
   const [selection, setSelection] = React.useState<Readonly<{ key: string }> | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const annualInspection = useXydcAnnualInspection();
   const openedModel = selection
     ? models.find(model => `${model.group.country}:${model.group.parentAsin}` === selection.key) ?? null
     : null;
@@ -195,19 +199,36 @@ function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
   }, [openedModel, selection]);
   const close = React.useCallback(() => {
     setSelection(null);
-    window.requestAnimationFrame(() => triggerRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      const trigger = triggerRef.current;
+      if (trigger?.isConnected && !trigger.disabled && trigger.getClientRects().length > 0) trigger.focus();
+    });
   }, []);
   const open = React.useCallback((model: XydcOrderCardModel, trigger: HTMLButtonElement) => {
+    annualInspection?.dismiss({ suppress: true });
     triggerRef.current = trigger;
     setSelection({ key: `${model.group.country}:${model.group.parentAsin}` });
-  }, []);
+  }, [annualInspection]);
   return <>
     <XydcVariantSectionBody props={props} models={models} onOpen={open} />
-    {openedModel ? <XydcOrderDetail model={openedModel} market={props.market} onClose={close} /> : null}
+    {openedModel ? <XydcOrderDetail key={xydcAnnualInspectionIdentity(openedModel)} model={openedModel} market={props.market} onClose={close} /> : null}
   </>;
 }
 
+function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
+  const { families, market, orderFamilies, products } = props;
+  const models = React.useMemo(() => buildModels({ families, market, orderFamilies, products }), [families, market, orderFamilies, products]);
+  return <XydcAnnualInspectionProvider models={models}>
+    <InteractiveXydcVariantSectionBody props={props} models={models} />
+  </XydcAnnualInspectionProvider>;
+}
+
 export function XydcVariantSection(props: XydcVariantSectionProps) {
-  if (typeof window === "undefined") return <XydcVariantSectionBody props={props} models={buildModels(props)} />;
+  if (typeof window === "undefined") {
+    const models = buildModels(props);
+    return <XydcAnnualInspectionProvider models={models}>
+      <XydcVariantSectionBody props={props} models={models} />
+    </XydcAnnualInspectionProvider>;
+  }
   return <InteractiveXydcVariantSection {...props} />;
 }

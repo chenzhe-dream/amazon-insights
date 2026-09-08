@@ -1,5 +1,6 @@
 import type { XydcOrderSnapshot, XydcOrderSummary, XydcOrderWindow } from "../shared/xydc-order-contract";
 import { summarizeXydcOrders } from "../shared/xydc-order-summary";
+import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
 import type { XydcVariantFamilyGroup, XydcVariantMarket, XydcVariantProduct } from "./xydc-variant-section";
 
 const imagePlaceholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Crect width='72' height='72' fill='%23f2f6fa'/%3E%3Cpath d='M17 50l12-13 9 8 8-10 10 15z' fill='%239aabba'/%3E%3Ccircle cx='28' cy='26' r='6' fill='%239aabba'/%3E%3C/svg%3E";
@@ -159,22 +160,31 @@ export function XydcOrderCard({
         </div>
       ) : null}
 
-      {summary?.complete && summary.total !== null && summary.total > 0 ? <>
+      {summary?.complete && summary.total !== null && summary.total > 0 ?
         <div className="xydc-order-share" aria-label="已披露订单量年度份额">
-          {summary.rows.filter(row => row.share !== null).map(row => (
-            <span
+          {summary.rows.filter(row => row.share !== null && row.share > 0).map(row => (
+            <XydcAnnualInspectionTrigger
               key={row.asin}
-              data-order-asin={row.asin}
-              data-order-color={colors.get(row.asin)}
-              style={{ width: `${row.share}%`, background: colors.get(row.asin) }}
+              model={model}
+              asin={row.asin}
+              className="xydc-order-share-segment"
+              dataOrderColor={colors.get(row.asin)}
+              label={`查看 ${orderAttributeLabel(childByAsin.get(row.asin))} 年度订单明细（年度份额区段）`}
               title={`${orderAttributeLabel(childByAsin.get(row.asin))} ${formatOrderShare(row.share)}`}
-            >{row.share !== null && row.share >= 8 ? formatOrderShare(row.share) : ""}</span>
+              style={{ width: `${row.share}%`, background: colors.get(row.asin) }}
+            >{row.share !== null && row.share >= 8 ? formatOrderShare(row.share) : ""}
+            </XydcAnnualInspectionTrigger>
           ))}
         </div>
-        <div className="xydc-order-legend">
-          {summary.rows.map(row => <span key={row.asin} data-order-asin={row.asin} data-order-color={colors.get(row.asin)}><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</span>)}
-        </div>
-      </> : null}
+      : null}
+      <div className="xydc-order-legend">
+        {rows.map(row => <XydcAnnualInspectionTrigger
+          key={row.asin}
+          model={model}
+          asin={row.asin}
+          dataOrderColor={colors.get(row.asin)}
+        ><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</XydcAnnualInspectionTrigger>)}
+      </div>
 
       <div className="xydc-order-table-wrap" role="region" aria-label={`${group.parentAsin} 子体订单预览`} tabIndex={0}>
         <table className="xydc-order-table">
