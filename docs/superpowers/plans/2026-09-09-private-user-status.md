@@ -47,6 +47,8 @@ export type UserPresenceAccess = Readonly<{
 
 Server settings are `AGENT_USER_PRESENCE_ORGANIZATION_ID`, `AGENT_USER_PRESENCE_PRIMARY_USER_ID`, `AGENT_USER_PRESENCE_PRIMARY_EMAIL`, `AGENT_USER_PRESENCE_DINGTALK_USER_ID`, `AGENT_USER_PRESENCE_DINGTALK_CORP_ID`, `AGENT_USER_PRESENCE_DINGTALK_SUBJECT_ID`. Each branch requires its full configuration; no primary-email default which could authorize unintended organizations. IDs are opaque bounded nonempty strings; validate email with existing Zod email rules. Snapshot configuration is process-local; deployment changes apply on controlled restart. User disable/demotion/binding removal is checked fresh each API request.
 
+The two grants are independent: demotion revokes the primary-email grant; removal of the exact DingTalk binding revokes the personal-DingTalk grant. If deployment intentionally assigns both grants to one internal account, the other still-valid grant may allow access. Disable, session invalidation and organization mismatch always deny both. Do not require an administrator role for the verified personal DingTalk branch or infer the login provider from the account email.
+
 - [ ] **Step 1: Write red permission and binding tests.** Use artificial distinct IDs and fake in-memory read facts for pure access tests; use real temporary SQLite/isolated PG repositories for binding lookup tests. Name each behavior:
 
 ```ts
