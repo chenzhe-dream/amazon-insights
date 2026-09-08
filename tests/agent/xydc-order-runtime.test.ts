@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -50,7 +50,7 @@ test("historic runtime payloads default the independent order member", () => {
   assert.deepEqual(snapshot.variantOrders, { families: [] });
 });
 
-test("runtime returns only current-window snapshots derived from authorized input variants", async () => {
+test("runtime returns current and prior complete snapshots derived from authorized input variants without writing on repeated GET reads", async () => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-order-runtime-"));
   const requested = ["B000000001", "B000000002", "B000000003"];
   const authorized = variant(requested[0]!, "B0PARENT01", ["B0CHILD001", "B0CHILD002"]);
@@ -70,12 +70,31 @@ test("runtime returns only current-window snapshots derived from authorized inpu
     }
     process.env.AGENT_DATA_ROOT = dataRoot;
 
+    const countryDirectory = path.dirname(xydcOrderCachePath(dataRoot, authorized, currentSnapshot.window));
+    const beforeNames = await readdir(countryDirectory);
+    const beforeFiles = await Promise.all(beforeNames.map(async name => ({
+      name,
+      contents: await readFile(path.join(countryDirectory, name), "utf8"),
+      modifiedAt: (await stat(path.join(countryDirectory, name))).mtimeMs,
+    })));
     const result = readGeneratedRuntimeAnalysisData(requested, "US", {
       now,
       readVariantFamilies: () => [authorized, oldWindow],
     });
+    const repeated = readGeneratedRuntimeAnalysisData(requested, "US", {
+      now,
+      readVariantFamilies: () => [authorized, oldWindow],
+    });
 
-    assert.deepEqual(result.variantOrders.families, [currentSnapshot]);
+    assert.deepEqual(result.variantOrders.families, [currentSnapshot, { ...staleWindowSnapshot, cacheState: "stale" }]);
+    assert.deepEqual(repeated.variantOrders, result.variantOrders);
+    const afterNames = await readdir(countryDirectory);
+    const afterFiles = await Promise.all(afterNames.map(async name => ({
+      name,
+      contents: await readFile(path.join(countryDirectory, name), "utf8"),
+      modifiedAt: (await stat(path.join(countryDirectory, name))).mtimeMs,
+    })));
+    assert.deepEqual(afterFiles, beforeFiles);
     const serialized = JSON.stringify(result.variantOrders);
     assert.equal(serialized.includes("B0PARENT99"), false);
     assert.equal(serialized.includes("xydc-orders"), false);
@@ -120,7 +139,7 @@ test("runtime looks up the authorized country-parent child union without changin
   }
 });
 
-test("runtime rejects current-top snapshots with expired or future child timestamps", async () => {
+test("runtime rejects current-top snapshots with future child timestamps and marks expired complete data stale", async () => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-order-runtime-child-age-"));
   const requested = ["B000000001", "B000000002", "B000000003"];
   const authorized = variant(requested[0]!, "B0PARENT01", ["B0CHILD001"]);
@@ -142,7 +161,11 @@ test("runtime rejects current-top snapshots with expired or future child timesta
         now,
         readVariantFamilies: () => [authorized],
       });
-      assert.deepEqual(result.variantOrders.families, [], caseName);
+      if (caseName === "expired") {
+        assert.deepEqual(result.variantOrders.families, [{ ...snapshot, cacheState: "stale" }], caseName);
+      } else {
+        assert.deepEqual(result.variantOrders.families, [], caseName);
+      }
     }
   } finally {
     if (previousRoot === undefined) delete process.env.AGENT_DATA_ROOT;

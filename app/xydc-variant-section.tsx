@@ -3,7 +3,8 @@
 import * as React from "react";
 
 import type { XydcOrderSnapshot, XydcOrderWindow } from "../shared/xydc-order-contract";
-import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../shared/xydc-order-summary";
+import { selectXydcOrderDisplaySnapshot } from "../shared/xydc-order-display";
+import { getXydcOrderWindow } from "../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../shared/xydc-variant-contract";
 import {
   useXydcAnnualInspection,
@@ -124,13 +125,19 @@ function familyIdentity(group: XydcVariantFamilyGroup): XydcVariantFamily {
   };
 }
 
-function resolveOrderSnapshot(group: XydcVariantFamilyGroup, snapshots: readonly XydcOrderSnapshot[], window: XydcOrderWindow) {
-  return snapshots.find(snapshot => matchesXydcOrderSnapshot(snapshot, familyIdentity(group), window)) ?? null;
+function resolveOrderSnapshot(
+  group: XydcVariantFamilyGroup,
+  snapshots: readonly XydcOrderSnapshot[],
+  window: XydcOrderWindow,
+  now: Date,
+) {
+  return selectXydcOrderDisplaySnapshot(snapshots, familyIdentity(group), window, now);
 }
 
 function buildModels(props: XydcVariantSectionProps) {
   const productByAsin = new Map(props.products.map((product, index) => [product.asin, { product, index }]));
-  const window = getXydcOrderWindow(new Date());
+  const now = new Date();
+  const window = getXydcOrderWindow(now);
   return groupXydcVariantFamilies(props.families).map(group => {
     const familyInputOrder = new Map(group.inputAsins.map((asin, index) => [asin, index]));
     const orderedInputs = [...group.inputAsins].sort((left, right) =>
@@ -142,7 +149,7 @@ function buildModels(props: XydcVariantSectionProps) {
       group: { ...group, inputAsins: orderedInputs },
       product: productEntry?.product,
       competitorNumber: productEntry ? productEntry.index + 1 : null,
-      snapshot: resolveOrderSnapshot(group, props.orderFamilies ?? [], window),
+      snapshot: resolveOrderSnapshot(group, props.orderFamilies ?? [], window, now),
       window,
     } satisfies XydcOrderCardModel;
   }).sort((left, right) =>
@@ -166,7 +173,7 @@ function XydcVariantSectionBody({
       <div className="section-head xydc-order-section-head">
         <div>
           <h3>父体订单量份额与12个月趋势</h3>
-          <p>近12个完整月 · {window.startMonth} — {window.endMonth}</p>
+          <p>默认统计窗口 · {window.startMonth} — {window.endMonth}</p>
         </div>
         <span className="xydc-order-source-badge">西柚洞察 · 子体汇总</span>
       </div>

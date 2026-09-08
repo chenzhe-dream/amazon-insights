@@ -58,6 +58,7 @@ function XydcAnnualInspectionRegion({
   const [position, setPosition] = React.useState<Readonly<{ left: number; top: number; width: number; maxHeight: number }> | null>(null);
   const summary = model.snapshot ? summarizeXydcOrders(model.snapshot) : null;
   const orderWindow = model.snapshot?.window ?? model.window;
+  const historical = Boolean(model.snapshot && orderWindow.endMonth !== model.window.endMonth);
   const row = summary?.rows.find(candidate => candidate.asin === active.asin) ?? {
     asin: active.asin,
     complete: false,
@@ -150,7 +151,11 @@ function XydcAnnualInspectionRegion({
       </dl>
       <footer>
         {model.snapshot ? <>
-          {model.snapshot.cacheState === "stale" ? <strong>订单缓存数据</strong> : null}
+          {historical
+            ? <strong>历史缓存 · 当前统计区间待补齐</strong>
+            : model.snapshot.cacheState === "stale"
+              ? <strong>缓存数据 · 待更新</strong>
+              : null}
           <span>来源更新时间：{model.snapshot.sourceUpdatedAt ?? "数据源未提供"}</span>
           <span>本次采集时间：{model.snapshot.fetchedAt}</span>
         </> : <span>订单数据待采集</span>}

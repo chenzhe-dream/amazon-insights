@@ -109,6 +109,7 @@ export function XydcOrderCard({
     ? product.title
     : "商品资料待补充，不影响已获取的变体展示";
   const sourceWindow = snapshot?.window ?? window;
+  const historical = Boolean(snapshot && sourceWindow.endMonth !== window.endMonth);
   const status = !snapshot ? "pending" : summary?.complete ? "complete" : "partial";
   const allUnreported = summary?.complete && summary.total === 0;
 
@@ -212,7 +213,11 @@ export function XydcOrderCard({
       <footer className="xydc-order-meta">
         <span>统计窗口：{sourceWindow.startMonth} — {sourceWindow.endMonth}</span>
         <span>来源：西柚洞察 · 子体汇总</span>
-        {snapshot?.cacheState === "stale" ? <em className="xydc-order-cache-badge">订单缓存数据</em> : null}
+        {historical
+          ? <em className="xydc-order-cache-badge">历史缓存 · 当前统计区间待补齐</em>
+          : snapshot?.cacheState === "stale"
+            ? <em className="xydc-order-cache-badge">缓存数据 · 待更新</em>
+            : null}
         {group.cacheState === "stale" ? <em className="xydc-variant-cache-badge">变体缓存数据</em> : null}
         {snapshot ? <><span>来源更新时间：{snapshot.sourceUpdatedAt ?? "数据源未提供"}</span><span>本次采集时间：{snapshot.fetchedAt}</span></> : null}
         <span>变体来源更新时间：{group.sourceUpdatedAt ?? "数据源未提供"}</span>

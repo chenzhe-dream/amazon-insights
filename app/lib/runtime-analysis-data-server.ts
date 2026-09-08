@@ -9,10 +9,10 @@ import { AsinSchema, EntityIdSchema, GetProjectResponseSchema } from "../../shar
 import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
 import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
-import { isCurrentXydcOrderTimestamp, xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
+import { readXydcOrderDisplaySnapshot } from "../../scripts/lib/xydc-order-display-cache";
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
-import { XydcOrderSnapshotSchema, type XydcOrderSnapshot, type XydcOrderWindow } from "../../shared/xydc-order-contract";
-import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../../shared/xydc-order-summary";
+import type { XydcOrderSnapshot, XydcOrderWindow } from "../../shared/xydc-order-contract";
+import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 import type { XydcOrderReadScope, XydcOrderProgressView } from "../../shared/xydc-order-progress";
 import { createXydcJobAuthority, createXydcProgressPool, readXydcOrderProgress } from "../../scripts/lib/xydc-order-job-progress";
@@ -130,15 +130,12 @@ function readScopedXydcOrderFamilies(
   const seen = new Set<string>();
   return families.flatMap(family => {
     try {
-      const raw = JSON.parse(fs.readFileSync(xydcOrderCachePath(dataRoot, family, window), "utf8"));
-      const parsed = XydcOrderSnapshotSchema.safeParse(raw);
-      if (!parsed.success || !matchesXydcOrderSnapshot(parsed.data, family, window)) return [];
-      if (!isCurrentXydcOrderTimestamp(parsed.data.fetchedAt, now)
-        || parsed.data.children.some(child => !isCurrentXydcOrderTimestamp(child.fetchedAt, now))) return [];
-      const identity = `${parsed.data.country}:${parsed.data.parentAsin}:${[...parsed.data.childAsins].sort().join(",")}`;
+      const snapshot = readXydcOrderDisplaySnapshot(dataRoot, family, window, now);
+      if (!snapshot) return [];
+      const identity = `${snapshot.country}:${snapshot.parentAsin}:${[...snapshot.childAsins].sort().join(",")}`;
       if (seen.has(identity)) return [];
       seen.add(identity);
-      return [parsed.data];
+      return [snapshot];
     } catch {
       return [];
     }

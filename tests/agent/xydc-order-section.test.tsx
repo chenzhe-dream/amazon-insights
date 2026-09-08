@@ -10,6 +10,7 @@ import { createServer as createViteServer, type ViteDevServer } from "vite";
 
 import { XydcVariantSection } from "../../app/xydc-variant-section";
 import type { XydcOrderReason, XydcOrderSnapshot } from "../../shared/xydc-order-contract";
+import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const market = { label: "美国站", domain: "www.amazon.com" };
@@ -177,9 +178,51 @@ test("keeps variant information while truthfully rendering pending, partial, zer
   assert.match(html, /本次采集时间：2026-09-04T12:34:56.000Z/);
   assert.match(html, /暂无可披露订单数据/);
   assert.match(html, /未披露/);
-  assert.match(html, /订单缓存数据/);
+  assert.match(html, /缓存数据 · 待更新/);
   assert.match(html, /变体缓存数据/);
   assert.doesNotMatch(html, /近30天/);
+});
+
+test("renders complete historical cache against its actual period while the default current period remains pending", t => {
+  const currentNow = new Date("2026-10-09T12:00:00.000Z");
+  t.mock.timers.enable({ apis: ["Date"], now: currentNow });
+  const oldComplete = orderFixture();
+  const requested = getXydcOrderWindow(currentNow);
+  const currentPartial: XydcOrderSnapshot = {
+    ...oldComplete,
+    window: requested,
+    children: [],
+    fetchedAt: "2026-10-09T11:00:00.000Z",
+    cacheState: "fresh",
+    reasonCode: "PARTIAL_DATA",
+  };
+  const html = renderSection([familyFixture()], [currentPartial, oldComplete]);
+
+  assert.match(html, /默认统计窗口 · 2025-10 — 2026-09/);
+  assert.match(html, /统计窗口：2025-09 — 2026-08/);
+  assert.match(html, /历史缓存 · 当前统计区间待补齐/);
+  assert.match(html, /5,900\+/);
+  assert.doesNotMatch(html, /部分订单数据不可用/);
+
+  const currentComplete: XydcOrderSnapshot = {
+    ...currentPartial,
+    children: oldComplete.children.map(child => ({
+      ...child,
+      trends: requested.months.map(date => ({ date, orders: 1 })),
+      fetchedAt: "2026-10-09T11:00:00.000Z",
+      reasonCode: null,
+    })),
+    reasonCode: null,
+  };
+  const refreshedHtml = renderSection([familyFixture()], [oldComplete, currentComplete]);
+  assert.match(refreshedHtml, /统计窗口：2025-10 — 2026-09/);
+  assert.match(refreshedHtml, />48\+</);
+  assert.doesNotMatch(refreshedHtml, /5,900\+|历史缓存/);
+
+  const changedFamily = familyFixture("B000000010", "B000000001", primaryAsins.slice(0, 3));
+  const changedHtml = renderSection([changedFamily], [oldComplete]);
+  assert.match(changedHtml, /订单数据待采集/);
+  assert.doesNotMatch(changedHtml, /5,900\+|历史缓存/);
 });
 
 function browserExecutablePath() {
@@ -239,6 +282,16 @@ async function startBrowserFixtureServer() {
     orderFixture({ parentAsin: "B000000040", childAsins: zeroAsins, values: zeroAsins.map(() => months.map(() => 0)), cacheState: "stale" }),
   ];
   const fixtureProps = { products, families, orderFamilies: orders, market };
+  const historicalWindow = getXydcOrderWindow(new Date("2026-08-08T12:00:00.000Z"));
+  const historicalFirst = {
+    ...orders[0]!,
+    window: historicalWindow,
+    children: orders[0]!.children.map(child => ({
+      ...child,
+      trends: child.trends.map((trend, index) => ({ ...trend, date: historicalWindow.months[index]! })),
+    })),
+  };
+  const historicalFixtureProps = { products, families, orderFamilies: [historicalFirst, ...orders.slice(1)], market };
   const updatedFixtureProps = {
     products: products.map((product, index) => index === 0 ? { ...product, brand: "LEPOWER UPDATED" } : product),
     families,
@@ -275,6 +328,7 @@ window.rerenderEquivalentXydcFixture = () => root.render(createElement(XydcVaria
 window.rerenderUpdatedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(updatedFixtureProps)}));
 window.rerenderReorderedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(reorderedFixtureProps)}));
 window.rerenderChangedChildSetXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(changedChildSetFixtureProps)}));
+window.rerenderHistoricalXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(historicalFixtureProps)}));
 window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(withoutFirstFixtureProps)}));
 window.commitRemoveRestoreAndClickFirstAnnual = async (label) => {
   const findTrigger = () => [...document.querySelectorAll('[data-parent-asin="B000000010"] .xydc-order-legend button')]
@@ -417,6 +471,28 @@ test("desktop and 390px layouts keep order cards in-bounds", async t => {
   }, { width: 390, height: 844 });
 });
 
+test("historical detail and annual inspection show the actual source period and pending-current lifecycle", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  await withFixture(async page => {
+    await page.evaluate(() => (window as typeof window & { rerenderHistoricalXydcFixture(): void }).rerenderHistoricalXydcFixture());
+    const card = page.locator("[data-parent-asin='B000000010']");
+    await card.getByText("历史缓存 · 当前统计区间待补齐").waitFor();
+    await card.getByRole("button", { name: "查看全部 4 个子体与月度趋势" }).click();
+    const dialog = page.getByRole("dialog");
+    assert.match(await dialog.textContent() ?? "", /2025-08 — 2026-07/);
+    assert.match(await dialog.textContent() ?? "", /12个月订单量：5,900\+/);
+    assert.match(await dialog.textContent() ?? "", /历史缓存 · 当前统计区间待补齐/);
+
+    const annualTrigger = dialog.getByRole("button", { name: "查看 砂黑色 年度订单明细" });
+    await annualTrigger.hover();
+    const inspection = page.locator(".xydc-annual-inspection");
+    await inspection.waitFor();
+    assert.match(await inspection.textContent() ?? "", /2025-08 — 2026-07/);
+    assert.match(await inspection.textContent() ?? "", /12个月订单量4,000\+/);
+    assert.match(await inspection.textContent() ?? "", /历史缓存 · 当前统计区间待补齐/);
+  });
+});
+
 test("annual inspection exposes derived annual rows for complete, raw-zero, incomplete, and pending children", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
   await withFixture(async page => {
@@ -448,7 +524,7 @@ test("annual inspection exposes derived annual rows for complete, raw-zero, inco
     assert.match(await zeroRegion.textContent() ?? "", /12个月订单量\s*未披露/);
     assert.match(await zeroRegion.textContent() ?? "", /年度份额\s*—/);
     assert.match(await zeroRegion.textContent() ?? "", /缺失 \/ 未披露月份\s*0 \/ 12/);
-    assert.match(await zeroRegion.textContent() ?? "", /订单缓存数据/);
+    assert.match(await zeroRegion.textContent() ?? "", /缓存数据 · 待更新/);
     assert.match(await zeroRegion.textContent() ?? "", /2026-09-04T12:34:56\.000Z/);
 
     await partialCard.locator(".xydc-order-legend").getByRole("button", { name: "查看 砂黑色 年度订单明细" }).click();

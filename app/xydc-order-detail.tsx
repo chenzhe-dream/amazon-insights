@@ -52,6 +52,7 @@ export function XydcOrderDetail({
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const tableRegionId = `xydc-order-annual-table-${React.useId().replaceAll(":", "")}`;
   const orderWindow = snapshot?.window ?? model.window;
+  const historical = Boolean(snapshot && orderWindow.endMonth !== model.window.endMonth);
   const maximum = Math.max(1, ...orderWindow.months.map(month => snapshot ? monthDisclosedTotal(snapshot, month) : 0));
   const rows = [...(summary?.rows ?? group.children.map(child => ({
     asin: child.asin,
@@ -192,7 +193,14 @@ export function XydcOrderDetail({
             </table>
           </div>
         </div> : null}
-        <footer>来源：西柚洞察 · 子体汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}</footer>
+        <footer>
+          来源：西柚洞察 · 子体汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}
+          {historical
+            ? <strong>历史缓存 · 当前统计区间待补齐</strong>
+            : snapshot?.cacheState === "stale"
+              ? <strong>缓存数据 · 待更新</strong>
+              : null}
+        </footer>
       </section>
     </div>
   );

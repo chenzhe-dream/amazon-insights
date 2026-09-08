@@ -8,6 +8,7 @@ import {
   type XydcOrderSnapshot,
   type XydcOrderWindow,
 } from "../../shared/xydc-order-contract";
+import { isCurrentXydcOrderTimestamp, isFreshXydcOrderCache } from "../../shared/xydc-order-freshness";
 import { matchesXydcOrderSnapshot } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
@@ -33,6 +34,8 @@ const defaultOps: XydcOrderFileOps = {
   delay: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
 };
 
+export { isCurrentXydcOrderTimestamp, isFreshXydcOrderCache };
+
 function normalizedIdentity(family: XydcVariantFamily, window: XydcOrderWindow) {
   const parsedFamily = XydcVariantFamilySchema.parse(family);
   const country = parsedFamily.country.trim().toUpperCase();
@@ -52,30 +55,6 @@ export function xydcOrderCachePath(dataRoot: string, family: XydcVariantFamily, 
   const identity = normalizedIdentity(family, window);
   const filename = `${identity.parentAsin}-${window.startMonth}-${window.endMonth}-${identity.digest}.json`;
   return path.join(path.resolve(dataRoot), "xydc-orders", "v1", identity.country, filename);
-}
-
-export function isFreshXydcOrderCache(
-  snapshot: XydcOrderSnapshot | undefined,
-  now: Date,
-  maxAgeMs = 86_400_000,
-) {
-  if (!snapshot || snapshot.cacheState !== "fresh" || snapshot.reasonCode !== null) return false;
-  if (!isCurrentXydcOrderTimestamp(snapshot.fetchedAt, now, maxAgeMs)) return false;
-  if (snapshot.children.length !== snapshot.childAsins.length) return false;
-  const expectedMonths = new Set(snapshot.window.months);
-  return snapshot.children.every(child => isCurrentXydcOrderTimestamp(child.fetchedAt, now, maxAgeMs)
-    && child.reasonCode === null
-    && child.trends.length === snapshot.window.months.length
-    && child.trends.every(trend => expectedMonths.has(trend.date)));
-}
-
-export function isCurrentXydcOrderTimestamp(
-  fetchedAt: string,
-  now: Date,
-  maxAgeMs = 86_400_000,
-) {
-  const age = now.getTime() - Date.parse(fetchedAt);
-  return Number.isFinite(age) && age >= 0 && age <= maxAgeMs;
 }
 
 export async function readXydcOrderSnapshot(
