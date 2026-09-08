@@ -52,8 +52,10 @@ function fullEnv(overrides: Record<string, string | undefined> = {}) {
   };
 }
 
-function repositoryWithBinding(read: () => Promise<DingTalkIdentityBinding | null>) {
-  return { findDingTalkIdentityByUserId: read } as AuthenticationRepository;
+function repositoryWithBinding(
+  read: () => Promise<DingTalkIdentityBinding | null>,
+): Pick<AuthenticationRepository, "findDingTalkIdentityByUserId"> {
+  return { findDingTalkIdentityByUserId: read };
 }
 
 function accessHarness(options: {
@@ -205,7 +207,7 @@ test("wrong DingTalk corp, subject, organization, user, missing seam and reposit
   const missingSeam = createUserPresenceAccess({
     env: fullEnv(),
     authService: { findPublicUser: async () => dingTalkUser },
-    repository: {} as AuthenticationRepository,
+    repository: {},
   });
   assert.equal(await missingSeam.canView(dingTalkPrincipal), false);
 

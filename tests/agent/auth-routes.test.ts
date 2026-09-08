@@ -224,11 +224,14 @@ test("auth contracts register closed login errors and current-session response",
     SessionResponseSchema.safeParse({ authenticated: false, user: null, sessionIdentity: SESSION_IDENTITY }).success,
     false,
   );
-  assert.equal(
-    SessionResponseSchema.parse({ authenticated: true, user: USER, sessionIdentity: SESSION_IDENTITY })
-      .canViewUserPresence,
-    false,
-  );
+  const defaultedSession = SessionResponseSchema.parse({
+    authenticated: true,
+    user: USER,
+    sessionIdentity: SESSION_IDENTITY,
+  });
+  assert.equal(defaultedSession.authenticated, true);
+  if (!defaultedSession.authenticated) assert.fail("authenticated session expected");
+  assert.equal(defaultedSession.canViewUserPresence, false);
   assert.equal(
     SessionResponseSchema.safeParse({
       authenticated: true,

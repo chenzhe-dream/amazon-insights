@@ -6,6 +6,8 @@ import { changeWebPassword, expireAuthenticatedSession, type AuthSessionState } 
 
 const authenticatedState: AuthSessionState = {
   status: "authenticated",
+  sessionIdentity: "A".repeat(43),
+  canViewUserPresence: false,
   user: {
     id: "018f1f5c-60f0-4b7a-8000-000000000001",
     organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
@@ -129,7 +131,7 @@ test("wrong-current-password stays inline while a genuine expired session expire
     Response.json({ error: { code: "INVALID_CREDENTIALS", message: "safe", requestId: "password-wrong" } }, { status: 401 }),
     Response.json({ error: { code: "AUTHENTICATION_REQUIRED", message: "safe", requestId: "session-expired" } }, { status: 401 }),
   ];
-  let gateState = authenticatedState;
+  let gateState: AuthSessionState = authenticatedState;
   const unsubscribe = subscribeToAuthenticationRequired(() => {
     gateState = expireAuthenticatedSession(gateState);
   });

@@ -82,6 +82,64 @@ function stageOutputHash(stage: string, data: Record<string, unknown>) {
     .digest("hex");
 }
 
+test("mounted auth gate keeps a real 401 authoritative over a captured current-session 403 callback", async () => {
+  const page = await browser.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  try {
+    await page.route("**/api/agent/v1/auth/session", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        authenticated: true,
+        canViewUserPresence: true,
+        sessionIdentity: "A".repeat(43),
+        user: {
+          id: "018f1f5c-60f0-4b7a-8000-000000000001",
+          organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+          email: "synthetic-primary@example.test",
+          displayName: "Synthetic primary",
+          role: "admin",
+          status: "active",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    }));
+    await page.route("**/api/agent/v1/auth-expiry-race", route => route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "AUTHENTICATION_REQUIRED",
+          message: "Authentication is required",
+          requestId: "synthetic-expiry-race",
+        },
+      }),
+    }));
+    await page.route("**/api/auth/dingtalk/config", route => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ enabled: false }),
+    }));
+
+    await page.goto(
+      `${baseUrl}/tests/agent/helpers/primary-admin-browser-harness.html?authGateRace=1`,
+    );
+    await page.getByTestId("protected-session-content").waitFor();
+    await page.getByRole("link", { name: "用户状态" }).waitFor();
+
+    await page.evaluate(() => window.triggerAuthSessionExpiryRace?.());
+    await page.getByRole("heading", { name: "登录您的账户" }).waitFor();
+
+    assert.equal(await page.getByTestId("protected-session-content").count(), 0);
+    assert.equal(await page.getByRole("link", { name: "用户状态" }).count(), 0);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await page.close();
+  }
+});
+
 test("non-primary builder interactions replace the hidden diagnostic with visible business notices", async () => {
   const page = await browser.newPage();
   const pageErrors: string[] = [];

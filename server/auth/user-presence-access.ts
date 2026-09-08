@@ -8,6 +8,10 @@ export type UserPresenceAccess = Readonly<{
 }>;
 
 type UserPresenceEnvironment = Readonly<Record<string, string | undefined>>;
+type UserPresenceBindingRepository = Pick<
+  AuthenticationRepository,
+  "findDingTalkIdentityByUserId"
+>;
 
 const OpaqueIdSchema = z.string().trim().min(1).max(200);
 
@@ -23,7 +27,7 @@ function optionalValue(
 export function createUserPresenceAccess(options: Readonly<{
   env: UserPresenceEnvironment;
   authService: Pick<AuthenticationService, "findPublicUser">;
-  repository: AuthenticationRepository | null;
+  repository: UserPresenceBindingRepository | null;
 }>): UserPresenceAccess {
   const organizationId = optionalValue(
     options.env,

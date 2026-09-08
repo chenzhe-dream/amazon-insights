@@ -4,6 +4,9 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { AuthenticatedAmazonOpportunityApp } from "../../../app/page";
+import { AuthIdentityControl, AuthSessionGate } from "../../../app/auth-session-gate";
+import type { AuthenticatedWebSession } from "../../../app/auth-session-gate";
+import { localAgentFetch } from "../../../app/lib/local-agent-browser";
 
 const nativeHistoryReplaceState = window.history.replaceState.bind(window.history);
 
@@ -18,6 +21,9 @@ const authSession = {
     createdAt: "2026-08-20T00:00:00.000Z",
     updatedAt: "2026-08-20T00:00:00.000Z",
   },
+  sessionIdentity: "A".repeat(43),
+  canViewUserPresence: false,
+  revokeUserPresenceAccess: () => {},
   logout: async () => {},
   logoutPending: false,
   logoutError: null,
@@ -32,6 +38,7 @@ declare global {
     staleRouterDrops?: string[];
     dropNextRouterReplace?: boolean;
     routerRefreshes?: number;
+    triggerAuthSessionExpiryRace?: () => Promise<void>;
     __VINEXT_RSC_NAVIGATE__?: (
       href: string,
       redirectDepth?: number,
@@ -39,6 +46,36 @@ declare global {
       historyUpdateMode?: "push" | "replace",
     ) => Promise<void>;
   }
+}
+
+function ExpiryRaceProtectedSession({ session }: { session: AuthenticatedWebSession }) {
+  useEffect(() => {
+    const revokeCapturedSession = () => {
+      session.revokeUserPresenceAccess(session.sessionIdentity);
+    };
+    window.triggerAuthSessionExpiryRace = async () => {
+      await localAgentFetch("/v1/auth-expiry-race");
+      revokeCapturedSession();
+    };
+    return () => {
+      delete window.triggerAuthSessionExpiryRace;
+    };
+  }, [session]);
+
+  return createElement(
+    "main",
+    { "data-testid": "protected-session-content" },
+    createElement("p", null, "受保护内容"),
+    createElement(AuthIdentityControl, { session }),
+  );
+}
+
+function AuthSessionExpiryRaceHarness() {
+  return (
+    <AuthSessionGate>
+      {(session: AuthenticatedWebSession) => <ExpiryRaceProtectedSession session={session} />}
+    </AuthSessionGate>
+  );
 }
 
 function BrowserHarness() {
@@ -120,4 +157,7 @@ function BrowserHarness() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(createElement(BrowserHarness));
+const rootComponent = new URLSearchParams(window.location.search).get("authGateRace") === "1"
+  ? AuthSessionExpiryRaceHarness
+  : BrowserHarness;
+createRoot(document.getElementById("root")!).render(createElement(rootComponent));
