@@ -1,6 +1,6 @@
 # Cache-first annual display and private user status — verification
 
-Date: 2026-09-09. Status: implementation and task gates passed; final whole-change review pending. Not a production activation or real-account acceptance statement.
+Date: 2026-09-09. Status: development implementation, task gates and final whole-change review passed. Production activation and real-account acceptance remain pending.
 
 ## Scope and baseline
 
@@ -15,9 +15,9 @@ Date: 2026-09-09. Status: implementation and task gates passed; final whole-chan
 
 - [x] Task A RED/GREEN, full targeted matrix and independent spec/quality review.
 - [x] Task B RED/GREEN, real isolated SQLite/PostgreSQL binding tests and independent spec/quality review.
-- [x] Root locked-source regression matrix and baseline-aware changed-file lint comparison. Final branch diff check remains part of the final gate.
+- [x] Root locked-source regression matrix, baseline-aware changed-file lint comparison and final branch diff check.
 - [x] Full TypeScript fingerprint comparison and isolated production build/source fingerprint match.
-- [ ] Whole-change independent review; address any Critical or Important findings.
+- [x] Whole-change independent review; no new Critical, Important or Minor findings.
 - [x] Scope-bound optimization review, with evidence and regression tests for any additional change.
 
 ## Identity and environment boundaries
@@ -64,3 +64,10 @@ Date: 2026-09-09. Status: implementation and task gates passed; final whole-chan
 - Before formal activation, verify the exact internal user/organization for the designated primary email and the explicitly confirmed personal DingTalk account's current corp/subject binding. Set only the six server-owned keys documented in `.env.example` in private deployment configuration; never copy real values into Git, screenshots or frontend code. Partial/missing configuration authorizes no one on that branch.
 - Configuration is snapshotted per process; changing these values requires a controlled service restart after the existing active-task safety check. Do not force through a running-analysis guard. Do not promote a DingTalk member merely to grant this one capability.
 - After activation, verify both intended identities with real sessions, then another email administrator, another DingTalk user and an anonymous request. Verify both direct GET and UI denial, preserve normal heartbeat/analysis behavior, and record exact deployed source/artifact. Those real-account and deployment gates remain pending; isolated tests are not substitutes.
+
+## Final whole-change gate and handoff
+
+- Independent final reviewer approved **code readiness / Ready to merge: Yes** for `b8b565ea50fb3d67b615418d60e731e743b8bbdc..aa735e8fab2119b39bce092fd1337a0c8c36e8dc`; implementation remains `732dc84`. The complete 205,582-byte package and focused schema, authorized GET, real service-construction, auth-hook and session-lifecycle call sites were checked read-only. No new Critical, Important or Minor findings; no speculative lifecycle change was required.
+- Root evidence totals **196 passing tests** (50 cache/runtime + 101 extended presence/auth/database + 41 UI + 1 mounted expiry race + 3 built SSR). Existing lint/type debt and build warnings remain explicitly recorded above.
+- Final read-only formal check remains `status=ok`, HEAD `8f70e7df994f674177af0b3a54271b8458b37600`, artifact `337affd01ac62b2bd1c54ae850717de40c2225f23dbb8d1e9ef8d3efc0a02e49`, shared data count 39. No formal activation, restart, data/account changes, main merge or GitHub push occurred.
+- Delivery to the existing OpenSpec coordination task consists of this evidence and the locked code range. Retain the development branch and current worktree; do not infer account ownership or deploy blank permissions as if real-account acceptance passed.
