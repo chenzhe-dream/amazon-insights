@@ -98,26 +98,34 @@ export async function acquireXydcCoordination(token: string, endpoint: URL, opti
   const dispatch = <T>(send: () => T): Promise<{ response: T }> => {
     const next = queue.then(async () => {
       if (released) throw new XydcProviderError("RPC_ERROR");
-      check();
-      if (state.blocked) throw new XydcProviderError("BUDGET_EXHAUSTED");
-      while (Math.max(state.nextAllowedAt, state.cooldownUntil) > wallNow()) {
-        const wait = Math.max(state.nextAllowedAt, state.cooldownUntil) - wallNow();
-        if (state.cooldownUntil > wallNow()) await untilAbort(options.onRateWait?.(new Date(state.cooldownUntil).toISOString()), options.signal);
-        if (wait >= options.remaining()) throw new XydcProviderError("BUDGET_EXHAUSTED");
-        await untilAbort(delay(wait, options.signal), options.signal);
+      const previousAllowedAt = state.nextAllowedAt;
+      for (;;) {
         check();
         if (state.blocked) throw new XydcProviderError("BUDGET_EXHAUSTED");
+        // Ignore this turn's own reservation when re-entering after a newly observed cooldown.
+        while (Math.max(previousAllowedAt, state.cooldownUntil) > wallNow()) {
+          const wait = Math.max(previousAllowedAt, state.cooldownUntil) - wallNow();
+          if (state.cooldownUntil > wallNow()) await untilAbort(options.onRateWait?.(new Date(state.cooldownUntil).toISOString()), options.signal);
+          if (wait >= options.remaining()) throw new XydcProviderError("BUDGET_EXHAUSTED");
+          await untilAbort(delay(wait, options.signal), options.signal);
+          check();
+          if (state.blocked) throw new XydcProviderError("BUDGET_EXHAUSTED");
+        }
+        state.nextAllowedAt = wallNow() + XYDC_HTTP_SPACING_MS;
+        await persist();
+        check();
+        if (state.blocked) throw new XydcProviderError("BUDGET_EXHAUSTED");
+        // Authority is the final asynchronous operation, including after slow reservation I/O.
+        await untilAbort(options.beforeRequest?.(), options.signal);
+        check();
+        if (state.blocked) throw new XydcProviderError("BUDGET_EXHAUSTED");
+        if (state.cooldownUntil > wallNow()) continue;
+        // No await between the final cooldown/authority checks and synchronous fetch invocation.
+        const response = send();
+        state.nextAllowedAt = wallNow() + XYDC_HTTP_SPACING_MS;
+        await persist();
+        return { response };
       }
-      await untilAbort(options.beforeRequest?.(), options.signal);
-      check();
-      state.nextAllowedAt = wallNow() + XYDC_HTTP_SPACING_MS;
-      await persist();
-      check();
-      // Reservation, actual send and post-send timestamp stay in one dispatch queue turn.
-      const response = send();
-      state.nextAllowedAt = wallNow() + XYDC_HTTP_SPACING_MS;
-      await persist();
-      return { response };
     });
     queue = next.then(() => {}, () => {});
     return next;

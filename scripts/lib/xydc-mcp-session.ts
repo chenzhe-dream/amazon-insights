@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { acquireXydcCoordination, type CoordinationOptions } from "./xydc-request-coordination";
 import { decodeXydcResult, providerErrorFor, XydcProviderError } from "./xydc-provider-error";
 export type AllowedTool = "get_asin_variations" | "get_asin_info" | "get_asin_order_trends";
@@ -105,7 +106,8 @@ export async function withXydcSession<T>(token: string, run: (session: XydcSessi
               const fetched = await dispatched.response;
               if (closed) { await fetched.body?.cancel().catch(() => {}); throw failure ?? new XydcProviderError("CANCELLED"); }
               const response = ownResponseBody(fetched);
-              if (init?.method === "GET" || response.status === 202) { clearTimeout(requestTimer); timers.delete(requestTimer); }
+              const notificationCompleted = method?.startsWith("notifications/") && response.ok;
+              if (init?.method === "GET" || notificationCompleted) { clearTimeout(requestTimer); timers.delete(requestTimer); }
               if (!response.ok && !(init?.method === "GET" && response.status === 405)) {
                 await response.body?.cancel();
                 const error = providerErrorFor({ code: response.status, retryAfter: response.headers.get("retry-after") }, controller.signal, true);
@@ -138,7 +140,10 @@ export async function withXydcSession<T>(token: string, run: (session: XydcSessi
           try { return decodeXydcResult(raw); }
           catch (error) { if (error instanceof XydcProviderError && error.reasonCode === "RATE_LIMITED") await coordination!.rateLimited(error); throw error; }
         } catch (error) {
-          const safe = failure ?? (error instanceof XydcProviderError ? error : providerErrorFor(error, controller.signal, true));
+          // SDK and scope deadlines race; the SDK's remaining-budget timer can win first.
+          const safe = failure ?? (error instanceof McpError && error.code === ErrorCode.RequestTimeout
+            ? new XydcProviderError(options.budgetReason ?? "TIMEOUT")
+            : error instanceof XydcProviderError ? error : providerErrorFor(error, controller.signal, true));
           if (safe.reasonCode === "TIMEOUT" || safe.reasonCode === "CANCELLED" || safe.reasonCode === "BUDGET_EXHAUSTED") fail(safe);
           throw safe;
         } finally { stopTimers("tools/call"); }

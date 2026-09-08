@@ -150,3 +150,79 @@ test("a failed checkpoint write stops later paid calls and retains the already r
     assert.equal(result?.reasonCode, "RPC_ERROR");
   } finally { await fixture.close(); }
 });
+
+for (const mode of ["queued", "collecting", "after-child", "terminal", "cached-queued", "cached-terminal"] as const) {
+  test(`cancellation drains a hung ${mode} progress observer without losing completed work`, async () => {
+    const fixture = await httpFixture();
+    const target = fixtureFamily(mode === "after-child" ? undefined : ["B0CHILD001"]);
+    const controller = new AbortController();
+    let entered!: () => void;
+    let resume!: () => void;
+    const observed = new Promise<void>(resolve => { entered = resolve; });
+    const suspended = new Promise<void>(resolve => { resume = resolve; });
+    let calls = 0;
+    let observerCalls = 0;
+    const observerSignals: AbortSignal[] = [];
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let pending: ReturnType<typeof syncXydcOrderFamilies> | undefined;
+    try {
+      if (mode.startsWith("cached")) await syncXydcOrderFamilies({ families: [target], token: "fixture-token", now: fixtureNow, dataRoot: fixture.root,
+        callTool: async () => fixtureOrders("B0CHILD001"),
+      }, fast);
+      pending = syncXydcOrderFamilies({ families: [target], token: "fixture-token", now: fixtureNow, dataRoot: fixture.root, env: fixture.env, signal: controller.signal,
+        ...(mode === "after-child" || mode === "terminal" ? { callTool: async ({ args }: { args: Record<string, unknown> }) => { calls++; return fixtureOrders(args.asin as string); } } : {}),
+        onProgress: (facts, context) => {
+          observerCalls++; observerSignals.push(context.signal);
+          const match = mode.endsWith("queued") ? facts.state === "queued"
+            : mode.endsWith("terminal") ? facts.state === "completed"
+              : facts.state === "collecting" && (mode !== "after-child" || facts.children.some(child => child.state === "ready"));
+          if (match) { entered(); return suspended; }
+        },
+      }, { ...fast, wallNow: () => fixtureNow });
+      await observed; controller.abort();
+      const result = await Promise.race([pending, new Promise<never>((_, reject) => { watchdog = setTimeout(() => reject(new Error("observer ignored cancellation")), 300); })]);
+      assert.equal(fixture.requests.length, 0);
+      if (mode === "after-child") { assert.equal(calls, 1); assert.equal(result[0]?.children[0]?.trends.length, 12); assert.equal(result[0]?.reasonCode, "CANCELLED"); }
+      else if (mode === "terminal" || mode.startsWith("cached")) assert.equal(result[0]?.children[0]?.trends.length, 12);
+      else assert.equal(result[0]?.reasonCode, "CANCELLED");
+      const saved = await readXydcOrderSnapshot(fixture.root, target, getXydcOrderWindow(fixtureNow));
+      assert.equal(observerSignals.at(-1)?.aborted, true);
+      const stoppedAt = observerCalls;
+      resume(); await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(observerCalls, stoppedAt);
+      assert.deepEqual(await readXydcOrderSnapshot(fixture.root, target, getXydcOrderWindow(fixtureNow)), saved);
+    } finally { resume(); controller.abort(); if (watchdog) clearTimeout(watchdog); await pending; await fixture.close(); }
+  });
+}
+
+for (const mode of ["queued", "after-child", "terminal", "cached-terminal"] as const) {
+  test(`phase deadline bounds a hung ${mode} observer with BUDGET_EXHAUSTED`, async () => {
+    const fixture = await httpFixture();
+    const target = fixtureFamily(mode === "after-child" ? undefined : ["B0CHILD001"]);
+    let resume!: () => void;
+    const suspended = new Promise<void>(resolve => { resume = resolve; });
+    let calls = 0;
+    let observed = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let pending: ReturnType<typeof syncXydcOrderFamilies> | undefined;
+    try {
+      if (mode.startsWith("cached")) await syncXydcOrderFamilies({ families: [target], token: "fixture-token", now: fixtureNow, dataRoot: fixture.root,
+        callTool: async () => fixtureOrders("B0CHILD001"),
+      }, fast);
+      pending = syncXydcOrderFamilies({ families: [target], token: "fixture-token", now: fixtureNow, dataRoot: fixture.root, env: fixture.env,
+        ...(mode === "cached-terminal" ? {} : { callTool: async ({ args }: { args: Record<string, unknown> }) => { calls++; return fixtureOrders(args.asin as string); } }),
+        onProgress: facts => {
+          const match = mode === "queued" ? facts.state === "queued" : mode.endsWith("terminal") ? facts.state === "completed"
+            : facts.state === "collecting" && facts.children.some(child => child.state === "ready");
+          if (match) { observed = true; return suspended; }
+        },
+      }, { ...fast, wallNow: () => fixtureNow, phaseBudgetMs: mode === "after-child" ? 2_500 : 100 });
+      const result = await Promise.race([pending, new Promise<never>((_, reject) => { watchdog = setTimeout(() => reject(new Error("observer ignored phase deadline")), mode === "after-child" ? 3_000 : 400); })]);
+      assert.equal(observed, true);
+      assert.equal(fixture.requests.length, 0);
+      if (mode === "queued") { assert.equal(calls, 0); assert.equal(result[0]?.reasonCode, "BUDGET_EXHAUSTED"); }
+      if (mode === "after-child") { assert.equal(calls, 1); assert.equal(result[0]?.children[0]?.trends.length, 12); assert.equal(result[0]?.reasonCode, "BUDGET_EXHAUSTED"); }
+      if (mode.endsWith("terminal")) assert.equal(result[0]?.children[0]?.trends.length, 12);
+    } finally { resume(); if (watchdog) clearTimeout(watchdog); await pending; await fixture.close(); }
+  });
+}

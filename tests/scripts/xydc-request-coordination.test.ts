@@ -4,10 +4,117 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { callXydcTool, withXydcSession, XydcProviderError } from "../../scripts/lib/xydc-mcp-client";
 import { acquireXydcCoordination } from "../../scripts/lib/xydc-request-coordination";
 import { syncXydcOrderFamilies } from "../../scripts/lib/xydc-order-sync";
 import { fixtureFamily, fixtureNow, fixtureOrders, httpFixture } from "../helpers/xydc-http-fixture";
+
+for (const boundary of ["authority", "persistence"] as const) for (const blocked of [false, true]) {
+  test(`late ${blocked ? "unrepresentable" : "120s"} cooldown during ${boundary} wins before actual dispatch`, async t => {
+    const fixture = await httpFixture();
+    let wall = Date.now();
+    const started = wall;
+    let entered!: () => void;
+    let resume!: () => void;
+    const suspended = new Promise<void>(resolve => { entered = resolve; });
+    const resumed = new Promise<void>(resolve => { resume = resolve; });
+    let guards = 0;
+    let renames = 0;
+    const rename = fs.rename;
+    if (boundary === "persistence") t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) => {
+      if (++renames === 1) { entered(); await resumed; }
+      return rename(...args);
+    });
+    const coordination = await acquireXydcCoordination("fixture-token", new URL(fixture.env.XYDC_MCP_URL), {
+      env: fixture.env, signal: new AbortController().signal, remaining: () => 300_000, wallNow: () => wall,
+      delay: async ms => { wall += ms; }, beforeRequest: async () => { if (++guards === 1 && boundary === "authority") { entered(); await resumed; } },
+    });
+    const sent: number[] = [];
+    try {
+      const dispatch = coordination.dispatch(() => { sent.push(wall); });
+      await suspended;
+      const cooling = coordination.rateLimited(new XydcProviderError("RATE_LIMITED", blocked ? { retryAfterUnbounded: true } : { retryAfterMs: 120_000 }));
+      resume();
+      if (blocked) await assert.rejects(dispatch, /BUDGET_EXHAUSTED/); else await dispatch;
+      await cooling;
+      if (blocked) assert.deepEqual(sent, []);
+      else { assert.equal(sent.length, 1); assert.ok(sent[0]! >= started + 120_000, `sent ${started + 120_000 - sent[0]!}ms early`); assert.ok(guards >= 2); }
+    } finally { resume(); await coordination.release(); t.mock.restoreAll(); await fixture.close(); }
+  });
+}
+
+test("authority revoked during reservation persistence prevents actual dispatch", async t => {
+  const fixture = await httpFixture();
+  let entered!: () => void;
+  let resume!: () => void;
+  const suspended = new Promise<void>(resolve => { entered = resolve; });
+  const resumed = new Promise<void>(resolve => { resume = resolve; });
+  let authorized = true;
+  let renames = 0;
+  let calls = 0;
+  const rename = fs.rename;
+  t.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) => {
+    if (++renames === 1) { entered(); await resumed; }
+    return rename(...args);
+  });
+  const coordination = await acquireXydcCoordination("fixture-token", new URL(fixture.env.XYDC_MCP_URL), {
+    env: fixture.env, signal: new AbortController().signal, remaining: () => 10_000,
+    beforeRequest: async () => { if (!authorized) throw new Error("fixture authority revoked"); },
+  });
+  try {
+    const dispatch = coordination.dispatch(() => { calls++; });
+    await suspended; authorized = false; resume();
+    await assert.rejects(dispatch, /authority revoked/);
+    assert.equal(calls, 0);
+  } finally { resume(); await coordination.release(); t.mock.restoreAll(); await fixture.close(); }
+});
+
+test("HTTP202 keeps initialize and tools result deadlines until an RPC result arrives", async () => {
+  const outcomes = await Promise.all(["initialize", "tools/call"].map(async method => {
+    const fixture = await httpFixture((body, _req, res) => {
+      if (body.method !== method) return false;
+      res.writeHead(202).end(); return true;
+    });
+    const controller = new AbortController();
+    let wall = Date.now();
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let pending: Promise<string> | undefined;
+    try {
+      await withXydcSession("fixture-token", async () => {}, { env: fixture.env });
+      pending = withXydcSession("fixture-token", session => session.callTool("get_asin_info", {}), {
+        env: fixture.env, timeoutMs: 25_000, signal: controller.signal, wallNow: () => wall, delay: async ms => { wall += ms; },
+      }).then(() => "unexpected success", error => error instanceof XydcProviderError ? error.reasonCode : "unexpected error");
+      const outcome = await Promise.race([pending, new Promise<string>(resolve => { watchdog = setTimeout(() => resolve("still pending after16s"), 16_000); })]);
+      assert.equal(fixture.requests.filter(request => request.rpc === method).length, 1);
+      return { method, outcome };
+    } finally { if (watchdog) clearTimeout(watchdog); controller.abort(); await pending; await fixture.close(); }
+  }));
+  assert.deepEqual(outcomes, [{ method: "initialize", outcome: "TIMEOUT" }, { method: "tools/call", outcome: "TIMEOUT" }]);
+});
+
+test("HTTP202 tools can complete promptly through the established GET stream", async () => {
+  let stream: import("node:http").ServerResponse | undefined;
+  const fixture = await httpFixture((body, req, res) => {
+    if (req.method === "GET") {
+      stream = res; res.writeHead(200, { "Content-Type": "text/event-stream" }); res.flushHeaders(); return true;
+    }
+    if (body.method !== "tools/call") return false;
+    res.writeHead(202).end();
+    stream!.write(`data: ${JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: fixtureOrders("B0CHILD001") } })}\n\n`);
+    return true;
+  });
+  let wall = Date.now();
+  try {
+    const result = await withXydcSession("fixture-token", session => session.callTool("get_asin_info", {}), {
+      env: fixture.env, wallNow: () => wall, delay: async ms => { wall += ms; },
+    });
+    assert.deepEqual(result, fixtureOrders("B0CHILD001"));
+    assert.equal(fixture.requests.filter(request => request.rpc === "tools/call").length, 1);
+    assert.equal(fixture.requests.filter(request => request.rpc === "notifications/cancelled").length, 0);
+  } finally { await fixture.close(); }
+});
 
 test("real collector initializes once and spaces every actual HTTP by two seconds", async () => {
   const fixture = await httpFixture();
@@ -290,6 +397,33 @@ test("a process dying after its first successful child resumes only the unfinish
     assert.equal(resumed.code, 0, resumed.output);
     assert.equal(fixture.requests.filter(request => request.rpc === "tools/call").length, 2);
   } finally { await fixture.close(); }
+});
+
+test("an SDK deadline winning the scope timer race preserves the configured timeout reason", async t => {
+  const fixture = await httpFixture();
+  await withXydcSession("fixture-token", async () => {}, { env: fixture.env });
+  const connect = Client.prototype.connect;
+  const observed: unknown[] = [];
+  t.mock.method(Client.prototype, "connect", async function (this: Client, ...args: Parameters<Client["connect"]>) {
+    try { return await connect.call(this, args[0], { ...args[1], timeout: 5 }); }
+    catch (error) { observed.push(error); throw error; }
+  });
+  try {
+    for (const budgetReason of ["TIMEOUT", "BUDGET_EXHAUSTED"] as const) {
+      const started = performance.now();
+      await assert.rejects(withXydcSession(`fixture-${budgetReason}`, session => session.callTool("get_asin_info", {}), {
+        env: fixture.env, budgetReason, timeoutMs: 1_000, beforeRequest: async () => new Promise<void>(() => {}),
+      }), error => {
+        const sdkError = observed.at(-1);
+        assert.ok(sdkError instanceof McpError && sdkError.code === ErrorCode.RequestTimeout);
+        t.diagnostic(`SDK code=${sdkError.code}; elapsed=${Math.round(performance.now() - started)}ms; mapped=${error instanceof XydcProviderError ? error.reasonCode : "unexpected"}`);
+        return error instanceof XydcProviderError && error.reasonCode === budgetReason;
+      });
+    }
+    assert.equal(observed.length, 2);
+    assert.ok(observed.every(error => error instanceof McpError && error.code === ErrorCode.RequestTimeout));
+    assert.equal(fixture.requests.length, 0);
+  } finally { t.mock.restoreAll(); await fixture.close(); }
 });
 
 test("a nonresponsive async authority callback cannot hold the scope beyond its budget", async () => {
