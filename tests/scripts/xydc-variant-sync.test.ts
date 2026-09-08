@@ -16,6 +16,8 @@ import {
   writeXydcVariantFamily,
   xydcVariantCachePath,
 } from "../../scripts/lib/xydc-variant-cache";
+import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
+import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
 const inputAsin = "B0CHILD001";
@@ -805,9 +807,21 @@ test("Windows npm CLI executes offline fixture enrichment and writes the scoped 
   const root = await mkdtemp(path.join(os.tmpdir(), "xydc-cli-"));
   const fixturePath = path.join(root, "fixture.json");
   const cachePath = xydcVariantCachePath(root, "US", inputAsin);
+  const orderWindow = getXydcOrderWindow(new Date());
+  const orderResponse = (asin: string) => ({
+    status: 200,
+    cost_credits: 2,
+    data: {
+      asin,
+      country: "US",
+      dateRangeNotice: "fixture notice",
+      trends: orderWindow.months.map(date => ({ date, orders: 10 })),
+    },
+  });
   const fixture = JSON.stringify({
     get_asin_variations: variationResponse([{ asin: inputAsin, attributes: [{ dimension: "Color", value: "Red" }] }]),
     get_asin_info: infoResponse([inputAsin]),
+    get_asin_order_trends: { [inputAsin]: orderResponse(inputAsin) },
   });
   const fs = await import("node:fs/promises");
   await fs.writeFile(fixturePath, fixture, "utf8");
@@ -835,6 +849,9 @@ test("Windows npm CLI executes offline fixture enrichment and writes the scoped 
     const cached = JSON.parse(await readFile(cachePath, "utf8"));
     assert.equal(cached.status, "ready");
     assert.equal(cached.children[0].infoStatus, "ready");
+    const orderCache = JSON.parse(await readFile(xydcOrderCachePath(root, cached, orderWindow), "utf8"));
+    assert.equal(orderCache.children[0].trends.length, 12);
+    assert.equal(JSON.stringify(orderCache).includes("cost_credits"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

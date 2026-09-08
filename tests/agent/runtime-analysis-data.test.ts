@@ -87,7 +87,7 @@ test("runtime snapshot preserves project authorization and filters the requested
     `http://app.local/api/runtime-analysis-data?projectId=${projectId}&asins=${asins.join(",")}&country=CA`,
     { headers: { cookie: "session=opaque" } },
   ));
-  const body = await result.json() as { catalog: Array<{ asin: string }> };
+  const body = await result.json() as { catalog: Array<{ asin: string }>; variantOrders: { families: unknown[] } };
 
   assert.equal(result.status, 200);
   assert.deepEqual(body.catalog.map(item => item.asin), asins);
@@ -98,6 +98,7 @@ test("runtime snapshot preserves project authorization and filters the requested
   assert.equal(new Headers(requests[0]?.headers).get("cookie"), "session=opaque");
   assert.equal(new Headers(requests[0]?.headers).get("origin"), "http://app.local");
   assert.deepEqual(snapshotCountries, ["US"]);
+  assert.deepEqual(body.variantOrders, { families: [] });
   assert.equal(JSON.stringify(body).includes("formal-stack.env"), false);
   assert.equal(JSON.stringify(body).includes("cookie"), false);
 });

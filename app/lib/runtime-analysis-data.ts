@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { XydcOrderSnapshotSchema } from "../../shared/xydc-order-contract";
 import { XydcVariantFamilySchema } from "../../shared/xydc-variant-contract";
 
 const map = z.record(z.string(), z.unknown());
@@ -16,9 +17,11 @@ export const RuntimeAnalysisDataSnapshotSchema = z.strictObject({
   priceStrategy: z.strictObject({ strategyByAsin: map }),
   imageRemarks: z.strictObject({ remarksByAsin: map, outcomesByAsin: map }),
   variants: z.strictObject({ families: z.array(XydcVariantFamilySchema) }).default({ families: [] }),
+  variantOrders: z.strictObject({ families: z.array(XydcOrderSnapshotSchema) }).default({ families: [] }),
 });
 
 export type RuntimeAnalysisDataSnapshot = z.infer<typeof RuntimeAnalysisDataSnapshotSchema>;
+export type RuntimeAnalysisDataSnapshotInput = z.input<typeof RuntimeAnalysisDataSnapshotSchema>;
 
 export async function readRuntimeAnalysisData(
   projectId: string,

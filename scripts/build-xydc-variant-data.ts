@@ -7,7 +7,8 @@ import {
   type XydcVariantFamily,
   type XydcVariantReasonCode,
 } from "../shared/xydc-variant-contract";
-import { callXydcTool } from "./lib/xydc-mcp-client";
+import { callXydcTool, XydcProviderError } from "./lib/xydc-mcp-client";
+import { syncXydcOrderFamilies } from "./lib/xydc-order-sync";
 import { createXydcVariantCache, isFreshXydcVariantCache } from "./lib/xydc-variant-cache";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
@@ -501,10 +502,20 @@ export function getProjectRoot() {
   return path.resolve(import.meta.dirname, "..");
 }
 
-async function fixtureToolCall(fixturePath: string, toolName: "get_asin_variations" | "get_asin_info") {
+async function fixtureToolCall(
+  fixturePath: string,
+  toolName: "get_asin_variations" | "get_asin_info" | "get_asin_order_trends",
+  args: Record<string, unknown> = {},
+) {
   if (process.env.NODE_ENV !== "test") throw new Error("NOT_CONFIGURED");
   const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as Record<string, unknown>;
-  if (!(toolName in fixture)) throw new Error("SCHEMA_INVALID");
+  if (!(toolName in fixture)) throw new XydcProviderError(toolName === "get_asin_order_trends" ? "RPC_ERROR" : "SCHEMA_INVALID");
+  if (toolName === "get_asin_order_trends") {
+    const keyed = fixture[toolName];
+    if (!keyed || typeof keyed !== "object" || Array.isArray(keyed) || typeof args.asin !== "string"
+      || !(args.asin in keyed)) throw new XydcProviderError("RPC_ERROR");
+    return (keyed as Record<string, unknown>)[args.asin];
+  }
   return fixture[toolName];
 }
 
@@ -522,9 +533,25 @@ async function main() {
     batchSize: Number(process.env.XYDC_INFO_BATCH_SIZE ?? "20"),
     now: new Date(),
     cache: createXydcVariantCache(roots.dataRoot),
-    ...(fixturePath ? { callTool: async ({ toolName }) => fixtureToolCall(fixturePath, toolName) } : {}),
+    ...(fixturePath ? { callTool: async ({ toolName, args }) => fixtureToolCall(fixturePath, toolName, args) } : {}),
   });
-  process.stdout.write(`[xydc] ${families.length} family snapshots cached\n`);
+  let orderCount = 0;
+  try {
+    const orderSnapshots = await syncXydcOrderFamilies({
+      families,
+      token: process.env.XYDC_MCP_TOKEN ?? "",
+      now: new Date(),
+      dataRoot: roots.dataRoot,
+      force: process.env.FORCE_REFRESH === "1" || process.argv.includes("--force"),
+      ...(fixturePath ? {
+        callTool: async ({ toolName, args }) => fixtureToolCall(fixturePath, toolName, args),
+      } : {}),
+    });
+    orderCount = orderSnapshots.length;
+  } catch {
+    // Order history is optional enrichment and cannot change core variant sync success.
+  }
+  process.stdout.write(`[xydc] ${families.length} family snapshots cached; ${orderCount} order snapshots cached\n`);
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

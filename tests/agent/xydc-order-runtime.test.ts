@@ -1,0 +1,98 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import { readGeneratedRuntimeAnalysisData } from "../../app/lib/runtime-analysis-data-server";
+import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysis-data";
+import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
+import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
+import type { XydcOrderSnapshot } from "../../shared/xydc-order-contract";
+import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
+
+const now = new Date("2026-09-08T09:00:00.000Z");
+
+function variant(inputAsin: string, parentAsin: string, children: readonly string[]): XydcVariantFamily {
+  return {
+    inputAsin, country: "US", parentAsin, dimensions: [],
+    children: children.map(asin => ({
+      asin, attributes: [], title: null, imageUrl: null, price: null, currency: null,
+      stars: null, productPageRatings: null, listingDate: null, infoStatus: "pending",
+    })),
+    sourceUpdatedAt: null, fetchedAt: now.toISOString(), status: "partial",
+    reasonCode: "PARTIAL_CHILD_INFO", cacheState: "fresh",
+  };
+}
+
+function orderSnapshot(family: XydcVariantFamily, at = now): XydcOrderSnapshot {
+  const window = getXydcOrderWindow(at);
+  return {
+    version: 1, source: "xydc", aggregation: "children", country: family.country,
+    parentAsin: family.parentAsin, childAsins: family.children.map(child => child.asin), window,
+    children: family.children.map(child => ({
+      asin: child.asin,
+      trends: window.months.map(date => ({ date, orders: 1 })),
+      fetchedAt: at.toISOString(), reasonCode: null,
+    })),
+    sourceUpdatedAt: null, fetchedAt: at.toISOString(), cacheState: "fresh", reasonCode: null,
+  };
+}
+
+test("historic runtime payloads default the independent order member", () => {
+  const snapshot = RuntimeAnalysisDataSnapshotSchema.parse({
+    catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    reviews: { analysisByAsin: {}, ratingByAsin: {} }, salesTrend: { trendByAsin: {} },
+    fba: { feeByAsin: {} }, listing: { contentByAsin: {} }, category: { trendByNode: {} },
+    childSales: { rowsByAsin: {} }, priceStrategy: { strategyByAsin: {} },
+    imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} }, variants: { families: [] },
+  });
+  assert.deepEqual(snapshot.variantOrders, { families: [] });
+});
+
+test("runtime returns only current-window snapshots derived from authorized input variants", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-order-runtime-"));
+  const requested = ["B000000001", "B000000002", "B000000003"];
+  const authorized = variant(requested[0]!, "B0PARENT01", ["B0CHILD001", "B0CHILD002"]);
+  const oldWindow = variant(requested[1]!, "B0PARENT02", ["B0CHILD003"]);
+  const unrelated = variant("B000000099", "B0PARENT99", ["B0CHILD099"]);
+  const currentSnapshot = orderSnapshot(authorized);
+  const staleWindowSnapshot = orderSnapshot(oldWindow, new Date("2026-08-31T23:59:59.999Z"));
+  const unrelatedSnapshot = orderSnapshot(unrelated);
+  const previousRoot = process.env.AGENT_DATA_ROOT;
+  try {
+    for (const [family, snapshot] of [
+      [authorized, currentSnapshot], [oldWindow, staleWindowSnapshot], [unrelated, unrelatedSnapshot],
+    ] as const) {
+      const cachePath = xydcOrderCachePath(dataRoot, family, snapshot.window);
+      await mkdir(path.dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, JSON.stringify(snapshot));
+    }
+    process.env.AGENT_DATA_ROOT = dataRoot;
+
+    const result = readGeneratedRuntimeAnalysisData(requested, "US", {
+      now,
+      readVariantFamilies: () => [authorized, oldWindow],
+    });
+
+    assert.deepEqual(result.variantOrders.families, [currentSnapshot]);
+    const serialized = JSON.stringify(result.variantOrders);
+    assert.equal(serialized.includes("B0PARENT99"), false);
+    assert.equal(serialized.includes("xydc-orders"), false);
+    assert.equal(serialized.includes("cost_credits"), false);
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_DATA_ROOT;
+    else process.env.AGENT_DATA_ROOT = previousRoot;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("missing or malformed order caches are an empty optional runtime member", () => {
+  const requested = ["B000000001", "B000000002", "B000000003"];
+  const snapshot = readGeneratedRuntimeAnalysisData(requested, "US", {
+    now,
+    readVariantFamilies: () => [variant(requested[0]!, "B0PARENT01", ["B0CHILD001"])],
+    readOrderFamilies: () => [],
+  });
+  assert.deepEqual(snapshot.variantOrders, { families: [] });
+});

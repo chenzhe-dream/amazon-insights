@@ -9,17 +9,21 @@ import { AsinSchema, EntityIdSchema, GetProjectResponseSchema } from "../../shar
 import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
 import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import { XydcOrderSnapshotSchema, type XydcOrderSnapshot, type XydcOrderWindow } from "../../shared/xydc-order-contract";
+import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 import type { AgentServiceClient } from "./agent-service-client";
 import {
   RuntimeAnalysisDataSnapshotSchema,
   type RuntimeAnalysisDataSnapshot,
+  type RuntimeAnalysisDataSnapshotInput,
 } from "./runtime-analysis-data";
 
 type RuntimeAnalysisDataDependencies = Readonly<{
   client: AgentServiceClient;
-  readSnapshot: (asins: readonly string[], country: string) => RuntimeAnalysisDataSnapshot;
+  readSnapshot: (asins: readonly string[], country: string) => RuntimeAnalysisDataSnapshotInput;
 }>;
 
 const RuntimeAnalysisDataQuerySchema = z.strictObject({
@@ -73,7 +77,9 @@ export function createRuntimeAnalysisDataHandler(dependencies: RuntimeAnalysisDa
       return Response.json({ error: "当前项目与 ASIN 范围不匹配" }, { status: 409 });
     }
 
-    return Response.json(dependencies.readSnapshot(parsed.data.asins, project.data.project.marketplace));
+    return Response.json(RuntimeAnalysisDataSnapshotSchema.parse(
+      dependencies.readSnapshot(parsed.data.asins, project.data.project.marketplace),
+    ));
   };
 }
 
@@ -94,14 +100,49 @@ function readScopedXydcVariantFamilies(asins: readonly string[], country: string
   });
 }
 
+function readScopedXydcOrderFamilies(
+  families: readonly XydcVariantFamily[],
+  window: XydcOrderWindow,
+  now: Date,
+): XydcOrderSnapshot[] {
+  const dataRoot = process.env.AGENT_DATA_ROOT;
+  if (!dataRoot || !path.isAbsolute(dataRoot)) return [];
+  const seen = new Set<string>();
+  return families.flatMap(family => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(xydcOrderCachePath(dataRoot, family, window), "utf8"));
+      const parsed = XydcOrderSnapshotSchema.safeParse(raw);
+      if (!parsed.success || !matchesXydcOrderSnapshot(parsed.data, family, window)) return [];
+      const age = now.getTime() - Date.parse(parsed.data.fetchedAt);
+      if (!Number.isFinite(age) || age < 0 || age > 86_400_000) return [];
+      const identity = `${parsed.data.country}:${parsed.data.parentAsin}:${[...parsed.data.childAsins].sort().join(",")}`;
+      if (seen.has(identity)) return [];
+      seen.add(identity);
+      return [parsed.data];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export function readGeneratedRuntimeAnalysisData(
   asins: readonly string[],
   country: string,
   overrides: {
     readVariantFamilies?: (requestedAsins: readonly string[], cacheCountry: string) => XydcVariantFamily[];
+    readOrderFamilies?: (
+      families: readonly XydcVariantFamily[],
+      window: XydcOrderWindow,
+      now: Date,
+    ) => XydcOrderSnapshot[];
+    now?: Date;
   } = {},
 ): RuntimeAnalysisDataSnapshot {
   const readVariantFamilies = overrides.readVariantFamilies ?? readScopedXydcVariantFamilies;
+  const now = overrides.now ?? new Date();
+  const orderWindow = getXydcOrderWindow(now);
+  const variantFamilies = readVariantFamilies(asins, country);
+  const readOrderFamilies = overrides.readOrderFamilies ?? readScopedXydcOrderFamilies;
   const requestedCatalog = readCachedArrayExport(catalogPath, "refreshedCatalog");
   const requestedSet = new Set(asins);
   const catalog = requestedCatalog.filter((item: unknown) => {
@@ -126,6 +167,7 @@ export function readGeneratedRuntimeAnalysisData(
     childSales: stageData("child_sales"),
     priceStrategy: stageData("price_strategy"),
     imageRemarks: stageData("image_remarks"),
-    variants: { families: readVariantFamilies(asins, country) },
+    variants: { families: variantFamilies },
+    variantOrders: { families: readOrderFamilies(variantFamilies, orderWindow, now) },
   });
 }
