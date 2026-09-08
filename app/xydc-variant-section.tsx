@@ -180,16 +180,26 @@ function XydcVariantSectionBody({
 function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
   const { families, market, orderFamilies, products } = props;
   const models = React.useMemo(() => buildModels({ families, market, orderFamilies, products }), [families, market, orderFamilies, products]);
-  const [selectedModel, setSelectedModel] = React.useState<XydcOrderCardModel | null>(null);
+  const [selection, setSelection] = React.useState<Readonly<{ key: string }> | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const openedModel = selectedModel && models.includes(selectedModel) ? selectedModel : null;
+  const openedModel = selection
+    ? models.find(model => `${model.group.country}:${model.group.parentAsin}` === selection.key) ?? null
+    : null;
+  React.useEffect(() => {
+    if (!selection || openedModel) return;
+    const absentSelection = selection;
+    const timeout = window.setTimeout(() => {
+      setSelection(current => current === absentSelection ? null : current);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [openedModel, selection]);
   const close = React.useCallback(() => {
-    setSelectedModel(null);
+    setSelection(null);
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
   const open = React.useCallback((model: XydcOrderCardModel, trigger: HTMLButtonElement) => {
     triggerRef.current = trigger;
-    setSelectedModel(model);
+    setSelection({ key: `${model.group.country}:${model.group.parentAsin}` });
   }, []);
   return <>
     <XydcVariantSectionBody props={props} models={models} onOpen={open} />

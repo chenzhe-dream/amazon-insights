@@ -229,13 +229,32 @@ async function startBrowserFixtureServer() {
     }),
   ];
   const fixtureProps = { products, families, orderFamilies: orders, market };
+  const updatedFixtureProps = {
+    products: products.map((product, index) => index === 0 ? { ...product, brand: "LEPOWER UPDATED" } : product),
+    families,
+    orderFamilies: orders.map((snapshot, snapshotIndex) => snapshotIndex === 0 ? {
+      ...snapshot,
+      children: snapshot.children.map((child, childIndex) => childIndex === 0 ? {
+        ...child,
+        trends: child.trends.map((trend, trendIndex) => trendIndex === 0 ? { ...trend, orders: trend.orders + 1 } : trend),
+      } : child),
+    } : snapshot),
+    market,
+  };
   const serverMarkup = renderToStaticMarkup(createElement(XydcVariantSection, fixtureProps));
   const entry = `
 import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { hydrateRoot } from "react-dom/client";
 import { XydcVariantSection } from "/app/xydc-variant-section.tsx";
 const root = hydrateRoot(document.getElementById("root"), createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));
+window.rerenderEquivalentXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));
+window.rerenderUpdatedXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(updatedFixtureProps)}));
 window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })}));
+window.removeFirstAndOpenSecondXydcFixture = () => {
+  flushSync(() => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })})));
+  document.querySelector('[data-parent-asin="B000000020"] .xydc-order-open-detail').click();
+};
 window.restoreXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));`;
   const stylesheets = ["globals.css", "warm-theme.css", "comparison-layout.css"];
   const server = await createViteServer({
@@ -367,11 +386,29 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true);
     await page.keyboard.press("Tab");
     assert.equal(await page.getByRole("button", { name: "关闭订单明细" }).evaluate(element => element === document.activeElement), true);
+
+    await page.evaluate(() => (window as typeof window & { rerenderEquivalentXydcFixture(): void }).rerenderEquivalentXydcFixture());
+    assert.equal(await page.getByRole("dialog").count(), 1, "equivalent new arrays and objects keep the selected parent open");
+    assert.match(await dialog.textContent() ?? "", /5,900/);
+    await page.evaluate(() => (window as typeof window & { rerenderUpdatedXydcFixture(): void }).rerenderUpdatedXydcFixture());
+    assert.equal(await page.getByRole("dialog").count(), 1, "updated current-parent data keeps the selected parent open");
+    assert.match(await dialog.textContent() ?? "", /LEPOWER UPDATED/);
+    assert.match(await dialog.textContent() ?? "", /5,901/);
+
     const screenshot = join(process.cwd(), "test-results", "xydc-orders-dialog.png");
     await page.screenshot({ path: screenshot });
     await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("dialog").count(), 0);
     await page.waitForFunction(element => element === document.activeElement, await firstButton.elementHandle());
+
+    await firstButton.click();
+    await page.evaluate(() => (window as typeof window & { removeFirstAndOpenSecondXydcFixture(): void }).removeFirstAndOpenSecondXydcFixture());
+    await page.waitForTimeout(20);
+    assert.equal(await page.getByRole("dialog").count(), 1, "delayed absent-parent cleanup does not close a newer explicit selection");
+    assert.match(await dialog.textContent() ?? "", /B000000020/);
+    await page.getByRole("button", { name: "关闭订单明细" }).click();
+    await page.evaluate(() => (window as typeof window & { restoreXydcFixture(): void }).restoreXydcFixture());
+    await page.locator("[data-parent-asin='B000000010']").waitFor();
 
     await firstButton.click();
     await page.evaluate(() => (window as typeof window & { removeFirstXydcFixture(): void }).removeFirstXydcFixture());
