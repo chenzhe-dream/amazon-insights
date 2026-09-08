@@ -110,9 +110,9 @@
 
 - 沿用本任务既有补丁工作树 `C:/Users/EDY/Amazon-Product-Opportunity-Insights/.worktrees/fix-voc-import-status-20260907`，不新建嵌套工作树。
 - 本变更新分支：`codex/feat-xydc-parent-orders-12m-20260908`，起点 `3ccc0ef1b0ee2f22c4d58d454b213b508d76c733`，包含正式基线 `deab0aae8f7d5a04fd7787a0292f4285fa7cabae`。
-- 本轮只提交本设计文件；保留原有 `test-results/`，不改其他未提交内容。
+- 设计确认阶段仅提交本设计文件；用户随后批准先保存检查点`c7c8875`、再按实施计划开发。保留原有 `test-results/`，不改其他未提交内容。
 - 正式工作树 `integrate-xydc-variant-20260905` 的15个生成文件改动和运行服务保持不变；原始当前工作树的并行开发改动保持不变。
-- 用户审核书面规格后再编写实施计划、执行基线与回归测试。代码整合、正式服务发布/重启、main/GitHub操作另行确认，不随文档或实现自动执行。
+- 用户已审核书面规格，实施计划位于`docs/superpowers/plans/2026-09-08-xydc-parent-orders-12m.md`，开发和验证在上述隔离分支执行。代码整合、正式服务发布/重启、main/GitHub操作另行确认，不随文档或实现自动执行。
 
 ## 8. 规格自检
 

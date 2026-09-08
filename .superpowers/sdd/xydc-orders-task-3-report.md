@@ -117,3 +117,17 @@ Refreshed screenshots:
 - `C:\Users\EDY\Amazon-Product-Opportunity-Insights\.worktrees\fix-voc-import-status-20260907\test-results\xydc-orders-dialog.png`
 
 Self-review found no remaining Important issue in this correction scope. Final-review triage still retains the recorded Minor observations: small 10–11 px headings/warnings/metadata, palette repetition after 8 children without another discriminator, and independent SSR/client `new Date()` calls potentially crossing a UTC month boundary. Those were intentionally not expanded into typography, palette or architecture work here.
+
+## Lifecycle re-review correction
+
+Commit subject: `fix: stabilize Task 3 dialog selection lifecycle` (locked SHA returned to the controller).
+
+- Replaced model-object identity selection with stable country/parent identity and current-model lookup.
+- A committed absent identity schedules guarded cleanup; ownership by selection object prevents delayed cleanup from closing a newer explicit selection, including the same parent selected again.
+- Equivalent new arrays/objects keep the dialog open; updated product/order data stays open and renders current values; remove/re-add remains closed until an explicit click.
+
+RED: `node node_modules/tsx/dist/cli.mjs --test --test-name-pattern "opens only" tests/agent/xydc-order-section.test.tsx` — exit 1, 0/1 pass; equivalent new arrays/objects closed the dialog (`0 !== 1`).
+
+GREEN: `node node_modules/tsx/dist/cli.mjs --test tests/agent/xydc-variant-section.test.tsx tests/agent/xydc-order-section.test.tsx` — exit 0, 13/13 pass, including updated-data continuity, guarded newer selection, remove/re-add, Escape/backdrop/close focus return and hydration checks.
+
+Scoped files: `app/xydc-variant-section.tsx`, `tests/agent/xydc-order-section.test.tsx`. Targeted ESLint and diff-check evidence are recorded with the locked commit handoff; no build or full TypeScript pass was run.

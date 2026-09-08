@@ -94,7 +94,7 @@ Changes to these signatures require updating all plan references and consumers, 
 
 **Consumes:** Existing `XydcVariantFamily` for matching. **Produces:** the schemas/types/functions listed above.
 
-- [ ] Write failing behavior tests first using `node:assert/strict` and `node:test`. Fixed window must be exactly 12 consecutive months, valid ISO calendar months, unique children and month keys, finite nonnegative safe integer orders, and sanitized finite timestamps. Reject extra top-level/cache fields, invalid ASINs, country/path tricks, duplicate children, duplicate month entries and trends outside the requested window.
+- [x] Write failing behavior tests first using `node:assert/strict` and `node:test`. Fixed window must be exactly 12 consecutive months, valid ISO calendar months, unique children and month keys, finite nonnegative safe integer orders, and sanitized finite timestamps. Reject extra top-level/cache fields, invalid ASINs, country/path tricks, duplicate children, duplicate month entries and trends outside the requested window.
 
 ```ts
 test('pins twelve completed UTC months, never the current month', () => {
@@ -106,8 +106,8 @@ test('pins twelve completed UTC months, never the current month', () => {
 });
 ```
 
-- [ ] RED: `node node_modules/tsx/dist/cli.mjs --test tests/scripts/xydc-order-summary.test.ts`; verify failure is the missing new behavior, not a typo or environment issue.
-- [ ] Implement the schema and pure functions. Generate month keys from UTC year/month arithmetic, validate before arithmetic. Aggregate with `Map` by ASIN and month. Missing response/month makes annual row total `null`; any incomplete child makes family total and ALL annual shares `null`. Raw zero stays in source records, increments undisclosed count, and contributes no disclosed count; zero-only annual rows have `share: null`, not a claimed 0%. Positive complete rows sort by annual total descending and ASIN tie-break; unknown rows go last. Monthly family total is `null` if any child lacks that month. Do not average monthly shares.
+- [x] RED: `node node_modules/tsx/dist/cli.mjs --test tests/scripts/xydc-order-summary.test.ts`; verify failure is the missing new behavior, not a typo or environment issue.
+- [x] Implement the schema and pure functions. Generate month keys from UTC year/month arithmetic, validate before arithmetic. Aggregate with `Map` by ASIN and month. Missing response/month makes annual row total `null`; any incomplete child makes family total and ALL annual shares `null`. Raw zero stays in source records, increments undisclosed count, and contributes no disclosed count; zero-only annual rows have `share: null`, not a claimed 0%. Positive complete rows sort by annual total descending and ASIN tie-break; unknown rows go last. Monthly family total is `null` if any child lacks that month. Do not average monthly shares.
 
 Core arithmetic:
 
@@ -121,7 +121,7 @@ const withShares = rows.map(row => ({ ...row,
 }));
 ```
 
-- [ ] Test the real historical values as an explicitly labelled fixture, not application seed data:
+- [x] Test the real historical values as an explicitly labelled fixture, not application seed data:
 
 ```ts
 const historicalValues = {
@@ -135,8 +135,8 @@ const historicalValues = {
 // child-months; first share 4000/5900*100, not any monthly average.
 ```
 
-- [ ] Additional tests: December/January boundaries, UTC offset date near month boundary, shuffled trend order, changed parent/country/childset/window rejection, failed child with partial trends, absent child, missing month, all raw0, no children, top-three denominator with four rows. Make identity matching set-based, order-independent, and reject empty families.
-- [ ] GREEN: same focused test command plus existing `tests/scripts/xydc-variant-sync.test.ts`; commit only these three task files after self-review.
+- [x] Additional tests: December/January boundaries, UTC offset date near month boundary, shuffled trend order, changed parent/country/childset/window rejection, failed child with partial trends, absent child, missing month, all raw0, no children, top-three denominator with four rows. Make identity matching set-based, order-independent, and reject empty families.
+- [x] GREEN: same focused test command plus existing `tests/scripts/xydc-variant-sync.test.ts`; commit only these three task files after self-review.
 
 ### Task 2: Worker collection, independent cache and authorized runtime transport
 
@@ -157,9 +157,9 @@ syncXydcOrderFamilies(input: {
 
 Clock/delay/cache can be supplied as a separate small dependency object for deterministic timeout and cache tests. Do not read the real environment or real Provider from fixture tests.
 
-- [ ] Write tests then RED focused commands. Cover one family / shared children dedupe, cache hit makes no request, partial resumes only missing child histories, changed window refetch, force refresh and failed refresh stale fallback, all-child coverage including fourth child. Use real filesystem cache in a scratch directory; inject only network and time boundaries.
-- [ ] Extend the MCP allowlist only with `get_asin_order_trends`. Preserve existing callers and redacted error behavior. Add bounded safe metadata for order-specific 429/auth/quota handling without broadening old variant reason enums or retaining upstream message/body. Recognize documented structural HTTP/RPC status/Retry-After fields; unknown errors become `RPC_ERROR`, not guesses from arbitrary body prose.
-- [ ] Project the actual observed response (already unwrapped by `callXydcTool`) and validate exact identity before using it:
+- [x] Write tests then RED focused commands. Cover one family / shared children dedupe, cache hit makes no request, partial resumes only missing child histories, changed window refetch, force refresh and failed refresh stale fallback, all-child coverage including fourth child. Use real filesystem cache in a scratch directory; inject only network and time boundaries.
+- [x] Extend the MCP allowlist only with `get_asin_order_trends`. Preserve existing callers and redacted error behavior. Add bounded safe metadata for order-specific 429/auth/quota handling without broadening old variant reason enums or retaining upstream message/body. Recognize documented structural HTTP/RPC status/Retry-After fields; unknown errors become `RPC_ERROR`, not guesses from arbitrary body prose.
+- [x] Project the actual observed response (already unwrapped by `callXydcTool`) and validate exact identity before using it:
 
 ```ts
 const rawMonthlyExample = { status: 200, cost_credits: 2, data: {
@@ -172,18 +172,18 @@ const monthlyArgs = { asin: 'B07R56PTMS', country: 'US',
 
 The shown response intentionally contains only two months to test partial coverage; the complete historical fixture belongs in tests. Do not store `cost_credits`, `dateRangeNotice`, auth headers or the whole Provider body in snapshots. Keep `sourceUpdatedAt: null` when upstream provides no source-update timestamp.
 
-- [ ] Store validated family snapshots at paths under `xydc-orders/v1/COUNTRY/` bound to parent/window/full-childset (safe filename or deterministic hash). A reader must validate content even when its filename matches. Freshness is complete, same identity/window, age in `[0, 86400000]` ms and no failed refresh; future timestamps must not extend freshness. Atomic write follows existing exclusive temporary-file, fsync, bounded Windows rename retry and temporary-only cleanup.
-- [ ] Rate scheduler uses a single phase start/window and a global child identity map. Before every request/delay/retry check signal and remaining 300000 ms; pass a bounded signal into transport. Starts separated by 2000 ms; timeout per call 15000 ms or remaining phase budget, whichever is shorter. Never allow an injected request ignoring cancellation to hang the phase. On timeout preserve checked old same-window snapshot as stale, or mark unreturned children with the precise safe reason.
-- [ ] A 429 with retry wait <=30000 ms gets one retry if remaining budget can cover the wait and next request; absent/invalid delay means no retry. Auth/quota errors stop later calls; other individual failures continue independent children while within budget. Cache complete children independently in the family record so a second run fills only missing children; do not refresh `fetchedAt` for reused records. On failed forced refresh prefer an intact validated same-window complete snapshot and label it stale with the failure reason.
-- [ ] Integrate into `scripts/build-xydc-variant-data.ts` after variant collection so existing optional enrichment entrypoint still controls this nonblocking stage. Respect test fixture mode: no real network when `NODE_ENV=test` with an existing fixture lacking orders; return explicit unavailable/pending orders. Extend fixtures to key per ASIN when testing actual orders. A failure here must not change the core sync success contract.
-- [ ] Add runtime field without changing `variants` schema. Read only snapshots matching authorized input-derived variant families and the current UTC window. A user requesting one input must not receive unrelated family snapshots, paths or raw bodies. Allow an injected `now` in read helper for boundary tests. Missing/old order caches return `families: []`, not a 500. No runtime import may trigger collection.
-- [ ] GREEN commands:
+- [x] Store validated family snapshots at paths under `xydc-orders/v1/COUNTRY/` bound to parent/window/full-childset (safe filename or deterministic hash). A reader must validate content even when its filename matches. Freshness is complete, same identity/window, age in `[0, 86400000]` ms and no failed refresh; future timestamps must not extend freshness. Atomic write follows existing exclusive temporary-file, fsync, bounded Windows rename retry and temporary-only cleanup.
+- [x] Rate scheduler uses a single phase start/window and a global child identity map. Before every request/delay/retry check signal and remaining 300000 ms; pass a bounded signal into transport. Starts separated by 2000 ms; timeout per call 15000 ms or remaining phase budget, whichever is shorter. Never allow an injected request ignoring cancellation to hang the phase. On timeout preserve checked old same-window snapshot as stale, or mark unreturned children with the precise safe reason.
+- [x] A 429 with retry wait <=30000 ms gets one retry if remaining budget can cover the wait and next request; absent/invalid delay means no retry. Auth/quota errors stop later calls; other individual failures continue independent children while within budget. Cache complete children independently in the family record so a second run fills only missing children; do not refresh `fetchedAt` for reused records. On failed forced refresh prefer an intact validated same-window complete snapshot and label it stale with the failure reason.
+- [x] Integrate into `scripts/build-xydc-variant-data.ts` after variant collection so existing optional enrichment entrypoint still controls this nonblocking stage. Respect test fixture mode: no real network when `NODE_ENV=test` with an existing fixture lacking orders; return explicit unavailable/pending orders. Extend fixtures to key per ASIN when testing actual orders. A failure here must not change the core sync success contract.
+- [x] Add runtime field without changing `variants` schema. Read only snapshots matching authorized input-derived variant families and the current UTC window. A user requesting one input must not receive unrelated family snapshots, paths or raw bodies. Allow an injected `now` in read helper for boundary tests. Missing/old order caches return `families: []`, not a 500. No runtime import may trigger collection.
+- [x] GREEN commands:
 
 ```powershell
 node node_modules/tsx/dist/cli.mjs --conditions=react-server --test tests/scripts/xydc-order-summary.test.ts tests/scripts/xydc-order-sync.test.ts tests/scripts/xydc-mcp-client.test.ts tests/scripts/xydc-variant-sync.test.ts tests/agent/xydc-order-runtime.test.ts tests/agent/runtime-analysis-data.test.ts
 ```
 
-- [ ] Commit scoped files and report exact tests, TDD failure/pass evidence, safe error mappings, and any incomplete contract requirement.
+- [x] Commit scoped files and report exact tests, TDD failure/pass evidence, safe error mappings, and any incomplete contract requirement.
 
 ### Task 3: Two-column cards and per-family detail dialog
 
@@ -191,7 +191,7 @@ node node_modules/tsx/dist/cli.mjs --conditions=react-server --test tests/script
 
 **Consumes:** `variantOrders.families` plus existing products/variant families; Task 1 validated annual summary. **Produces:** approved cards and an accessible detail dialog; no new endpoint or fetch effect.
 
-- [ ] Write failing SSR/browser tests for title/window/source, 5900 sample, annual shares, two-column desktop geometry, one-column 390px layout, top-three denominator, empty/partial/stale states, and the dialog being absent until the corresponding button is clicked.
+- [x] Write failing SSR/browser tests for title/window/source, 5900 sample, annual shares, two-column desktop geometry, one-column 390px layout, top-three denominator, empty/partial/stale states, and the dialog being absent until the corresponding button is clicked.
 
 ```ts
 assert.match(html, /父体订单量份额与12个月趋势/);
@@ -207,11 +207,11 @@ await page.keyboard.press('Escape');
 assert.equal(await page.getByRole('dialog').count(), 0);
 ```
 
-- [ ] RED: `node node_modules/tsx/dist/cli.mjs --test tests/agent/xydc-order-section.test.tsx`.
-- [ ] Wire the optional `orderFamilies` prop from runtime to `XydcVariantSection` without breaking historic snapshots. Resolve each grouped family only by exact country/parent/full childset/window. Preserve input competitor order and representative product. Missing snapshot is a pending order card while product/variant information remains available.
-- [ ] Render title, fixed window, source and aggregation label visibly. Use `getXydcOrderWindow` consistently for pending state; do not default to30 days. Format complete positive sums using grouped numbers plus `+`. Render incomplete rows as `—`, undisclosed raw0 rows as `未披露`; a complete all-unreported family shows `暂无可披露订单数据`. Failure labels in Chinese; source/collection/cache timestamps not collapsed into a fake recent timestamp.
-- [ ] The card contains parent thumbnail/header and ordinary ASIN links, annual total, response coverage, percentage bar, stable ASIN-color legend, and a three-row table (variant/ASIN, annual orders/share, current price, listing date). Use complete annual totals for sorting; all shares derive from the full parent denominator. No rating/review-based order allocation. Expose the number of undisclosed child-months.
-- [ ] CSS layout baseline:
+- [x] RED: `node node_modules/tsx/dist/cli.mjs --test tests/agent/xydc-order-section.test.tsx`.
+- [x] Wire the optional `orderFamilies` prop from runtime to `XydcVariantSection` without breaking historic snapshots. Resolve each grouped family only by exact country/parent/full childset/window. Preserve input competitor order and representative product. Missing snapshot is a pending order card while product/variant information remains available.
+- [x] Render title, fixed window, source and aggregation label visibly. Use `getXydcOrderWindow` consistently for pending state; do not default to30 days. Format complete positive sums using grouped numbers plus `+`. Render incomplete rows as `—`, undisclosed raw0 rows as `未披露`; a complete all-unreported family shows `暂无可披露订单数据`. Failure labels in Chinese; source/collection/cache timestamps not collapsed into a fake recent timestamp.
+- [x] The card contains parent thumbnail/header and ordinary ASIN links, annual total, response coverage, percentage bar, stable ASIN-color legend, and a three-row table (variant/ASIN, annual orders/share, current price, listing date). Use complete annual totals for sorting; all shares derive from the full parent denominator. No rating/review-based order allocation. Expose the number of undisclosed child-months.
+- [x] CSS layout baseline:
 
 ```css
 .xydc-order-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
@@ -222,20 +222,20 @@ assert.equal(await page.getByRole('dialog').count(), 0);
 ```
 
 Use shared typography and spacing from surrounding page. Ensure readable text and no document-wide horizontal overflow. Narrow detail tables may scroll inside their own labeled region, not the page.
-- [ ] Keep one detail dialog for the selected parent. Reuse current escape/close/backdrop/focus handling and portal boundary, improve focus return/trap only where required for this dialog. It shows the same 12-month stacked chart with ALL child series and an all-child annual table. Plot widths/heights come from values, stable ASIN colors survive sort/order; null months are missing gaps, not zero bars. Use accessible textual chart description and per-month values/tooltips; SVG/basic CSS is sufficient, no chart dependency.
-- [ ] Browser tests block all non-loopback requests and mutations. Test two distinct parents, ensuring changing dialog never shows the previous parent's numbers; click close and Escape, check focus return, no extra modal on default render, 12 months, chart/color identity after sort, mobile geometry, and ordinary link href/target/rel. Save screenshots in untracked `test-results/`, not generated business files.
-- [ ] GREEN commands:
+- [x] Keep one detail dialog for the selected parent. Reuse current escape/close/backdrop/focus handling and portal boundary, improve focus return/trap only where required for this dialog. It shows the same 12-month stacked chart with ALL child series and an all-child annual table. Plot widths/heights come from values, stable ASIN colors survive sort/order; null months are missing gaps, not zero bars. Use accessible textual chart description and per-month values/tooltips; SVG/basic CSS is sufficient, no chart dependency.
+- [x] Browser tests block all non-loopback requests and mutations. Test two distinct parents, ensuring changing dialog never shows the previous parent's numbers; click close and Escape, check focus return, no extra modal on default render, 12 months, chart/color identity after sort, mobile geometry, and ordinary link href/target/rel. Save screenshots in untracked `test-results/`, not generated business files.
+- [x] GREEN commands:
 
 ```powershell
 node node_modules/tsx/dist/cli.mjs --test tests/agent/xydc-variant-section.test.tsx tests/agent/xydc-order-section.test.tsx
 node node_modules/tsx/dist/cli.mjs --conditions=react-server --test tests/scripts/xydc-order-summary.test.ts tests/scripts/xydc-order-sync.test.ts tests/agent/xydc-order-runtime.test.ts tests/agent/runtime-analysis-data.test.ts
 ```
 
-- [ ] Commit only task files, screenshots remain untracked. Report exact screenshot paths and test outcomes.
+- [x] Commit only task files, screenshots remain untracked. Report exact screenshot paths and test outcomes.
 
 ## Final branch verification and delivery
 
-- [ ] Run all named focused suites with appropriate separate React conditions, `git diff --check`, and lint on changed TS/TSX files. Run build in this isolated tree only; do not use shared formal runtime env or generated-data sync commands. Compare whole-repo TypeScript errors with baseline if needed; do not claim a historically failing typecheck is green.
-- [ ] Inspect generated desktop/mobile/dialog screenshots. Check spec coverage, identity separation, stale/partial labeling, deadline/cancellation, future timestamps and no provider on GET. Resolve task-review and whole-branch review findings with focused regression tests.
-- [ ] Record final commits, tests and limitations; do not trigger a real paid sync, restart formal services, cherry-pick into another task, merge main or push GitHub without the user's next confirmation.
-- [ ] Implementation decision: use fresh task implementers with independent task review while the controller manages baseline, integration evidence and scope. If user requests inline execution instead, use executing-plans with the same TDD gates.
+- [x] Run all named focused suites with appropriate separate React conditions, `git diff --check`, and lint on changed TS/TSX files. Run build in this isolated tree only; do not use shared formal runtime env or generated-data sync commands. Compare whole-repo TypeScript errors with baseline if needed; do not claim a historically failing typecheck is green.
+- [x] Inspect generated desktop/mobile/dialog screenshots. Check spec coverage, identity separation, stale/partial labeling, deadline/cancellation, future timestamps and no provider on GET. Resolve task-review and whole-branch review findings with focused regression tests.
+- [x] Record final commits, tests and limitations; do not trigger a real paid sync, restart formal services, cherry-pick into another task, merge main or push GitHub without the user's next confirmation.
+- [x] Implementation decision: use fresh task implementers with independent task review while the controller manages baseline, integration evidence and scope. If user requests inline execution instead, use executing-plans with the same TDD gates.
