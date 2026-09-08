@@ -148,13 +148,19 @@ test("maps documented structured order auth/quota reasons without guessing from 
   }
 });
 
-test("drops Retry-After metadata outside the single-retry bound", async () => {
+test("preserves Retry-After beyond thirty seconds", async () => {
   await assert.rejects(
     callXydcTool(token, "get_asin_order_trends", {}, {
       callTool: async () => { throw Object.assign(new Error(providerBody), { code: 429, retryAfter: "31" }); },
     }),
     error => error instanceof XydcProviderError
       && error.reasonCode === "RATE_LIMITED"
-      && error.retryAfterMs === undefined,
+      && error.retryAfterMs === 31_000,
   );
+});
+
+test("recognizes explicit provider 429 even without the MCP isError flag", async () => {
+  await assert.rejects(callXydcTool(token, "get_asin_info", {}, { callTool: async () => ({
+    content: [], structuredContent: { status: 429, retryAfter: "120" },
+  }) }), error => error instanceof XydcProviderError && error.reasonCode === "RATE_LIMITED" && error.retryAfterMs === 120_000);
 });

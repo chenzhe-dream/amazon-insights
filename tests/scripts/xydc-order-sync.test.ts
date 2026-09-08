@@ -392,7 +392,7 @@ test("retries a structured 429 once after a bounded Retry-After wait", async () 
   assert.equal(snapshot?.reasonCode, null);
 }));
 
-test("does not retry 429 without a valid bounded delay and stops later children on auth or quota", async () => scratch(async dataRoot => {
+test("retries explicit 429 at most twice with fallback delay and stops later children on auth or quota", async () => scratch(async dataRoot => {
   for (const providerError of [
     new XydcProviderError("RATE_LIMITED", { statusCode: 429 }),
     new XydcProviderError("RATE_LIMITED", { statusCode: 429, retryAfterMs: 30_001 }),
@@ -402,7 +402,7 @@ test("does not retry 429 without a valid bounded delay and stops later children 
       families: [family("B0PARENT01", ["B0CHILD001"])], token: "fixture-token", now, dataRoot: path.join(dataRoot, String(calls), String(providerError.retryAfterMs)), force: true,
       callTool: async () => { calls += 1; throw providerError; },
     }, fakeTime().dependencies);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     assert.equal(snapshot?.reasonCode, "RATE_LIMITED");
   }
 

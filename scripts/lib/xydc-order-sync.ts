@@ -14,12 +14,13 @@ import {
   readXydcOrderSnapshot,
   writeXydcOrderSnapshot,
 } from "./xydc-order-cache";
-import { callXydcTool, XydcProviderError } from "./xydc-mcp-client";
+import { withXydcSession, XydcProviderError } from "./xydc-mcp-client";
+import { readXydcOrderCheckpoint, writeXydcOrderCheckpoint } from "./xydc-order-checkpoint";
+import { abortableDelay } from "./xydc-request-coordination";
 
 const REQUEST_SPACING_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const PHASE_BUDGET_MS = 300_000;
-const MAX_RETRY_AFTER_MS = 30_000;
 
 type ToolCall = (input: {
   toolName: "get_asin_order_trends";
@@ -35,38 +36,28 @@ export type SyncXydcOrderFamiliesInput = {
   force?: boolean;
   signal?: AbortSignal;
   callTool?: ToolCall;
+  env?: NodeJS.ProcessEnv;
+  beforeRequest?: () => void | Promise<void>;
+  onProgress?: (facts: XydcOrderProgress) => void | Promise<void>;
+};
+
+export type XydcOrderProgress = {
+  window: XydcOrderWindow;
+  state: "queued" | "collecting" | "rate-wait" | "completed" | "partial" | "failed" | "cancelled";
+  children: Array<{ country: string; asin: string; state: "ready" | "cached" | "failed" | "pending"; reasonCode: XydcOrderReason | null }>;
+  retryAt?: string;
 };
 
 export interface XydcOrderSyncDependencies {
   monotonicNow?: () => number;
   delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   timeout?: (milliseconds: number, signal: AbortSignal) => Promise<never>;
+  wallNow?: () => Date;
 }
 
-const defaultDependencies: Required<XydcOrderSyncDependencies> = {
+const defaultDependencies = {
   monotonicNow: () => performance.now(),
-  delay: (milliseconds, signal) => new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new DOMException("Aborted", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
-  }),
-  timeout: (milliseconds, signal) => new Promise((_, reject) => {
-    if (signal.aborted) {
-      reject(new XydcProviderError("CANCELLED"));
-      return;
-    }
-    const timer = setTimeout(() => reject(new XydcProviderError("TIMEOUT")), milliseconds);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new XydcProviderError("CANCELLED"));
-    }, { once: true });
-  }),
+  delay: abortableDelay,
 };
 
 function schemaInvalid(): never {
@@ -183,31 +174,72 @@ function boundedSignal(outerSignal: AbortSignal, controller: AbortController) {
   return AbortSignal.any([outerSignal, controller.signal]);
 }
 
+async function loadReusableWork(input: SyncXydcOrderFamiliesInput, families: XydcVariantFamily[], window: XydcOrderWindow, now: Date) {
+  const cached = await Promise.all(families.map(family => readXydcOrderSnapshot(input.dataRoot, family, window)));
+  const records = new Map<string, XydcOrderChild>();
+  const freshIndexes = new Set<number>();
+  if (input.force) return { cached, records, freshIndexes };
+  for (let index = 0; index < families.length; index++) {
+    const family = families[index]!;
+    const prior = cached[index];
+    const checkpoints = await Promise.all(family.children.map(child => readXydcOrderCheckpoint(input.dataRoot, family, window, child.asin, now)));
+    const interruptedRefresh = completeSnapshot(prior) && checkpoints.some(child => child && Date.parse(child.fetchedAt) > Date.parse(prior!.fetchedAt));
+    if (!interruptedRefresh && isFreshXydcOrderCache(prior, now)) freshIndexes.add(index);
+    for (const child of family.children) {
+      const previous = prior?.children.find(candidate => candidate.asin === child.asin);
+      const checkpoint = checkpoints.find(candidate => candidate?.asin === child.asin);
+      const checkpointEligible = checkpoint && (prior?.cacheState !== "stale" && !interruptedRefresh || Date.parse(checkpoint.fetchedAt) > Date.parse(prior!.fetchedAt));
+      const oldEligible = previous && prior && !interruptedRefresh && reusableChild(prior, previous, window, now);
+      const candidate = checkpointEligible && (!oldEligible || Date.parse(checkpoint.fetchedAt) >= Date.parse(previous.fetchedAt)) ? checkpoint : oldEligible ? previous : undefined;
+      const key = childWorkKey(family.country, child.asin);
+      if (candidate && (!records.has(key) || Date.parse(candidate.fetchedAt) > Date.parse(records.get(key)!.fetchedAt))) records.set(key, candidate);
+    }
+  }
+  return { cached, records, freshIndexes };
+}
+
 export async function syncXydcOrderFamilies(
   input: SyncXydcOrderFamiliesInput,
   injected: XydcOrderSyncDependencies = {},
 ): Promise<XydcOrderSnapshot[]> {
+  const start = performance.now();
+  if (input.callTool) return collectXydcOrderFamilies(input, injected, false);
+  const window = getXydcOrderWindow(input.now);
+  const families = input.families.map(canonicalFamily).filter(family => family.children.length);
+  if (!families.length) return [];
+  const reusable = await loadReusableWork(input, families, window, injected.wallNow?.() ?? new Date());
+  if (!input.force && families.every(family => family.children.every(child => reusable.records.has(childWorkKey(family.country, child.asin))))) {
+    return collectXydcOrderFamilies({ ...input, callTool: async () => { throw new XydcProviderError("RPC_ERROR"); } }, injected, true);
+  }
+  let collection: Promise<XydcOrderSnapshot[]> | undefined;
+  let progress: XydcOrderProgress | undefined;
+  const onProgress = async (facts: XydcOrderProgress) => { progress = facts; await input.onProgress?.(facts); };
+  try {
+    return await withXydcSession(input.token, session => {
+      collection = collectXydcOrderFamilies({ ...input, onProgress,
+        callTool: ({ toolName, args }) => session.callTool(toolName, args),
+      }, { ...injected, monotonicNow: () => performance.now() - start }, true);
+      return collection;
+    }, { env: input.env, signal: input.signal, timeoutMs: PHASE_BUDGET_MS - (performance.now() - start), budgetReason: "BUDGET_EXHAUSTED",
+      beforeRequest: input.beforeRequest,
+      onRateWait: async retryAt => { if (progress) await input.onProgress?.({ ...progress, state: "rate-wait", ...(retryAt ? { retryAt } : {}) }); },
+    });
+  } catch (error) {
+    if (collection) return collection;
+    return collectXydcOrderFamilies({ ...input, callTool: async () => { throw error; } }, injected, true);
+  }
+}
+
+async function collectXydcOrderFamilies(input: SyncXydcOrderFamiliesInput, injected: XydcOrderSyncDependencies, realSession: boolean): Promise<XydcOrderSnapshot[]> {
   if (!Number.isFinite(input.now.getTime())) throw new TypeError("A valid collection date is required");
   const dependencies = { ...defaultDependencies, ...injected };
   const outerSignal = input.signal ?? new AbortController().signal;
   const phaseStart = dependencies.monotonicNow();
   const window = getXydcOrderWindow(input.now);
-  const fetchedAt = input.now.toISOString();
+  const wallNow = injected.wallNow ?? (realSession ? () => new Date() : () => input.now);
+  const fetchedAt = wallNow().toISOString();
   const families = input.families.map(canonicalFamily).filter(family => family.children.length > 0);
-  const cached = await Promise.all(families.map(family => readXydcOrderSnapshot(input.dataRoot, family, window)));
-  const records = new Map<string, XydcOrderChild>();
-  const freshIndexes = new Set<number>();
-
-  for (let index = 0; index < families.length; index += 1) {
-    const prior = cached[index];
-    if (!input.force && isFreshXydcOrderCache(prior, input.now)) freshIndexes.add(index);
-    if (!input.force && prior) {
-      for (const child of prior.children) {
-        const key = childWorkKey(families[index]!.country, child.asin);
-        if (reusableChild(prior, child, window, input.now) && !records.has(key)) records.set(key, child);
-      }
-    }
-  }
+  const { cached, records, freshIndexes } = await loadReusableWork(input, families, window, wallNow());
 
   const orderedWork = new Map<string, ChildWork>();
   for (const family of families) {
@@ -221,12 +253,17 @@ export async function syncXydcOrderFamilies(
     : family.children.map(child => childWorkKey(family.country, child.asin))));
   let lastRequestStart: number | undefined;
   let stopReason: XydcOrderReason | undefined;
-  const request: ToolCall = input.callTool ?? (async ({ toolName, args, signal }) => callXydcTool(
-    input.token,
-    toolName,
-    args,
-    { signal, timeoutMs: REQUEST_TIMEOUT_MS },
-  ));
+  const request = input.callTool!;
+  const reused = new Set(records.keys());
+  let rateCount = 0;
+  const emit = async (state: XydcOrderProgress["state"], retryAt?: string) => {
+    try { await input.onProgress?.({ window, state, ...(retryAt ? { retryAt } : {}), children: [...orderedWork.values()].map(work => {
+      const child = records.get(work.key);
+      return { country: work.country, asin: work.asin,
+        state: child && completeChild(child, window) ? reused.has(work.key) ? "cached" : "ready" : child ? "failed" : "pending",
+        reasonCode: child?.reasonCode ?? null };
+    }) }); } catch { throw new XydcProviderError("RPC_ERROR"); }
+  };
 
   const remaining = () => PHASE_BUDGET_MS - (dependencies.monotonicNow() - phaseStart);
   const wait = async (milliseconds: number) => {
@@ -241,29 +278,47 @@ export async function syncXydcOrderFamilies(
     if (outerSignal.aborted) throw new XydcProviderError("CANCELLED");
     const budget = remaining();
     if (budget <= 0) throw new XydcProviderError("BUDGET_EXHAUSTED");
-    if (lastRequestStart !== undefined) {
+    if (!realSession && lastRequestStart !== undefined) {
       const spacing = REQUEST_SPACING_MS - (dependencies.monotonicNow() - lastRequestStart);
       if (spacing > 0) await wait(spacing);
     }
     const timeoutMs = Math.min(REQUEST_TIMEOUT_MS, remaining());
     if (timeoutMs <= 0) throw new XydcProviderError("BUDGET_EXHAUSTED");
     lastRequestStart = dependencies.monotonicNow();
+    await emit("collecting");
+    if (!realSession) await input.beforeRequest?.();
+    if (outerSignal.aborted) throw new XydcProviderError("CANCELLED");
+    const args = { asin: work.asin, country: work.country, start_month: window.startMonth, end_month: window.endMonth };
+    if (realSession) return request({ toolName: "get_asin_order_trends", args, signal: outerSignal });
     const controller = new AbortController();
     const signal = boundedSignal(outerSignal, controller);
+    const timeoutController = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: () => void = () => {};
     try {
       return await Promise.race([
         request({
           toolName: "get_asin_order_trends",
-          args: { asin: work.asin, country: work.country, start_month: window.startMonth, end_month: window.endMonth },
+          args,
           signal,
         }),
-        dependencies.timeout(timeoutMs, signal),
+        injected.timeout ? injected.timeout(timeoutMs, timeoutController.signal) : new Promise<never>((_, reject) => {
+          abort = () => reject(new XydcProviderError("CANCELLED"));
+          outerSignal.addEventListener("abort", abort, { once: true });
+          timer = setTimeout(() => reject(new XydcProviderError("TIMEOUT")), timeoutMs);
+        }),
       ]);
-    } finally {
+    } catch (error) {
       controller.abort();
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+      outerSignal.removeEventListener("abort", abort);
+      timeoutController.abort();
     }
   };
 
+  try { await emit("queued"); } catch { stopReason = "RPC_ERROR"; }
   for (const work of orderedWork.values()) {
     if (!requiredWork.has(work.key) || (!input.force && records.has(work.key))) continue;
     if (stopReason) {
@@ -287,11 +342,15 @@ export async function syncXydcOrderFamilies(
       result = await oneRequest(work);
     } catch (error) {
       reason = reasonForError(error, outerSignal);
-      const retryAfterMs = error instanceof XydcProviderError ? error.retryAfterMs : undefined;
-      if (reason === "RATE_LIMITED" && retryAfterMs !== undefined && retryAfterMs <= MAX_RETRY_AFTER_MS
-        && retryAfterMs < remaining() && !outerSignal.aborted) {
+      const retryAfterMs = error instanceof XydcProviderError ? error.retryAfterMs ?? 30_000 : 30_000;
+      if (reason === "RATE_LIMITED") rateCount += 1;
+      if (reason === "RATE_LIMITED" && rateCount === 1 && !outerSignal.aborted) {
         try {
-          await wait(retryAfterMs);
+          if (error instanceof XydcProviderError && error.retryAfterUnbounded) throw new XydcProviderError("BUDGET_EXHAUSTED");
+          if (!realSession) {
+            await emit("rate-wait", new Date(wallNow().getTime() + retryAfterMs).toISOString());
+            await wait(retryAfterMs);
+          }
           result = await oneRequest(work);
           reason = undefined;
         } catch (retryError) {
@@ -302,19 +361,27 @@ export async function syncXydcOrderFamilies(
 
     if (reason === undefined) {
       try {
-        records.set(work.key, projectXydcOrderChild({
+        const child = projectXydcOrderChild({
           raw: result,
           asin: work.asin,
           country: work.country,
           window,
-          fetchedAt,
-        }));
+          fetchedAt: wallNow().toISOString(),
+        });
+        records.set(work.key, child);
+        if (completeChild(child, window)) {
+          try {
+            for (const family of families.filter(family => family.country === work.country && family.children.some(candidate => candidate.asin === work.asin))) {
+              await writeXydcOrderCheckpoint(input.dataRoot, family, window, child, wallNow());
+            }
+          } catch { stopReason = "RPC_ERROR"; }
+        }
       } catch (error) {
         reason = reasonForError(error, outerSignal);
       }
     }
     if (reason !== undefined) records.set(work.key, failureChild(work.asin, fetchedAt, reason));
-    if (reason === "AUTH_FAILED" || reason === "QUOTA_EXCEEDED" || reason === "CANCELLED" || reason === "BUDGET_EXHAUSTED") {
+    if (reason === "AUTH_FAILED" || reason === "QUOTA_EXCEEDED" || reason === "CANCELLED" || reason === "BUDGET_EXHAUSTED" || reason === "RATE_LIMITED") {
       stopReason = reason;
     }
   }
@@ -343,12 +410,14 @@ export async function syncXydcOrderFamilies(
         window,
         children,
         sourceUpdatedAt: null,
-        fetchedAt,
+        fetchedAt: wallNow().toISOString(),
         cacheState: "fresh",
         reasonCode,
       });
-    await writeXydcOrderSnapshot(input.dataRoot, family, snapshot);
+    await writeXydcOrderSnapshot(input.dataRoot, family, snapshot, undefined, wallNow());
     snapshots.push(snapshot);
   }
+  const ready = [...records.values()].filter(child => completeChild(child, window)).length;
+  try { await emit(outerSignal.aborted || stopReason === "CANCELLED" ? "cancelled" : ready === orderedWork.size ? "completed" : ready ? "partial" : "failed"); } catch { /* Observation failure must never replay provider work. */ }
   return snapshots;
 }

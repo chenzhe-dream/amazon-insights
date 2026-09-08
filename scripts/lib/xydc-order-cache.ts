@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 
 import {
   XydcOrderSnapshotSchema,
@@ -97,19 +98,38 @@ export async function writeXydcOrderSnapshot(
   family: XydcVariantFamily,
   snapshot: XydcOrderSnapshot,
   ops: XydcOrderFileOps = defaultOps,
+  observedAt = new Date(),
 ) {
   const parsed = XydcOrderSnapshotSchema.parse(snapshot);
   if (!matchesXydcOrderSnapshot(parsed, family, parsed.window)) {
     throw new Error("Xiyou order cache identity mismatch");
   }
   const target = xydcOrderCachePath(dataRoot, family, parsed.window);
+  return writeXydcOrderJson(target, parsed, ops, previous => {
+    const old = XydcOrderSnapshotSchema.safeParse(previous);
+    if (!old.success || !matchesXydcOrderSnapshot(old.data, family, parsed.window)
+      || Date.parse(old.data.fetchedAt) > observedAt.getTime()
+      || old.data.children.some(child => Date.parse(child.fetchedAt) > observedAt.getTime())) return false;
+    const complete = (value: XydcOrderSnapshot) => value.children.length === value.childAsins.length
+      && value.children.every(child => child.reasonCode === null && child.trends.length === value.window.months.length);
+    if (complete(old.data) && !complete(parsed)) return true;
+    return Date.parse(old.data.fetchedAt) > Date.parse(parsed.fetchedAt)
+      || old.data.children.some(child => parsed.children.some(next => next.asin === child.asin && Date.parse(next.fetchedAt) < Date.parse(child.fetchedAt)));
+  });
+}
+
+/** Same-directory fsync/rename under the existing process lock; optional predicate prevents time regression. */
+export async function writeXydcOrderJson(target: string, value: unknown, ops: XydcOrderFileOps = defaultOps, skip?: (previous: unknown) => boolean) {
   const directory = path.dirname(target);
   const temporary = path.join(directory, `.${path.basename(target)}.${randomUUID()}.tmp`);
   await ops.mkdir(directory, { recursive: true });
+  const release = await acquireInterprocessLock(`${target}.lock`, { waitMs: 15_000 });
   let handle: FileHandle | undefined;
   try {
+    try { if (skip?.(JSON.parse(await ops.readFile(target, "utf8")))) return; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
     handle = await ops.open(temporary, "wx");
-    await handle.writeFile(`${JSON.stringify(parsed)}\n`);
+    await handle.writeFile(`${JSON.stringify(value)}\n`);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -118,7 +138,7 @@ export async function writeXydcOrderSnapshot(
     if (handle) await handle.close().catch(() => undefined);
     await ops.unlink(temporary).catch(() => undefined);
     throw error;
-  }
+  } finally { release(); }
 }
 
 async function renameWithWindowsRetry(temporary: string, target: string, ops: XydcOrderFileOps) {
