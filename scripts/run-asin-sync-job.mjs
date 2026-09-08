@@ -603,6 +603,11 @@ function tryRunProviderCommand(label, command, args, env = {}) {
   }
 }
 
+const xydcSafeStopReasons = new Set([
+  "XYDC_COORDINATION_ROOT_REQUIRED", "XYDC_JOB_CONTEXT_INVALID", "XYDC_JOB_PARENT_IPC_REQUIRED",
+  "XYDC_JOB_DATABASE_NOT_CONFIGURED", "XYDC_COLLECTION_STOPPED",
+]);
+
 export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env = process.env }) {
   const childEnvironment = {
     XYDC_ASINS: asins.join(","),
@@ -614,8 +619,25 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env 
   }
   return new Promise(resolve => {
     const child = spawn(process.execPath, ["--import", "tsx", path.join(root, "scripts", "build-xydc-variant-data.ts")], {
-      cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+      cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe", "ipc"],
       env: { ...env, ...childEnvironment, AGENT_XYDC_PARENT_IPC: "1" },
+    });
+    let safeReason;
+    let diagnosticLine = "";
+    let discardLine = false;
+    child.stderr.on("data", chunk => {
+      if (safeReason) return;
+      // Drain all stderr, but retain at most 128 ASCII bytes and never echo provider text.
+      for (const byte of chunk) {
+        if (byte === 10) {
+          const match = !discardLine && /^\[xydc\] (XYDC_[A-Z_]+)\r?$/.exec(diagnosticLine);
+          diagnosticLine = ""; discardLine = false;
+          if (match && xydcSafeStopReasons.has(match[1])) { safeReason = match[1]; return; }
+        } else if (!discardLine) {
+          if (byte > 127 || diagnosticLine.length >= 128) { diagnosticLine = ""; discardLine = true; }
+          else diagnosticLine += String.fromCharCode(byte);
+        }
+      }
     });
     let terminationSignal;
     const cancel = signal => { terminationSignal = signal; if (child.connected) child.disconnect(); };
@@ -629,7 +651,7 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env 
       process.off("SIGTERM", terminate);
       // Preserve the runner's original termination semantics after its directly owned child has drained.
       if (terminationSignal) { process.kill(process.pid, terminationSignal); return; }
-      if (code !== 0) console.error("[warn] optional XYDC collection stopped");
+      if (code !== 0) console.error(`[warn] optional XYDC collection stopped${safeReason ? `: ${safeReason}` : ""}`);
       resolve(Object.freeze({ succeeded: code === 0 }));
     });
   });

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
@@ -16,6 +18,45 @@ const {
   runCatalogStage,
   sifKeywordSchemaDiagnostics,
 } = runner;
+
+test("real optional XYDC launcher preserves the safe missing coordination root diagnostic", async t => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "xydc-launcher-diagnostic-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const warnings = [];
+  t.mock.method(console, "error", value => warnings.push(value));
+  const result = await runner.runOptionalXydcVariantEnrichment({
+    asins: ["B0TEST0001"], marketplace: "US",
+    env: { ...process.env, NODE_OPTIONS: "", NODE_ENV: "test", AGENT_FORMAL_WORKTREE_ROOT: "",
+      AGENT_DATA_ROOT: path.join(temporary, "data"), AGENT_RUNTIME_ROOT: path.join(temporary, "runtime"),
+      AGENT_DATABASE_URL: "postgresql://fixture@127.0.0.1:1/fixture", DATABASE_URL: "postgresql://fixture@127.0.0.1:1/fixture",
+      XYDC_FIXTURE_PATH: "", XYDC_MCP_TOKEN: "fixture-token", XYDC_COORDINATION_ROOT: "", XYDC_MCP_URL: "http://127.0.0.1:1/mcp" },
+  });
+  assert.deepEqual(result, { succeeded: false });
+  assert.deepEqual(warnings, ["[warn] optional XYDC collection stopped: XYDC_COORDINATION_ROOT_REQUIRED"]);
+});
+
+test("real optional launcher drains hostile stderr but forwards only a bounded exact allowlisted line", async t => {
+  const warnings = [];
+  t.mock.method(console, "error", value => warnings.push(value));
+  for (const valid of [false, true]) {
+    // A child-only preload injects stderr without loading env files, DB, or any provider.
+    const preload = `
+      const write = text => new Promise(resolve => process.stderr.write(text, resolve));
+      await write('provider-secret fixture-token\\n[xydc] XYDC_UNKNOWN_SECRET\\n');
+      await write('x'.repeat(131072) + '[xydc] XYDC_COORDINATION_ROOT_REQUIRED\\n');
+      await write('[xydc] XYDC_COORDINATION_ROOT_REQUIRED trailing-secret\\n');
+      ${valid ? "await write('[xydc] XYDC_COORD'); await new Promise(setImmediate); await write('INATION_ROOT_REQUIRED\\r\\n');" : ""}
+      process.exit(1);
+    `;
+    // Exit the directly owned child before the CLI main can run.
+    const result = await runner.runOptionalXydcVariantEnrichment({
+      asins: ["B0TEST0001"], marketplace: "US",
+      env: { ...process.env, NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(preload)}` },
+    });
+    assert.deepEqual(result, { succeeded: false });
+  }
+  assert.deepEqual(warnings, ["[warn] optional XYDC collection stopped", "[warn] optional XYDC collection stopped: XYDC_COORDINATION_ROOT_REQUIRED"]);
+});
 
 test("catalog phase invokes XiYou after pending or cached catalog work and continues after its failure", async () => {
   for (const catalogPending of [["B0TEST0001"], []]) {

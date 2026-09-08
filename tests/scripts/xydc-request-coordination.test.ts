@@ -10,10 +10,51 @@ import { callXydcTool, withXydcSession, XydcProviderError } from "../../scripts/
 import { acquireXydcCoordination } from "../../scripts/lib/xydc-request-coordination";
 import { syncXydcOrderFamilies } from "../../scripts/lib/xydc-order-sync";
 import { fixtureFamily, fixtureNow, fixtureOrders, httpFixture } from "../helpers/xydc-http-fixture";
+import { coordinationFixture } from "../helpers/xydc-coordination-fixture";
+
+test("acquisition failure closes the HTTP fixture through the real test lifecycle", async () => {
+  const source = `
+    import test, { after } from 'node:test';
+    import fs from 'node:fs/promises';
+    import { coordinationFixture } from './tests/helpers/xydc-coordination-fixture.ts';
+    import { acquireXydcCoordination } from './scripts/lib/xydc-request-coordination.ts';
+    let fixture;
+    after(async () => {
+      if (await fs.stat(fixture.root).catch(() => null)) {
+        console.log('LEAKED_HTTP_FIXTURE'); await fixture.close();
+      }
+    });
+    test('injected acquisition failure', async t => {
+      fixture = await coordinationFixture(t);
+      console.log('FIXTURE_ROOT=' + fixture.root);
+      t.mock.method(fs, 'mkdir', async () => { throw Object.assign(new Error('fixture I/O failure'), { code: 'EIO' }); });
+      await acquireXydcCoordination('fixture-token', new URL(fixture.env.XYDC_MCP_URL), {
+        env: fixture.env, signal: new AbortController().signal, remaining: () => 10_000,
+      });
+    });
+  `;
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_TEST_CONTEXT;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
+    cwd: process.cwd(), env: childEnv, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", data => { output += data; }); child.stderr.on("data", data => { output += data; });
+  const watchdog = setTimeout(() => child.kill(), 5_000);
+  let code: number | null;
+  try { code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); }); }
+  finally { clearTimeout(watchdog); }
+  assert.equal(code, 1, output);
+  assert.match(output, /RPC_ERROR/);
+  assert.doesNotMatch(output, /LEAKED_HTTP_FIXTURE/);
+  const root = output.match(/FIXTURE_ROOT=([^\r\n]+)/)?.[1];
+  assert.ok(root, output);
+  await assert.rejects(fs.stat(root), { code: "ENOENT" });
+});
 
 for (const boundary of ["authority", "persistence"] as const) for (const blocked of [false, true]) {
   test(`late ${blocked ? "unrepresentable" : "120s"} cooldown during ${boundary} wins before actual dispatch`, async t => {
-    const fixture = await httpFixture();
+    const fixture = await coordinationFixture(t);
     let wall = Date.now();
     const started = wall;
     let entered!: () => void;
@@ -41,12 +82,12 @@ for (const boundary of ["authority", "persistence"] as const) for (const blocked
       await cooling;
       if (blocked) assert.deepEqual(sent, []);
       else { assert.equal(sent.length, 1); assert.ok(sent[0]! >= started + 120_000, `sent ${started + 120_000 - sent[0]!}ms early`); assert.ok(guards >= 2); }
-    } finally { resume(); await coordination.release(); t.mock.restoreAll(); await fixture.close(); }
+    } finally { resume(); await coordination.release(); t.mock.restoreAll(); }
   });
 }
 
 test("authority revoked during reservation persistence prevents actual dispatch", async t => {
-  const fixture = await httpFixture();
+  const fixture = await coordinationFixture(t);
   let entered!: () => void;
   let resume!: () => void;
   const suspended = new Promise<void>(resolve => { entered = resolve; });
@@ -68,7 +109,7 @@ test("authority revoked during reservation persistence prevents actual dispatch"
     await suspended; authorized = false; resume();
     await assert.rejects(dispatch, /authority revoked/);
     assert.equal(calls, 0);
-  } finally { resume(); await coordination.release(); t.mock.restoreAll(); await fixture.close(); }
+  } finally { resume(); await coordination.release(); t.mock.restoreAll(); }
 });
 
 test("HTTP202 keeps initialize and tools result deadlines until an RPC result arrives", async () => {
@@ -213,8 +254,8 @@ test("real initialize cancellation closes connection and a later scope can acqui
   } finally { await fixture.close(); }
 });
 
-test("cancel while waiting for a credential or pacing gate never emits HTTP", async () => {
-  const fixture = await httpFixture();
+test("cancel while waiting for a credential or pacing gate never emits HTTP", async t => {
+  const fixture = await coordinationFixture(t);
   const holding = await acquireXydcCoordination("fixture-token", new URL(fixture.env.XYDC_MCP_URL), {
     env: fixture.env, signal: new AbortController().signal, remaining: () => 10_000,
   });
@@ -231,7 +272,7 @@ test("cancel while waiting for a credential or pacing gate never emits HTTP", as
     const pending = callXydcTool("fixture-token", "get_asin_info", {}, { env: fixture.env, signal: paced.signal });
     setTimeout(() => paced.abort(), 50);
     await assert.rejects(pending, /CANCELLED/); assert.equal(fixture.requests.length, 0);
-  } finally { await holding.release(); await fixture.close(); }
+  } finally { await holding.release(); }
 });
 
 test("async authority rejected after real pacing prevents the next HTTP", async () => {
@@ -278,7 +319,7 @@ test("same credential batches in two processes do not overlap and cooldown survi
 });
 
 test("slow reservation writes cannot bunch actual dispatch and concurrent cooldown cannot regress", async t => {
-  const fixture = await httpFixture();
+  const fixture = await coordinationFixture(t);
   let wall = Date.now();
   const original = fs.rename;
   let renames = 0;
@@ -302,7 +343,7 @@ test("slow reservation writes cannot bunch actual dispatch and concurrent cooldo
     const files = (await readdir(fixture.env.XYDC_COORDINATION_ROOT)).filter(file => file.endsWith(".json"));
     const saved = JSON.parse(await readFile(path.join(fixture.env.XYDC_COORDINATION_ROOT, files[0]!), "utf8"));
     assert.ok(saved.cooldownUntil >= wall + 120_000);
-  } finally { await coordination.release(); t.mock.restoreAll(); await fixture.close(); }
+  } finally { await coordination.release(); t.mock.restoreAll(); }
 });
 
 test("pending GET headers retain their fifteen second timeout after a tool succeeds", async () => {
@@ -400,7 +441,7 @@ test("a process dying after its first successful child resumes only the unfinish
 });
 
 test("an SDK deadline winning the scope timer race preserves the configured timeout reason", async t => {
-  const fixture = await httpFixture();
+  const fixture = await coordinationFixture(t);
   await withXydcSession("fixture-token", async () => {}, { env: fixture.env });
   const connect = Client.prototype.connect;
   const observed: unknown[] = [];
@@ -423,7 +464,7 @@ test("an SDK deadline winning the scope timer race preserves the configured time
     assert.equal(observed.length, 2);
     assert.ok(observed.every(error => error instanceof McpError && error.code === ErrorCode.RequestTimeout));
     assert.equal(fixture.requests.length, 0);
-  } finally { t.mock.restoreAll(); await fixture.close(); }
+  } finally { t.mock.restoreAll(); }
 });
 
 test("a nonresponsive async authority callback cannot hold the scope beyond its budget", async () => {
