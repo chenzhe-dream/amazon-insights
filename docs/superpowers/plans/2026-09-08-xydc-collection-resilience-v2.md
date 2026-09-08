@@ -32,16 +32,16 @@
 
 **Files owned:** scripts/lib/xydc-mcp-client.ts；可新增 scripts/lib/xydc-request-coordination.ts、scripts/lib/xydc-mcp-session.ts、必要时xydc-provider-error.ts（按职责拆分，不循环依赖）；scripts/lib/xydc-order-sync.ts；scripts/lib/xydc-order-cache.ts 或新 xydc-order-checkpoint.ts；相关 tests/scripts/xydc-mcp-client.test.ts、xydc-order-sync.test.ts 和新 xydc-request-coordination.test.ts、xydc-order-checkpoint.test.ts、tests/helpers/xydc-*.mjs/ts。本任务不改 page/worker/runner/共享锁实现/计划/进度台账。若必须调整已有函数接口，先查调用点并保留现有调用兼容。
 
-- [ ] **RED：先复现目前缺陷。** 新增本地 HTTP MCP fixture，记录全部方法/时间戳/连接和业务次数。测试多个业务调用应只initialize一次；任意HTTP相邻发送至少2000ms；现有实现应失败。另测一个成功子体后中断，重开只请求未完成子体；当前只末尾写缓存应失败。运行并记录精确失败断言，不以编译错误作为RED。
-- [ ] **协调契约。** 真实调用要求绝对服务器端 XYDC_COORDINATION_ROOT。键为规范化endpoint与trim后token的SHA256，不存原token、session ID或Provider响应。仅同主机/同目录协调；不共享其他runtimeRoot。缺失/非法目录报 NOT_CONFIGURED，无法安全读写/损坏状态报安全 RPC_ERROR，均不发请求。测试注入 callTool 维持离线兼容，不要求生产目录。
-- [ ] **会话边界。** 导出 withXydcSession(token, run, options) 一类有界scope API；run接收只允许3个现有工具的 callTool。scope先获取既有 acquireInterprocessLock 的凭证独占批次锁，再调用run；连接直到第一次真实调用才创建。callXydcTool 保留旧签名，真实单调用通过同scope；collector一次批次只用一个scope，不嵌套同锁。没有待采集项不创建scope、更不连网。不同凭证不共享SDK对象/headers/在途请求。
-- [ ] **发送闸门与超时。** 每个实际HTTP发出前检查 nextAllowedAt/cooldownUntil、剩余预算和signal，再原子持久化nextAllowedAt；initialize/通知/GET/tools POST全覆盖。HTTP起始间距2000ms。订单阶段总预算300000ms包括等待锁、排队、冷却、连接、请求；旧单次调用15s包括排队。tools POST真正发出后15s内完成，不能把排队误算成工具超时；initialize/通知亦有界；GET仅响应头等待有界，不每15s打断合法长流。成功清除定时器/监听器，不触发abort或取消通知。超时/取消关闭底层transport/socket并清理所有资源，禁SDK隐式重试/重连/结果未知重放。
-- [ ] **429规则。** 任意工具/HTTP429均持久化凭证冷却；支持合法Retry-After秒数与HTTP-date，不能把>30s当作缺失或截短。没有有效指示时当前批次第一次退避30s，第二次60s；显式不可表示超长等待停止自动请求，不偷偷改为短等待。每子体最多2次业务尝试，仅明确429可自动重试；二次429停止本批次后续子体。认证/额度不足停止批次；404/坏结构为该子体失败；超时/未知结果不自动重放。等待超预算保留已有结果并结束，不提前请求。冷却随scope结束、错误及进程重启仍有效。
-- [ ] **检查点与缓存。** 完整且通过身份/12月校验的子体成功后立即原子保存，身份含country/parent/sorted完整child集合/window/childASIN。保留真实响应时间，可注入wall-clock供测试；缓存复用保留旧时间。只复用<=24h、不在未来、完整匹配的条目。获取凭证锁后再读缓存/检查点，避免排队任务重新收费。force绕过旧缓存读取，但新成功检查点立即保存；失败刷新不覆盖以前完整的family展示快照。新成功检查点独立于旧family保留，后续普通补采复用新成功项。写入采用现有atomic/lock模式，旧时间不能覆盖较新条目；不同凭证不承诺全局付费去重，但不得损坏缓存或倒退完整数据。
-- [ ] **事实事件接口。** 为 input 新增可选 env/onProgress/beforeRequest，保留旧调用。beforeRequest 是可选异步权限栅栏，沿会话传到真实HTTP闸门，在实际发送前（排队后）执行；失败不发请求，不做隐式重试。事件是当前固定窗口、country+ASIN去重队列的实际状态：queued/collecting/rate-wait/completed/partial/failed/cancelled；child事实包含ASIN、country、ready/cached/failed/pending以及安全reason；retryAt仅真实冷却时间。ready只计实际12个月返回齐全（含供应商0未披露），失败不计就绪；不能按流逝时间推算百分比。回调不携带token/raw响应/其他项目数据。进度持久化失败不能重放业务请求。
-- [ ] **GREEN验证矩阵。** 真HTTP测试同时覆盖同凭证两个子进程不重叠且冷却跨进程保留、不同凭证隔离、失败initialize释放、取消在锁/等待/连接/业务各阶段关闭、成功不晚发cancel、Retry-After120s/HTTPdate/缺失/超预算、工具业务不隐式重放。用可注入时钟快速单测长等待，但至少一个真实时间间距测试不缩短生产默认。缓存测试覆盖成功后崩溃恢复、force部分失败+新检查点、旧写不覆盖新、国家/parent/child集合/window改变不复用、不同国家相同ASIN不串、全缓存0 HTTP。断言真实请求数，不只mock函数次数。
-- [ ] 运行 node --import tsx --conditions=react-server --test tests/scripts/xydc-order-summary.test.ts tests/scripts/xydc-order-sync.test.ts tests/scripts/xydc-mcp-client.test.ts tests/scripts/xydc-variant-sync.test.ts tests/agent/xydc-order-runtime.test.ts 及新测试；变更文件ESLint/diff-check。必要类型检查对比既有341诊断基线，不掩盖原债务。
-- [ ] 仅提交本任务代码/测试，写明新增API、RED/GREEN命令结果、已知限制到独立report；等待双重任务审查，不启动下一任务。
+- [x] **RED：先复现目前缺陷。** 新增本地 HTTP MCP fixture，记录全部方法/时间戳/连接和业务次数。测试多个业务调用应只initialize一次；任意HTTP相邻发送至少2000ms；现有实现应失败。另测一个成功子体后中断，重开只请求未完成子体；当前只末尾写缓存应失败。运行并记录精确失败断言，不以编译错误作为RED。
+- [x] **协调契约。** 真实调用要求绝对服务器端 XYDC_COORDINATION_ROOT。键为规范化endpoint与trim后token的SHA256，不存原token、session ID或Provider响应。仅同主机/同目录协调；不共享其他runtimeRoot。缺失/非法目录报 NOT_CONFIGURED，无法安全读写/损坏状态报安全 RPC_ERROR，均不发请求。测试注入 callTool 维持离线兼容，不要求生产目录。
+- [x] **会话边界。** 导出 withXydcSession(token, run, options) 一类有界scope API；run接收只允许3个现有工具的 callTool。scope先获取既有 acquireInterprocessLock 的凭证独占批次锁，再调用run；连接直到第一次真实调用才创建。callXydcTool 保留旧签名，真实单调用通过同scope；collector一次批次只用一个scope，不嵌套同锁。没有待采集项不创建scope、更不连网。不同凭证不共享SDK对象/headers/在途请求。
+- [x] **发送闸门与超时。** 每个实际HTTP发出前检查 nextAllowedAt/cooldownUntil、剩余预算和signal，再原子持久化nextAllowedAt；initialize/通知/GET/tools POST全覆盖。HTTP起始间距2000ms。订单阶段总预算300000ms包括等待锁、排队、冷却、连接、请求；旧单次调用15s包括排队。tools POST真正发出后15s内完成，不能把排队误算成工具超时；initialize/通知亦有界；GET仅响应头等待有界，不每15s打断合法长流。成功清除定时器/监听器，不触发abort或取消通知。超时/取消关闭底层transport/socket并清理所有资源，禁SDK隐式重试/重连/结果未知重放。
+- [x] **429规则。** 任意工具/HTTP429均持久化凭证冷却；支持合法Retry-After秒数与HTTP-date，不能把>30s当作缺失或截短。没有有效指示时当前批次第一次退避30s，第二次60s；显式不可表示超长等待停止自动请求，不偷偷改为短等待。每子体最多2次业务尝试，仅明确429可自动重试；二次429停止本批次后续子体。认证/额度不足停止批次；404/坏结构为该子体失败；超时/未知结果不自动重放。等待超预算保留已有结果并结束，不提前请求。冷却随scope结束、错误及进程重启仍有效。
+- [x] **检查点与缓存。** 完整且通过身份/12月校验的子体成功后立即原子保存，身份含country/parent/sorted完整child集合/window/childASIN。保留真实响应时间，可注入wall-clock供测试；缓存复用保留旧时间。只复用<=24h、不在未来、完整匹配的条目。获取凭证锁后再读缓存/检查点，避免排队任务重新收费。force绕过旧缓存读取，但新成功检查点立即保存；失败刷新不覆盖以前完整的family展示快照。新成功检查点独立于旧family保留，后续普通补采复用新成功项。写入采用现有atomic/lock模式，旧时间不能覆盖较新条目；不同凭证不承诺全局付费去重，但不得损坏缓存或倒退完整数据。
+- [x] **事实事件接口。** 为 input 新增可选 env/onProgress/beforeRequest，保留旧调用。beforeRequest 是可选异步权限栅栏，沿会话传到真实HTTP闸门，在实际发送前（排队后）执行；失败不发请求，不做隐式重试。事件是当前固定窗口、country+ASIN去重队列的实际状态：queued/collecting/rate-wait/completed/partial/failed/cancelled；child事实包含ASIN、country、ready/cached/failed/pending以及安全reason；retryAt仅真实冷却时间。ready只计实际12个月返回齐全（含供应商0未披露），失败不计就绪；不能按流逝时间推算百分比。回调不携带token/raw响应/其他项目数据。进度持久化失败不能重放业务请求。
+- [x] **GREEN验证矩阵。** 真HTTP测试同时覆盖同凭证两个子进程不重叠且冷却跨进程保留、不同凭证隔离、失败initialize释放、取消在锁/等待/连接/业务各阶段关闭、成功不晚发cancel、Retry-After120s/HTTPdate/缺失/超预算、工具业务不隐式重放。用可注入时钟快速单测长等待，但至少一个真实时间间距测试不缩短生产默认。缓存测试覆盖成功后崩溃恢复、force部分失败+新检查点、旧写不覆盖新、国家/parent/child集合/window改变不复用、不同国家相同ASIN不串、全缓存0 HTTP。断言真实请求数，不只mock函数次数。
+- [x] 运行 node --import tsx --conditions=react-server --test tests/scripts/xydc-order-summary.test.ts tests/scripts/xydc-order-sync.test.ts tests/scripts/xydc-mcp-client.test.ts tests/scripts/xydc-variant-sync.test.ts tests/agent/xydc-order-runtime.test.ts 及新测试；变更文件ESLint/diff-check。必要类型检查对比既有341诊断基线，不掩盖原债务。
+- [x] 仅提交本任务代码/测试，写明新增API、RED/GREEN命令结果、已知限制到独立report；等待双重任务审查，不启动下一任务。
 
 ### Task 2: B2 可信任务进度、取消栅栏与只读前端等待提示
 
@@ -62,7 +62,9 @@
 - [ ] 定点Node前后端分开条件运行，变更ESLint/diff-check、isolated npm run build、类型diagnostic基线对照；现有A1/A2和K1 UI回归必须绿。报告真实失败/重试，不能只报最终一次绿色。
 - [ ] 仅提交本任务源代码/测试/配置说明，写独立report；任务审查通过后由root进行V2整分支终审和已缓存真实ASIN预览验证。测试通过不等于正式发布，正式系统保持不变。
 
-## Final verification and delivery
+## Final verification and delivery (coordinator only)
+
+以下检查由root在两项任务审查通过后执行，不属于B2实现者的提交或自我验收权限。B2实现者只报告自己的测试与边界，不标记整体任务Approved或触碰正式环境。
 
 - [ ] 回归范围：B新增测试 + 当前订单server67基线 + 年度UI；不混用react-server与浏览器React条件。
 - [ ] V2整体代码范围从 ef6867848e4e56c4450bf20946ca9f88973b43ca 审查；检查没有新的月度交互/投影和没有越界生成数据。
