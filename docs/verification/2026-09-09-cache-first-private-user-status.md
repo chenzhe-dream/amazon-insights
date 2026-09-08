@@ -32,6 +32,7 @@ Date: 2026-09-09. Status: implementation in progress; not a production acceptanc
 
 - The two private-presence grants are independent. Email-role removal revokes the email grant, binding removal revokes the DingTalk grant, and inactive/cross-organization/session-invalid callers cannot use either. This clarifies existing intended behavior without promoting any account.
 - The display implementation must reuse a browser-safe extraction of the existing collector freshness predicate instead of duplicating the 24-hour rule; collector API and TTL remain unchanged.
+- During Task B, root reproduced a session-invalid boundary defect before accepting the implementation: the existing gate's 401 subscription cleared only React state; the new 403 handler could then copy the still-authenticated controller state back into the view before effect cleanup. Minimal callback-wiring RED exited 1 (`after403View=authenticated`, expected `unauthenticated`) in `.superpowers/sdd/private-presence-expiry-race-probe.ts`. The B plan and extracted brief now require authoritative controller/view invalidation and an actual boundary regression before approval; no production incident is claimed from this local reproduction.
 
 ## Task A locked-source verification
 

@@ -34,7 +34,7 @@
 - Produces `readXydcOrderDisplaySnapshot(dataRoot: string, family: XydcVariantFamily, window: XydcOrderWindow, now: Date): XydcOrderSnapshot | null`.
 - Wire without changing `RuntimeAnalysisDataSnapshot.variantOrders.families` shape or project authorization. A selected stale copy may use cacheState stale in the projection; never rewrite its persisted timestamps/state on GET.
 
-- [ ] **Step 1: Add expected-behavior tests and observe RED.** Reuse current family/order fixtures in runtime/section tests. New pure tests can use the following minimal complete fixture (with imports from the existing shared modules):
+- [x] **Step 1: Add expected-behavior tests and observe RED.** Reuse current family/order fixtures in runtime/section tests. New pure tests can use the following minimal complete fixture (with imports from the existing shared modules):
 
 ```ts
 const now = new Date('2026-10-09T12:00:00.000Z');
@@ -63,7 +63,7 @@ assert.equal(selectXydcOrderDisplaySnapshot([{...prior,fetchedAt:'2099-01-01T00:
 
 Split assertions into named tests; also cover invalid/future child and source timestamps, future window, wrong child set, duplicates, current partial without history, all-zero complete snapshot, stable deterministic tie order, non-mutation. Run `node --conditions=react-server --import tsx --test tests/scripts/xydc-order-display.test.ts tests/agent/xydc-order-runtime.test.ts`; record behavior RED, not syntax/import failures alone.
 
-- [ ] **Step 2: Implement the pure selection algorithm.** Use safe parsing and nonfuture timestamps before ranking; normalized family identity still uses the existing exact matcher. The core decision is:
+- [x] **Step 2: Implement the pure selection algorithm.** Use safe parsing and nonfuture timestamps before ranking; normalized family identity still uses the existing exact matcher. The core decision is:
 
 ```ts
 const complete = valid.filter(s => summarizeXydcOrders(s).complete);
@@ -78,9 +78,9 @@ return selected ? {
 
 Keep the shared module browser-safe: do not import fs/cache writer/MCP; reproduce freshness using a small pure timestamp/shape helper or extract the existing pure freshness code to a shared module and re-export it from cache.ts for compatibility. `newest` ranks endMonth descending, fetchedAt descending, then stable content tie-breaker. Validation requires `matchesXydcOrderSnapshot(s,family,s.window)` and `s.window.endMonth <= window.endMonth`, parsed 12-month schema and finite timestamps <= now. No aggregate across snapshots/windows.
 
-- [ ] **Step 3: Implement read-only cache discovery and integrate runtime.** Read only regular non-symlink files under `dataRoot/xydc-orders/v1/<validated-country>`, with parent-specific filename prefix and canonical pattern. Parse each file, recompute `xydcOrderCachePath(dataRoot,family,snapshot.window)` and require exact normalized absolute filename equality before considering content. Current-file direct lookup remains supported. ENOENT/malformed optional candidates do not prevent another valid candidate; never follow supplied paths from JSON, subdirectories, arbitrary ASINs or temporary files. Return `selectXydcOrderDisplaySnapshot(candidates,family,window,now)` and retain existing deduped authorized family grouping in runtime. GET creates no files/tasks/Provider clients.
+- [x] **Step 3: Implement read-only cache discovery and integrate runtime.** Read only regular non-symlink files under `dataRoot/xydc-orders/v1/<validated-country>`, with parent-specific filename prefix and canonical pattern. Parse each file, recompute `xydcOrderCachePath(dataRoot,family,snapshot.window)` and require exact normalized absolute filename equality before considering content. Current-file direct lookup remains supported. ENOENT/malformed optional candidates do not prevent another valid candidate; never follow supplied paths from JSON, subdirectories, arbitrary ASINs or temporary files. Return `selectXydcOrderDisplaySnapshot(candidates,family,window,now)` and retain existing deduped authorized family grouping in runtime. GET creates no files/tasks/Provider clients.
 
-- [ ] **Step 4: Integrate UI with actual snapshot windows.** In section `resolveOrderSnapshot`, call the same pure selector with `familyIdentity(group)`, requested window and current time. Keep `model.window` as requested window and `model.snapshot.window` as actual data period. Card, detail and annual inspection use actual snapshot window, including inspection identity. Add Chinese `历史缓存` when periods differ, `缓存数据` for expired current period, and note requested-window data is pending when history is selected. Section heading must distinguish default requested range from a history card's actual range. Do not relabel old data latest/current. Existing progress remains independent.
+- [x] **Step 4: Integrate UI with actual snapshot windows.** In section `resolveOrderSnapshot`, call the same pure selector with `familyIdentity(group)`, requested window and current time. Keep `model.window` as requested window and `model.snapshot.window` as actual data period. Card, detail and annual inspection use actual snapshot window, including inspection identity. Add Chinese `历史缓存` when periods differ, `缓存数据` for expired current period, and note requested-window data is pending when history is selected. Section heading must distinguish default requested range from a history card's actual range. Do not relabel old data latest/current. Existing progress remains independent.
 
 ```tsx
 const sourceWindow = snapshot?.window ?? window;
@@ -89,7 +89,7 @@ const historical = Boolean(snapshot && sourceWindow.endMonth !== window.endMonth
 {historical ? <em>历史缓存 · 当前统计区间待补齐</em> : snapshot?.cacheState === 'stale' ? <em>缓存数据 · 待更新</em> : null}
 ```
 
-- [ ] **Step 5: Verify full task matrix once, self-review and commit only owned files.**
+- [x] **Step 5: Verify full task matrix once, self-review and commit only owned files.**
 
 Run pure+runtime+writer tests with server condition:
 `node --conditions=react-server --import tsx --test tests/scripts/xydc-order-display.test.ts tests/agent/xydc-order-runtime.test.ts tests/scripts/xydc-order-summary.test.ts tests/scripts/xydc-order-sync.test.ts tests/agent/runtime-analysis-data.test.ts`
