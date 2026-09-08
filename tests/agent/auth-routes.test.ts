@@ -224,6 +224,20 @@ test("auth contracts register closed login errors and current-session response",
     SessionResponseSchema.safeParse({ authenticated: false, user: null, sessionIdentity: SESSION_IDENTITY }).success,
     false,
   );
+  assert.equal(
+    SessionResponseSchema.parse({ authenticated: true, user: USER, sessionIdentity: SESSION_IDENTITY })
+      .canViewUserPresence,
+    false,
+  );
+  assert.equal(
+    SessionResponseSchema.safeParse({
+      authenticated: true,
+      user: USER,
+      sessionIdentity: SESSION_IDENTITY,
+      canViewUserPresence: true,
+    }).success,
+    true,
+  );
 
   assert.equal(
     findHttpContract("GET", "/v1/auth/session")?.path,
@@ -472,6 +486,7 @@ test("current session returns either the authenticated public user or a strict u
     authenticated: true,
     user: USER,
     sessionIdentity: createHash("sha256").update("30000000-0000-4000-8000-000000000001", "utf8").digest("base64url"),
+    canViewUserPresence: false,
   });
   assert.deepEqual(service.authenticateCalls, [RAW_TOKEN]);
   assert.deepEqual(service.publicUserCalls, [USER.id]);
@@ -485,6 +500,43 @@ test("current session returns either the authenticated public user or a strict u
   assert.equal(anonymous.statusCode, 200);
   assert.deepEqual(anonymous.json(), { authenticated: false, user: null, sessionIdentity: null });
   assert.equal(SessionResponseSchema.safeParse(anonymous.json()).success, true);
+});
+
+test("current session projects only the dedicated user-presence capability", async (t) => {
+  const service = new FakeAuthService();
+  service.principal = {
+    kind: "user",
+    userId: USER.id,
+    organizationId: USER.organizationId,
+    email: USER.email,
+    role: USER.role,
+    sessionId: "30000000-0000-4000-8000-000000000001",
+  };
+  const checked: unknown[] = [];
+  const app = buildAgentApp({
+    env: securityEnv(),
+    authService: asAuthService(service),
+    authConfig: secureConfig,
+    userPresenceAccess: {
+      async canView(principal) {
+        checked.push(principal);
+        return true;
+      },
+    },
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/auth/session",
+    headers: {
+      ...proxyHeaders(),
+      cookie: `__Host-agent_session=${RAW_TOKEN}`,
+    },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().canViewUserPresence, true);
+  assert.deepEqual(checked, [service.principal]);
 });
 
 test("auth responses and logs do not contain secret sentinels", async (t) => {

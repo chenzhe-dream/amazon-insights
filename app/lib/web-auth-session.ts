@@ -17,13 +17,17 @@ import {
 import { localAgentFetch } from "./local-agent-browser";
 
 export type AuthFetch = (path: string, init?: RequestInit) => Promise<Response>;
-export type AuthenticatedWebIdentity = Readonly<{ user: User; sessionIdentity: string }>;
+export type AuthenticatedWebIdentity = Readonly<{
+  user: User;
+  sessionIdentity: string;
+  canViewUserPresence: boolean;
+}>;
 
 export type AuthSessionState =
   | Readonly<{ status: "checking"; user: null; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unauthenticated"; user: null; message: string | null; retryAfterSeconds: number | null }>
   | Readonly<{ status: "submitting"; user: null; message: null; retryAfterSeconds: null }>
-  | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; message: null; retryAfterSeconds: null }>
+  | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; canViewUserPresence: boolean; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unavailable"; user: null; message: string; retryAfterSeconds: null }>;
 
 export type WebAuthErrorKind =
@@ -66,7 +70,11 @@ export async function readWebSession(fetchImpl: AuthFetch = localAgentFetch): Pr
     const parsed = SessionResponseSchema.safeParse(await readJson(response));
     if (!parsed.success) throw unavailable();
     if (parsed.data.authenticated) {
-      return { user: parsed.data.user, sessionIdentity: parsed.data.sessionIdentity };
+      return {
+        user: parsed.data.user,
+        sessionIdentity: parsed.data.sessionIdentity,
+        canViewUserPresence: parsed.data.canViewUserPresence,
+      };
     }
     return null;
   } catch (error) {

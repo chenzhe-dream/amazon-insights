@@ -46,7 +46,15 @@ const workbenchRetry = renderToStaticMarkup(createElement(AuthLoginCard, {
   onDingTalkWorkbenchRetry: () => {},
 }));
 const identity = renderToStaticMarkup(createElement(AuthIdentityControl, {
-  session: { user, sessionIdentity: "A".repeat(43), logout: async () => {}, logoutPending: false, logoutError: null },
+  session: {
+    user,
+    sessionIdentity: "A".repeat(43),
+    canViewUserPresence: false,
+    revokeUserPresenceAccess: () => {},
+    logout: async () => {},
+    logoutPending: false,
+    logoutError: null,
+  },
 }));
 
 process.stdout.write(JSON.stringify({ checking, childRenderCount, login, workbenchRetry, identity }));

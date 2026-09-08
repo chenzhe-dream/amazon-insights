@@ -5,6 +5,7 @@ import {
   ActivityResponseSchema,
 } from "../../shared/agent-contracts";
 import type { AuthenticatedPrincipal } from "../auth/authentication-service";
+import type { UserPresenceAccess } from "../auth/user-presence-access";
 import type { AdminUserPresenceRepository } from "../db/admin-user-presence-repository";
 import { AdminUserPresenceService } from "../services/admin-user-presence-service";
 import { ContractRouteError } from "./analysis-runs";
@@ -42,9 +43,25 @@ export function registerAdminUserPresenceRoutes(
   app: FastifyInstance,
   repository: AdminUserPresenceRepository | null,
   clock: () => Date = () => new Date(),
+  access: UserPresenceAccess | null = null,
 ) {
   app.get("/v1/admin/users", async (request) => {
     const principal = userPrincipal(request);
+    let canView = false;
+    if (access) {
+      try {
+        canView = await access.canView(principal);
+      } catch {
+        canView = false;
+      }
+    }
+    if (!canView) {
+      throw new ContractRouteError(
+        403,
+        "FORBIDDEN",
+        "Request is not authorized",
+      );
+    }
     const asOf = clock();
     const asOfIso = asOf.toISOString();
     const result = await repositoryOrThrow(repository).listOrganizationUsers({

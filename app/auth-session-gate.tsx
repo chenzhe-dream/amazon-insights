@@ -9,11 +9,13 @@ import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbe
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
 import { DingTalkBrowserError, DingTalkWorkbenchAttempt, isDingTalkContainer, requestDingTalkWorkbenchCode, sanitizeDingTalkReturnPath } from "./lib/dingtalk-browser";
-import { WebAuthError, changeWebPassword, expireAuthenticatedSession, type AuthSessionState, loginAndReadWebSession, loginWithDingTalkWorkbenchCode, logoutWebSession, readDingTalkPublicConfig, readWebSession } from "./lib/web-auth-session";
+import { WebAuthError, changeWebPassword, type AuthSessionState, loginAndReadWebSession, loginWithDingTalkWorkbenchCode, logoutWebSession, readDingTalkPublicConfig, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
   user: User;
   sessionIdentity: string;
+  canViewUserPresence: boolean;
+  revokeUserPresenceAccess: (sessionIdentity: string) => void;
   logout: () => Promise<void>;
   logoutPending: boolean;
   logoutError: string | null;
@@ -229,7 +231,7 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
     <div className="auth-identity-control">
       <span className="auth-identity-name">{user.displayName || user.email}</span>
       <span className="auth-identity-role">{user.role}</span>
-      {user.role === "admin" ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
+      {session.canViewUserPresence === true ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
       <PasswordChangeControl />
       <button type="button" className="ghost-btn" disabled={logoutPending} onClick={() => void logout()}>
         {logoutPending ? "退出中…" : "退出登录"}
@@ -351,8 +353,9 @@ export function AuthSessionGate({ children }: {
   }, [dingTalkConfig, runDingTalkWorkbenchLogin, state.status]);
 
   useEffect(() => subscribeToAuthenticationRequired(() => {
-    setState((current) => expireAuthenticatedSession(current));
-  }), []);
+    if (!controller.expireAuthenticatedSession()) return;
+    setState(controller.state);
+  }), [controller]);
 
   useEffect(() => {
     if (state.status !== "unauthenticated" || state.retryAfterSeconds === null || state.retryAfterSeconds <= 0) return;
@@ -373,6 +376,11 @@ export function AuthSessionGate({ children }: {
     setLogoutError(controller.logoutError);
   }, [controller]);
 
+  const revokeUserPresenceAccess = useCallback((sessionIdentity: string) => {
+    if (!controller.revokeUserPresenceAccess(sessionIdentity)) return;
+    setState(controller.state);
+  }, [controller]);
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     controller.setCredentials(email, password);
@@ -389,7 +397,15 @@ export function AuthSessionGate({ children }: {
   }
   if (state.status === "authenticated") return <>
     <AuthenticatedActivityHeartbeat sessionIdentity={state.sessionIdentity} />
-    {children({ user: state.user, sessionIdentity: state.sessionIdentity, logout, logoutPending, logoutError })}
+    {children({
+      user: state.user,
+      sessionIdentity: state.sessionIdentity,
+      canViewUserPresence: state.canViewUserPresence,
+      revokeUserPresenceAccess,
+      logout,
+      logoutPending,
+      logoutError,
+    })}
   </>;
   return <AuthLoginCard
     state={state}

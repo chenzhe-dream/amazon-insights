@@ -15,6 +15,7 @@ import {
 } from "../../shared/agent-contracts";
 import type { AgentAuthenticationConfig } from "../config";
 import type { AuthenticationService } from "../auth/authentication-service";
+import type { UserPresenceAccess } from "../auth/user-presence-access";
 import {
   parseSessionCookie,
   serializeClearedSessionCookie,
@@ -104,6 +105,7 @@ export function registerAuthRoutes(
   app: FastifyInstance,
   service: AuthenticationService | null,
   config: AgentAuthenticationConfig,
+  userPresenceAccess: UserPresenceAccess | null = null,
 ) {
   app.post("/v1/auth/login", async (request, reply) => {
     const body = parseContract(LoginRequestSchema, request.body);
@@ -173,6 +175,14 @@ export function registerAuthRoutes(
     }
 
     const user = await authService.findPublicUser(principal.userId);
+    let canViewUserPresence = false;
+    if (user && userPresenceAccess) {
+      try {
+        canViewUserPresence = await userPresenceAccess.canView(principal);
+      } catch {
+        canViewUserPresence = false;
+      }
+    }
     const sessionIdentity = createHash("sha256")
       .update(principal.sessionId, "utf8")
       .digest("base64url");
@@ -180,6 +190,7 @@ export function registerAuthRoutes(
       authenticated: user !== null,
       user,
       sessionIdentity: user ? sessionIdentity : null,
+      ...(user ? { canViewUserPresence } : {}),
     });
   });
 }

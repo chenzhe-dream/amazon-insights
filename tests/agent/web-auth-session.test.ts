@@ -26,7 +26,11 @@ const user = Object.freeze({
   updatedAt: "2026-08-19T00:00:00.000Z",
 });
 const sessionIdentity = "A".repeat(43);
-const authenticatedWebIdentity = Object.freeze({ user, sessionIdentity });
+const authenticatedWebIdentity = Object.freeze({
+  user,
+  sessionIdentity,
+  canViewUserPresence: false,
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +72,17 @@ test("readWebSession returns the exact validated authenticated identity", async 
   const stub = queuedFetch(Response.json({ authenticated: true, user, sessionIdentity }));
 
   assert.deepEqual(await readWebSession(stub.fetch), authenticatedWebIdentity);
+
+  const permitted = queuedFetch(Response.json({
+    authenticated: true,
+    user,
+    sessionIdentity,
+    canViewUserPresence: true,
+  }));
+  assert.deepEqual(await readWebSession(permitted.fetch), {
+    ...authenticatedWebIdentity,
+    canViewUserPresence: true,
+  });
 });
 
 test("readWebSession rejects contradictory and malformed session payloads as unavailable", async () => {
@@ -238,6 +253,7 @@ test("expireAuthenticatedSession only expires authenticated state", () => {
     status: "authenticated" as const,
     user,
     sessionIdentity,
+    canViewUserPresence: true,
     message: null,
     retryAfterSeconds: null,
   };
@@ -280,9 +296,43 @@ test("AuthSessionController starts checking, returns the exact confirmed user, a
   await controller.bootstrap();
   assert.equal(controller.state.status, "unauthenticated");
   await controller.submit();
-  assert.deepEqual(controller.state, { status: "authenticated", user, sessionIdentity, message: null, retryAfterSeconds: null });
+  assert.deepEqual(controller.state, { status: "authenticated", ...authenticatedWebIdentity, message: null, retryAfterSeconds: null });
   assert.equal(controller.password, "");
   controller.acceptAuthenticatedIdentity(authenticatedWebIdentity);
+});
+
+test("AuthSessionController revokes only the matching authenticated session capability", () => {
+  const controller = new AuthSessionController({
+    readSession: async () => null,
+    login: async () => authenticatedWebIdentity,
+    logout: async () => {},
+  });
+  controller.acceptAuthenticatedIdentity({
+    ...authenticatedWebIdentity,
+    canViewUserPresence: true,
+  });
+
+  assert.equal(controller.revokeUserPresenceAccess("stale-session"), false);
+  assert.equal(controller.state.status === "authenticated" && controller.state.canViewUserPresence, true);
+  assert.equal(controller.revokeUserPresenceAccess(sessionIdentity), true);
+  assert.equal(controller.state.status === "authenticated" && controller.state.canViewUserPresence, false);
+});
+
+test("controller-owned 401 expiry cannot be undone by a late matching 403 revocation", () => {
+  const controller = new AuthSessionController({
+    readSession: async () => null,
+    login: async () => authenticatedWebIdentity,
+    logout: async () => {},
+  });
+  controller.acceptAuthenticatedIdentity({
+    ...authenticatedWebIdentity,
+    canViewUserPresence: true,
+  });
+
+  assert.equal(controller.expireAuthenticatedSession(), true);
+  assert.equal(controller.state.status, "unauthenticated");
+  assert.equal(controller.revokeUserPresenceAccess(sessionIdentity), false);
+  assert.equal(controller.state.status, "unauthenticated");
 });
 
 test("AuthSessionController keeps the application authenticated after logout failure and allows retry", async () => {

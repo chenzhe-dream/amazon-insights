@@ -57,6 +57,8 @@ function renderBuilder(
   const session: AuthenticatedWebSession = {
     user: account,
     sessionIdentity: "A".repeat(43),
+    canViewUserPresence: false,
+    revokeUserPresenceAccess: () => {},
     logout: async () => {},
     logoutPending: false,
     logoutError: null,

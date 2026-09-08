@@ -1,4 +1,9 @@
-import { WebAuthError, type AuthenticatedWebIdentity, type AuthSessionState } from "./web-auth-session";
+import {
+  WebAuthError,
+  expireAuthenticatedSession,
+  type AuthenticatedWebIdentity,
+  type AuthSessionState,
+} from "./web-auth-session";
 
 export type AuthSessionControllerDependencies = Readonly<{
   readSession: () => Promise<AuthenticatedWebIdentity | null>;
@@ -68,6 +73,25 @@ export class AuthSessionController {
       message: null,
       retryAfterSeconds: null,
     };
+  }
+
+  revokeUserPresenceAccess(sessionIdentity: string): boolean {
+    if (
+      this.state.status !== "authenticated" ||
+      this.state.sessionIdentity !== sessionIdentity ||
+      this.state.canViewUserPresence !== true
+    ) {
+      return false;
+    }
+    this.state = { ...this.state, canViewUserPresence: false };
+    return true;
+  }
+
+  expireAuthenticatedSession(): boolean {
+    const expired = expireAuthenticatedSession(this.state);
+    if (expired === this.state) return false;
+    this.state = expired;
+    return true;
   }
 
   tickRateLimit() {

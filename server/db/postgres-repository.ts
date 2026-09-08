@@ -115,6 +115,9 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   findAuthenticationUserById:
     RuntimeAgentRepository["findAuthenticationUserById"] = (userId) =>
       this.#core.findAuthenticationUserById(userId);
+  findDingTalkIdentityByUserId:
+    RuntimeAgentRepository["findDingTalkIdentityByUserId"] = (userId) =>
+      this.#core.findDingTalkIdentityByUserId(userId);
   createSession: RuntimeAgentRepository["createSession"] = (session) =>
     this.#core.createSession(session);
   findActiveSessionPrincipalByTokenHash:

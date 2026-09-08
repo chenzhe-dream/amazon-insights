@@ -80,7 +80,7 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
   }
 
   if (normalizedMethod === "GET" && pathname === "/v1/admin/users") {
-    return { kind: "session", roles: ADMIN_ROLES };
+    return { kind: "session", roles: MEMBER_ROLES };
   }
 
   if (normalizedMethod === "POST" && pathname === "/v1/auth/activity") {

@@ -181,6 +181,9 @@ export function AdminUserPresenceView({
   if (state.status === "error") {
     return <StateCard classes={classes} role="alert">{state.message}</StateCard>;
   }
+  if (state.status === "forbidden") {
+    return <StateCard classes={classes} role="alert">此页面仅供已授权账号查看。</StateCard>;
+  }
   if (state.status === "empty") {
     return <StateCard classes={classes} role="status">暂无用户数据</StateCard>;
   }
@@ -189,16 +192,20 @@ export function AdminUserPresenceView({
 
 export function AdminUserPresenceLoader({
   classes,
+  sessionIdentity,
+  onForbidden,
 }: {
   classes: AdminUserPresenceClassNames;
+  sessionIdentity: string;
+  onForbidden: (sessionIdentity: string) => void;
 }) {
   const [controller] = useState(() => new AdminUserPresenceLoaderController());
   const [state, setState] = useState<AdminUserPresenceLoadState>({ status: "loading" });
 
   useEffect(() => {
-    controller.start(setState);
+    controller.start(setState, { sessionIdentity, onForbidden });
     return () => controller.stop();
-  }, [controller]);
+  }, [controller, onForbidden, sessionIdentity]);
 
   return <AdminUserPresenceView classes={classes} state={state} />;
 }
@@ -212,7 +219,7 @@ export function AdminUsersAuthenticatedPage({
   classes: AdminUserPresenceClassNames;
   session: AuthenticatedWebSession;
 }) {
-  const isAdmin = session.user.role === "admin";
+  const canView = session.canViewUserPresence === true;
   return (
     <main className={classes.page}>
       <div className={classes.shell}>
@@ -226,9 +233,13 @@ export function AdminUsersAuthenticatedPage({
             <AuthIdentityControl session={session} />
           </div>
         </header>
-        {isAdmin
-          ? (adminContent ?? <AdminUserPresenceLoader classes={classes} />)
-          : <StateCard classes={classes} role="alert"><h2>无权访问</h2><p>此页面仅供管理员使用。</p></StateCard>}
+        {canView
+          ? (adminContent ?? <AdminUserPresenceLoader
+              classes={classes}
+              sessionIdentity={session.sessionIdentity}
+              onForbidden={session.revokeUserPresenceAccess}
+            />)
+          : <StateCard classes={classes} role="alert"><h2>无权访问</h2><p>此页面仅供已授权账号查看。</p></StateCard>}
       </div>
     </main>
   );

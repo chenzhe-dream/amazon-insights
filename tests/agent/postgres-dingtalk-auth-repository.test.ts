@@ -87,3 +87,60 @@ test(
     assert.equal(existing.user.updatedAt, "2026-09-04T09:00:00.000Z");
   },
 );
+
+test("PostgreSQL binding lookup is exact, read-only, current, and provider-scoped", async (t) => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const context = new PostgresQueryContext(pool);
+  const store = new PostgresCoreStore(context);
+  t.after(() => context.close());
+
+  const identity = {
+    id: "10000000-0000-4000-8000-000000000010",
+    organizationId: "20000000-0000-4000-8000-000000000010",
+    corpId: "exact-corp",
+    subjectId: "exact-subject",
+    candidateEmail: "exact@example.com",
+    fallbackEmail: "dingtalk+exact@identity.invalid",
+    displayName: "Exact Person",
+    createdAt: NOW,
+    auditEventId: "30000000-0000-4000-8000-000000000010",
+  };
+  await store.findOrCreateDingTalkUser(identity);
+  const before = await pool.query(
+    "SELECT provider, corp_id, subject_id, user_id, created_at, last_login_at FROM auth_identities WHERE user_id = $1",
+    [identity.id],
+  );
+  assert.deepEqual(await store.findDingTalkIdentityByUserId(identity.id), {
+    userId: identity.id,
+    organizationId: identity.organizationId,
+    corpId: identity.corpId,
+    subjectId: identity.subjectId,
+  });
+  const after = await pool.query(
+    "SELECT provider, corp_id, subject_id, user_id, created_at, last_login_at FROM auth_identities WHERE user_id = $1",
+    [identity.id],
+  );
+  assert.deepEqual(after.rows, before.rows);
+
+  const movedOrganization = "20000000-0000-4000-8000-000000000099";
+  await pool.query("UPDATE users SET organization_id = $1 WHERE id = $2", [movedOrganization, identity.id]);
+  assert.equal(
+    (await store.findDingTalkIdentityByUserId(identity.id))?.organizationId,
+    movedOrganization,
+  );
+
+  await pool.query("DELETE FROM auth_identities WHERE user_id = $1", [identity.id]);
+  assert.equal(await store.findDingTalkIdentityByUserId(identity.id), null);
+  await pool.query(
+    "ALTER TABLE auth_identities DROP CONSTRAINT auth_identities_provider_check",
+  );
+  await pool.query(
+    `INSERT INTO auth_identities (provider, corp_id, subject_id, user_id, created_at, last_login_at)
+     VALUES ('not-dingtalk', $1, $2, $3, $4, $4)`,
+    [identity.corpId, identity.subjectId, identity.id, identity.createdAt],
+  );
+  assert.equal(await store.findDingTalkIdentityByUserId(identity.id), null);
+});

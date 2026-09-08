@@ -67,6 +67,10 @@ import {
   type ConcurrencyAdminService,
 } from "./services/seller-sprite-quota-service";
 import type { AuthenticationService } from "./auth/authentication-service";
+import {
+  createUserPresenceAccess,
+  type UserPresenceAccess,
+} from "./auth/user-presence-access";
 import type { DingTalkAuthenticationService } from "./auth/dingtalk-authentication-service";
 import type { DingTalkAuthRateLimiter } from "./auth/dingtalk-rate-limiter";
 import type { PostgresConcurrencyControlStore } from "./db/postgres/concurrency-control-store";
@@ -94,6 +98,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
   readLegacyProject?: (legacyProjectId: string) => unknown;
   adminUserPresenceRepository?: AdminUserPresenceRepository | null;
+  userPresenceAccess?: UserPresenceAccess | null;
 };
 
 const LOG_REDACTION_PATHS = [
@@ -165,6 +170,15 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   const policy = loadAgentServicePolicy(env);
   const authConfig = options.authConfig ?? loadAgentAuthenticationConfig(env);
   const authService = options.authService ?? null;
+  const userPresenceAccess = options.userPresenceAccess === undefined
+    ? authService
+      ? createUserPresenceAccess({
+          env,
+          authService,
+          repository: options.repository ?? null,
+        })
+      : null
+    : options.userPresenceAccess;
   const localBrowserOrigin =
     env.AGENT_VOC_LOCAL_ORIGIN ??
     (env.AGENT_VOC_LOCAL_FAKE === "1" ? "http://127.0.0.1:31900" : null);
@@ -307,6 +321,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     app,
     authService,
     authConfig,
+    userPresenceAccess,
   );
   registerDingTalkAuthRoutes(
     app,
@@ -403,6 +418,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     options.adminUserPresenceRepository === undefined
       ? options.repository?.adminUserPresence ?? null
       : options.adminUserPresenceRepository,
+    undefined,
+    userPresenceAccess,
   );
   registerFeedbackRoute(app, options.repository ?? null, env);
   registerManualAlexaVocRoutes(

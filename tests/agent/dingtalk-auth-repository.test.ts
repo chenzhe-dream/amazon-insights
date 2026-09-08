@@ -159,3 +159,47 @@ test("DingTalk identity preserves role/status and does not bind an email collisi
   assert.equal(existing.user.updatedAt, "2026-09-04T09:00:00.000Z");
   reopened.close();
 });
+
+test("SQLite binding lookup is exact, read-only, and follows binding removal", async (t) => {
+  const { path, repository } = temporaryRepository(t);
+  const created = await repository.findOrCreateDingTalkUser(verifiedUser());
+  const beforeInspector = new DatabaseSync(path, { readOnly: true });
+  const before = beforeInspector.prepare("SELECT * FROM auth_identities WHERE user_id = ?")
+    .get(created.user.id);
+  beforeInspector.close();
+
+  assert.deepEqual(await repository.findDingTalkIdentityByUserId(created.user.id), {
+    userId: created.user.id,
+    organizationId: ORGANIZATION_ID,
+    corpId: "ding-corp-id",
+    subjectId: "ding-subject-1",
+  });
+  const afterInspector = new DatabaseSync(path, { readOnly: true });
+  const after = afterInspector.prepare("SELECT * FROM auth_identities WHERE user_id = ?")
+    .get(created.user.id);
+  afterInspector.close();
+  assert.deepEqual(after, before);
+
+  const writer = new DatabaseSync(path);
+  writer.prepare("DELETE FROM auth_identities WHERE user_id = ?").run(created.user.id);
+  writer.close();
+  assert.equal(await repository.findDingTalkIdentityByUserId(created.user.id), null);
+});
+
+test("SQLite binding lookup ignores wrong providers and returns the current user organization", async (t) => {
+  const { path, repository } = temporaryRepository(t);
+  const created = await repository.findOrCreateDingTalkUser(verifiedUser());
+  const writer = new DatabaseSync(path);
+  writer.prepare("UPDATE users SET organization_id = ? WHERE id = ?")
+    .run("20000000-0000-4000-8000-000000000099", created.user.id);
+  assert.equal(
+    (await repository.findDingTalkIdentityByUserId(created.user.id))?.organizationId,
+    "20000000-0000-4000-8000-000000000099",
+  );
+  writer.exec("PRAGMA ignore_check_constraints = ON");
+  writer.prepare("UPDATE auth_identities SET provider = 'not-dingtalk' WHERE user_id = ?")
+    .run(created.user.id);
+  writer.close();
+
+  assert.equal(await repository.findDingTalkIdentityByUserId(created.user.id), null);
+});

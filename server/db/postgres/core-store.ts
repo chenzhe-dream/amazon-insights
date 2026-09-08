@@ -23,6 +23,7 @@ import type {
   AuthenticationRepository,
   AuthenticationUserRecord,
   CreateOAuthLoginStateInput,
+  DingTalkIdentityBinding,
   ConnectorStatusRecord,
   ConnectorStatusRepository,
   ConnectorCredentialRecord,
@@ -465,6 +466,30 @@ export class PostgresCoreStore
       );
       const row = result.rows[0];
       return row ? { user: mapUser(row), passwordHash: row.password_hash === null ? null : requireString(row.password_hash) } : null;
+    });
+  }
+
+  findDingTalkIdentityByUserId(userId: string): Promise<DingTalkIdentityBinding | null> {
+    const parsed = EntityIdSchema.safeParse(userId);
+    if (!parsed.success) return Promise.resolve(null);
+    return this.#execute(async () => {
+      const result = await this.#queries.query<PostgresRow>(
+        `SELECT identity.user_id, users.organization_id,
+                identity.corp_id, identity.subject_id
+           FROM auth_identities identity
+           JOIN users ON users.id = identity.user_id
+          WHERE identity.provider = 'dingtalk' AND identity.user_id = $1
+          LIMIT 1`,
+        [parsed.data],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return Object.freeze({
+        userId: requireString(row.user_id),
+        organizationId: requireString(row.organization_id),
+        corpId: requireString(row.corp_id),
+        subjectId: requireString(row.subject_id),
+      });
     });
   }
 

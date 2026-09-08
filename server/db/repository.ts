@@ -69,6 +69,13 @@ export interface ActiveSessionPrincipalRecord {
   readonly role: "admin" | "member";
 }
 
+export type DingTalkIdentityBinding = Readonly<{
+  userId: string;
+  organizationId: string;
+  corpId: string;
+  subjectId: string;
+}>;
+
 export interface OAuthLoginStateRecord {
   readonly stateHash: string;
   readonly returnPath: string;
@@ -121,6 +128,9 @@ export interface AuthenticationRepository
   findAuthenticationUserById?(
     userId: string,
   ): Promise<AuthenticationUserRecord | null>;
+  findDingTalkIdentityByUserId?(
+    userId: string,
+  ): Promise<DingTalkIdentityBinding | null>;
   createSession(session: SessionRecord): Promise<SessionRecord>;
   findActiveSessionPrincipalByTokenHash(input: {
     tokenHash: string;

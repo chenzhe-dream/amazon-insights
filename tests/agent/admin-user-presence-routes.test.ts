@@ -58,6 +58,20 @@ class FakeAuthService {
   async authenticate(rawToken: string | null) {
     return rawToken === RAW_TOKEN ? this.currentPrincipal : null;
   }
+
+  async findPublicUser(userId: string) {
+    if (!this.currentPrincipal || this.currentPrincipal.userId !== userId) return null;
+    return {
+      id: this.currentPrincipal.userId,
+      organizationId: this.currentPrincipal.organizationId,
+      email: this.currentPrincipal.email,
+      displayName: "Synthetic Current User",
+      role: this.currentPrincipal.role,
+      status: "active" as const,
+      createdAt: "2026-09-09T00:00:00.000Z",
+      updatedAt: "2026-09-09T00:00:00.000Z",
+    };
+  }
 }
 
 function asAuthService(service: FakeAuthService): AuthenticationService {
@@ -129,6 +143,7 @@ function proxyHeaders(withSession = true) {
 function buildPresenceApp(
   role: "admin" | "member" | null,
   repository: AdminUserPresenceRepository | null,
+  allowed = role === "admin",
 ) {
   return buildAgentApp({
     env: securityEnv(),
@@ -137,6 +152,9 @@ function buildPresenceApp(
       new FakeAuthService(role === null ? null : principal(role)),
     ),
     adminUserPresenceRepository: repository,
+    userPresenceAccess: {
+      canView: async () => allowed,
+    },
   });
 }
 
@@ -148,7 +166,7 @@ function assertPublicPayload(payload: unknown) {
   );
 }
 
-test("admin presence GET is centrally authenticated and admin-only", async (t) => {
+test("user presence GET is centrally authenticated and denied without dedicated permission", async (t) => {
   const repository = new FakePresenceRepository();
   const unauthenticated = buildPresenceApp(null, repository);
   const member = buildPresenceApp("member", repository);
@@ -173,6 +191,106 @@ test("admin presence GET is centrally authenticated and admin-only", async (t) =
   assert.equal(forbidden.statusCode, 403);
   assertPublicPayload(forbidden.json());
   assert.equal(repository.listCalls.length, 0);
+});
+
+test("user presence GET uses its dedicated permission instead of administrator role", async (t) => {
+  const repository = new FakePresenceRepository();
+  const permittedMember = buildPresenceApp("member", repository, true);
+  const deniedAdmin = buildPresenceApp("admin", repository, false);
+  t.after(async () => {
+    await permittedMember.close();
+    await deniedAdmin.close();
+  });
+
+  const permitted = await permittedMember.inject({
+    method: "GET",
+    url: "/v1/admin/users",
+    headers: proxyHeaders(),
+  });
+  assert.equal(permitted.statusCode, 200);
+
+  const denied = await deniedAdmin.inject({
+    method: "GET",
+    url: "/v1/admin/users",
+    headers: proxyHeaders(),
+  });
+  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.json().error.code, "FORBIDDEN");
+  assert.equal(repository.listCalls.length, 1);
+});
+
+test("buildAgentApp constructs the production access evaluator from supplied configuration", async (t) => {
+  const repository = new FakePresenceRepository();
+  const app = buildAgentApp({
+    env: {
+      ...securityEnv(),
+      AGENT_USER_PRESENCE_ORGANIZATION_ID: INTERNAL_ORGANIZATION,
+      AGENT_USER_PRESENCE_PRIMARY_USER_ID: INTERNAL_ADMIN,
+      AGENT_USER_PRESENCE_PRIMARY_EMAIL: "admin@example.com",
+      AGENT_USER_PRESENCE_DINGTALK_USER_ID: "",
+      AGENT_USER_PRESENCE_DINGTALK_CORP_ID: "",
+      AGENT_USER_PRESENCE_DINGTALK_SUBJECT_ID: "",
+    },
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal("admin"))),
+    adminUserPresenceRepository: repository,
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/admin/users",
+    headers: proxyHeaders(),
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(repository.listCalls.length, 1);
+});
+
+test("user presence permission is rechecked per request and failures deny before listing", async (t) => {
+  const repository = new FakePresenceRepository();
+  let allowed = true;
+  const app = buildAgentApp({
+    env: securityEnv(),
+    authConfig,
+    authService: asAuthService(new FakeAuthService(principal("admin"))),
+    adminUserPresenceRepository: repository,
+    userPresenceAccess: {
+      async canView() {
+        if (allowed) return true;
+        throw new Error("private permission source failure");
+      },
+    },
+  });
+  t.after(() => app.close());
+
+  const first = await app.inject({
+    method: "GET",
+    url: "/v1/admin/users",
+    headers: proxyHeaders(),
+  });
+  assert.equal(first.statusCode, 200);
+  allowed = false;
+  const revoked = await app.inject({
+    method: "GET",
+    url: "/v1/admin/users",
+    headers: proxyHeaders(),
+  });
+  assert.equal(revoked.statusCode, 403);
+  assert.equal(revoked.json().error.code, "FORBIDDEN");
+  assert.equal(repository.listCalls.length, 1);
+});
+
+test("a permitted presence member remains blocked from unrelated administrator routes", async (t) => {
+  const app = buildPresenceApp("member", new FakePresenceRepository(), true);
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/v1/admin/concurrency",
+    headers: proxyHeaders(),
+  });
+  assert.equal(response.statusCode, 403);
+  assert.equal(response.json().error.code, "FORBIDDEN");
 });
 
 test("admin presence GET scopes the repository and shares one server asOf with the strict response", async (t) => {

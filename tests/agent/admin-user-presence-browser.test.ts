@@ -94,6 +94,21 @@ test("admin presence helper rejects non-OK, malformed, unknown, sensitive, and p
   }
 });
 
+test("admin presence helper exposes only a typed forbidden classification for 403", async () => {
+  await assert.rejects(
+    readAdminUserPresence(
+      new AbortController().signal,
+      async () => Response.json({ error: { message: "private details" } }, { status: 403 }),
+    ),
+    (error: unknown) => {
+      assert.equal((error as { kind?: unknown }).kind, "forbidden");
+      assert.equal(error instanceof Error ? error.message : "", ADMIN_USER_PRESENCE_ERROR_MESSAGE);
+      assert.doesNotMatch(String(error), /private details/);
+      return true;
+    },
+  );
+});
+
 test("admin presence helper preserves the shared authentication-required notification on 401", async () => {
   const originalFetch = globalThis.fetch;
   let authenticationRequired = 0;
@@ -175,4 +190,43 @@ test("loader controller maps failures safely and ignores stopped or stale comple
   await Promise.resolve();
   await Promise.resolve();
   assert.deepEqual(replacementStates, ["loading", "loading", "empty"]);
+});
+
+test("loader clears data and revokes only the captured current session on forbidden", async () => {
+  const states: string[] = [];
+  const revoked: string[] = [];
+  const controller = new AdminUserPresenceLoaderController(async () => {
+    const error = new Error(ADMIN_USER_PRESENCE_ERROR_MESSAGE) as Error & { kind: string };
+    error.kind = "forbidden";
+    throw error;
+  });
+  controller.start(
+    (state) => states.push(state.status),
+    { sessionIdentity: "current-session", onForbidden: (identity) => revoked.push(identity) },
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(states, ["loading", "forbidden"]);
+  assert.deepEqual(revoked, ["current-session"]);
+
+  const stale = deferred<AdminUserPresenceResponse>();
+  const oldRevocations: string[] = [];
+  let call = 0;
+  const replacement = new AdminUserPresenceLoaderController(async () => {
+    call += 1;
+    if (call === 1) return stale.promise;
+    return { ...responseFixture, users: [] };
+  });
+  replacement.start(() => {}, {
+    sessionIdentity: "old-session",
+    onForbidden: (identity) => oldRevocations.push(identity),
+  });
+  replacement.start(() => {}, {
+    sessionIdentity: "new-session",
+    onForbidden: (identity) => oldRevocations.push(identity),
+  });
+  stale.reject(Object.assign(new Error(ADMIN_USER_PRESENCE_ERROR_MESSAGE), { kind: "forbidden" }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(oldRevocations, []);
 });

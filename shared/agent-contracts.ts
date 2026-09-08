@@ -855,7 +855,12 @@ export type LogoutResponse = z.infer<typeof LogoutResponseSchema>;
 
 const SessionIdentitySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 export const SessionResponseSchema = z.discriminatedUnion("authenticated", [
-  strictObject({ authenticated: z.literal(true), user: UserSchema, sessionIdentity: SessionIdentitySchema }),
+  strictObject({
+    authenticated: z.literal(true),
+    user: UserSchema,
+    sessionIdentity: SessionIdentitySchema,
+    canViewUserPresence: z.boolean().default(false),
+  }),
   strictObject({ authenticated: z.literal(false), user: z.null(), sessionIdentity: z.null() }),
 ]);
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;

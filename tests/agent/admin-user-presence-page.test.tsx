@@ -32,10 +32,12 @@ function user(role: User["role"]): User {
   };
 }
 
-function session(role: User["role"]): AuthenticatedWebSession {
+function session(role: User["role"], canViewUserPresence = false): AuthenticatedWebSession {
   return {
     user: user(role),
     sessionIdentity: "A".repeat(43),
+    canViewUserPresence,
+    revokeUserPresenceAccess: () => {},
     logout: async () => {},
     logoutPending: false,
     logoutError: null,
@@ -84,7 +86,7 @@ test("route composes the client boundary, which owns AuthSessionGate before admi
   assert.match(boundary, /<AuthSessionGate>[\s\S]*?<AdminUsersAuthenticatedPage/);
 });
 
-test("member renders denied without mounting admin content while admin mounts it", () => {
+test("capability denial never mounts admin content while a permitted member mounts it", () => {
   let mounts = 0;
   function Probe() {
     mounts += 1;
@@ -92,16 +94,17 @@ test("member renders denied without mounting admin content while admin mounts it
   }
 
   const memberHtml = renderToStaticMarkup(createElement(AdminUsersAuthenticatedPage, {
-    session: session("member"),
+    session: session("admin", false),
     classes,
     adminContent: createElement(Probe),
   }));
   assert.match(memberHtml, /无权访问/);
+  assert.match(memberHtml, /此页面仅供已授权账号查看。/);
   assert.doesNotMatch(memberHtml, /admin-loader-mounted|用户活动数据/);
   assert.equal(mounts, 0);
 
   const adminHtml = renderToStaticMarkup(createElement(AdminUsersAuthenticatedPage, {
-    session: session("admin"),
+    session: session("member", true),
     classes,
     adminContent: createElement(Probe),
   }));
@@ -151,14 +154,14 @@ test("safe formatting and rendered UI do not expose internal or sensitive vocabu
   assert.doesNotMatch(html, /cookie|token|hash|password|session[_ -]?id\b|organization[_ -]?id\b|user[_ -]?id\b|credential|ip address|backend-private-sentinel/i);
 });
 
-test("identity control renders the users link for admin only and both roles keep normal account controls", () => {
-  const member = renderToStaticMarkup(createElement(AuthIdentityControl, { session: session("member") }));
-  const admin = renderToStaticMarkup(createElement(AuthIdentityControl, { session: session("admin") }));
+test("identity control renders the users link only with capability and keeps normal account controls", () => {
+  const deniedAdmin = renderToStaticMarkup(createElement(AuthIdentityControl, { session: session("admin", false) }));
+  const permittedMember = renderToStaticMarkup(createElement(AuthIdentityControl, { session: session("member", true) }));
 
-  assert.doesNotMatch(member, /href="\/admin\/users"|用户状态/);
-  assert.match(admin, /href="\/admin\/users"/);
-  assert.match(admin, /用户状态/);
-  for (const html of [member, admin]) {
+  assert.doesNotMatch(deniedAdmin, /href="\/admin\/users"|用户状态/);
+  assert.match(permittedMember, /href="\/admin\/users"/);
+  assert.match(permittedMember, /用户状态/);
+  for (const html of [deniedAdmin, permittedMember]) {
     assert.match(html, /修改密码/);
     assert.match(html, /退出登录/);
   }

@@ -238,6 +238,7 @@ import type {
   CreateProjectOnceInput,
   CreateProjectResult,
   CreateOAuthLoginStateInput,
+  DingTalkIdentityBinding,
   EnqueueJobInput,
   FailJobInput,
   FeedbackAttachmentMetadata,
@@ -6889,6 +6890,28 @@ export class SqliteAgentRepository
            FROM users WHERE id = ?`,
       ).get(parsed) as SqliteRow | undefined;
       return row ? { user: mapUser(row), passwordHash: row.password_hash === null ? null : String(row.password_hash) } : null;
+    });
+  }
+
+  findDingTalkIdentityByUserId(userId: string): Promise<DingTalkIdentityBinding | null> {
+    const parsed = parseEntityIdOrNull(userId);
+    if (!parsed) return Promise.resolve(null);
+    return this.#serialize(() => {
+      const row = this.#database.prepare(
+        `SELECT identity.user_id, users.organization_id,
+                identity.corp_id, identity.subject_id
+           FROM auth_identities identity
+           JOIN users ON users.id = identity.user_id
+          WHERE identity.provider = 'dingtalk' AND identity.user_id = ?
+          LIMIT 1`,
+      ).get(parsed) as SqliteRow | undefined;
+      if (!row) return null;
+      return Object.freeze({
+        userId: String(row.user_id),
+        organizationId: String(row.organization_id),
+        corpId: String(row.corp_id),
+        subjectId: String(row.subject_id),
+      });
     });
   }
 
