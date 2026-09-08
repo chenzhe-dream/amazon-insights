@@ -30,7 +30,7 @@
 
 **Scope inside task:** XYDC-ANNUAL-V2，允许 B1 及供 B2 消费的可选事实事件回调。K1 保留12个月既有数据和展示。禁止 D1 月度新增交互/投影、D2饼图，以及 X1 正式服务/共享数据/主分支/远端/真实Provider改动。不实现进度UI或通用任务重构。
 
-**Files owned:** scripts/lib/xydc-mcp-client.ts；可新增 scripts/lib/xydc-request-coordination.ts、scripts/lib/xydc-mcp-session.ts（按职责拆分，不循环依赖）；scripts/lib/xydc-order-sync.ts；scripts/lib/xydc-order-cache.ts 或新 xydc-order-checkpoint.ts；相关 tests/scripts/xydc-mcp-client.test.ts、xydc-order-sync.test.ts 和新 xydc-request-coordination.test.ts、xydc-order-checkpoint.test.ts、tests/helpers/xydc-*.mjs/ts。本任务不改 page/worker/runner/共享锁实现/计划/进度台账。若必须调整已有函数接口，先查调用点并保留现有调用兼容。
+**Files owned:** scripts/lib/xydc-mcp-client.ts；可新增 scripts/lib/xydc-request-coordination.ts、scripts/lib/xydc-mcp-session.ts、必要时xydc-provider-error.ts（按职责拆分，不循环依赖）；scripts/lib/xydc-order-sync.ts；scripts/lib/xydc-order-cache.ts 或新 xydc-order-checkpoint.ts；相关 tests/scripts/xydc-mcp-client.test.ts、xydc-order-sync.test.ts 和新 xydc-request-coordination.test.ts、xydc-order-checkpoint.test.ts、tests/helpers/xydc-*.mjs/ts。本任务不改 page/worker/runner/共享锁实现/计划/进度台账。若必须调整已有函数接口，先查调用点并保留现有调用兼容。
 
 - [ ] **RED：先复现目前缺陷。** 新增本地 HTTP MCP fixture，记录全部方法/时间戳/连接和业务次数。测试多个业务调用应只initialize一次；任意HTTP相邻发送至少2000ms；现有实现应失败。另测一个成功子体后中断，重开只请求未完成子体；当前只末尾写缓存应失败。运行并记录精确失败断言，不以编译错误作为RED。
 - [ ] **协调契约。** 真实调用要求绝对服务器端 XYDC_COORDINATION_ROOT。键为规范化endpoint与trim后token的SHA256，不存原token、session ID或Provider响应。仅同主机/同目录协调；不共享其他runtimeRoot。缺失/非法目录报 NOT_CONFIGURED，无法安全读写/损坏状态报安全 RPC_ERROR，均不发请求。测试注入 callTool 维持离线兼容，不要求生产目录。
