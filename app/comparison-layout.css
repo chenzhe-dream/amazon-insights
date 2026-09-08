@@ -151,6 +151,87 @@
   .xydc-variant-drawer-children { grid-template-columns: minmax(0, 1fr); }
   .xydc-variant-drawer { padding: 16px; }
 }
+/* Annual parent-order cards replace the legacy variant preview while retaining its page boundary. */
+.xydc-order-section-head { align-items: flex-start; gap: 16px; }
+.xydc-order-source-badge { flex: none; padding: 6px 10px; border: 1px solid #b9d4f2; border-radius: 6px; background: #f5faff; color: #2769ad; font-size: 12px; font-weight: 700; }
+.xydc-order-scope-note { margin: 0 0 14px; padding: 8px 11px; border: 1px solid #cfe2fa; border-radius: 7px; background: #f3f8ff; color: #4b6784; font-size: 12px; line-height: 1.55; }
+.xydc-order-section-empty { color: #62758b; font-size: 12px; }
+.xydc-order-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.xydc-order-card { min-width: 0; border: 1px solid #dce5f2; border-radius: 12px; background: #fff; padding: 14px; overflow: hidden; }
+.xydc-order-card-head { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #e5ebf2; min-width: 0; }
+.xydc-order-parent-image { width: 72px; height: 72px; flex: none; object-fit: contain; border: 1px solid #dfe7f0; border-radius: 8px; background: #f5f7fa; }
+.xydc-order-parent-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.xydc-order-parent-copy>span { color: #7c8b9e; font-size: 11px; }
+.xydc-order-parent-copy>b { color: #17283d; font-size: 18px; line-height: 1.3; }
+.xydc-order-parent-copy>small { overflow: hidden; color: #66788d; font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.xydc-order-parent-links { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; color: #40536a; font-size: 12px; }
+.xydc-order-parent-links a,.xydc-order-table a,.xydc-order-detail-table a { color: #1769d3; font-family: var(--font-geist-mono),Consolas,monospace; font-size: 11px; text-decoration: none; }
+.xydc-order-parent-links a:hover,.xydc-order-table a:hover,.xydc-order-detail-table a:hover { text-decoration: underline; }
+.xydc-order-metric-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 13px 2px 10px; }
+.xydc-order-metric-row>div:first-child>span { display: block; color: #66788d; font-size: 11px; }
+.xydc-order-metric-row>div:first-child>strong { display: block; margin-top: 3px; color: #14243a; font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.xydc-order-state { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; }
+.xydc-order-state b { padding: 4px 7px; border-radius: 5px; font-size: 11px; }
+.xydc-order-state span { color: #62758b; font-size: 11px; }
+.xydc-order-state-complete b { border: 1px solid #8dd3a3; background: #effbf3; color: #237543; }
+.xydc-order-state-partial b { border: 1px solid #efc870; background: #fff9e9; color: #94600d; }
+.xydc-order-state-pending b { border: 1px solid #c9d3df; background: #f6f8fa; color: #627184; }
+.xydc-order-share { display: flex; min-height: 34px; overflow: hidden; border-radius: 6px; background: #edf1f5; }
+.xydc-order-share>span { display: grid; min-width: 0; place-items: center; overflow: hidden; color: #fff; font-size: 12px; font-weight: 750; white-space: nowrap; text-shadow: 0 1px 1px rgba(0,0,0,.18); }
+.xydc-order-legend,.xydc-order-dialog-legend { display: flex; flex-wrap: wrap; gap: 7px 13px; padding: 9px 2px; }
+.xydc-order-legend span,.xydc-order-dialog-legend span { display: inline-flex; min-width: 0; align-items: center; gap: 5px; color: #4f6075; font-size: 11px; }
+.xydc-order-legend i,.xydc-order-dialog-legend i,.xydc-order-table th i,.xydc-order-detail-table th i { width: 9px; height: 9px; flex: none; border-radius: 50%; }
+.xydc-order-table-wrap,.xydc-order-detail-table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid #dce4ed; border-radius: 7px; }
+.xydc-order-table,.xydc-order-detail-table { width: 100%; min-width: 520px; border-collapse: collapse; color: #40536a; font-size: 11px; }
+.xydc-order-table th,.xydc-order-table td,.xydc-order-detail-table th,.xydc-order-detail-table td { padding: 8px 9px; border-bottom: 1px solid #e7edf3; text-align: left; vertical-align: middle; }
+.xydc-order-table thead th,.xydc-order-detail-table thead th { background: #f7f9fc; color: #66778b; font-size: 10px; font-weight: 650; }
+.xydc-order-table tbody tr:last-child>* ,.xydc-order-detail-table tbody tr:last-child>* { border-bottom: 0; }
+.xydc-order-table tbody th,.xydc-order-detail-table tbody th { font-weight: 650; }
+.xydc-order-table tbody th>span,.xydc-order-detail-table tbody th>span { display: flex; align-items: center; gap: 5px; color: #263b54; }
+.xydc-order-table tbody th>a,.xydc-order-detail-table tbody th>a { display: block; margin-top: 3px; }
+.xydc-order-table td b { display: block; color: #273c55; font-size: 12px; }
+.xydc-order-table td small { display: block; margin-top: 2px; color: #66788d; font-size: 10px; }
+.xydc-order-open-detail { width: 100%; min-height: 36px; margin-top: 9px; padding: 7px 10px; border: 1px solid #4389de; border-radius: 6px; background: #fff; color: #1769d3; font-size: 12px; font-weight: 700; cursor: pointer; }
+.xydc-order-open-detail:hover { background: #f0f6ff; }
+.xydc-order-open-detail:focus-visible,.xydc-order-dialog button:focus-visible,.xydc-order-dialog select:focus-visible { outline: 2px solid #1769d3; outline-offset: 2px; }
+.xydc-order-meta { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 9px; color: #7a899a; font-size: 10px; line-height: 1.45; }
+.xydc-order-meta em { color: #9a661b; font-style: normal; font-weight: 700; }
+.xydc-order-warning,.xydc-order-empty-data { margin: 8px 0 0; padding: 7px 9px; border: 1px solid #efd18a; border-radius: 6px; background: #fff9eb; color: #8b5e15; font-size: 10px; line-height: 1.5; }
+.xydc-order-variant-note { margin: 9px 0 0; padding: 6px 8px; border-radius: 5px; background: #fff8e8; color: #8b5e15; font-size: 10px; line-height: 1.5; }
+.xydc-order-pending { display: grid; min-height: 138px; place-content: center; gap: 8px; padding: 18px; border: 1px solid #d9e0e8; border-radius: 8px; background: linear-gradient(#fafbfc,#f5f7f9); text-align: center; }
+.xydc-order-pending strong { color: #34465d; font-size: 15px; }
+.xydc-order-pending span { color: #708094; font-size: 11px; line-height: 1.55; }
+.xydc-order-dialog-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(21,35,52,.42); }
+.xydc-order-dialog { box-sizing: border-box; width: min(1050px,100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 18px; border-radius: 12px; background: #fff; box-shadow: 0 18px 60px rgba(20,35,53,.28); }
+.xydc-order-dialog>header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.xydc-order-dialog>header span,.xydc-order-dialog>header small { color: #68798e; font-size: 11px; }
+.xydc-order-dialog>header h4 { margin: 4px 0; color: #17283d; font-size: 18px; }
+.xydc-order-dialog-total { display: block; margin-top: 5px; color: #263b54; font-size: 12px; }
+.xydc-order-dialog>header button { min-width: 52px; min-height: 36px; border: 1px solid #d7e0e9; border-radius: 6px; background: #fff; color: #40536a; cursor: pointer; }
+.xydc-order-chart-description { margin: 11px 0 7px; color: #62758b; font-size: 11px; line-height: 1.55; }
+.xydc-order-chart { display: grid; height: 250px; grid-template-columns: repeat(12,minmax(28px,1fr)); gap: 8px; align-items: end; padding: 20px 14px 8px; border: 1px solid #dfe6ee; border-radius: 8px; background: repeating-linear-gradient(to top,#fff 0,#fff 49px,#e9eef4 50px); overflow-x: auto; }
+.xydc-order-month { display: flex; height: 100%; min-width: 28px; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; }
+.xydc-order-month-bar { display: flex; width: min(42px,100%); min-height: 4px; flex-direction: column-reverse; overflow: hidden; border-radius: 3px 3px 0 0; background: #edf1f5; }
+.xydc-order-month-bar>span { display: block; width: 100%; min-height: 0; }
+.xydc-order-month-bar>.xydc-order-month-gap { height: 2px!important; background: repeating-linear-gradient(90deg,#bec9d5 0,#bec9d5 3px,transparent 3px,transparent 6px)!important; }
+.xydc-order-month-bar>.xydc-order-month-undisclosed { height: 0!important; }
+.xydc-order-month>small { color: #728196; font-size: 9px; white-space: nowrap; }
+.xydc-order-detail-headline { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
+.xydc-order-detail-headline>b { color: #263b54; font-size: 14px; }
+.xydc-order-detail-headline label { display: flex; align-items: center; gap: 7px; color: #62758b; font-size: 11px; }
+.xydc-order-detail-headline select { min-height: 34px; border: 1px solid #d9e1ea; border-radius: 5px; background: #fff; color: #34465d; }
+.xydc-order-detail-table { min-width: 620px; }
+.xydc-order-dialog>footer { margin-top: 9px; color: #7a899a; font-size: 10px; }
+@media(max-width:900px) { .xydc-order-grid { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:600px) {
+  .xydc-order-section-head { display: block; }
+  .xydc-order-source-badge { display: inline-block; margin-top: 8px; }
+  .xydc-order-card { padding: 12px; }
+  .xydc-order-metric-row { align-items: flex-start; flex-direction: column; }
+  .xydc-order-state { align-items: flex-start; text-align: left; }
+  .xydc-order-dialog-backdrop { padding: 0; }
+  .xydc-order-dialog { width: 100%; max-height: 100vh; min-height: 100vh; border-radius: 0; padding: 14px; }
+}
 .price-strategy-cell p{margin:0 0 8px;color:#53657a;font-size:9px;line-height:1.58}.price-strategy-cell p:last-of-type{margin-bottom:6px}.price-strategy-cell p>b{display:inline-block;margin-right:5px;padding:2px 5px;border-radius:3px;background:#eaf3ff;color:#2f6fae;font-size:8px}.price-strategy-cell>small{display:block;padding-top:5px;border-top:1px dashed #e0e7ef;color:#8a97a6;font-size:7px}.no-data-text{color:#8a97a6;font-size:9px}
 .fba-fee-cell{display:flex;flex-direction:column;gap:3px}.fba-fee-cell strong{font-size:12px;color:#24354a}.fba-fee-cell small{color:#8a97a6;font-size:7px;line-height:1.35}
 .listing-images-card,

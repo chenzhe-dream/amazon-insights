@@ -3230,6 +3230,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             image: product.image,
           }))}
           families={runtimeAnalysisData?.variants.families ?? []}
+          orderFamilies={runtimeAnalysisData?.variantOrders.families ?? []}
           market={markets[market]}
         />
       </div>}
