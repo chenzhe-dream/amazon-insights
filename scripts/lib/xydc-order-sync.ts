@@ -9,6 +9,7 @@ import {
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
 import {
+  isCurrentXydcOrderTimestamp,
   isFreshXydcOrderCache,
   readXydcOrderSnapshot,
   writeXydcOrderSnapshot,
@@ -140,6 +141,24 @@ function completeSnapshot(snapshot: XydcOrderSnapshot | undefined) {
     && snapshot.children.every(child => completeChild(child, snapshot.window)));
 }
 
+function reusableChild(
+  snapshot: XydcOrderSnapshot,
+  child: XydcOrderChild,
+  window: XydcOrderWindow,
+  now: Date,
+) {
+  return snapshot.cacheState === "fresh"
+    && isCurrentXydcOrderTimestamp(snapshot.fetchedAt, now)
+    && isCurrentXydcOrderTimestamp(child.fetchedAt, now)
+    && completeChild(child, window);
+}
+
+type ChildWork = { key: string; country: string; asin: string };
+
+function childWorkKey(country: string, asin: string) {
+  return `${country}:${asin}`;
+}
+
 function failureChild(asin: string, fetchedAt: string, reasonCode: XydcOrderReason): XydcOrderChild {
   return { asin, trends: [], fetchedAt, reasonCode };
 }
@@ -184,15 +203,22 @@ export async function syncXydcOrderFamilies(
     if (!input.force && isFreshXydcOrderCache(prior, input.now)) freshIndexes.add(index);
     if (!input.force && prior) {
       for (const child of prior.children) {
-        if (completeChild(child, window) && !records.has(child.asin)) records.set(child.asin, child);
+        const key = childWorkKey(families[index]!.country, child.asin);
+        if (reusableChild(prior, child, window, input.now) && !records.has(key)) records.set(key, child);
       }
     }
   }
 
-  const orderedAsins = [...new Set(families.flatMap(family => family.children.map(child => child.asin)))];
-  const requiredAsins = new Set(families.flatMap((family, index) => freshIndexes.has(index)
+  const orderedWork = new Map<string, ChildWork>();
+  for (const family of families) {
+    for (const child of family.children) {
+      const key = childWorkKey(family.country, child.asin);
+      if (!orderedWork.has(key)) orderedWork.set(key, { key, country: family.country, asin: child.asin });
+    }
+  }
+  const requiredWork = new Set(families.flatMap((family, index) => freshIndexes.has(index)
     ? []
-    : family.children.map(child => child.asin)));
+    : family.children.map(child => childWorkKey(family.country, child.asin))));
   let lastRequestStart: number | undefined;
   let stopReason: XydcOrderReason | undefined;
   const request: ToolCall = input.callTool ?? (async ({ toolName, args, signal }) => callXydcTool(
@@ -211,7 +237,7 @@ export async function syncXydcOrderFamilies(
     if (remaining() <= 0) throw new XydcProviderError("BUDGET_EXHAUSTED");
   };
 
-  const oneRequest = async (asin: string) => {
+  const oneRequest = async (work: ChildWork) => {
     if (outerSignal.aborted) throw new XydcProviderError("CANCELLED");
     const budget = remaining();
     if (budget <= 0) throw new XydcProviderError("BUDGET_EXHAUSTED");
@@ -228,7 +254,7 @@ export async function syncXydcOrderFamilies(
       return await Promise.race([
         request({
           toolName: "get_asin_order_trends",
-          args: { asin, country: families[0]?.country ?? "US", start_month: window.startMonth, end_month: window.endMonth },
+          args: { asin: work.asin, country: work.country, start_month: window.startMonth, end_month: window.endMonth },
           signal,
         }),
         dependencies.timeout(timeoutMs, signal),
@@ -238,27 +264,27 @@ export async function syncXydcOrderFamilies(
     }
   };
 
-  for (const asin of orderedAsins) {
-    if (!requiredAsins.has(asin) || (!input.force && records.has(asin))) continue;
+  for (const work of orderedWork.values()) {
+    if (!requiredWork.has(work.key) || (!input.force && records.has(work.key))) continue;
     if (stopReason) {
-      records.set(asin, failureChild(asin, fetchedAt, stopReason));
+      records.set(work.key, failureChild(work.asin, fetchedAt, stopReason));
       continue;
     }
     if (!input.token.trim()) {
       stopReason = "NOT_CONFIGURED";
-      records.set(asin, failureChild(asin, fetchedAt, stopReason));
+      records.set(work.key, failureChild(work.asin, fetchedAt, stopReason));
       continue;
     }
     if (outerSignal.aborted) {
       stopReason = "CANCELLED";
-      records.set(asin, failureChild(asin, fetchedAt, stopReason));
+      records.set(work.key, failureChild(work.asin, fetchedAt, stopReason));
       continue;
     }
 
     let result: unknown;
     let reason: XydcOrderReason | undefined;
     try {
-      result = await oneRequest(asin);
+      result = await oneRequest(work);
     } catch (error) {
       reason = reasonForError(error, outerSignal);
       const retryAfterMs = error instanceof XydcProviderError ? error.retryAfterMs : undefined;
@@ -266,7 +292,7 @@ export async function syncXydcOrderFamilies(
         && retryAfterMs < remaining() && !outerSignal.aborted) {
         try {
           await wait(retryAfterMs);
-          result = await oneRequest(asin);
+          result = await oneRequest(work);
           reason = undefined;
         } catch (retryError) {
           reason = reasonForError(retryError, outerSignal);
@@ -276,10 +302,10 @@ export async function syncXydcOrderFamilies(
 
     if (reason === undefined) {
       try {
-        records.set(asin, projectXydcOrderChild({
+        records.set(work.key, projectXydcOrderChild({
           raw: result,
-          asin,
-          country: families[0]?.country ?? "US",
+          asin: work.asin,
+          country: work.country,
           window,
           fetchedAt,
         }));
@@ -287,7 +313,7 @@ export async function syncXydcOrderFamilies(
         reason = reasonForError(error, outerSignal);
       }
     }
-    if (reason !== undefined) records.set(asin, failureChild(asin, fetchedAt, reason));
+    if (reason !== undefined) records.set(work.key, failureChild(work.asin, fetchedAt, reason));
     if (reason === "AUTH_FAILED" || reason === "QUOTA_EXCEEDED" || reason === "CANCELLED" || reason === "BUDGET_EXHAUSTED") {
       stopReason = reason;
     }
@@ -301,7 +327,7 @@ export async function syncXydcOrderFamilies(
       snapshots.push(prior);
       continue;
     }
-    const children = family.children.map(child => records.get(child.asin)
+    const children = family.children.map(child => records.get(childWorkKey(family.country, child.asin))
       ?? failureChild(child.asin, fetchedAt, stopReason ?? (outerSignal.aborted ? "CANCELLED" : "BUDGET_EXHAUSTED")));
     const reasonCode = familyReason(children);
     const attemptedRefreshFailed = reasonCode !== null;

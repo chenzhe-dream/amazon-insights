@@ -9,7 +9,7 @@ import { AsinSchema, EntityIdSchema, GetProjectResponseSchema } from "../../shar
 import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
 import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
-import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
+import { isCurrentXydcOrderTimestamp, xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import { XydcOrderSnapshotSchema, type XydcOrderSnapshot, type XydcOrderWindow } from "../../shared/xydc-order-contract";
 import { getXydcOrderWindow, matchesXydcOrderSnapshot } from "../../shared/xydc-order-summary";
@@ -113,8 +113,8 @@ function readScopedXydcOrderFamilies(
       const raw = JSON.parse(fs.readFileSync(xydcOrderCachePath(dataRoot, family, window), "utf8"));
       const parsed = XydcOrderSnapshotSchema.safeParse(raw);
       if (!parsed.success || !matchesXydcOrderSnapshot(parsed.data, family, window)) return [];
-      const age = now.getTime() - Date.parse(parsed.data.fetchedAt);
-      if (!Number.isFinite(age) || age < 0 || age > 86_400_000) return [];
+      if (!isCurrentXydcOrderTimestamp(parsed.data.fetchedAt, now)
+        || parsed.data.children.some(child => !isCurrentXydcOrderTimestamp(child.fetchedAt, now))) return [];
       const identity = `${parsed.data.country}:${parsed.data.parentAsin}:${[...parsed.data.childAsins].sort().join(",")}`;
       if (seen.has(identity)) return [];
       seen.add(identity);
@@ -123,6 +123,29 @@ function readScopedXydcOrderFamilies(
       return [];
     }
   });
+}
+
+function groupXydcOrderLookupFamilies(families: readonly XydcVariantFamily[]): XydcVariantFamily[] {
+  const groups = new Map<string, {
+    family: XydcVariantFamily;
+    children: XydcVariantFamily["children"][number][];
+    seen: Set<string>;
+  }>();
+  for (const family of families) {
+    const key = `${family.country}:${family.parentAsin}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { family, children: [], seen: new Set<string>() };
+      groups.set(key, group);
+    }
+    for (const child of family.children) {
+      if (!group.seen.has(child.asin)) {
+        group.seen.add(child.asin);
+        group.children.push(child);
+      }
+    }
+  }
+  return [...groups.values()].map(group => ({ ...group.family, children: group.children }));
 }
 
 export function readGeneratedRuntimeAnalysisData(
@@ -168,6 +191,6 @@ export function readGeneratedRuntimeAnalysisData(
     priceStrategy: stageData("price_strategy"),
     imageRemarks: stageData("image_remarks"),
     variants: { families: variantFamilies },
-    variantOrders: { families: readOrderFamilies(variantFamilies, orderWindow, now) },
+    variantOrders: { families: readOrderFamilies(groupXydcOrderLookupFamilies(variantFamilies), orderWindow, now) },
   });
 }

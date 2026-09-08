@@ -87,6 +87,70 @@ test("runtime returns only current-window snapshots derived from authorized inpu
   }
 });
 
+test("runtime looks up the authorized country-parent child union without changing variant families", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-order-runtime-union-"));
+  const requested = ["B000000001", "B000000002", "B000000003"];
+  const first = variant(requested[0]!, "B0PARENT01", ["B0CHILD001"]);
+  const second = variant(requested[1]!, "B0PARENT01", ["B0CHILD002"]);
+  const union = variant(requested[0]!, "B0PARENT01", ["B0CHILD001", "B0CHILD002"]);
+  const unionSnapshot = orderSnapshot(union);
+  const cachePath = xydcOrderCachePath(dataRoot, union, unionSnapshot.window);
+  const previousRoot = process.env.AGENT_DATA_ROOT;
+  try {
+    await mkdir(path.dirname(cachePath), { recursive: true });
+    await writeFile(cachePath, JSON.stringify(unionSnapshot));
+    process.env.AGENT_DATA_ROOT = dataRoot;
+
+    const result = readGeneratedRuntimeAnalysisData(requested, "US", {
+      now,
+      readVariantFamilies: () => [first, second],
+    });
+    assert.deepEqual(result.variants.families, [first, second]);
+    assert.deepEqual(result.variantOrders.families, [unionSnapshot]);
+
+    const subset = readGeneratedRuntimeAnalysisData(requested, "US", {
+      now,
+      readVariantFamilies: () => [first],
+    });
+    assert.deepEqual(subset.variantOrders.families, []);
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_DATA_ROOT;
+    else process.env.AGENT_DATA_ROOT = previousRoot;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("runtime rejects current-top snapshots with expired or future child timestamps", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-order-runtime-child-age-"));
+  const requested = ["B000000001", "B000000002", "B000000003"];
+  const authorized = variant(requested[0]!, "B0PARENT01", ["B0CHILD001"]);
+  const previousRoot = process.env.AGENT_DATA_ROOT;
+  try {
+    process.env.AGENT_DATA_ROOT = dataRoot;
+    for (const [caseName, childAt] of [
+      ["expired", new Date("2026-09-07T08:59:59.999Z")],
+      ["future", new Date("2026-09-08T09:00:00.001Z")],
+    ] as const) {
+      const snapshot = orderSnapshot(authorized);
+      snapshot.children[0] = { ...snapshot.children[0]!, fetchedAt: childAt.toISOString() };
+      const cachePath = xydcOrderCachePath(path.join(dataRoot, caseName), authorized, snapshot.window);
+      await mkdir(path.dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, JSON.stringify(snapshot));
+      process.env.AGENT_DATA_ROOT = path.join(dataRoot, caseName);
+
+      const result = readGeneratedRuntimeAnalysisData(requested, "US", {
+        now,
+        readVariantFamilies: () => [authorized],
+      });
+      assert.deepEqual(result.variantOrders.families, [], caseName);
+    }
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_DATA_ROOT;
+    else process.env.AGENT_DATA_ROOT = previousRoot;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test("missing or malformed order caches are an empty optional runtime member", () => {
   const requested = ["B000000001", "B000000002", "B000000003"];
   const snapshot = readGeneratedRuntimeAnalysisData(requested, "US", {

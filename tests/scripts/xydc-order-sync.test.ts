@@ -23,10 +23,15 @@ import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 const now = new Date("2026-09-08T09:00:00.000Z");
 const months = getXydcOrderWindow(now).months;
 
-function family(parentAsin: string, childAsins: readonly string[], inputAsin = childAsins[0]!): XydcVariantFamily {
+function family(
+  parentAsin: string,
+  childAsins: readonly string[],
+  inputAsin = childAsins[0]!,
+  country = "US",
+): XydcVariantFamily {
   return {
     inputAsin,
-    country: "US",
+    country,
     parentAsin,
     dimensions: ["Color"],
     children: childAsins.map(asin => ({
@@ -41,13 +46,13 @@ function family(parentAsin: string, childAsins: readonly string[], inputAsin = c
   };
 }
 
-function response(asin: string, selectedMonths: readonly string[] = months, orders = 100) {
+function response(asin: string, selectedMonths: readonly string[] = months, orders = 100, country = "US") {
   return {
     status: 200,
     cost_credits: 2,
     data: {
       asin,
-      country: "US",
+      country,
       dateRangeNotice: "provider availability notice",
       trends: selectedMonths.map(date => ({ date, orders })),
     },
@@ -170,6 +175,168 @@ test("partial cache resumes only missing child histories and preserves reused fe
   assert.equal(resumed[0]?.reasonCode, null);
   assert.equal(resumed[0]?.children.find(child => child.asin === "B0CHILD001")?.fetchedAt, later.toISOString());
   assert.equal(resumed[0]?.children.find(child => child.asin === "B0CHILD002")?.fetchedAt, now.toISOString());
+}));
+
+test("expired and future-dated complete caches are recollected instead of laundered", async () => scratch(async dataRoot => {
+  const target = family("B0PARENT01", ["B0CHILD001"]);
+  await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now, dataRoot,
+    callTool: async ({ args }) => response(args.asin as string, months, 100),
+  }, fakeTime().dependencies);
+
+  let expiredCalls = 0;
+  const expiredNow = new Date("2026-09-10T09:00:00.000Z");
+  const [expired] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: expiredNow, dataRoot,
+    callTool: async ({ args }) => {
+      expiredCalls += 1;
+      return response(args.asin as string, months, 200);
+    },
+  }, fakeTime().dependencies);
+  assert.equal(expiredCalls, 1);
+  assert.equal(expired?.children[0]?.trends[0]?.orders, 200);
+  assert.equal(expired?.children[0]?.fetchedAt, expiredNow.toISOString());
+
+  const futureRoot = path.join(dataRoot, "future");
+  const futureNow = new Date("2026-09-10T09:00:00.000Z");
+  await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: futureNow, dataRoot: futureRoot,
+    callTool: async ({ args }) => response(args.asin as string, months, 300),
+  }, fakeTime().dependencies);
+  let futureCalls = 0;
+  const [recollected] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now, dataRoot: futureRoot,
+    callTool: async ({ args }) => {
+      futureCalls += 1;
+      return response(args.asin as string, months, 400);
+    },
+  }, fakeTime().dependencies);
+  assert.equal(futureCalls, 1);
+  assert.equal(recollected?.children[0]?.trends[0]?.orders, 400);
+  assert.equal(recollected?.children[0]?.fetchedAt, now.toISOString());
+}));
+
+test("a failed-refresh stale fallback is retried and only becomes fresh after collection", async () => scratch(async dataRoot => {
+  const target = family("B0PARENT01", ["B0CHILD001"]);
+  await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now, dataRoot,
+    callTool: async ({ args }) => response(args.asin as string, months, 100),
+  }, fakeTime().dependencies);
+
+  const failedAt = new Date("2026-09-08T10:00:00.000Z");
+  const [stale] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: failedAt, dataRoot, force: true,
+    callTool: async () => { throw new XydcProviderError("RPC_ERROR"); },
+  }, fakeTime().dependencies);
+  assert.equal(stale?.cacheState, "stale");
+
+  let retryCalls = 0;
+  const recoveredAt = new Date("2026-09-08T11:00:00.000Z");
+  const [recovered] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: recoveredAt, dataRoot,
+    callTool: async ({ args }) => {
+      retryCalls += 1;
+      return response(args.asin as string, months, 200);
+    },
+  }, fakeTime().dependencies);
+  assert.equal(retryCalls, 1);
+  assert.equal(recovered?.cacheState, "fresh");
+  assert.equal(recovered?.reasonCode, null);
+  assert.equal(recovered?.children[0]?.trends[0]?.orders, 200);
+}));
+
+test("partial resume recollects an aged complete child and preserves an eligible sibling", async () => scratch(async dataRoot => {
+  const target = family("B0PARENT01", ["B0CHILD001", "B0CHILD002", "B0CHILD003"]);
+  const observedAt = new Date("2026-09-09T12:00:00.000Z");
+  const eligibleAt = new Date("2026-09-09T11:00:00.000Z").toISOString();
+  const agedAt = new Date("2026-09-08T09:00:00.000Z").toISOString();
+  const snapshot: XydcOrderSnapshot = {
+    version: 1, source: "xydc", aggregation: "children", country: "US", parentAsin: target.parentAsin,
+    childAsins: target.children.map(child => child.asin), window: getXydcOrderWindow(observedAt),
+    children: [
+      { asin: "B0CHILD001", trends: response("B0CHILD001").data.trends, fetchedAt: agedAt, reasonCode: null },
+      { asin: "B0CHILD002", trends: response("B0CHILD002").data.trends, fetchedAt: eligibleAt, reasonCode: null },
+      { asin: "B0CHILD003", trends: response("B0CHILD003", months.slice(0, 2)).data.trends, fetchedAt: eligibleAt, reasonCode: "PARTIAL_DATA" },
+    ],
+    sourceUpdatedAt: null, fetchedAt: eligibleAt, cacheState: "fresh", reasonCode: "PARTIAL_DATA",
+  };
+  await writeXydcOrderSnapshot(dataRoot, target, snapshot);
+
+  const calls: string[] = [];
+  const [resumed] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: observedAt, dataRoot,
+    callTool: async ({ args }) => {
+      calls.push(args.asin as string);
+      return response(args.asin as string, months, 200);
+    },
+  }, fakeTime().dependencies);
+  assert.deepEqual(calls, ["B0CHILD001", "B0CHILD003"]);
+  assert.equal(resumed?.children.find(child => child.asin === "B0CHILD001")?.fetchedAt, observedAt.toISOString());
+  assert.equal(resumed?.children.find(child => child.asin === "B0CHILD002")?.fetchedAt, eligibleAt);
+}));
+
+test("mixed-age assembled snapshots expire when their oldest child reaches 24 hours", async () => scratch(async dataRoot => {
+  const target = family("B0PARENT01", ["B0CHILD001", "B0CHILD002"]);
+  await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now, dataRoot,
+    callTool: async ({ args }) => args.asin === "B0CHILD001"
+      ? response("B0CHILD001")
+      : response("B0CHILD002", months.slice(0, 2)),
+  }, fakeTime().dependencies);
+
+  const resumedAt = new Date("2026-09-09T08:00:00.000Z");
+  const [assembled] = await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: resumedAt, dataRoot,
+    callTool: async ({ args }) => response(args.asin as string, months, 200),
+  }, fakeTime().dependencies);
+  assert.equal(assembled?.fetchedAt, resumedAt.toISOString());
+  assert.equal(assembled?.children.find(child => child.asin === "B0CHILD001")?.fetchedAt, now.toISOString());
+  assert.equal(isFreshXydcOrderCache(assembled, new Date("2026-09-09T08:59:59.999Z")), true);
+  assert.equal(isFreshXydcOrderCache(assembled, new Date("2026-09-09T09:00:00.001Z")), false);
+
+  const calls: string[] = [];
+  await syncXydcOrderFamilies({
+    families: [target], token: "fixture-token", now: new Date("2026-09-09T09:00:00.001Z"), dataRoot,
+    callTool: async ({ args }) => {
+      calls.push(args.asin as string);
+      return response(args.asin as string, months, 300);
+    },
+  }, fakeTime().dependencies);
+  assert.deepEqual(calls, ["B0CHILD001"]);
+}));
+
+test("shared ASIN work is deduplicated per market and rejects a response from the wrong market", async () => scratch(async dataRoot => {
+  const us = family("B0PARENT01", ["B0CHILD001"], "B0CHILD001", "US");
+  const uk = family("B0PARENT02", ["B0CHILD001"], "B0CHILD001", "UK");
+  const calls: Record<string, unknown>[] = [];
+  const snapshots = await syncXydcOrderFamilies({
+    families: [us, uk], token: "fixture-token", now, dataRoot,
+    callTool: async ({ args }) => {
+      calls.push(args);
+      const country = args.country as string;
+      return response(args.asin as string, months, country === "US" ? 100 : 200, country);
+    },
+  }, fakeTime().dependencies);
+  assert.deepEqual(calls, [
+    { asin: "B0CHILD001", country: "US", start_month: "2025-09", end_month: "2026-08" },
+    { asin: "B0CHILD001", country: "UK", start_month: "2025-09", end_month: "2026-08" },
+  ]);
+  assert.deepEqual(snapshots.map(snapshot => [snapshot.country, snapshot.children[0]?.trends[0]?.orders]), [
+    ["US", 100], ["UK", 200],
+  ]);
+
+  const mismatchCalls: string[] = [];
+  const mismatched = await syncXydcOrderFamilies({
+    families: [us, uk], token: "fixture-token", now, dataRoot: path.join(dataRoot, "mismatch"),
+    callTool: async ({ args }) => {
+      const country = args.country as string;
+      mismatchCalls.push(country);
+      return response(args.asin as string, months, 100, country === "UK" ? "US" : country);
+    },
+  }, fakeTime().dependencies);
+  assert.deepEqual(mismatchCalls, ["US", "UK"]);
+  assert.equal(mismatched[0]?.reasonCode, null);
+  assert.equal(mismatched[1]?.reasonCode, "SCHEMA_INVALID");
 }));
 
 test("failed forced refresh preserves an intact complete same-window snapshot as stale", async () => scratch(async dataRoot => {
