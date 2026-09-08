@@ -25,6 +25,12 @@ function monthDisclosedTotal(snapshot: NonNullable<XydcOrderCardModel["snapshot"
   return snapshot.children.reduce((sum, child) => sum + (child.trends.find(trend => trend.date === month)?.orders ?? 0), 0);
 }
 
+function accessibleMonthlyOrder(orders: number | null) {
+  if (orders === null) return "缺失";
+  if (orders === 0) return "未披露";
+  return `${orders.toLocaleString("en-US")} 单`;
+}
+
 export function XydcOrderDetail({
   model,
   market,
@@ -103,32 +109,49 @@ export function XydcOrderDetail({
         <p className="xydc-order-chart-description" id="xydc-order-chart-description">
           堆叠柱状图按月展示全部 {summary?.expectedChildren ?? group.children.length} 个子体的已披露订单；缺失月份保留为空缺，原始零值标记为未披露。
         </p>
-        <div className="xydc-order-chart" role="img" aria-describedby="xydc-order-chart-description">
+        <div className="xydc-order-chart" aria-hidden="true">
           {orderWindow.months.map(month => {
             const values = summary?.months.find(item => item.date === month)?.values
               ?? childAsins.map(asin => ({ asin, orders: null }));
             const monthTotal = snapshot ? monthDisclosedTotal(snapshot, month) : 0;
             return <div className="xydc-order-month" data-order-month={month} key={month}>
-              <div className="xydc-order-month-bar" style={{ height: `${Math.max(4, monthTotal / maximum * 100)}%` }}>
-                {values.map(value => {
-                  const height = value.orders && monthTotal > 0 ? value.orders / monthTotal * 100 : 0;
-                  return value.orders === null ? <span className="xydc-order-month-gap" key={value.asin} aria-label={`${month} ${value.asin} 缺失`} /> : (
+              <div className="xydc-order-month-plot">
+                {monthTotal > 0 ? <div className="xydc-order-month-bar" style={{ height: `${monthTotal / maximum * 100}%` }}>
+                  {values.filter(value => value.orders !== null && value.orders > 0).map(value => {
+                    const height = value.orders! / monthTotal * 100;
+                    return (
                     <span
                       key={value.asin}
                       data-order-asin={value.asin}
                       data-order-color={colors.get(value.asin)}
-                      className={value.orders === 0 ? "xydc-order-month-undisclosed" : ""}
                       style={{ height: `${height}%`, background: colors.get(value.asin) }}
-                      aria-label={`${month} ${value.asin} ${value.orders === 0 ? "未披露" : `${value.orders} 单`}`}
-                      title={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders === 0 ? "未披露" : `${value.orders.toLocaleString("en-US")}+`}`}
+                      title={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders!.toLocaleString("en-US")}+`}
                     />
                   );
-                })}
+                  })}
+                </div> : null}
+              </div>
+              <div className="xydc-order-month-markers">
+                {values.filter(value => value.orders === null || value.orders === 0).map(value => <span
+                  key={value.asin}
+                  className={value.orders === null ? "xydc-order-month-gap" : "xydc-order-month-undisclosed"}
+                  title={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${accessibleMonthlyOrder(value.orders)}`}
+                />)}
               </div>
               <small>{month.slice(2)}</small>
             </div>;
           })}
         </div>
+        <table className="xydc-order-monthly-a11y xydc-order-visually-hidden">
+          <caption>逐月全部子体订单明细</caption>
+          <thead><tr><th scope="col">月份</th>{childAsins.map(asin => <th scope="col" key={asin}>{asin}</th>)}</tr></thead>
+          <tbody>{orderWindow.months.map(month => {
+            const values = summary?.months.find(item => item.date === month)?.values
+              ?? childAsins.map(asin => ({ asin, orders: null }));
+            const valueByAsin = new Map(values.map(value => [value.asin, value.orders]));
+            return <tr key={month}><th scope="row">{month}</th>{childAsins.map(asin => <td key={asin}>{accessibleMonthlyOrder(valueByAsin.get(asin) ?? null)}</td>)}</tr>;
+          })}</tbody>
+        </table>
         <div className="xydc-order-dialog-legend">
           {childAsins.map(asin => <span key={asin} data-order-asin={asin} data-order-color={colors.get(asin)}><i style={{ background: colors.get(asin) }} />{orderAttributeLabel(childByAsin.get(asin))}</span>)}
         </div>

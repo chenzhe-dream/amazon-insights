@@ -66,6 +66,13 @@ test("groups matching input ASINs into one parent order card without changing th
   assert.match(html, /已识别 4 个子体/);
   assert.match(html, /查看全部 4 个子体/);
   assert.doesNotMatch(html, /查看全部 4 个子体与月度趋势/);
+  assert.match(html, /输入 ASIN/);
+  assert.ok(html.indexOf(inputAsins[0]!) < html.indexOf(inputAsins[1]!), "input ASIN links keep original input order");
+  for (const asin of inputAsins) assert.match(html, new RegExp(`href="https://www\\.amazon\\.com/dp/${asin}"`));
+  assert.equal((html.match(/data-order-preview-row=/g) ?? []).length, 3);
+  assert.match(html, /Color 1/);
+  assert.match(html, /USD 11\.00/);
+  assert.doesNotMatch(html, /本次采集时间|>0\+<|>未披露</);
 });
 
 test("preserves input order for cards and representative catalog products", () => {
@@ -136,6 +143,32 @@ test("keeps catalog placeholders, variant source timestamps, and Chinese variant
   assert.match(html, /变体来源更新时间：2026-09-04T00:00:00.000Z/);
   assert.match(html, /变体采集时间：2026-09-04T01:00:00.000Z/);
   for (const [, label] of reasonCases) assert.match(html, new RegExp(label));
+});
+
+test("keeps child information states and variant cache identity distinct while orders are pending", () => {
+  const children = [
+    { ...childFixture(1), infoStatus: "pending" as const, price: 11.25, listingDate: null },
+    { ...childFixture(2), infoStatus: "unavailable" as const, price: 12.5, listingDate: null },
+  ];
+  const html = renderSection([familyFixture(inputAsins[0]!, {
+    children,
+    status: "partial",
+    reasonCode: "PARTIAL_CHILD_INFO",
+    cacheState: "stale",
+    sourceUpdatedAt: "2026-09-03T02:00:00.000Z",
+    fetchedAt: "2026-09-04T03:00:00.000Z",
+  })]);
+
+  assert.match(html, /子体信息待补充/);
+  assert.match(html, /子体信息不可用/);
+  assert.match(html, /变体缓存数据/);
+  assert.doesNotMatch(html, /订单缓存数据/);
+  assert.match(html, /部分子体详情暂未返回/);
+  assert.match(html, /变体来源更新时间：2026-09-03T02:00:00.000Z/);
+  assert.match(html, /变体采集时间：2026-09-04T03:00:00.000Z/);
+  assert.equal((html.match(/data-order-preview-row=/g) ?? []).length, 2);
+  assert.match(html, /USD 11\.25/);
+  assert.match(html, /USD 12\.50/);
 });
 
 test("uses ordinary Amazon links with safe new-tab attributes", () => {

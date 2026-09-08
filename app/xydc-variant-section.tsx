@@ -124,9 +124,10 @@ function buildModels(props: XydcVariantSectionProps) {
   const productByAsin = new Map(props.products.map((product, index) => [product.asin, { product, index }]));
   const window = getXydcOrderWindow(new Date());
   return groupXydcVariantFamilies(props.families).map(group => {
+    const familyInputOrder = new Map(group.inputAsins.map((asin, index) => [asin, index]));
     const orderedInputs = [...group.inputAsins].sort((left, right) =>
       (productByAsin.get(left)?.index ?? Number.POSITIVE_INFINITY) - (productByAsin.get(right)?.index ?? Number.POSITIVE_INFINITY)
-        || left.localeCompare(right),
+        || (familyInputOrder.get(left) ?? Number.POSITIVE_INFINITY) - (familyInputOrder.get(right) ?? Number.POSITIVE_INFINITY),
     );
     const productEntry = orderedInputs.map(asin => productByAsin.get(asin)).find(Boolean);
     return {
@@ -179,17 +180,16 @@ function XydcVariantSectionBody({
 function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
   const { families, market, orderFamilies, products } = props;
   const models = React.useMemo(() => buildModels({ families, market, orderFamilies, products }), [families, market, orderFamilies, products]);
-  const [openedKey, setOpenedKey] = React.useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = React.useState<XydcOrderCardModel | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const opened = openedKey ? models.find(model => `${model.group.country}:${model.group.parentAsin}` === openedKey) : null;
-  const openedModel = opened ?? null;
+  const openedModel = selectedModel && models.includes(selectedModel) ? selectedModel : null;
   const close = React.useCallback(() => {
-    setOpenedKey(null);
+    setSelectedModel(null);
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
   const open = React.useCallback((model: XydcOrderCardModel, trigger: HTMLButtonElement) => {
     triggerRef.current = trigger;
-    setOpenedKey(`${model.group.country}:${model.group.parentAsin}`);
+    setSelectedModel(model);
   }, []);
   return <>
     <XydcVariantSectionBody props={props} models={models} onOpen={open} />

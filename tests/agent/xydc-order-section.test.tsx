@@ -60,6 +60,7 @@ function orderFixture({
   cacheState = "fresh",
   reasonCode = null,
   sourceUpdatedAt = "2026-09-04T00:00:00.000Z",
+  missing = {},
 }: {
   parentAsin?: string;
   childAsins?: string[];
@@ -67,6 +68,7 @@ function orderFixture({
   cacheState?: XydcOrderSnapshot["cacheState"];
   reasonCode?: XydcOrderReason | null;
   sourceUpdatedAt?: string | null;
+  missing?: Readonly<Record<string, readonly string[]>>;
 } = {}): XydcOrderSnapshot {
   return {
     version: 1,
@@ -78,7 +80,9 @@ function orderFixture({
     window: { startMonth: months[0]!, endMonth: months.at(-1)!, months },
     children: childAsins.map((asin, index) => ({
       asin,
-      trends: (values[index] ?? []).map((orders, monthIndex) => ({ date: months[monthIndex]!, orders })),
+      trends: (values[index] ?? [])
+        .map((orders, monthIndex) => ({ date: months[monthIndex]!, orders }))
+        .filter(trend => !missing[asin]?.includes(trend.date)),
       fetchedAt: `2026-09-04T0${Math.min(index + 1, 9)}:00:00.000Z`,
       reasonCode: reasonCode === "PARTIAL_DATA" && index === childAsins.length - 1 ? "PARTIAL_DATA" : null,
     })),
@@ -122,6 +126,7 @@ test("renders fixed-window annual parent cards from the complete family denomina
   assert.match(html, /11\.02%/);
   assert.match(html, /查看全部 4 个子体与月度趋势/);
   assert.equal((html.match(/data-order-preview-row=/g) ?? []).length, 3);
+  assert.match(html, /输入 ASIN/);
   assert.match(html, /4\/4 个子体返回/);
   assert.match(html, /12\/12 月/);
   assert.doesNotMatch(html, /近30天|评论占比|独立评论数/);
@@ -129,6 +134,20 @@ test("renders fixed-window annual parent cards from the complete family denomina
   const link = html.match(/<a[^>]+href="https:\/\/www\.amazon\.com\/dp\/B000000001"[^>]*>/)?.[0] ?? "";
   assert.match(link, /target="_blank"/);
   assert.match(link, /rel="noopener noreferrer"/);
+});
+
+test("labels every matched input ASIN in input order even when one is outside the annual top three", t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  const inputOrder = ["B000000002", "B000000004"];
+  const html = renderSection(
+    inputOrder.map(asin => familyFixture("B000000010", asin)),
+    [orderFixture()],
+    inputOrder.map((asin, index) => ({ asin, brand: `INPUT ${index + 1}`, title: `Input ${index + 1}`, image: fixtureImage })),
+  );
+
+  assert.ok(html.indexOf(`data-order-input-asin="${inputOrder[0]}"`) < html.indexOf(`data-order-input-asin="${inputOrder[1]}"`));
+  assert.match(html, /data-order-input-asin="B000000004"/);
+  assert.doesNotMatch(html, /data-order-preview-row="B000000004"/);
 });
 
 test("keeps variant information while truthfully rendering pending, partial, zero-only, and stale orders", t => {
@@ -142,7 +161,7 @@ test("keeps variant information while truthfully rendering pending, partial, zer
   const zeroAsins = ["B000000007", "B000000008"];
   const zeroFamily = familyFixture("B000000030", "B000000007", zeroAsins);
   const zeroSnapshot = orderFixture({ parentAsin: "B000000030", childAsins: zeroAsins, values: [months.map(() => 0), months.map(() => 0)] });
-  const staleFamily = familyFixture("B000000040", "B000000009", ["B000000009"]);
+  const staleFamily = { ...familyFixture("B000000040", "B000000009", ["B000000009"]), cacheState: "stale" as const };
   const staleSnapshot = orderFixture({ parentAsin: "B000000040", childAsins: ["B000000009"], values: [months.map(() => 10)], cacheState: "stale" });
   const html = renderSection([familyFixture(), pendingFamily, zeroFamily, staleFamily], [partial, zeroSnapshot, staleSnapshot], [
     ...products,
@@ -157,7 +176,8 @@ test("keeps variant information while truthfully rendering pending, partial, zer
   assert.match(html, /本次采集时间：2026-09-04T12:34:56.000Z/);
   assert.match(html, /暂无可披露订单数据/);
   assert.match(html, /未披露/);
-  assert.match(html, /缓存数据/);
+  assert.match(html, /订单缓存数据/);
+  assert.match(html, /变体缓存数据/);
   assert.doesNotMatch(html, /近30天/);
 });
 
@@ -188,10 +208,25 @@ async function startBrowserFixtureServer() {
   const secondAsins = ["B000000005", "B000000006"];
   const partialAsins = ["B000000007", "B000000008", "B000000009"];
   const families = [familyFixture(), familyFixture("B000000020", "B000000005", secondAsins), familyFixture("B000000030", "B000000007", partialAsins)];
+  const mixedValues = [
+    [1, 0, ...months.slice(2).map(() => 80)],
+    [0, 0, ...months.slice(2).map(() => 40)],
+    [0, 0, ...months.slice(2).map(() => 20)],
+  ];
   const orders = [
     orderFixture(),
     orderFixture({ parentAsin: "B000000020", childAsins: secondAsins, values: [months.map(() => 100), months.map(() => 50)] }),
-    orderFixture({ parentAsin: "B000000030", childAsins: partialAsins, values: [months.map(() => 80), months.map(() => 40), months.slice(0, 11).map(() => 20)], reasonCode: "PARTIAL_DATA" }),
+    orderFixture({
+      parentAsin: "B000000030",
+      childAsins: partialAsins,
+      values: mixedValues,
+      missing: {
+        B000000007: [months[2]!],
+        B000000008: [months[2]!],
+        B000000009: [months[0]!, months[2]!],
+      },
+      reasonCode: "PARTIAL_DATA",
+    }),
   ];
   const fixtureProps = { products, families, orderFamilies: orders, market };
   const serverMarkup = renderToStaticMarkup(createElement(XydcVariantSection, fixtureProps));
@@ -200,7 +235,8 @@ import { createElement } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { XydcVariantSection } from "/app/xydc-variant-section.tsx";
 const root = hydrateRoot(document.getElementById("root"), createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));
-window.replaceXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })}));`;
+window.removeFirstXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify({ products: products.slice(1), families: families.slice(1), orderFamilies: orders.slice(1), market })}));
+window.restoreXydcFixture = () => root.render(createElement(XydcVariantSection, ${JSON.stringify(fixtureProps)}));`;
   const stylesheets = ["globals.css", "warm-theme.css", "comparison-layout.css"];
   const server = await createViteServer({
     configFile: false,
@@ -335,12 +371,25 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     await page.screenshot({ path: screenshot });
     await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("dialog").count(), 0);
-    assert.equal(await firstButton.evaluate(element => element === document.activeElement), true);
+    await page.waitForFunction(element => element === document.activeElement, await firstButton.elementHandle());
 
     await firstButton.click();
-    await page.evaluate(() => (window as typeof window & { replaceXydcFixture(): void }).replaceXydcFixture());
+    await page.evaluate(() => (window as typeof window & { removeFirstXydcFixture(): void }).removeFirstXydcFixture());
     await page.locator("[data-parent-asin='B000000010']").waitFor({ state: "detached" });
     assert.equal(await page.getByRole("dialog").count(), 0);
+
+    await page.evaluate(() => (window as typeof window & { restoreXydcFixture(): void }).restoreXydcFixture());
+    await page.locator("[data-parent-asin='B000000010']").waitFor();
+    assert.equal(await page.getByRole("dialog").count(), 0, "removed and re-added parent stays closed until explicitly reopened");
+    await page.getByRole("button", { name: "查看全部 4 个子体与月度趋势" }).click();
+    assert.equal(await page.getByRole("dialog").count(), 1);
+    const restoredButton = page.getByRole("button", { name: "查看全部 4 个子体与月度趋势" });
+    await page.locator(".xydc-order-dialog-backdrop").click({ position: { x: 1, y: 1 } });
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    await page.waitForFunction(element => element === document.activeElement, await restoredButton.elementHandle());
+
+    await page.evaluate(() => (window as typeof window & { removeFirstXydcFixture(): void }).removeFirstXydcFixture());
+    await page.locator("[data-parent-asin='B000000010']").waitFor({ state: "detached" });
 
     await page.getByRole("button", { name: "查看全部 2 个子体与月度趋势" }).click();
     assert.match(await dialog.textContent() ?? "", /B000000020/);
@@ -350,7 +399,24 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     assert.equal(await page.getByRole("dialog").count(), 0);
 
     await page.getByRole("button", { name: "查看全部 3 个子体与月度趋势" }).click();
-    assert.ok(await dialog.locator(".xydc-order-month-gap").count() > 0);
+    const smallPositiveMonth = dialog.locator("[data-order-month='2025-09']");
+    const smallBarHeight = Number.parseFloat(await smallPositiveMonth.locator(".xydc-order-month-bar").evaluate(element => (element as HTMLElement).style.height));
+    assert.ok(smallBarHeight > 0 && smallBarHeight < 4, `small positive month keeps exact ${smallBarHeight}% height`);
+    assert.equal(await smallPositiveMonth.locator(".xydc-order-month-bar > [data-order-asin]").count(), 1);
+    assert.equal(await smallPositiveMonth.locator(".xydc-order-month-markers .xydc-order-month-undisclosed").count(), 1);
+    assert.equal(await smallPositiveMonth.locator(".xydc-order-month-markers .xydc-order-month-gap").count(), 1);
+    assert.equal(await smallPositiveMonth.locator(".xydc-order-month-bar > [data-order-asin]").evaluate(element => getComputedStyle(element).flexShrink), "0");
+    assert.equal(await dialog.locator("[data-order-month='2025-10'] .xydc-order-month-bar").count(), 0, "all-undisclosed month has no data bar");
+    assert.equal(await dialog.locator("[data-order-month='2025-10'] .xydc-order-month-undisclosed").count(), 3);
+    assert.equal(await dialog.locator("[data-order-month='2025-11'] .xydc-order-month-bar").count(), 0, "all-missing month has no data bar");
+    assert.equal(await dialog.locator("[data-order-month='2025-11'] .xydc-order-month-gap").count(), 3);
+    const accessibleMonthlyData = dialog.getByRole("table", { name: "逐月全部子体订单明细" });
+    assert.equal(await accessibleMonthlyData.count(), 1);
+    assert.deepEqual(await accessibleMonthlyData.getByRole("columnheader").allTextContents(), ["月份", "B000000007", "B000000008", "B000000009"]);
+    assert.deepEqual(await accessibleMonthlyData.getByRole("row", { name: /2025-09/ }).getByRole("cell").allTextContents(), ["1 单", "未披露", "缺失"]);
+    assert.deepEqual(await accessibleMonthlyData.getByRole("row", { name: /2025-10/ }).getByRole("cell").allTextContents(), ["未披露", "未披露", "未披露"]);
+    assert.deepEqual(await accessibleMonthlyData.getByRole("row", { name: /2025-11/ }).getByRole("cell").allTextContents(), ["缺失", "缺失", "缺失"]);
+    assert.doesNotMatch(await accessibleMonthlyData.textContent() ?? "", /B000000008 0 单|B000000009 0 单/);
     assert.equal(await dialog.locator("[data-order-month]").count(), 12);
     await page.getByRole("button", { name: "关闭订单明细" }).click();
   });

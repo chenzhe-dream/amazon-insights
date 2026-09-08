@@ -62,6 +62,12 @@ function formatListingDate(child: XydcVariantFamilyGroup["children"][number] | u
   return child?.listingDate ?? "未提供";
 }
 
+function childInfoLabel(child: XydcVariantFamilyGroup["children"][number] | undefined) {
+  if (child?.infoStatus === "pending") return "子体信息待补充";
+  if (child?.infoStatus === "unavailable") return "子体信息不可用";
+  return null;
+}
+
 function visibleMonthCount(summary: XydcOrderSummary | null) {
   return summary?.months.filter(month => month.total !== null).length ?? 0;
 }
@@ -118,6 +124,16 @@ export function XydcOrderCard({
             父体 <a href={orderHref(market.domain, group.parentAsin)} target="_blank" rel="noopener noreferrer">{group.parentAsin}<span aria-hidden="true">↗</span></a>
             <span>{group.children.length} 个子体</span>
           </div>
+          <div className="xydc-order-input-links">
+            <span>输入 ASIN</span>
+            {group.inputAsins.map(asin => <a
+              key={asin}
+              data-order-input-asin={asin}
+              href={orderHref(market.domain, asin)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >{asin}<span aria-hidden="true">↗</span></a>)}
+          </div>
         </div>
       </header>
       {group.status !== "ready" ? <p className="xydc-order-variant-note">
@@ -160,14 +176,14 @@ export function XydcOrderCard({
         </div>
       </> : null}
 
-      {status !== "pending" ? <div className="xydc-order-table-wrap" role="region" aria-label={`${group.parentAsin} 子体订单预览`} tabIndex={0}>
+      <div className="xydc-order-table-wrap" role="region" aria-label={`${group.parentAsin} 子体订单预览`} tabIndex={0}>
         <table className="xydc-order-table">
           <thead><tr><th>变体 / ASIN</th><th>12个月订单量 / 年度份额</th><th>当前价格</th><th>上架时间</th></tr></thead>
           <tbody>
             {rows.slice(0, 3).map(row => {
               const child = childByAsin.get(row.asin);
               return <tr key={row.asin} data-order-preview-row={row.asin}>
-                <th scope="row"><span><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(child)}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a></th>
+                <th scope="row"><span><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(child)}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a>{childInfoLabel(child) ? <small className={`xydc-order-child-state xydc-order-child-state-${child?.infoStatus}`}>{childInfoLabel(child)}</small> : null}</th>
                 <td><b>{formatOrderCount(row.total, row.complete)}</b><small>{formatOrderShare(row.share)}</small></td>
                 <td>{formatPrice(child)}</td>
                 <td>{formatListingDate(child)}</td>
@@ -175,7 +191,7 @@ export function XydcOrderCard({
             })}
           </tbody>
         </table>
-      </div> : null}
+      </div>
 
       {snapshot?.reasonCode ? <p className="xydc-order-warning">原因：{orderReasonLabels[snapshot.reasonCode]}</p> : null}
       {summary && summary.undisclosedChildMonths > 0 ? <p className="xydc-order-warning">{summary.undisclosedChildMonths} 个子体月份未披露；汇总值不代表精确成交量。</p> : null}
@@ -185,7 +201,8 @@ export function XydcOrderCard({
       <footer className="xydc-order-meta">
         <span>统计窗口：{sourceWindow.startMonth} — {sourceWindow.endMonth}</span>
         <span>来源：西柚洞察 · 子体汇总</span>
-        {snapshot?.cacheState === "stale" ? <em>缓存数据</em> : null}
+        {snapshot?.cacheState === "stale" ? <em className="xydc-order-cache-badge">订单缓存数据</em> : null}
+        {group.cacheState === "stale" ? <em className="xydc-variant-cache-badge">变体缓存数据</em> : null}
         {snapshot ? <><span>来源更新时间：{snapshot.sourceUpdatedAt ?? "数据源未提供"}</span><span>本次采集时间：{snapshot.fetchedAt}</span></> : null}
         <span>变体来源更新时间：{group.sourceUpdatedAt ?? "数据源未提供"}</span>
         <span>变体采集时间：{group.fetchedAt}</span>

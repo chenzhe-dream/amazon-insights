@@ -164,9 +164,11 @@
 .xydc-order-parent-copy>span { color: #7c8b9e; font-size: 11px; }
 .xydc-order-parent-copy>b { color: #17283d; font-size: 18px; line-height: 1.3; }
 .xydc-order-parent-copy>small { overflow: hidden; color: #66788d; font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.xydc-order-parent-links { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; color: #40536a; font-size: 12px; }
-.xydc-order-parent-links a,.xydc-order-table a,.xydc-order-detail-table a { color: #1769d3; font-family: var(--font-geist-mono),Consolas,monospace; font-size: 11px; text-decoration: none; }
-.xydc-order-parent-links a:hover,.xydc-order-table a:hover,.xydc-order-detail-table a:hover { text-decoration: underline; }
+.xydc-order-parent-links,.xydc-order-input-links { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; color: #40536a; font-size: 12px; }
+.xydc-order-input-links { margin-top: 2px; }
+.xydc-order-input-links>span { color: #708094; }
+.xydc-order-parent-links a,.xydc-order-input-links a,.xydc-order-table a,.xydc-order-detail-table a { color: #1769d3; font-family: var(--font-geist-mono),Consolas,monospace; font-size: 11px; text-decoration: none; }
+.xydc-order-parent-links a:hover,.xydc-order-input-links a:hover,.xydc-order-table a:hover,.xydc-order-detail-table a:hover { text-decoration: underline; }
 .xydc-order-metric-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 13px 2px 10px; }
 .xydc-order-metric-row>div:first-child>span { display: block; color: #66788d; font-size: 11px; }
 .xydc-order-metric-row>div:first-child>strong { display: block; margin-top: 3px; color: #14243a; font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
@@ -189,6 +191,9 @@
 .xydc-order-table tbody th,.xydc-order-detail-table tbody th { font-weight: 650; }
 .xydc-order-table tbody th>span,.xydc-order-detail-table tbody th>span { display: flex; align-items: center; gap: 5px; color: #263b54; }
 .xydc-order-table tbody th>a,.xydc-order-detail-table tbody th>a { display: block; margin-top: 3px; }
+.xydc-order-child-state { display: inline-block; margin-top: 4px; padding: 2px 5px; border-radius: 4px; color: #8b5e15; font-size: 10px; font-weight: 650; }
+.xydc-order-child-state-pending { background: #fff8e8; }
+.xydc-order-child-state-unavailable { background: #f7eeee; color: #9a4545; }
 .xydc-order-table td b { display: block; color: #273c55; font-size: 12px; }
 .xydc-order-table td small { display: block; margin-top: 2px; color: #66788d; font-size: 10px; }
 .xydc-order-open-detail { width: 100%; min-height: 36px; margin-top: 9px; padding: 7px 10px; border: 1px solid #4389de; border-radius: 6px; background: #fff; color: #1769d3; font-size: 12px; font-weight: 700; cursor: pointer; }
@@ -210,12 +215,16 @@
 .xydc-order-dialog>header button { min-width: 52px; min-height: 36px; border: 1px solid #d7e0e9; border-radius: 6px; background: #fff; color: #40536a; cursor: pointer; }
 .xydc-order-chart-description { margin: 11px 0 7px; color: #62758b; font-size: 11px; line-height: 1.55; }
 .xydc-order-chart { display: grid; height: 250px; grid-template-columns: repeat(12,minmax(28px,1fr)); gap: 8px; align-items: end; padding: 20px 14px 8px; border: 1px solid #dfe6ee; border-radius: 8px; background: repeating-linear-gradient(to top,#fff 0,#fff 49px,#e9eef4 50px); overflow-x: auto; }
-.xydc-order-month { display: flex; height: 100%; min-width: 28px; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; }
-.xydc-order-month-bar { display: flex; width: min(42px,100%); min-height: 4px; flex-direction: column-reverse; overflow: hidden; border-radius: 3px 3px 0 0; background: #edf1f5; }
-.xydc-order-month-bar>span { display: block; width: 100%; min-height: 0; }
-.xydc-order-month-bar>.xydc-order-month-gap { height: 2px!important; background: repeating-linear-gradient(90deg,#bec9d5 0,#bec9d5 3px,transparent 3px,transparent 6px)!important; }
-.xydc-order-month-bar>.xydc-order-month-undisclosed { height: 0!important; }
+.xydc-order-month { display: grid; height: 100%; min-width: 28px; grid-template-rows: minmax(0,1fr) 8px auto; align-items: end; gap: 3px; }
+.xydc-order-month-plot { display: flex; width: 100%; height: 100%; align-items: flex-end; justify-content: center; }
+.xydc-order-month-bar { display: flex; width: min(42px,100%); flex-direction: column-reverse; overflow: hidden; border-radius: 3px 3px 0 0; }
+.xydc-order-month-bar>span { display: block; width: 100%; min-height: 0; flex-shrink: 0; }
+.xydc-order-month-markers { display: flex; width: 100%; height: 8px; align-items: center; justify-content: center; gap: 2px; overflow: hidden; }
+.xydc-order-month-markers>span { width: 6px; height: 3px; flex: none; }
+.xydc-order-month-markers>.xydc-order-month-gap { background: repeating-linear-gradient(90deg,#9eacbc 0,#9eacbc 2px,transparent 2px,transparent 4px); }
+.xydc-order-month-markers>.xydc-order-month-undisclosed { border: 1px solid #aab6c4; border-radius: 50%; background: #fff; }
 .xydc-order-month>small { color: #728196; font-size: 9px; white-space: nowrap; }
+.xydc-order-visually-hidden { position: absolute!important; width: 1px!important; height: 1px!important; padding: 0!important; margin: -1px!important; overflow: hidden!important; clip: rect(0,0,0,0)!important; white-space: nowrap!important; border: 0!important; }
 .xydc-order-detail-headline { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
 .xydc-order-detail-headline>b { color: #263b54; font-size: 14px; }
 .xydc-order-detail-headline label { display: flex; align-items: center; gap: 7px; color: #62758b; font-size: 11px; }
