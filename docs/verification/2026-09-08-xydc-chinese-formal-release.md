@@ -60,4 +60,6 @@ LAN 地址实机仍为 `192.168.1.109`；同机直连 `http://192.168.1.109:3190
 
 两个独立 browser 会话已关闭。31911 只读验收辅助进程保留为当前中文版本，不是正式入口；没有启动新的产品页面。年度快照导入仍待用户另行明确选择，不纳入此次代码发布完成声明。
 
-OpenSpec 只读联合终验待回执；不会因此再次触发构建或重启。
+OpenSpec 只读联合终验 **Approved**，无发布一致性/运行身份/数据保护阻断发现。其独立核对正式 HEAD/index、Web/Agent/LAN 直连健康、源码/dist/immutable/current 指纹、严格请求 payload/hash/applied/target、保留 code base 及 dataCurrent/streams、manager 所有权/根/端口/队列、READ ONLY 事务下的 active 与六项业务计数、15 个生成文件备份 hash、正式 env 单键差异及空协调目录、main/origin-main 不变。
+
+联合窗口独立确认共享业务文件现存 36 个、无 xydc-orders；全部 36 文件前后 hash 相等沿用 root 的发布记录，不宣称该窗口重建了不存在于备份中的前态清单。联合窗口没有重跑测试/构建、改配置、部署、Provider 或业务写入；登录后正式 UI、真实 Provider/年度数值齐全及第二台物理 LAN 客户端仍未验收。此回执只补文档，正式目标和运行版本保持 8f70，不再次触发发布。
