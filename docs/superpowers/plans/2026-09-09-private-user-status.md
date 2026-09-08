@@ -49,7 +49,7 @@ Server settings are `AGENT_USER_PRESENCE_ORGANIZATION_ID`, `AGENT_USER_PRESENCE_
 
 The two grants are independent: demotion revokes the primary-email grant; removal of the exact DingTalk binding revokes the personal-DingTalk grant. If deployment intentionally assigns both grants to one internal account, the other still-valid grant may allow access. Disable, session invalidation and organization mismatch always deny both. Do not require an administrator role for the verified personal DingTalk branch or infer the login provider from the account email.
 
-- [ ] **Step 1: Write red permission and binding tests.** Use artificial distinct IDs and fake in-memory read facts for pure access tests; use real temporary SQLite/isolated PG repositories for binding lookup tests. Name each behavior:
+- [x] **Step 1: Write red permission and binding tests.** Use artificial distinct IDs and fake in-memory read facts for pure access tests; use real temporary SQLite/isolated PG repositories for binding lookup tests. Name each behavior:
 
 ```ts
 assert.equal(await access.canView(primaryPrincipal), true);
@@ -66,7 +66,7 @@ assert.equal(await access.canView(personalDingTalkMember), false);
 
 Test missing/partial config, current-user mismatch, disabled account, same nickname/email but different ID, wrong corp/subject, repository exception and non-user session as denied. Test that list repository is never invoked when denied. Observe current ADMIN_ROLES wrongly admitting other admins/rejecting permitted DingTalk member through real buildAgentApp routes before implementing the new policy.
 
-- [ ] **Step 2: Implement read-only repository binding seam and evaluator.** PG/SQLite query only the designated internal user ID; join current users to identity and require provider='dingtalk'. Return exact columns, never credential fields; do not create or link identities. Adapt placeholder syntax per database:
+- [x] **Step 2: Implement read-only repository binding seam and evaluator.** PG/SQLite query only the designated internal user ID; join current users to identity and require provider='dingtalk'. Return exact columns, never credential fields; do not create or link identities. Adapt placeholder syntax per database:
 
 ```sql
 SELECT identity.user_id, users.organization_id, identity.corp_id, identity.subject_id
@@ -90,7 +90,7 @@ return Boolean(bound && bound.userId === user.id && bound.organizationId === org
 
 Configuration/data errors return false without logging secrets or allowing login to fail just because this optional permission is unavailable. Keep service small and reusable by both session projection and GET.
 
-- [ ] **Step 3: Wire backend and strict session shape.** Add authenticated-session `canViewUserPresence: z.boolean().default(false)`; anonymous responses remain false or omit per strict schema branch, never true. Extend registerAuthRoutes/registerAdminUserPresenceRoutes with the same evaluator from buildAgentApp; no evaluator means denied. Reclassify ONLY GET /v1/admin/users to MEMBER_ROLES (valid authenticated sessions), then enforce evaluator before `listOrganizationUsers`:
+- [x] **Step 3: Wire backend and strict session shape.** Add authenticated-session `canViewUserPresence: z.boolean().default(false)`; anonymous responses remain false or omit per strict schema branch, never true. Extend registerAuthRoutes/registerAdminUserPresenceRoutes with the same evaluator from buildAgentApp; no evaluator means denied. Reclassify ONLY GET /v1/admin/users to MEMBER_ROLES (valid authenticated sessions), then enforce evaluator before `listOrganizationUsers`:
 
 ```ts
 const principal = userPrincipal(request);
@@ -101,7 +101,7 @@ if (!access || !await access.canView(principal)) {
 
 Keep 401/403 generic; no partial list or identity configuration leaks. For session responses compute capability after current authenticated-user lookup and return false for inactive/missing users. Existing authService authenticates before permission; test real app hook order. Do not grant special access based on test caller headers or anonymous loopback.
 
-- [ ] **Step 4: Propagate and invalidate front-end capability.** Carry `canViewUserPresence` through readWebSession, AuthenticatedWebIdentity, authenticated AuthSessionState, AuthSessionController and AuthenticatedWebSession. Explicit false default preserves old session fixture compatibility but does not imply admin=true. Update exact confirmed identity tests and actual callers, not broad type casts.
+- [x] **Step 4: Propagate and invalidate front-end capability.** Carry `canViewUserPresence` through readWebSession, AuthenticatedWebIdentity, authenticated AuthSessionState, AuthSessionController and AuthenticatedWebSession. Explicit false default preserves old session fixture compatibility but does not imply admin=true. Update exact confirmed identity tests and actual callers, not broad type casts.
 
 ```tsx
 {session.canViewUserPresence === true ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
@@ -112,7 +112,7 @@ Retain normal password/logout/heartbeat controls for everyone. Denied page copy 
 
 **Root self-review correction, confirmed RED:** the existing 401 subscription expires only React state, while the new 403 callback reads `AuthSessionController.state`. A same-turn 401 then 403 can therefore restore an expired authenticated view. Make session invalidation authoritative for controller and rendered state together; a late 403 must never reauthenticate or restore capability. Add a regression at the real controller/gate boundary and verify a newly logged-in session is unaffected. Probe pre-invalidation in-flight session-read completion too; introduce a bounded invalidation fence only if a failing test demonstrates it can restore expired state. This correction stays within the session-invalid privacy requirement and does not change provider authentication, heartbeat access or global 403 policy. Root RED callback-wiring evidence: `.superpowers/sdd/private-presence-expiry-race-probe.ts` (historical reproduction, not the corrected implementation test).
 
-- [ ] **Step 5: Complete test matrix, self-review and commit.**
+- [x] **Step 5: Complete test matrix, self-review and commit.**
 
 Run focused tests during iteration, then once:
 `node --conditions=react-server --import tsx --test tests/agent/user-presence-access.test.ts tests/agent/admin-user-presence-routes.test.ts tests/agent/admin-user-presence-browser.test.ts tests/agent/admin-user-presence-contracts.test.ts tests/agent/auth-authorization.test.ts tests/agent/authentication-service.test.ts tests/agent/web-auth-session.test.ts tests/agent/dingtalk-auth-repository.test.ts`
