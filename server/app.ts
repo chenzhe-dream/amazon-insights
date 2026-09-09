@@ -7,6 +7,8 @@ import Fastify, {
 } from "fastify";
 import multipart from "@fastify/multipart";
 import { readProjectReadonly } from "../scripts/lib/project-store.mjs";
+import { createAnalysisProjectFavoriteStore } from "./services/analysis-project-favorite-store";
+import { registerAnalysisProjectFavoriteRoutes } from "./routes/analysis-project-favorites";
 
 import {
   registerCapabilitiesRoutes,
@@ -505,6 +507,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     options.repository ? (principal) => resolveExecutionContext(principal) : null,
     options.openaiCapability ?? null,
   );
+  registerAnalysisProjectFavoriteRoutes(app, createAnalysisProjectFavoriteStore({ env }));
   registerLocalDataRoutes(
     app,
     options.localDataBridgeDeps ?? createDefaultLocalDataBridgeDeps(options.repository ?? null, {

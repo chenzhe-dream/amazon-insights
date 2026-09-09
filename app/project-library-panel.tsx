@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AnalysisProjectFavorites } from "./use-analysis-project-favorites";
 import {
   AMAZON_MAJOR_CATEGORIES,
   AMAZON_MAJOR_CATEGORY_IDS,
@@ -45,7 +46,7 @@ const KIND_UI: Record<
 > = {
   analysis: {
     saveTitle: "保存当前对标池",
-    saveHint: "将当前 ASIN 组合保存为团队共享项目，便于下次快速加载。",
+    saveHint: "保存后进入历史项目；点击收藏后才会出现在已收藏中。",
     updateAsins: "更新当前项目 ASIN",
     listTitle: "已收藏项目",
     listHint: "团队共享，点击加载即可切换对标 ASIN 组合。",
@@ -140,6 +141,7 @@ function persistAuthor(value: string) {
 }
 
 type Props = {
+  favorites?: AnalysisProjectFavorites;
   market: string;
   draftAsins: string[];
   currentProjectId: string | null;
@@ -160,6 +162,7 @@ type Props = {
 };
 
 export function ProjectLibraryPage({
+  favorites,
   market,
   draftAsins,
   currentProjectId,
@@ -179,6 +182,7 @@ export function ProjectLibraryPage({
   onRefreshKeywords,
 }: Props) {
   const [projects, setProjects] = useState<AnalysisProject[]>([]);
+  const [libraryView, setLibraryView] = useState<"favorites" | "history">("favorites");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -222,6 +226,7 @@ export function ProjectLibraryPage({
 
   const filteredProjects = useMemo(() => {
     return projects.filter(project => {
+      if (kind === "analysis" && libraryView === "favorites" && !favorites?.projectIds.includes(project.id)) return false;
       const projectMajor = normalizeAmazonMajorCategory(project.majorCategory) ?? project.majorCategory;
       if (majorFilter === "__none__" && projectMajor) return false;
       if (majorFilter !== "all" && majorFilter !== "__none__" && projectMajor !== majorFilter) {
@@ -229,7 +234,9 @@ export function ProjectLibraryPage({
       }
       return projectMatchesQuery(project, searchQuery);
     });
-  }, [projects, majorFilter, searchQuery]);
+  }, [projects, majorFilter, searchQuery, kind, libraryView, favorites?.projectIds]);
+  const visibleTotal = kind === "analysis" && libraryView === "favorites"
+    ? projects.filter(project => favorites?.projectIds.includes(project.id)).length : projects.length;
 
   const hasActiveFilters = majorFilter !== "all" || Boolean(searchQuery.trim());
 
@@ -357,6 +364,7 @@ export function ProjectLibraryPage({
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error ?? "保存失败");
         resetForm();
+        if (kind === "analysis") setLibraryView("history");
         onProjectSaved?.(payload.project);
         await refresh();
       }
@@ -496,7 +504,7 @@ export function ProjectLibraryPage({
           ) : (
             <>
               <button type="button" className="primary-btn project-primary-btn" disabled={saving} onClick={saveProject}>
-                {saving ? "保存中…" : saveLabel}
+                {saving ? "保存中…" : kind === "analysis" ? "保存为历史项目" : saveLabel}
               </button>
               {currentProjectId ? (
                 <button type="button" className="ghost-btn" disabled={saving} onClick={updateCurrentProjectAsins}>
@@ -511,16 +519,26 @@ export function ProjectLibraryPage({
       <section className="card project-list-card">
         <div className="project-list-head">
           <div className="project-section-head project-section-head-inline">
-            <h3>{copy.listTitle}</h3>
+            <h3>{kind === "analysis" && libraryView === "history" ? "历史项目" : copy.listTitle}</h3>
             <p>
-              {copy.listHint}
-              {projects.length > 0 ? ` · 显示 ${filteredProjects.length}/${projects.length}` : ""}
+              {kind === "analysis" ? "团队共享；取消收藏只移除标记，项目及分析结果仍保留。" : copy.listHint}
+              {visibleTotal > 0 ? ` · 显示 ${filteredProjects.length}/${visibleTotal}` : ""}
             </p>
           </div>
-          <button type="button" className="ghost-btn" onClick={refresh} disabled={loading}>
+          <button type="button" className="ghost-btn" onClick={() => { void refresh(); if (kind === "analysis") void favorites?.refresh(); }} disabled={loading || (kind === "analysis" && (favorites?.loading || favorites?.pending))}>
             刷新列表
           </button>
         </div>
+        {kind === "analysis" ? <div className="project-major-chips" role="group" aria-label="项目列表范围">
+          <button type="button" className={`project-major-chip${libraryView === "favorites" ? " active" : ""}`}
+            aria-pressed={libraryView === "favorites"} onClick={() => setLibraryView("favorites")}>
+            已收藏（{projects.filter(project => favorites?.projectIds.includes(project.id)).length}）
+          </button>
+          <button type="button" className={`project-major-chip${libraryView === "history" ? " active" : ""}`}
+            aria-pressed={libraryView === "history"} onClick={() => setLibraryView("history")}>
+            历史项目（{projects.length}）
+          </button>
+        </div> : null}
         <div className="project-filter-bar">
           <label className="project-search-field">
             <span>模糊搜索</span>
@@ -584,11 +602,13 @@ export function ProjectLibraryPage({
           ))}
         </div>
         {error ? <p className="project-panel-error">{error}</p> : null}
+        {kind === "analysis" && favorites?.error ? <p role="alert" className="project-panel-error">{favorites.error}</p> : null}
         {loading ? <p className="project-panel-empty">加载中…</p> : null}
-        {!loading && projects.length === 0 ? (
-          <p className="project-panel-empty">{emptyHint}</p>
+        {!loading && kind === "analysis" && libraryView === "favorites" && !favorites?.ready ? <p className="project-panel-empty">收藏列表尚未加载，请稍候或刷新重试。</p> : null}
+        {!loading && visibleTotal === 0 && (kind !== "analysis" || libraryView === "history" || favorites?.ready) ? (
+          <p className="project-panel-empty">{kind === "analysis" ? (libraryView === "favorites" ? "尚未收藏项目，请在历史项目中点击收藏。" : "暂无历史项目，开始分析或保存项目后会出现在这里。") : emptyHint}</p>
         ) : null}
-        {!loading && projects.length > 0 && filteredProjects.length === 0 ? (
+        {!loading && visibleTotal > 0 && filteredProjects.length === 0 ? (
           <p className="project-panel-empty">没有匹配的项目，试试换个大类或搜索词。</p>
         ) : null}
         <div className="project-cards">
@@ -645,9 +665,14 @@ export function ProjectLibraryPage({
                 >
                   {loadLabel}
                 </Link>
-                <button type="button" className="ghost-btn danger" onClick={() => removeProject(project.id)}>
+                {kind === "analysis" ? <button type="button" className="ghost-btn"
+                  disabled={!favorites?.ready || favorites.pending || favorites.loading}
+                  aria-pressed={Boolean(favorites?.projectIds.includes(project.id))}
+                  onClick={() => void favorites?.setFavorite(project.id, !favorites.projectIds.includes(project.id))}>
+                  {favorites?.pending ? "保存收藏中…" : favorites?.projectIds.includes(project.id) ? "取消收藏" : "☆ 收藏项目"}
+                </button> : <button type="button" className="ghost-btn danger" onClick={() => removeProject(project.id)}>
                   删除
-                </button>
+                </button>}
               </div>
             </article>
           ))}

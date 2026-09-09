@@ -69,6 +69,8 @@ import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { listingImageRemarks } from "./listing-image-remarks";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
+import { useAnalysisProjectFavorites } from "./use-analysis-project-favorites";
+import { AnalysisProjectFavoriteButton } from "./analysis-project-favorite-button";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
@@ -1760,6 +1762,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
   const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
   const runtimeSessionKey = `${authSession.sessionIdentity}:${authSession.user.organizationId}`;
+  const projectFavorites = useAnalysisProjectFavorites(authSession.logoutPending ? null : runtimeSessionKey);
   useLayoutEffect(() => {
     setVocRun(null);
     return () => {
@@ -3160,7 +3163,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             ) : null}
           </div>
           <div className="builder-actions">
-            <Link className="ghost-btn" href={tabHref("projects")}>★ 项目收藏</Link>
+            <AnalysisProjectFavoriteButton projectId={currentProjectId} favorites={projectFavorites} />
+            <Link className="ghost-btn" href={tabHref("projects")}>收藏与历史</Link>
             {currentProjectName ? (
               <span className="builder-project-chip">
                 当前工作区：{currentProjectName}
@@ -4054,6 +4058,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "projects" && <div className="page-content compare-page">
         <ProjectLibraryPage
           kind="analysis"
+          key={runtimeSessionKey}
+          favorites={projectFavorites}
           market={market}
           draftAsins={inputs}
           currentProjectId={currentProjectId}

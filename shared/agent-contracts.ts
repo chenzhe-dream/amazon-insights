@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
 
 import {
   createAdminUserPresenceContracts,
@@ -1900,6 +1901,27 @@ export const v1Contracts = [
   },
   {
     method: "GET",
+    path: "/v1/local-data/project-favorites",
+    query: FavoriteEmptySchema,
+    response: AnalysisFavoritesResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "PUT",
+    path: "/v1/local-data/projects/:id/favorite",
+    params: FavoriteParamsSchema,
+    response: AnalysisFavoriteResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/local-data/projects/:id/favorite",
+    params: FavoriteParamsSchema,
+    response: AnalysisFavoriteResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
     path: "/v1/local-data/projects",
     request: LocalDataProjectListQuerySchema,
     response: LocalDataProjectsResponseSchema,
@@ -2088,6 +2110,7 @@ export type AgentServiceV1Path =
   | `/v1/reports/${string}`
   | "/v1/local-voc"
   | "/v1/local-data/projects"
+  | "/v1/local-data/project-favorites"
   | `/v1/local-data/projects/${string}`
   | "/v1/local-data/sync-asins"
   | `/v1/local-data/sync-asins/${string}`
