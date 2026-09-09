@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 
 import { createTrafficSnapshotOwner } from "../../app/lib/traffic-snapshot-browser";
 
@@ -138,11 +137,17 @@ test("session, organization, and logout transitions clear state and reject late 
   assert.equal(owner.current().kind, "pending");
 });
 
-test("page traffic wiring binds authenticated identity and never falls back to global traffic rows", () => {
-  const source = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
-  assert.match(source, /sessionIdentity: authSession\.sessionIdentity/);
-  assert.match(source, /organizationId: authSession\.user\.organizationId/);
-  assert.match(source, /logoutPending: authSession\.logoutPending/);
-  assert.doesNotMatch(source, /overview:\s*sifListingTrafficOverview/);
-  assert.match(source, /trafficDisplayFromSnapshot\(trafficSnapshotState\.snapshot, trustedTrafficDetailInput\)/);
+test("session-only and organization-only changes clear already visible dynamic data", async () => {
+  const owner = createTrafficSnapshotOwner({
+    ...identity, runId, marketplace: "US", asins,
+    request: async () => ({ ok: true, status: 200, json: async () => dynamicPayload() }),
+  });
+  await owner.refresh();
+  assert.equal(owner.current().kind, "dynamic");
+  owner.rebind({ ...identity, sessionIdentity: "session-b", runId, marketplace: "US", asins });
+  assert.equal(owner.current().kind, "pending");
+  await owner.refresh();
+  assert.equal(owner.current().kind, "dynamic");
+  owner.rebind({ ...identity, sessionIdentity: "session-b", organizationId: "org-b", runId, marketplace: "US", asins });
+  assert.equal(owner.current().kind, "pending");
 });

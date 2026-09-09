@@ -447,9 +447,9 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
       listing: { stage: "listing", stageStatus: "done", data: stageData("listing") },
     } as never, {
       keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {},
-      salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {},
+      salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {} as Record<string, unknown>, categoryTrendByNode: {},
       childSalesByAsin: {}, priceStrategyByAsin: {}, imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
-      trafficData: { overview: {}, monthlyTrend: {}, meta: { source: "fixture" } },
+      trafficData: { overview: {}, monthlyTrend: {}, meta: { source: "fixture", period: "fixture", country: "US", updatedThrough: null, status: "ready", emptyMessage: "fixture" } },
     });
     assert.deepEqual(listingSnapshot.listingContentByAsin[asins[0]], {
       asin: asins[0], marketplace: "US", fetchedAt: "2026-08-25", status: "ready",
@@ -806,6 +806,17 @@ test("project registration failure fails closed for every local-project and regi
     "asin-set-mismatch",
   ] as const) {
     const page = await browser.newPage();
+    // This test owns registration failures; unrelated runtime reads must be valid
+    // so a background parse error cannot race its asserted registration notice.
+    await page.route("**/api/runtime-analysis-data?*", route => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({
+        catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+        reviews: { analysisByAsin: {}, ratingByAsin: {} }, salesTrend: { trendByAsin: {} },
+        fba: { feeByAsin: {} }, listing: { contentByAsin: {} }, category: { trendByNode: {} },
+        childSales: { rowsByAsin: {} }, priceStrategy: { strategyByAsin: {} },
+        imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} },
+      }),
+    }));
     const oldProject = {
       id: "old-project-id",
       slug: "old-slug",

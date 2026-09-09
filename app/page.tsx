@@ -23,10 +23,9 @@ import {
   sifAdChannelGlossary,
   sifAdChannelGlossaryList,
   trafficDisplayFromSnapshot,
-  type TrafficDistributionItem,
+  type TrafficDisplayItem,
   type ChildTrafficVariant,
   type TrafficDisplayData,
-  type ScopedTrafficDetail,
 } from "./sif-listing-traffic-data";
 import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
 import {
@@ -95,7 +94,8 @@ import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
 import { WorkspaceHistoryStrip } from "./workspace-history-strip";
 import { clearSyncJobFromSearch, isSyncJobScopeMatch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { parseBatchAsinInput } from "./lib/asin-batch-input";
-import { createTrafficSnapshotOwner, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
+import { createTrafficSnapshotOwner, trafficSnapshotBindingKey, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
+import { trafficStageFromReceipt, formatTrafficScore, formatTrafficPercent, trafficChildCountLabel, trafficDetailMessage, type TrafficFieldState, type TrafficStageReceipt } from "./lib/traffic-detail-view";
 import { publicationArtifactNotice } from "./lib/publication-artifact-notice";
 import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { resolveAlexaVocPageScope } from "./lib/alexa-voc-page-scope";
@@ -797,27 +797,28 @@ function RatingCell({ rating, reviews }: { rating: number; reviews: number | nul
   );
 }
 
-function TrafficDistributionBars({ items, palette, maxItems, glossary }: {
-  items: TrafficDistributionItem[];
+function TrafficDistributionBars({ items, palette, maxItems, glossary, state }: {
+  items: TrafficDisplayItem[];
   palette: string[];
   maxItems?: number;
   glossary?: Record<string, { en: string; meaning: string }>;
+  state?: TrafficFieldState;
 }) {
   const visible = maxItems ? items.slice(0, maxItems) : items;
-  if (!visible.length) return <div className="traffic-dist-empty"><strong>—</strong><span>{sifListingTrafficMeta.emptyMessage}</span></div>;
+  if (!visible.length) return <div className="traffic-dist-empty"><strong>—</strong><span>{trafficDetailMessage(state)}</span></div>;
   return (
     <div className="traffic-dist-bars">
       {visible.map((item, index) => {
         const tip = glossary?.[item.label];
         const title = tip
-          ? `${item.label} · ${tip.en}\n${tip.meaning}\n${item.score.toLocaleString()} · ${item.ratio}%`
-          : `${item.label} · ${item.score.toLocaleString()} · ${item.ratio}%`;
+          ? `${item.label} · ${tip.en}\n${tip.meaning}\n${formatTrafficScore(item.score)} · ${formatTrafficPercent(item.ratio)}`
+          : `${item.label} · ${formatTrafficScore(item.score)} · ${formatTrafficPercent(item.ratio)}`;
         return (
           <div key={item.label} title={title}>
             <span title={title}>{item.label}</span>
-            <i><b style={{ width: `${Math.min(100, item.ratio)}%`, background: palette[index % palette.length] }} /></i>
-            <strong>{item.score.toLocaleString()}</strong>
-            <em>{item.ratio}%</em>
+            <i><b style={{ width: `${Math.max(0, Math.min(100, item.ratio ?? 0))}%`, background: palette[index % palette.length] }} /></i>
+            <strong>{formatTrafficScore(item.score)}</strong>
+            <em>{formatTrafficPercent(item.ratio)}</em>
           </div>
         );
       })}
@@ -825,12 +826,12 @@ function TrafficDistributionBars({ items, palette, maxItems, glossary }: {
   );
 }
 
-function ChildTrafficStructurePanel({ variants }: { variants: ChildTrafficVariant[] }) {
+function ChildTrafficStructurePanel({ variants, state }: { variants: ChildTrafficVariant[]; state?: TrafficFieldState }) {
   const previewCount = 3;
   const [expanded, setExpanded] = useState(false);
   const ranked = [...variants].sort((a, b) => b.totalScore - a.totalScore || b.sharePct - a.sharePct);
   if (!ranked.length) {
-    return <div className="traffic-dist-empty"><strong>—</strong><span>{sifListingTrafficMeta.emptyMessage}</span></div>;
+    return <div className="traffic-dist-empty"><strong>—</strong><span>{trafficDetailMessage(state)}</span></div>;
   }
   const visible = expanded ? ranked : ranked.slice(0, previewCount);
   const hiddenCount = Math.max(0, ranked.length - previewCount);
@@ -853,16 +854,16 @@ function ChildTrafficStructurePanel({ variants }: { variants: ChildTrafficVarian
           return (
             <div className="child-traffic-row" key={child.asin}>
               <div className="child-traffic-meta">
-                <img src={amazonMediaSrc(child.image)} alt="" referrerPolicy="no-referrer" />
+                {child.image && <img src={amazonMediaSrc(child.image)} alt="" referrerPolicy="no-referrer" />}
                 <div>
                   <b>#{index + 1} · {child.label}</b>
                   <small>{child.asin}</small>
                 </div>
-                <em>{child.sharePct}%</em>
+                <em title={formatTrafficPercent(child.sharePct)}>{formatTrafficPercent(child.sharePct)}</em>
               </div>
               <div className="child-traffic-bar-wrap" style={{ width: `${Math.max(18, (child.totalScore / maxScore) * 100)}%` }}>
                 <SegmentStackBar segments={segments} hideSegmentTitle={false} />
-                <strong>{child.totalScore.toLocaleString()}</strong>
+                <strong title={formatTrafficScore(child.totalScore)}>{formatTrafficScore(child.totalScore)}</strong>
               </div>
             </div>
           );
@@ -1720,7 +1721,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
   const [publicationConvergenceNotice, setPublicationConvergenceNotice] = useState<string | null>(null);
-  const [stageOutputSnapshot, setStageOutputSnapshot] = useState<StageOutputSnapshot>({});
+  const [stageOutputReceipt, setStageOutputReceipt] = useState<(TrafficStageReceipt & { ownerToken: object }) | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
   const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
   const analysisStartInFlight = useRef(false);
@@ -1899,16 +1900,35 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     }
     return disposition;
   }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
+  const stageOutputJobId = syncJobId ?? terminalSyncJob?.jobId ?? null;
+  const stageOutputRunId = baseSyncRunId ?? resumedSyncScope.context?.runId ?? null;
   const stageOutputScopeKey = [
+    authSession.sessionIdentity,
+    authSession.logoutPending ? "logout" : "active",
+    market, [...activeAsins].sort().join(","),
     authSession.user.organizationId,
-    pathname,
-    searchParams.toString(),
+    workspacePath,
     resumedProjectId ?? "",
-    resumedSyncScope.context?.runId ?? "",
-    syncJobId ?? "",
+    stageOutputRunId ?? "",
+    stageOutputJobId ?? "",
   ].join("|");
+  // A fresh token prevents A -> B -> A from reviving the first A's pending response.
+  const stageOutputOwnerToken = useMemo(() => ({ scopeKey: stageOutputScopeKey }), [stageOutputScopeKey]);
+  const onScopedStageOutput = useCallback((snapshot: StageOutputSnapshot, reason?: "owner-disposed") => {
+    // Tab disposal is not a new data result. Explicit retry updates (including {}) still apply.
+    if (reason === "owner-disposed") return;
+    setStageOutputReceipt({ scopeKey: stageOutputOwnerToken.scopeKey, ownerToken: stageOutputOwnerToken, snapshot });
+  }, [stageOutputOwnerToken]);
+  const currentStageReceipt = stageOutputReceipt?.ownerToken === stageOutputOwnerToken ? stageOutputReceipt : null;
+  const stageOutputSnapshot = useMemo<StageOutputSnapshot>(() => !authSession.logoutPending && currentStageReceipt
+    ? currentStageReceipt.snapshot : {}, [authSession.logoutPending, currentStageReceipt]);
+  const visibleTrafficStage = trafficStageFromReceipt(currentStageReceipt, {
+    scopeKey: stageOutputScopeKey, projectId: resumedProjectId, runId: stageOutputRunId, jobId: stageOutputJobId,
+    enabled: !authSession.logoutPending,
+  });
   const syncResume = useMemo<SyncResumeBundle>(() => ({
     organizationId: authSession.logoutPending ? null : authSession.user.organizationId,
+    sessionIdentity: authSession.sessionIdentity,
     stageOutputScopeKey,
     syncJobId,
     terminalJob: terminalSyncJob,
@@ -1917,7 +1937,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     resumePending: resumedSyncScope.resolving,
     resumeBlocked: !resumedSyncScope.canAdopt,
     workspaceReady,
-    onStageOutput: setStageOutputSnapshot,
+    onStageOutput: onScopedStageOutput,
     onSyncJobId: jobId => {
       rememberSyncJob(jobId);
       setTerminalSyncJob(null);
@@ -1932,13 +1952,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     onRestart: restartTerminalSync,
     canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
-  }), [authSession.logoutPending, authSession.user.organizationId, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
-  useEffect(() => {
-    setStageOutputSnapshot({});
-  }, [stageOutputScopeKey]);
-  useEffect(() => {
-    if (authSession.logoutPending) setStageOutputSnapshot({});
-  }, [authSession.logoutPending]);
+  }), [authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, onScopedStageOutput, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
 
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
@@ -1956,7 +1970,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
     [activeAsins, manualVoc.effectiveVocByAsin],
   );
-  const [trafficSnapshotState, setTrafficSnapshotState] = useState<TrafficSnapshotClientState>({ kind: "pending" });
+  const [trafficSnapshotReceipt, setTrafficSnapshotReceipt] = useState<{ key: string; state: TrafficSnapshotClientState } | null>(null);
+  const trafficBindingKey = trafficSnapshotBindingKey({
+    sessionIdentity: authSession.sessionIdentity, organizationId: authSession.user.organizationId,
+    logoutPending: authSession.logoutPending, marketplace: market, asins: activeAsins,
+    runId: activeTab === "traffic" ? baseSyncRunId : null,
+  });
+  const trafficSnapshotState = useMemo<TrafficSnapshotClientState>(() => !authSession.logoutPending && trafficSnapshotReceipt?.key === trafficBindingKey
+    ? trafficSnapshotReceipt.state : { kind: "pending" }, [authSession.logoutPending, trafficBindingKey, trafficSnapshotReceipt]);
   const trafficSnapshotOwner = useRef<ReturnType<typeof createTrafficSnapshotOwner> | null>(null);
   const asinScopeKey = activeAsins.join(",");
   useLayoutEffect(() => {
@@ -1968,7 +1989,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       marketplace: market,
       asins: activeAsins,
       request: (path) => localAgentFetch(path),
-      onState: setTrafficSnapshotState,
+      onState: (state, key) => setTrafficSnapshotReceipt({ state, key }),
     });
     if (activeTab !== "traffic" || !baseSyncRunId || activeAsins.length === 0) {
       owner.rebind({ sessionIdentity: authSession.sessionIdentity, organizationId: authSession.user.organizationId, logoutPending: authSession.logoutPending, runId: null, marketplace: market, asins: activeAsins });
@@ -1981,33 +2002,16 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       window.clearInterval(timer);
     };
   }, [activeAsins, activeTab, asinScopeKey, authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, baseSyncRunId, market]);
-  const trustedTrafficDetailInput = useMemo(() => {
-    const projection = stageOutputSnapshot.traffic;
-    if (!projection || !("data" in projection) || !projection.data || !resumedProjectId || !baseSyncRunId) return undefined;
-    const listing = projection.data.listingByAsin as Record<string, unknown>;
-    const expectedScopeByAsin: Record<string, import("./lib/traffic-detail-view").TrafficDetailScope> = {};
-    const candidateByAsin: Record<string, ScopedTrafficDetail | undefined> = {};
-    for (const asin of activeAsins) {
-      const record = listing[asin];
-      if (!record || typeof record !== "object" || !Array.isArray((record as { naturalAd?: unknown }).naturalAd)) continue;
-      const scope = {
-        organizationId: authSession.user.organizationId, projectId: resumedProjectId, runId: baseSyncRunId,
-        jobId: projection.jobId, marketplace: market, asin, evidenceId: projection.contentHash,
-      };
-      expectedScopeByAsin[asin] = scope;
-      candidateByAsin[asin] = { scope, overview: record as never };
-    }
-    return { expectedScopeByAsin, candidateByAsin };
-  }, [activeAsins, authSession.user.organizationId, baseSyncRunId, market, resumedProjectId, stageOutputSnapshot.traffic]);
+  // Stage output is independently authorized, not proof for hydrating a snapshot cache.
   const trafficData = useMemo(
-    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot, trustedTrafficDetailInput) : undefined,
-    [trafficSnapshotState, trustedTrafficDetailInput],
+    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot) : undefined,
+    [trafficSnapshotState],
   );
   const trafficOrigin = trafficSnapshotState.kind === "dynamic"
     ? "dynamic" as const
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
   const stageOutputView = useMemo(
-    () => buildStageOutputView(stageOutputSnapshot, {
+    () => buildStageOutputView({ ...stageOutputSnapshot, traffic: visibleTrafficStage.traffic }, {
       keywordAnalysisByAsin: runtimeAnalysisData
         ? runtimeAnalysisData.keywords.analysisByAsin as typeof sifKeywordAnalysisData
         : sifKeywordAnalysisData,
@@ -2050,7 +2054,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         meta: sifListingTrafficMeta,
       },
     }),
-    [runtimeAnalysisData, stageOutputSnapshot, trafficData],
+    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData],
   );
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
@@ -2320,7 +2324,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setSyncRunContext(null);
       setTerminalSyncJob(null);
       setTerminalPointerRetained(false);
-      setStageOutputSnapshot({});
+      setStageOutputReceipt(null);
     }
     if (!project.slug) {
       params.set("asins", project.asins.join(","));
@@ -2360,7 +2364,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       setSyncRunContext(null);
       setTerminalSyncJob(null);
       setTerminalPointerRetained(false);
-      setStageOutputSnapshot({});
+      setStageOutputReceipt(null);
     }
     setRuntimeAnalysisData(null);
     runtimeAnalysisRequest.current += 1;
@@ -3798,11 +3802,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                   <div className="traffic-distribution-row" key={p.asin}>
                     <div className="traffic-product-cell">
                       <ProductHeader product={p} index={i} market={market} />
-                      {data && <small>总分 {data.totalScore.toLocaleString()} · 更新至 {data.updatedThrough ?? trafficMeta.updatedThrough}</small>}
+                      {data && <small>总分 {formatTrafficScore(data.totalScore)} · 更新至 {data.updatedThrough ?? "未提供"}</small>}
                     </div>
                     <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.naturalAd ?? []} palette={["#55BB6A", "#FFB03B"]} /></div>
-                    <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.adChannels ?? []} glossary={sifAdChannelGlossary} palette={["#538CEE", "#FFB03B", "#F15C5C", "#55BB6A"]} /></div>
-                    <div className="traffic-metric-cell"><TrafficDistributionBars items={data?.recommendationSources ?? []} maxItems={4} palette={["#538CEE", "#55BB6A", "#FFB03B", "#F15C5C"]} /></div>
+                    <div className="traffic-metric-cell"><TrafficDistributionBars state={stageOutputView.trafficData.detailAvailability?.[p.asin]?.adChannels} items={data?.adChannels ?? []} glossary={sifAdChannelGlossary} palette={["#538CEE", "#FFB03B", "#F15C5C", "#55BB6A"]} /></div>
+                    <div className="traffic-metric-cell"><TrafficDistributionBars state={stageOutputView.trafficData.detailAvailability?.[p.asin]?.recommendationSources} items={data?.recommendationSources ?? []} maxItems={6} palette={["#538CEE", "#55BB6A", "#FFB03B", "#F15C5C"]} /></div>
                   </div>
                 );
               })}
@@ -3835,9 +3839,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 <div className="child-traffic-card" key={p.asin}>
                   <div className="child-traffic-card-head">
                     <ProductHeader product={p} index={i} market={market} />
-                    <small>{data?.children.length ?? 0} 个子体 · 总分 {(data?.totalScore ?? 0).toLocaleString()}</small>
+                    <small>{trafficChildCountLabel(data, stageOutputView.trafficData.detailAvailability?.[p.asin]?.children)} · 总分 {formatTrafficScore(data?.totalScore)}</small>
                   </div>
-                  <ChildTrafficStructurePanel variants={data?.children ?? []} />
+                  <ChildTrafficStructurePanel variants={data?.children ?? []} state={stageOutputView.trafficData.detailAvailability?.[p.asin]?.children} />
                 </div>
               );
             })}

@@ -1,37 +1,21 @@
-# SIF Regression Task 2 Report
+# SIF Regression Task 2 — corrected acceptance record
 
-## Result
+The initial implementation f53dcbf and its 30-test result were NOT the final acceptance gate. Review found incomplete row validation, unknown values treated as zero, self-labeled candidate scope and weak page wiring coverage. This supersedes the original report, including its incorrect no-new-TypeScript-debt claim.
 
-- Added strict seven-field `TrafficDetailScope` matching and used it at the production snapshot/detail join.
-- Compact stage projections now merge field-by-field. Omitted fields preserve accepted detail, explicit zero/empty/null values remain authoritative, and malformed detail arrays become unavailable.
-- Dynamic snapshots preserve exact summary totals and `childCount`; absent detail stays explicitly missing and no aggregate is fabricated as a channel or recommendation detail.
-- Page traffic wiring no longer falls back to the global compiled SIF rows. Accepted full stage output is the only explicit detail candidate.
-- Traffic ownership now includes session identity, organization, and logout state. Rebinding clears visible state, invalidates late responses, and logout suppresses reads.
+Root corrections:
+- Per-field merge preserves omitted accepted values but distinguishes missing, invalid, empty and zero. Unknown natural/ad scores remain null.
+- Snapshot summaries do not read global detail. Production joins independently owner-accepted stage output, with project/run/job validation; no unproven cache hydration.
+- Request-bound receipts plus owner tokens protect session/organization/logout/task changes, including A -> B -> A and late responses.
+- Disposal has a specific owner-disposed tag; legitimate empty retry updates still apply. Tab return and terminal URL cleanup retain detail; only auth transitions rearm settled jobs.
+- Insufficient natural/ad evidence is not graded as zero. No monthly algorithm/layout change.
 
-## TDD evidence
+Evidence:
+- Worker substantive RED: 29/32 passed with three merge/state failures, then root corrections.
+- Actual browser precision RED and missing-count RED preceded UI correction; source-regex wiring checks were replaced with mounted-page assertions.
+- Conclusion RED reproduced unknown natural traffic being graded.
+- Full regression exposed four terminal duplicate GET/completion failures; initialized auth-owner ref corrected them.
+- Terminal tab-return RED timed out on lost detail; owner/disposal correction passed, with ABA and URL cleanup assertions.
+- Historical summary provenance and counts 11/2/6 are confirmed; complete same-batch details are NOT. No historical replay/backfill.
+- Fresh TypeScript comparison: baseline 339 diagnostics, current 334, no new fingerprint. Repository-wide type check is not clean.
 
-RED was established against the baseline behavior by the new assertions: the baseline had no scope module, compact `{ total: 0 }` erased detail/defaulted missing values, snapshots fabricated channel/recommendation rows, and page wiring referenced `sifListingTrafficOverview` as fallback.
-
-GREEN:
-
-`npx --no-install tsx --conditions=react-server --test tests/agent/traffic-detail-view.test.ts tests/agent/runtime-analysis-data.test.ts tests/agent/stage-output-browser.test.ts tests/agent/traffic-snapshot-browser.test.ts`
-
-Result: 30 passed, 0 failed.
-
-Targeted lint:
-
-`npx --no-install eslint app/lib/stage-output-view.ts app/sif-listing-traffic-data.ts app/lib/traffic-snapshot-browser.ts app/lib/traffic-detail-view.ts tests/agent/runtime-analysis-data.test.ts tests/agent/stage-output-browser.test.ts tests/agent/traffic-snapshot-browser.test.ts tests/agent/traffic-detail-view.test.ts`
-
-Result: exit 0.
-
-`git diff --check`: exit 0 (only existing line-ending warnings for unrelated dirty files).
-
-## Risks and limits
-
-- Historical detail was not restored because the evidence report did not prove same-batch detail provenance. Trusted snapshot counts remain visible while detail availability is missing.
-- Mounted-browser behavior remains Task 3 scope; this task adds owner and production-wiring regression coverage.
-- Repository-wide TypeScript debt was not changed. The targeted files introduced no additional diagnostic beyond the documented pre-existing page/literal-meta errors.
-
-## Commit
-
-Implementation commit: `f53dcbf` (`fix: scope SIF traffic detail projections`).
+Final commands/counts/build/deployment boundary live in docs/verification/2026-09-09-sif-traffic-regression-repair.md. Root owns checkout changes under the Sites skill; agents are read-only reviewers. Nullable views and UI corrections form one coupled local candidate. Formal service, provider, business database and caches are untouched.

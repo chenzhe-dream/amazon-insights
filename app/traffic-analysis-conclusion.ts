@@ -438,7 +438,13 @@ export function buildTrafficAnalysisConclusion(
   const available = products
     .map(product => {
       const data = overviewByAsin[product.asin];
-      return data ? { product, data } : null;
+      const fields = trafficData?.detailAvailability?.[product.asin];
+      // A summary is sufficient for the metrics table, not for detail-derived grading.
+      const complete = data && data.totalScore !== null
+        && ["自然流量", "广告流量"].every(label => data.naturalAd.some(item => item.label === label))
+        && data.naturalAd.every(item => item.score !== null && item.ratio !== null)
+        && (!fields || Object.values(fields).every(state => state === "complete" || state === "empty"));
+      return complete ? { product, data: data as SifListingTrafficOverview } : null;
     })
     .filter((item): item is { product: ProductLike; data: SifListingTrafficOverview } => Boolean(item));
 
@@ -460,7 +466,7 @@ export function buildTrafficAnalysisConclusion(
       implications: ["请先同步 SIF「查流量结构」父/子体数据后再分析。"],
       dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力；需结合 CTR、CVR、ACOS、CPC、订单、销售额与利润数据进一步验证。",
       methodNote: trafficMeta.emptyMessage,
-      updatedThrough: trafficMeta.updatedThrough,
+      updatedThrough: trafficMeta.updatedThrough ?? "未提供",
     };
   }
 
@@ -510,6 +516,6 @@ export function buildTrafficAnalysisConclusion(
     ],
     dataBoundary: "当前结论反映竞品获取和运营流量的能力，不等同于广告转化效率或盈利能力；需结合 CTR、CVR、ACOS、CPC、订单、销售额与利润数据进一步验证。",
     methodNote: `口径：SIF Listing 聚合 · ${trafficMeta.period} · 更新至 ${trafficMeta.updatedThrough} · 有效子体=父体内流量占比≥5% · 广告渠道占比分母为广告总流量。`,
-    updatedThrough: trafficMeta.updatedThrough,
+    updatedThrough: trafficMeta.updatedThrough ?? "未提供",
   };
 }

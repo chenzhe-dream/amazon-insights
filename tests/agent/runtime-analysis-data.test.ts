@@ -193,7 +193,29 @@ test("compact traffic summaries merge field-by-field without erasing trusted det
   assert.equal(explicitEmpty.trafficData.overview[asin]?.updatedThrough, null);
 
   const malformed = buildStageOutputView({ traffic: { stage: "traffic", stageStatus: "done", data: { listingByAsin: { [asin]: { adChannels: "bad" } } } } } as never, fallback);
-  assert.equal(malformed.trafficData.overview[asin], null);
+  assert.equal(malformed.trafficData.detailAvailability?.[asin]?.adChannels, "invalid");
+  assert.deepEqual(malformed.trafficData.overview[asin]?.children, detail.children);
+});
+
+test("traffic merge distinguishes omitted, invalid, zero, and partial summary fields", () => {
+  const asin = asins[0]!;
+  const fallback = {
+    keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {}, salesTrendByAsin: {},
+    fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {}, childSalesByAsin: {}, priceStrategyByAsin: {},
+    imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
+    trafficData: { overview: {}, monthlyTrend: {}, meta: sifListingTrafficMeta },
+  };
+  const view = (record: unknown) => buildStageOutputView({ traffic: {
+    stage: "traffic", stageStatus: "done", data: { listingByAsin: { [asin]: record }, monthlyByAsin: {} },
+  } } as never, fallback).trafficData;
+
+  assert.equal(view({ total: null }).overview[asin]?.totalScore, null);
+  const partial = view({ natural: 5 }).overview[asin]!;
+  assert.equal(partial.totalScore, null);
+  assert.deepEqual(partial.naturalAd.map(item => item.score), [5, null]);
+  const zero = view({ total: 0, natural: 0, advertising: 0 }).overview[asin]!;
+  assert.deepEqual(zero.naturalAd.map(item => item.ratio), [0, 0]);
+  assert.equal(view({ children: [null] }).detailAvailability?.[asin]?.children, "invalid");
 });
 
 test("runtime snapshot carries the three published late-stage maps", () => {

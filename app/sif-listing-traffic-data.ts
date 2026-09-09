@@ -1,12 +1,18 @@
 import { sifListingTrafficRawByAsin, sifListingTrafficRawMeta } from "./sif-listing-traffic-raw-data";
 import type { TrafficSnapshotReadResponse } from "../shared/agent-contracts";
 import type { SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
-import { sameTrafficDetailScope, type TrafficDetailScope } from "./lib/traffic-detail-view";
+import { sameTrafficDetailScope, mergeTrafficRecord, missingTrafficDetails, type TrafficDetailScope, type TrafficDetailAvailability } from "./lib/traffic-detail-view";
 
 export type TrafficDistributionItem = {
   label: string;
   score: number;
   ratio: number;
+};
+
+export type TrafficDisplayItem = {
+  label: string;
+  score: number | null;
+  ratio: number | null;
 };
 
 export type ChildTrafficVariant = {
@@ -30,6 +36,11 @@ export type SifListingTrafficOverview = {
   children: ChildTrafficVariant[];
   updatedThrough: string | null;
   childCount?: number;
+};
+
+export type TrafficDisplayOverview = Omit<SifListingTrafficOverview, "totalScore" | "naturalAd"> & {
+  totalScore: number | null;
+  naturalAd: TrafficDisplayItem[];
 };
 
 function pct(ratio: number) {
@@ -100,7 +111,7 @@ function buildOverview(raw: RawOverview, structure: RawStructure): SifListingTra
       if (!item || item.score <= 0) return null;
       return { label: adChannelFallback[key], score: score(item.score), ratio: pct(item.ratio) };
     })
-    .filter((item): item is TrafficDistributionItem => Boolean(item));
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   const recommendationSources = Object.values(raw.recommend)
     .filter(item => item.score > 0 && item.ratio >= 0.01)
@@ -156,15 +167,15 @@ export const childTrafficSegmentMeta = [
 ];
 
 export type TrafficDisplayData = {
-  overview: Record<string, SifListingTrafficOverview | null>;
+  overview: Record<string, TrafficDisplayOverview | null>;
   monthlyTrend: Record<string, SifMonthlyTrafficSeries>;
-  meta: typeof sifListingTrafficMeta;
-  detailAvailability?: Record<string, "available" | "missing" | "invalid-scope">;
+  meta: { source: string; period: string; country: string; updatedThrough: string | null; status: "ready"; emptyMessage: string };
+  detailAvailability?: Record<string, TrafficDetailAvailability>;
 };
 
 export type ScopedTrafficDetail = Readonly<{
   scope: TrafficDetailScope;
-  overview: SifListingTrafficOverview;
+  overview: Partial<TrafficDisplayOverview>;
 }>;
 
 export function trafficDisplayFromSnapshot(
@@ -180,8 +191,11 @@ export function trafficDisplayFromSnapshot(
   for (const item of snapshot.traffic.competitors) {
     const expected = detailInput?.expectedScopeByAsin[item.asin];
     const candidate = detailInput?.candidateByAsin[item.asin];
-    const trusted = expected && candidate && sameTrafficDetailScope(expected, candidate.scope) ? candidate.overview : null;
-    detailAvailability[item.asin] = trusted ? "available" : candidate ? "invalid-scope" : "missing";
+    const accepted = expected && candidate && expected.asin === item.asin && expected.marketplace === snapshot.marketplace
+      && sameTrafficDetailScope(expected, candidate.scope) ? mergeTrafficRecord(candidate.overview) : null;
+    const trusted = accepted?.overview;
+    detailAvailability[item.asin] = accepted?.availability ?? (candidate
+      ? { adChannels: "invalid", recommendationSources: "invalid", children: "invalid" } : missingTrafficDetails());
     overview[item.asin] = {
       totalScore: item.trafficVolume,
       naturalAd: [
@@ -192,7 +206,7 @@ export function trafficDisplayFromSnapshot(
       recommendationSources: trusted?.recommendationSources ?? [],
       children: trusted?.children ?? [],
       childCount: item.childCount,
-      updatedThrough: snapshot.collectedAt.slice(0, 10),
+      updatedThrough: trusted ? trusted.updatedThrough : snapshot.collectedAt.slice(0, 10),
     };
     monthlyTrend[item.asin] = {
       asin: item.asin,

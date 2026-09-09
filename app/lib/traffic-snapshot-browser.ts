@@ -18,21 +18,28 @@ function sameAsinScope(left: readonly string[], right: readonly string[]) {
   return [...left].sort().join(",") === [...right].sort().join(",");
 }
 
-export function createTrafficSnapshotOwner(input: {
+export type TrafficSnapshotBinding = {
   sessionIdentity: string;
   organizationId: string;
   logoutPending: boolean;
   runId: string | null;
   marketplace: string;
   asins: readonly string[];
+};
+
+export function trafficSnapshotBindingKey(binding: TrafficSnapshotBinding): string {
+  return JSON.stringify([binding.sessionIdentity, binding.organizationId, binding.logoutPending, binding.runId, binding.marketplace, [...binding.asins].sort()]);
+}
+
+export function createTrafficSnapshotOwner(input: TrafficSnapshotBinding & {
   request(path: string): Promise<TrafficSnapshotResponse>;
-  onState?(state: TrafficSnapshotClientState): void;
+  onState?(state: TrafficSnapshotClientState, bindingKey: string): void;
 }) {
   let binding = input;
   let state: TrafficSnapshotClientState = { kind: "pending" };
   const update = (next: TrafficSnapshotClientState) => {
     state = next;
-    input.onState?.(state);
+    input.onState?.(state, trafficSnapshotBindingKey(binding));
   };
   return Object.freeze({
     current: () => state,
@@ -43,7 +50,7 @@ export function createTrafficSnapshotOwner(input: {
     },
     async refresh() {
       const requestedBinding = binding;
-      if (requestedBinding.logoutPending || !requestedBinding.runId) return state;
+      if (requestedBinding.logoutPending || !requestedBinding.runId || !requestedBinding.sessionIdentity || !requestedBinding.organizationId) return state;
       const response = await requestedBinding.request(`/v1/runs/${encodeURIComponent(requestedBinding.runId)}/traffic-snapshot`);
       if (binding !== requestedBinding) return state;
       if (response.status === 404) {

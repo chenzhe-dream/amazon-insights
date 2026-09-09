@@ -1,4 +1,5 @@
 import type { TrafficDisplayData } from "../sif-listing-traffic-data";
+import { mergeTrafficRecord } from "./traffic-detail-view";
 import type { StageOutputSnapshot } from "./stage-output-browser";
 
 type StageOutputFallbacks = {
@@ -29,25 +30,11 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   const priceStrategyOutput = availableData(snapshot, "price_strategy") as { strategyByAsin?: Record<string, unknown> } | null;
   const imageRemarksOutput = availableData(snapshot, "image_remarks") as { remarksByAsin?: Record<string, unknown>; outcomesByAsin?: Record<string, unknown> } | null;
   const baseTraffic = fallbacks.trafficData;
+  const detailAvailability = { ...baseTraffic.detailAvailability };
   const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
-    const record = asRecord(value);
-    const prior = baseTraffic.overview[asin];
-    if (hasMalformedTrafficArray(record)) return [asin, null];
-    const full = mergeFullTrafficRecord(record, prior);
-    if (full) return [asin, full];
-    const totalScore = ownFinite(record, "total") ?? prior?.totalScore;
-    const natural = ownFinite(record, "natural");
-    const advertising = ownFinite(record, "advertising");
-    if (totalScore === undefined && natural === undefined && advertising === undefined) return [asin, prior ?? null];
-    return [asin, {
-      totalScore: totalScore ?? 0,
-      naturalAd: natural === undefined && advertising === undefined ? (prior?.naturalAd ?? []) : [
-        { label: "自然流量", score: natural ?? prior?.naturalAd?.[0]?.score ?? 0, ratio: totalScore && natural !== undefined ? natural / totalScore * 100 : prior?.naturalAd?.[0]?.ratio ?? 0 },
-        { label: "广告流量", score: advertising ?? prior?.naturalAd?.[1]?.score ?? 0, ratio: totalScore && advertising !== undefined ? advertising / totalScore * 100 : prior?.naturalAd?.[1]?.ratio ?? 0 },
-      ],
-      adChannels: prior?.adChannels ?? [], recommendationSources: prior?.recommendationSources ?? [],
-      children: prior?.children ?? [], childCount: prior?.childCount, updatedThrough: prior?.updatedThrough ?? null,
-    }];
+    const merged = mergeTrafficRecord(value, baseTraffic.overview[asin], baseTraffic.detailAvailability?.[asin]);
+    detailAvailability[asin] = merged.availability;
+    return [asin, merged.overview];
   })) as TrafficDisplayData["overview"];
   const stageTrafficMonthly = Object.fromEntries(Object.entries(trafficOutput?.monthlyByAsin ?? {}).map(([asin, value]) => {
     const points = Array.isArray(asRecord(value).points) ? (asRecord(value).points as unknown[]).map(rawPoint => {
@@ -77,35 +64,9 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
       overview: { ...baseTraffic.overview, ...stageTrafficOverview },
       monthlyTrend: { ...baseTraffic.monthlyTrend, ...stageTrafficMonthly },
       meta: baseTraffic.meta,
+      detailAvailability,
     } satisfies TrafficDisplayData,
   };
-}
-
-function mergeFullTrafficRecord(record: Record<string, unknown>, prior: TrafficDisplayData["overview"][string]) {
-  if (!hasOwn(record, "naturalAd") && !hasOwn(record, "adChannels") && !hasOwn(record, "recommendationSources") && !hasOwn(record, "children")) return null;
-  const arrays = ["naturalAd", "adChannels", "recommendationSources", "children"] as const;
-  if (arrays.some(key => hasOwn(record, key) && !Array.isArray(record[key]))) return null;
-  return {
-    totalScore: ownFinite(record, "totalScore") ?? ownFinite(record, "total") ?? prior?.totalScore ?? 0,
-    naturalAd: hasOwn(record, "naturalAd") ? record.naturalAd as never[] : prior?.naturalAd ?? [],
-    adChannels: hasOwn(record, "adChannels") ? record.adChannels as never[] : prior?.adChannels ?? [],
-    recommendationSources: hasOwn(record, "recommendationSources") ? record.recommendationSources as never[] : prior?.recommendationSources ?? [],
-    children: hasOwn(record, "children") ? record.children as never[] : prior?.children ?? [],
-    childCount: ownFinite(record, "childCount") ?? prior?.childCount,
-    updatedThrough: hasOwn(record, "updatedThrough") && (record.updatedThrough === null || typeof record.updatedThrough === "string")
-      ? record.updatedThrough as string | null : prior?.updatedThrough ?? null,
-  };
-}
-
-function hasMalformedTrafficArray(record: Record<string, unknown>) {
-  return ["naturalAd", "adChannels", "recommendationSources", "children"]
-    .some(key => hasOwn(record, key) && !Array.isArray(record[key]));
-}
-
-const hasOwn = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
-function ownFinite(value: Record<string, unknown>, key: string): number | undefined {
-  if (!hasOwn(value, key)) return undefined;
-  return typeof value[key] === "number" && Number.isFinite(value[key]) ? value[key] as number : undefined;
 }
 
 function availableData(snapshot: StageOutputSnapshot, stage: keyof StageOutputSnapshot): unknown | null {
