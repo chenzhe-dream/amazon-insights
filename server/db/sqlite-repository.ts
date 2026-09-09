@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { normalizationRecoveryDisposition, normalizationRecoveryQueries, normalizationSettlementQueries, type NormalizationTerminalRepair } from "../domain/voc/alexa-voc-recovery";
+import { claimableAttemptSql, expiredVocWaitSql, latestActiveAttemptSql, vocQueueCutoff, vocQueueTimeoutError } from "../domain/voc/queue-deadline";
 
 import {
   AgentRunAttemptSchema,
@@ -224,6 +225,7 @@ import type {
   BindLegacyProjectOwnerResult,
   CancelAnalysisRunInput,
   ClaimJobInput,
+  ExpireVocQueueInput,
   CompleteJobInput,
   ConnectorStatusError,
   ConnectorStatusRecord,
@@ -5327,7 +5329,28 @@ export class SqliteAgentRepository
     );
   }
 
+  expireVocQueue(input: ExpireVocQueueInput): Promise<number> {
+    return this.#serialize(() => this.#withImmediateTransaction(() => {
+      const cutoff = vocQueueCutoff(input.checkedAt, input.timeoutMs);
+      const limit = input.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError("Invalid queue expiry batch size");
+      const rows = this.#database.prepare(
+        `SELECT ja.*, rs.run_id, rs.stage FROM job_attempts ja
+           JOIN run_stages rs ON rs.id = ja.stage_id
+           JOIN analysis_runs ar ON ar.id = rs.run_id
+         WHERE ${latestActiveAttemptSql} AND ${expiredVocWaitSql("?")}
+           AND (? IS NULL OR rs.run_id = ?)
+         ORDER BY ja.available_at, ja.id LIMIT ?`,
+      ).all(cutoff, input.runId ?? null, input.runId ?? null, limit) as SqliteRow[];
+      for (const row of rows) this.#settleClaimCandidate(mapJob(row), {
+        kind: "settle", attemptStatus: "failed", stageStatus: "failed", error: vocQueueTimeoutError(),
+      }, input.checkedAt);
+      return rows.length;
+    }));
+  }
+
   #claimNextJob(input: ClaimJobInput): JobAttemptRecord | null {
+    const cutoff = input.queueTimeoutMs === undefined ? null : vocQueueCutoff(input.claimedAt, input.queueTimeoutMs);
     if (input.leaseDurationMs <= 0) {
       throw new Error("Lease duration must be positive");
     }
@@ -5343,31 +5366,33 @@ export class SqliteAgentRepository
 
     const candidate = this.#database
       .prepare(
-        `SELECT job_attempts.*, run_stages.run_id AS run_id,
-                run_stages.stage AS stage
-         FROM job_attempts
-         JOIN run_stages ON run_stages.id = job_attempts.stage_id
+        `SELECT ja.*, rs.run_id, rs.stage
+         FROM job_attempts ja
+         JOIN run_stages rs ON rs.id = ja.stage_id
+         JOIN analysis_runs ar ON ar.id = rs.run_id
          WHERE (
-           (job_attempts.status = 'queued' AND job_attempts.available_at <= ?)
+           (ja.status = 'queued' AND ja.available_at <= ?)
            OR (
-             job_attempts.status = 'failed' AND job_attempts.retryable = 1
-             AND job_attempts.retry_scheduled_at IS NULL
+             ja.status = 'failed' AND ja.retryable = 1
+             AND ja.retry_scheduled_at IS NULL
              AND (
-               job_attempts.report_publication_retry_at IS NULL
-               OR job_attempts.report_publication_retry_at <= ?
+               ja.report_publication_retry_at IS NULL
+               OR ja.report_publication_retry_at <= ?
              )
-             AND job_attempts.available_at <= ?
+             AND ja.available_at <= ?
            )
            OR (
-             job_attempts.status = 'running' AND job_attempts.lease_expires_at <= ?
+             ja.status = 'running' AND ja.lease_expires_at <= ?
            )
-         ) AND (? IS NULL OR run_stages.stage = ?)
+         ) AND (? IS NULL OR rs.stage = ?)
+         AND ${claimableAttemptSql}
+         AND (? IS NULL OR NOT (${latestActiveAttemptSql} AND (${expiredVocWaitSql("?")})))
          ORDER BY
-           CASE job_attempts.status
-             WHEN 'running' THEN job_attempts.lease_expires_at
-             ELSE job_attempts.available_at
+           CASE ja.status
+             WHEN 'running' THEN ja.lease_expires_at
+             ELSE ja.available_at
            END,
-           job_attempts.created_at, job_attempts.id
+           ja.created_at, ja.id
          LIMIT 1`,
       )
       .get(
@@ -5377,6 +5402,8 @@ export class SqliteAgentRepository
         input.claimedAt,
         input.stage ?? null,
         input.stage ?? null,
+        cutoff,
+        cutoff,
       ) as
       | SqliteRow
       | undefined;

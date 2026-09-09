@@ -58,6 +58,7 @@ export interface JobAttemptWorkerLoopOptions {
   readonly ownerId: string;
   readonly handler: JobHandler;
   readonly stage?: JobAttemptRecord["stage"];
+  readonly queueTimeoutMs?: number;
   readonly leaseDurationMs: number;
   readonly heartbeatIntervalMs: number;
   readonly pollIntervalMs: number;
@@ -173,6 +174,7 @@ export class JobAttemptWorkerLoop {
       claimedAt,
       leaseDurationMs: this.#options.leaseDurationMs,
       ...(this.#options.stage ? { stage: this.#options.stage } : {}),
+      ...(this.#options.queueTimeoutMs !== undefined ? { queueTimeoutMs: this.#options.queueTimeoutMs } : {}),
     });
     if (!job) return false;
     if (this.#stopping) {

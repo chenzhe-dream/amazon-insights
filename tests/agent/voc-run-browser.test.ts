@@ -17,6 +17,26 @@ import {
 const runId = "11111111-1111-4111-8111-111111111111";
 const baseRunId = "22222222-2222-4222-8222-222222222222";
 
+test("restored VOC polling stops publishing and fetching when its view is abandoned", async () => {
+  const controller = new AbortController();
+  let reads = 0, published = 0;
+  await waitForVocRun(runId, { signal: controller.signal, attempts: 3, intervalMs: 0,
+    fetchImpl: async (input) => { reads++; return String(input).endsWith("/reports") ? Response.json({ reports: [] }) : Response.json({ stages: [{ stage: "voc-positioning", status: "queued" }] }); },
+    sleep: async () => { controller.abort(); }, onObservation: () => { published++; },
+  });
+  assert.equal(reads, 2);
+  assert.equal(published, 1);
+});
+
+test("queue timeout remains a Chinese failure even when a historical report exists", async () => {
+  const observed = await observeVocRun(runId, async (input) => String(input).endsWith("/reports")
+    ? Response.json({ reports: [{ id: "old", stage: "voc-positioning" }] })
+    : Response.json({ stages: [{ stage: "voc-positioning", status: "failed", lastError: { code: "QUEUE_TIMEOUT", message: "raw English" } }] }));
+  assert.equal(observed.kind, "failed");
+  assert.equal(observed.message, "VOC 排队超时，已停止自动重试，请稍后手动重试。");
+  assert.equal(observed.report?.id, "old");
+});
+
 test("VOC run identity round-trips through its dedicated URL key without dropping base sync identity", () => {
   const next = searchWithVocRunId(`?project=p1&asins=A,B,C&run=${baseRunId}`, runId);
   assert.equal(next.get("project"), "p1");

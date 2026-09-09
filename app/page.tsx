@@ -1659,16 +1659,17 @@ export function VocRunStatusSummary({ observation }: { observation: VocRunObserv
   }
   const stage = observation.stage;
   const stageStatus = typeof stage?.status === "string" ? stage.status.trim() : "";
+  const queueTimeout = (stage?.lastError as { code?: string } | null)?.code === "QUEUE_TIMEOUT";
 
   return <>
-    <strong>VOC Agent · {observation.kind}</strong>
+    <strong>VOC Agent · {queueTimeout ? "排队超时" : observation.kind}</strong>
     <p>{observation.message}</p>
     {observation.runId ? <small>Run {observation.runId}</small> : null}
     {stage && stageStatus ? <>
       <p>
-        Stage: {stageStatus} · {String(stage.progress ?? 0)}%
+        {queueTimeout ? "阶段：已失败" : `Stage: ${stageStatus}`} · {String(stage.progress ?? 0)}%
       </p>
-      {stage.lastError ? (
+      {stage.lastError && !queueTimeout ? (
         <p>{typeof stage.lastError === "object" && "message" in stage.lastError
           ? String(stage.lastError.message)
           : String(stage.lastError)}</p>
@@ -1717,6 +1718,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [vocRun, setVocRun] = useState<VocRunObservation | null>(null);
   const [selectedReportIds, setSelectedReportIds] = useState<SavedAnalysisReportSelection>({});
   const restoringVocRun = useRef<string | null>(null);
+  const vocRestoreController = useRef<AbortController | null>(null);
   const [syncAsins, setSyncAsins] = useState<string[] | null>(null);
   const [syncRunContext, setSyncRunContext] = useState<{ projectId: string; runId: string } | null>(null);
   const [terminalSyncJob, setTerminalSyncJob] = useState<SyncJob | null>(null);
@@ -1758,6 +1760,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const syncJobId = syncJobIdFromSearch(searchParams.toString());
   const baseSyncRunId = baseSyncRunIdFromSearch(searchParams.toString());
   const runtimeSessionKey = `${authSession.sessionIdentity}:${authSession.user.organizationId}`;
+  useLayoutEffect(() => {
+    setVocRun(null);
+    return () => {
+      vocRestoreController.current?.abort();
+      vocRestoreController.current = null;
+      restoringVocRun.current = null;
+    };
+  }, [runtimeSessionKey, authSession.logoutPending]);
   const runtimeAsinKey = [...activeAsins].sort().join(",");
   const runtimeScopeKey = `${runtimeSessionKey}:${currentProjectId}:${market}:${runtimeAsinKey}:${syncJobId}:${baseSyncRunId}`;
   const runtimeScope = useRef<{ sessionKey: string; projectId: string | null; asins: string; enabled: boolean } | null>(null);
@@ -2120,20 +2130,27 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, [refreshCatalog, workspaceKey]);
 
   useEffect(() => {
-    const runId = vocRunIdFromSearch(searchParams.toString());
-    if (!runId || restoringVocRun.current === runId) return;
+    const runId = vocRunIdFromSearch(appSearch);
+    if (authSession.logoutPending || !runId || restoringVocRun.current === runId) return;
     restoringVocRun.current = runId;
-    void observeVocRun(runId)
-      .then(setVocRun)
-      .catch((error) => setVocRun({
+    const controller = new AbortController();
+    vocRestoreController.current = controller;
+    void waitForVocRun(runId, { signal: controller.signal, onObservation: (observation) => {
+      if (!controller.signal.aborted) setVocRun(observation);
+    } })
+      .catch((error) => { if (!controller.signal.aborted) setVocRun({
         kind: "failed",
         runId,
         stage: null,
         report: null,
         reports: [],
         message: error instanceof Error ? error.message : "Unable to restore VOC run",
-      }));
-  }, [searchParams]);
+      }); });
+    return () => {
+      controller.abort();
+      if (restoringVocRun.current === runId) restoringVocRun.current = null;
+    };
+  }, [appSearch, runtimeSessionKey, authSession.logoutPending]);
 
   useEffect(() => {
     flyoutPinnedRef.current = flyoutPinned;

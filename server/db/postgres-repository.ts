@@ -378,6 +378,8 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#jobs.enqueueJob(job);
   claimNextJob: RuntimeAgentRepository["claimNextJob"] = (input) =>
     this.#jobs.claimNextJob(input);
+  expireVocQueue: RuntimeAgentRepository["expireVocQueue"] = (input) =>
+    this.#jobs.expireVocQueue(input);
   renewJobLease: RuntimeAgentRepository["renewJobLease"] = (input) =>
     this.#jobs.renewJobLease(input);
   releaseJobLease: RuntimeAgentRepository["releaseJobLease"] = (input) =>

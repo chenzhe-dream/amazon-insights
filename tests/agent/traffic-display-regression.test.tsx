@@ -16,6 +16,7 @@ const project = { id: "a081d838-ffcb-4e36-b4ad-e38937f73370", kind: "analysis", 
 const runId = "20000000-0000-4000-8000-000000000070";
 const jobId = "30000000-0000-4000-8000-000000000070";
 const nextRun = "20000000-0000-4000-8000-000000000071";
+const vocFixtureRun = "20000000-0000-4000-8000-000000000072";
 const search = (run = runId) => `tab=traffic&run=${run}&syncJob=${jobId}`;
 const distributions = (score: number) => ["SP(常规)", "SP(推荐)", "SB(常规)", "SBV"].map((label, index) => ({ label, score: score * [0.7, 0.15, 0.1, 0.05][index]!, ratio: [70, 15, 10, 5][index]! }));
 const fullByAsin = Object.fromEntries(asins.map((asin, index) => [asin, {
@@ -58,7 +59,7 @@ after(async () => { await browser?.close(); await server?.close(); });
 async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
   const context = await browser.newContext({ viewport: { width, height: 1000 }, deviceScaleFactor: 1, serviceWorkers: "block" });
   const page = await context.newPage();
-  const state = { mode, snapshotStatus: 200, stageStatus: 200, run: runId, completed: false, jobVersion: 1, holdSnapshots: false, holdStages: false, snapshotReads: 0, stageReads: 0, jobReads: 0, taskWrites: 0, externalApis: 0 };
+  const state = { mode, snapshotStatus: 200, stageStatus: 200, run: runId, completed: false, jobVersion: 1, holdSnapshots: false, holdStages: false, snapshotReads: 0, stageReads: 0, jobReads: 0, taskWrites: 0, externalApis: 0, holdVoc: false, vocReads: 0, vocStatus: 200 };
   const pending: Array<() => Promise<void>> = [];
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -69,6 +70,14 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
     if (!url.pathname.startsWith("/api/")) return route.continue();
     if (route.request().method() !== "GET") { state.taskWrites++; return reply(route, {}, 405); }
     const path = url.pathname.replace(/^\/api\/agent/, "");
+    if (path === `/v1/runs/${vocFixtureRun}` || path === `/v1/runs/${vocFixtureRun}/reports`) {
+      state.vocReads++;
+      const status = state.vocStatus;
+      const payload = path.endsWith("/reports") ? { reports: [] } : { stages: [{ stage: "voc-positioning", status: "queued", progress: 37 }] };
+      const respond = () => reply(route, payload, status).catch(() => undefined);
+      if (state.holdVoc) { pending.push(respond); return; }
+      return respond();
+    }
     if (path.endsWith("/traffic-snapshot")) {
       state.snapshotReads++;
       const status = state.snapshotStatus;
@@ -104,6 +113,31 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
 async function waitForText(page: Page, selector: string, value: string) {
   await page.waitForFunction(({ selector, value }) => document.querySelector(selector)?.textContent?.includes(value), { selector, value }, { timeout: 15000 });
 }
+
+for (const change of ["sessionIdentity", "organizationId", "logoutPending"] as const) test(`VOC restore rejects old observations on ${change} and stops abandoned polling`, async () => {
+  const f = await fixture();
+  try {
+    await f.open();
+    await f.page.evaluate(search => window.navigateTrafficFixture?.(search), `${search().replace("tab=traffic", "tab=voc")}&vocRun=${vocFixtureRun}`);
+    await waitForText(f.page, "[data-voc-run]", "37%");
+    f.state.holdVoc = true;
+    const deadline = Date.now() + 5000;
+    while (f.pending.length < 2 && Date.now() < deadline) await f.page.waitForTimeout(50);
+    assert.ok(f.pending.length >= 2);
+    f.state.vocStatus = 403;
+    const before = f.state.vocReads;
+    const immediate = await f.page.evaluate(change => {
+      window.setTrafficFixtureSession?.(change === "logoutPending" ? { logoutPending: true } : change === "sessionIdentity" ? { sessionIdentity: "B".repeat(43) } : { organizationId: "018f1f5c-60f0-4b7a-8000-000000000099" });
+      return document.querySelector("[data-voc-run]")?.textContent ?? "";
+    }, change);
+    assert.ok(!immediate.includes("37%"), "previous identity state cleared before paint");
+    f.state.holdVoc = false;
+    for (const release of f.pending.splice(0)) await release();
+    await f.page.waitForTimeout(1400);
+    assert.equal((await f.page.locator("[data-voc-run]").allTextContents()).join("").includes("37%"), false);
+    if (change === "logoutPending") assert.equal(f.state.vocReads, before, "logout stops new reads");
+  } finally { await f.close(); }
+});
 
 for (const width of [1280, 1920]) test(`actual traffic page formats all rows and fits numeric cells at ${width}px`, async () => {
   const f = await fixture("full", width);

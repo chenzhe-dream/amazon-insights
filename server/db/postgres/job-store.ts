@@ -11,6 +11,7 @@ import type {
   ClaimJobInput,
   CompleteJobInput,
   EnqueueJobInput,
+  ExpireVocQueueInput,
   FailJobInput,
   JobAttemptRecord,
   ReleaseJobLeaseInput,
@@ -19,6 +20,7 @@ import type {
 } from "../repository";
 import { JobLeaseLostError } from "../repository";
 import { PostgresQueryContext } from "./query-context";
+import { claimableAttemptSql, expiredVocWaitSql, latestActiveAttemptSql, vocQueueCutoff, vocQueueTimeoutError } from "../../domain/voc/queue-deadline";
 import { normalizationRecoveryDisposition, normalizationRecoveryQueries, normalizationSettlementQueries, type NormalizationTerminalRepair } from "../../domain/voc/alexa-voc-recovery";
 
 type JobRepositoryContract = {
@@ -135,6 +137,7 @@ export class PostgresJobStore implements JobRepositoryContract {
       assertIdentifier(input.ownerId, "lease owner");
       assertTimestamp(input.claimedAt, "claimedAt");
       assertPositiveInteger(input.leaseDurationMs, "lease duration");
+      const cutoff = input.queueTimeoutMs === undefined ? null : vocQueueCutoff(input.claimedAt, input.queueTimeoutMs);
       if (input.stage !== undefined && !isStage(input.stage)) {
         throw new TypeError("Invalid job claim stage filter");
       }
@@ -143,6 +146,7 @@ export class PostgresJobStore implements JobRepositoryContract {
           `SELECT ja.*, rs.run_id, rs.stage
              FROM job_attempts ja
              JOIN run_stages rs ON rs.id = ja.stage_id
+             JOIN analysis_runs ar ON ar.id = rs.run_id
             WHERE (
               (ja.status = 'queued' AND ja.available_at <= $1)
               OR (
@@ -159,18 +163,28 @@ export class PostgresJobStore implements JobRepositoryContract {
               )
             )
               AND ($2::text IS NULL OR rs.stage = $2)
+              AND ${claimableAttemptSql}
+              AND ($3::timestamptz IS NULL OR NOT (${latestActiveAttemptSql} AND (${expiredVocWaitSql("$3")})))
             ORDER BY
               CASE ja.status
                 WHEN 'running' THEN ja.lease_expires_at
                 ELSE ja.available_at
               END,
               ja.created_at, ja.id
-            FOR UPDATE OF ja SKIP LOCKED
+            FOR UPDATE OF ar, rs, ja SKIP LOCKED
             LIMIT 1`,
-          [input.claimedAt, input.stage ?? null],
+          [input.claimedAt, input.stage ?? null, cutoff],
         );
         const candidate = selected.rows[0];
         if (!candidate) return null;
+        // Recheck using a fresh snapshot after locking the stage. A manual retry
+        // may have committed a successor while the selection was in flight.
+        const eligible = await this.#queries.query(
+          `SELECT ja.id FROM job_attempts ja
+             JOIN run_stages rs ON rs.id = ja.stage_id
+             JOIN analysis_runs ar ON ar.id = rs.run_id
+           WHERE ja.id = $1 AND ${claimableAttemptSql}`, [candidate.id]);
+        if (!eligible.rows[0]) return null;
         const current = mapJob(candidate);
 
         if (current.status === "queued") {
@@ -289,6 +303,41 @@ export class PostgresJobStore implements JobRepositoryContract {
           input.claimedAt,
         );
         return await this.#findRequiredJob(nextId);
+      });
+    });
+  }
+
+  expireVocQueue(input: ExpireVocQueueInput): Promise<number> {
+    return this.#execute(async () => {
+      const cutoff = vocQueueCutoff(input.checkedAt, input.timeoutMs);
+      const limit = input.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError("Invalid queue expiry batch size");
+      if (input.runId !== undefined) assertIdentifier(input.runId, "run ID");
+      return this.#queries.transaction(async () => {
+        const selected = await this.#queries.query<JobRow>(
+          `SELECT ja.*, rs.run_id, rs.stage FROM job_attempts ja
+             JOIN run_stages rs ON rs.id = ja.stage_id
+             JOIN analysis_runs ar ON ar.id = rs.run_id
+           WHERE ${latestActiveAttemptSql} AND ${expiredVocWaitSql("$1")}
+             AND ($2::text IS NULL OR rs.run_id = $2)
+           ORDER BY ja.available_at, ja.id
+           LIMIT $3 FOR UPDATE OF ar, rs, ja SKIP LOCKED`,
+          [cutoff, input.runId ?? null, limit]);
+        let count = 0;
+        for (const row of selected.rows) {
+          const eligible = await this.#queries.query(
+            `SELECT ja.id FROM job_attempts ja
+               JOIN run_stages rs ON rs.id = ja.stage_id
+               JOIN analysis_runs ar ON ar.id = rs.run_id
+             WHERE ja.id = $2 AND ${latestActiveAttemptSql} AND ${expiredVocWaitSql("$1")}`,
+            [cutoff, row.id]);
+          if (!eligible.rows[0]) continue;
+          await this.#settleClaimCandidate(mapJob(row), {
+            kind: "settle", attemptStatus: "failed", stageStatus: "failed", error: vocQueueTimeoutError(),
+          }, input.checkedAt);
+          count += 1;
+        }
+        return count;
       });
     });
   }

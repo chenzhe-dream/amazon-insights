@@ -525,6 +525,18 @@ export interface ClaimJobInput {
   claimedAt: string;
   leaseDurationMs: number;
   stage?: RunStageRecord["stage"];
+  queueTimeoutMs?: number;
+}
+
+export interface ExpireVocQueueInput {
+  checkedAt: string;
+  timeoutMs: number;
+  limit?: number;
+  runId?: string;
+}
+
+export interface VocQueueRepositoryCapability {
+  expireVocQueue(input: ExpireVocQueueInput): Promise<number>;
 }
 
 export interface ConnectorStatusError {
@@ -736,6 +748,7 @@ export interface ManualAlexaVocRepositoryCapability {
 }
 
 export type RuntimeAgentRepository = AgentRepository &
+  VocQueueRepositoryCapability &
   UserFeedbackRepository &
   ConnectorStatusRepository &
   ConnectorCredentialRepository &

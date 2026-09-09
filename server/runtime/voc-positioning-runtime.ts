@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
+import { DEFAULT_VOC_QUEUE_TIMEOUT_MS } from "../domain/voc/queue-deadline";
 import type { RuntimeAgentRepository } from "../db/repository";
 import type { VocDataSnapshotRecord } from "../data/voc-data-snapshot";
 import { preprocessVocSnapshot } from "../domain/voc/preprocess-voc-snapshot";
@@ -31,6 +32,7 @@ import {
 export interface VocPositioningRuntimeOptions {
   repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
+  queueTimeoutMs?: number;
   provider?: ModelProvider;
   providerFactory?: (options: OpenAIProviderOptions) => ModelProvider;
   providerName?: string;
@@ -133,6 +135,7 @@ export async function createVocPositioningRuntime(
     repository: options.repository,
     ownerId: options.config.worker.ownerId,
     stage: "voc-positioning",
+    queueTimeoutMs: options.queueTimeoutMs ?? DEFAULT_VOC_QUEUE_TIMEOUT_MS,
     handler,
     leaseDurationMs: options.config.worker.leaseDurationMs,
     heartbeatIntervalMs: options.config.worker.heartbeatIntervalMs,

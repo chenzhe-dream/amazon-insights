@@ -41,6 +41,7 @@ import type { ModelValidationLogger } from "./runtime/skill-runner";
 import type { WorkerClock, WorkerLogger } from "./runtime/worker-loop";
 import { OpenAIProvider } from "./runtime/openai-provider";
 import { SyncJobDispatcher } from "./runtime/sync-job-dispatcher";
+import { loadVocQueueTimeoutMs, VocQueueDeadlineRuntime } from "./runtime/voc-queue-deadline-runtime";
 import { createTrafficAnalysisRuntime } from "./runtime/traffic-analysis-runtime";
 import { createProductDefinitionRuntime } from "./runtime/product-definition-runtime";
 import {
@@ -347,6 +348,12 @@ export async function createAgentService(
       }),
     });
     let vocRuntime: VocPositioningRuntime | null = null;
+    const queueTimeoutMs = loadVocQueueTimeoutMs(env);
+    const vocQueueRuntime = new VocQueueDeadlineRuntime({
+      repository, timeoutMs: queueTimeoutMs,
+      ...(options.clock ? { clock: options.clock } : {}),
+      logger: { warn: (metadata, event) => app.log.warn(metadata, event) },
+    });
     let normalizationRuntime: AlexaVocNormalizationRuntime | null = null;
     let trafficRuntime: VocPositioningRuntime | null = null;
     let productRuntime: VocPositioningRuntime | null = null;
@@ -369,6 +376,7 @@ export async function createAgentService(
           throw error;
         }
         manualAlexaVocPublicationRuntime?.start();
+        vocQueueRuntime.start();
         manualAlexaVocRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
@@ -432,6 +440,7 @@ export async function createAgentService(
           }
           vocRuntime = await createVocPositioningRuntime({
             repository,
+            queueTimeoutMs,
             config: resolution.config,
             provider,
             providerName,
@@ -492,6 +501,7 @@ export async function createAgentService(
         stopped = true;
         stopPromise = stopAgentServiceResources({
           runtimes: [
+            vocQueueRuntime,
             syncJobDispatcher,
             manualAlexaVocPublicationRuntime,
             manualAlexaVocRetentionRuntime,

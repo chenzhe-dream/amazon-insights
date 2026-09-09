@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { vocQueueTimeoutError } from "../domain/voc/queue-deadline";
 
 import type {
   AnalysisRun,
@@ -813,6 +814,9 @@ function publicPersistedError(
   error: Record<string, unknown>,
   requestId: string,
 ): ApiError {
+  if (error.code === "QUEUE_TIMEOUT") {
+    return ApiErrorSchema.parse({ ...vocQueueTimeoutError(), requestId });
+  }
   const alreadyPublic = ApiErrorSchema.safeParse(error);
   if (alreadyPublic.success) return alreadyPublic.data;
 

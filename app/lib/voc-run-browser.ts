@@ -1,4 +1,5 @@
 import { localAgentErrorMessage, localAgentFetch } from "./local-agent-browser";
+import { VOC_QUEUE_TIMEOUT_MESSAGE } from "../../shared/voc-queue-timeout";
 
 const entityId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -108,7 +109,8 @@ export async function observeVocRun(
     const reportHistory = reports.reports ?? [];
     const report = reportHistory.find((item) => item.stage === "voc-positioning") ?? null;
     const status = typeof stage?.status === "string" ? stage.status : null;
-    const kind: VocRunObservation["kind"] = report
+    const queueTimeout = status === "failed" && (stage?.lastError as { code?: string } | null)?.code === "QUEUE_TIMEOUT";
+    const kind: VocRunObservation["kind"] = queueTimeout ? "failed" : report
       ? "succeeded"
       : !stage
         ? "not-started"
@@ -123,7 +125,7 @@ export async function observeVocRun(
       stage,
       report,
       reports: reportHistory,
-      message: kind === "not-started"
+      message: queueTimeout ? VOC_QUEUE_TIMEOUT_MESSAGE : kind === "not-started"
         ? "VOC 分析尚未开始"
         : kind === "succeeded"
           ? "VOC 报告已保存"
@@ -154,17 +156,23 @@ export async function waitForVocRun(
     sleep?: (ms: number) => Promise<void>;
     fetchImpl?: BrowserFetch;
     onObservation?: (observation: VocRunObservation) => void;
+    signal?: AbortSignal;
   } = {},
 ) {
   const attempts = options.attempts ?? 900;
   const intervalMs = options.intervalMs ?? 1_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const fetchImpl = options.fetchImpl ?? localAgentFetch;
+  const fetchBase = options.fetchImpl ?? localAgentFetch;
+  const fetchImpl: BrowserFetch = (input, init) => fetchBase(input, { ...init, ...(options.signal ? { signal: options.signal } : {}) });
+  options.signal?.throwIfAborted();
   let observation = await observeVocRun(runId, fetchImpl);
+  if (options.signal?.aborted) return observation;
   options.onObservation?.(observation);
   for (let index = 1; index < attempts && observation.kind === "active"; index += 1) {
     await sleep(intervalMs);
+    if (options.signal?.aborted) break;
     observation = await observeVocRun(runId, fetchImpl);
+    if (options.signal?.aborted) break;
     options.onObservation?.(observation);
   }
   return observation;
