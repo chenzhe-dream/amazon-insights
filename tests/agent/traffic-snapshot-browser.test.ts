@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { createTrafficSnapshotOwner } from "../../app/lib/traffic-snapshot-browser";
 
@@ -7,6 +8,7 @@ const runId = "10000000-0000-4000-8000-000000000003";
 const asins = ["B0C4XRN398"];
 const nextRunId = "10000000-0000-4000-8000-000000000004";
 const nextAsins = ["B07VY9Q95Q"];
+const identity = { sessionIdentity: "session-a", organizationId: "org-a", logoutPending: false };
 
 function dynamicPayload() {
   return {
@@ -34,7 +36,7 @@ test("the current-run dynamic snapshot is preferred without a build or reload re
   const requests: string[] = [];
   const states: string[] = [];
   const owner = createTrafficSnapshotOwner({
-    runId, marketplace: "US", asins,
+    ...identity, runId, marketplace: "US", asins,
     request: async (path) => {
       requests.push(path);
       return { ok: true, status: 200, json: async () => dynamicPayload() };
@@ -49,7 +51,7 @@ test("the current-run dynamic snapshot is preferred without a build or reload re
 
 test("a 404 retains a visibly labeled legacy fallback", async () => {
   const owner = createTrafficSnapshotOwner({
-    runId, marketplace: "US", asins,
+    ...identity, runId, marketplace: "US", asins,
     request: async () => ({ ok: false, status: 404, json: async () => ({ error: { code: "NOT_FOUND" } }) }),
   });
   await owner.refresh();
@@ -60,7 +62,7 @@ test("a later matching snapshot replaces the fallback without reload", async () 
   let attempt = 0;
   const requests: string[] = [];
   const owner = createTrafficSnapshotOwner({
-    runId, marketplace: "US", asins,
+    ...identity, runId, marketplace: "US", asins,
     request: async (path) => {
       requests.push(path);
       attempt += 1;
@@ -77,7 +79,7 @@ test("a later matching snapshot replaces the fallback without reload", async () 
 
 test("mismatched dynamic data is not adopted", async () => {
   const owner = createTrafficSnapshotOwner({
-    runId, marketplace: "US", asins,
+    ...identity, runId, marketplace: "US", asins,
     request: async () => ({ ok: true, status: 200, json: async () => ({ ...dynamicPayload(), asins: ["B07VY9Q95Q"] }) }),
   });
   await owner.refresh();
@@ -88,7 +90,7 @@ test("identity transition clears old dynamic data before the next read resolves"
   let phase: "first" | "mismatch" | "next" = "first";
   const requests: string[] = [];
   const owner = createTrafficSnapshotOwner({
-    runId, marketplace: "US", asins,
+    ...identity, runId, marketplace: "US", asins,
     request: async (path) => {
       requests.push(path);
       if (phase === "first") return { ok: true, status: 200, json: async () => dynamicPayload() };
@@ -100,7 +102,7 @@ test("identity transition clears old dynamic data before the next read resolves"
   assert.equal(owner.current().kind, "dynamic");
 
   phase = "mismatch";
-  owner.rebind({ runId: nextRunId, marketplace: "US", asins: nextAsins });
+  owner.rebind({ ...identity, runId: nextRunId, marketplace: "US", asins: nextAsins });
   assert.equal(owner.current().kind, "pending");
   await owner.refresh();
   assert.equal(owner.current().kind, "pending");
@@ -113,4 +115,34 @@ test("identity transition clears old dynamic data before the next read resolves"
     `/v1/runs/${nextRunId}/traffic-snapshot`,
     `/v1/runs/${nextRunId}/traffic-snapshot`,
   ]);
+});
+
+test("session, organization, and logout transitions clear state and reject late responses", async () => {
+  let resolve!: (value: { ok: boolean; status: number; json(): Promise<unknown> }) => void;
+  let requests = 0;
+  const owner = createTrafficSnapshotOwner({
+    ...identity, runId, marketplace: "US", asins,
+    request: () => { requests += 1; return new Promise(done => { resolve = done; }); },
+  });
+  const pending = owner.refresh();
+  owner.rebind({ ...identity, sessionIdentity: "session-b", runId, marketplace: "US", asins });
+  assert.equal(owner.current().kind, "pending");
+  resolve({ ok: true, status: 200, json: async () => dynamicPayload() });
+  await pending;
+  assert.equal(owner.current().kind, "pending");
+
+  owner.rebind({ ...identity, organizationId: "org-b", runId, marketplace: "US", asins });
+  owner.rebind({ ...identity, organizationId: "org-b", logoutPending: true, runId, marketplace: "US", asins });
+  await owner.refresh();
+  assert.equal(requests, 1);
+  assert.equal(owner.current().kind, "pending");
+});
+
+test("page traffic wiring binds authenticated identity and never falls back to global traffic rows", () => {
+  const source = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /sessionIdentity: authSession\.sessionIdentity/);
+  assert.match(source, /organizationId: authSession\.user\.organizationId/);
+  assert.match(source, /logoutPending: authSession\.logoutPending/);
+  assert.doesNotMatch(source, /overview:\s*sifListingTrafficOverview/);
+  assert.match(source, /trafficDisplayFromSnapshot\(trafficSnapshotState\.snapshot, trustedTrafficDetailInput\)/);
 });

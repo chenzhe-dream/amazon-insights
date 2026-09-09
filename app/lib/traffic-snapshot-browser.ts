@@ -19,6 +19,9 @@ function sameAsinScope(left: readonly string[], right: readonly string[]) {
 }
 
 export function createTrafficSnapshotOwner(input: {
+  sessionIdentity: string;
+  organizationId: string;
+  logoutPending: boolean;
   runId: string | null;
   marketplace: string;
   asins: readonly string[];
@@ -33,14 +36,14 @@ export function createTrafficSnapshotOwner(input: {
   };
   return Object.freeze({
     current: () => state,
-    rebind(next: Pick<typeof input, "runId" | "marketplace" | "asins">) {
+    rebind(next: Pick<typeof input, "sessionIdentity" | "organizationId" | "logoutPending" | "runId" | "marketplace" | "asins">) {
       binding = { ...binding, ...next };
       update({ kind: "pending" });
       return state;
     },
     async refresh() {
       const requestedBinding = binding;
-      if (!requestedBinding.runId) return state;
+      if (requestedBinding.logoutPending || !requestedBinding.runId) return state;
       const response = await requestedBinding.request(`/v1/runs/${encodeURIComponent(requestedBinding.runId)}/traffic-snapshot`);
       if (binding !== requestedBinding) return state;
       if (response.status === 404) {

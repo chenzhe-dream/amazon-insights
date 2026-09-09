@@ -18,7 +18,6 @@ import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data"
 import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
 import {
   sifListingTrafficMeta,
-  sifListingTrafficOverview,
   childTrafficSegmentMeta,
   childTrafficSegments,
   sifAdChannelGlossary,
@@ -27,6 +26,7 @@ import {
   type TrafficDistributionItem,
   type ChildTrafficVariant,
   type TrafficDisplayData,
+  type ScopedTrafficDetail,
 } from "./sif-listing-traffic-data";
 import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
 import {
@@ -1961,6 +1961,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const asinScopeKey = activeAsins.join(",");
   useLayoutEffect(() => {
     const owner = trafficSnapshotOwner.current ??= createTrafficSnapshotOwner({
+      sessionIdentity: authSession.sessionIdentity,
+      organizationId: authSession.user.organizationId,
+      logoutPending: authSession.logoutPending,
       runId: null,
       marketplace: market,
       asins: activeAsins,
@@ -1968,19 +1971,37 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       onState: setTrafficSnapshotState,
     });
     if (activeTab !== "traffic" || !baseSyncRunId || activeAsins.length === 0) {
-      owner.rebind({ runId: null, marketplace: market, asins: activeAsins });
+      owner.rebind({ sessionIdentity: authSession.sessionIdentity, organizationId: authSession.user.organizationId, logoutPending: authSession.logoutPending, runId: null, marketplace: market, asins: activeAsins });
       return;
     }
-    owner.rebind({ runId: baseSyncRunId, marketplace: market, asins: activeAsins });
+    owner.rebind({ sessionIdentity: authSession.sessionIdentity, organizationId: authSession.user.organizationId, logoutPending: authSession.logoutPending, runId: baseSyncRunId, marketplace: market, asins: activeAsins });
     void owner.refresh().catch(() => undefined);
     const timer = window.setInterval(() => void owner.refresh().catch(() => undefined), 5_000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeAsins, activeTab, asinScopeKey, baseSyncRunId, market]);
+  }, [activeAsins, activeTab, asinScopeKey, authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, baseSyncRunId, market]);
+  const trustedTrafficDetailInput = useMemo(() => {
+    const projection = stageOutputSnapshot.traffic;
+    if (!projection || !("data" in projection) || !projection.data || !resumedProjectId || !baseSyncRunId) return undefined;
+    const listing = projection.data.listingByAsin as Record<string, unknown>;
+    const expectedScopeByAsin: Record<string, import("./lib/traffic-detail-view").TrafficDetailScope> = {};
+    const candidateByAsin: Record<string, ScopedTrafficDetail | undefined> = {};
+    for (const asin of activeAsins) {
+      const record = listing[asin];
+      if (!record || typeof record !== "object" || !Array.isArray((record as { naturalAd?: unknown }).naturalAd)) continue;
+      const scope = {
+        organizationId: authSession.user.organizationId, projectId: resumedProjectId, runId: baseSyncRunId,
+        jobId: projection.jobId, marketplace: market, asin, evidenceId: projection.contentHash,
+      };
+      expectedScopeByAsin[asin] = scope;
+      candidateByAsin[asin] = { scope, overview: record as never };
+    }
+    return { expectedScopeByAsin, candidateByAsin };
+  }, [activeAsins, authSession.user.organizationId, baseSyncRunId, market, resumedProjectId, stageOutputSnapshot.traffic]);
   const trafficData = useMemo(
-    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot) : undefined,
-    [trafficSnapshotState],
+    () => trafficSnapshotState.kind === "dynamic" ? trafficDisplayFromSnapshot(trafficSnapshotState.snapshot, trustedTrafficDetailInput) : undefined,
+    [trafficSnapshotState, trustedTrafficDetailInput],
   );
   const trafficOrigin = trafficSnapshotState.kind === "dynamic"
     ? "dynamic" as const
@@ -2024,8 +2045,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         ? runtimeAnalysisData.imageRemarks.outcomesByAsin
         : {},
       trafficData: trafficData ?? {
-        overview: sifListingTrafficOverview,
-        monthlyTrend: sifMonthlyTrafficTrend,
+        overview: {},
+        monthlyTrend: {},
         meta: sifListingTrafficMeta,
       },
     }),

@@ -168,6 +168,34 @@ test("verified done and partial stage outputs both overlay runtime fallbacks", (
   assert.equal(partial.fbaFeeByAsin[asins[0]!], doneFee);
 });
 
+test("compact traffic summaries merge field-by-field without erasing trusted details", () => {
+  const asin = asins[0]!;
+  const detail = {
+    totalScore: 900, naturalAd: [{ label: "自然流量", score: 600, ratio: 66.7 }],
+    adChannels: [{ label: "SP(常规)", score: 200, ratio: 22.2 }],
+    recommendationSources: [{ label: "相似商品", score: 40, ratio: 4.4 }],
+    children: [{ asin: "B000000009", label: "child", image: "", totalScore: 1, sharePct: 1, organic: 1, sp: 0, spRecommend: 0, sb: 0, sbv: 0 }],
+    updatedThrough: "2026-08-01",
+  };
+  const fallback = {
+    keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {},
+    salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {}, childSalesByAsin: {},
+    priceStrategyByAsin: {}, imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
+    trafficData: { overview: { [asin]: detail }, monthlyTrend: {}, meta: sifListingTrafficMeta },
+  };
+  const compact = buildStageOutputView({ traffic: { stage: "traffic", stageStatus: "done", data: { listingByAsin: { [asin]: { total: 0 } } } } } as never, fallback);
+  assert.equal(compact.trafficData.overview[asin]?.totalScore, 0);
+  assert.deepEqual(compact.trafficData.overview[asin]?.adChannels, detail.adChannels);
+  assert.deepEqual(compact.trafficData.overview[asin]?.children, detail.children);
+
+  const explicitEmpty = buildStageOutputView({ traffic: { stage: "traffic", stageStatus: "done", data: { listingByAsin: { [asin]: { adChannels: [], recommendationSources: [], children: [], updatedThrough: null } } } } } as never, fallback);
+  assert.deepEqual(explicitEmpty.trafficData.overview[asin]?.adChannels, []);
+  assert.equal(explicitEmpty.trafficData.overview[asin]?.updatedThrough, null);
+
+  const malformed = buildStageOutputView({ traffic: { stage: "traffic", stageStatus: "done", data: { listingByAsin: { [asin]: { adChannels: "bad" } } } } } as never, fallback);
+  assert.equal(malformed.trafficData.overview[asin], null);
+});
+
 test("runtime snapshot carries the three published late-stage maps", () => {
   const snapshot = RuntimeAnalysisDataSnapshotSchema.parse({
     catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} }, reviews: { analysisByAsin: {}, ratingByAsin: {} },

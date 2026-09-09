@@ -1,6 +1,7 @@
 import { sifListingTrafficRawByAsin, sifListingTrafficRawMeta } from "./sif-listing-traffic-raw-data";
 import type { TrafficSnapshotReadResponse } from "../shared/agent-contracts";
 import type { SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
+import { sameTrafficDetailScope, type TrafficDetailScope } from "./lib/traffic-detail-view";
 
 export type TrafficDistributionItem = {
   label: string;
@@ -28,6 +29,7 @@ export type SifListingTrafficOverview = {
   recommendationSources: TrafficDistributionItem[];
   children: ChildTrafficVariant[];
   updatedThrough: string | null;
+  childCount?: number;
 };
 
 function pct(ratio: number) {
@@ -157,27 +159,39 @@ export type TrafficDisplayData = {
   overview: Record<string, SifListingTrafficOverview | null>;
   monthlyTrend: Record<string, SifMonthlyTrafficSeries>;
   meta: typeof sifListingTrafficMeta;
+  detailAvailability?: Record<string, "available" | "missing" | "invalid-scope">;
 };
 
-export function trafficDisplayFromSnapshot(snapshot: TrafficSnapshotReadResponse): TrafficDisplayData {
+export type ScopedTrafficDetail = Readonly<{
+  scope: TrafficDetailScope;
+  overview: SifListingTrafficOverview;
+}>;
+
+export function trafficDisplayFromSnapshot(
+  snapshot: TrafficSnapshotReadResponse,
+  detailInput?: Readonly<{
+    expectedScopeByAsin: Readonly<Record<string, TrafficDetailScope>>;
+    candidateByAsin: Readonly<Record<string, ScopedTrafficDetail | undefined>>;
+  }>,
+): TrafficDisplayData {
   const overview: TrafficDisplayData["overview"] = {};
   const monthlyTrend: TrafficDisplayData["monthlyTrend"] = {};
+  const detailAvailability: NonNullable<TrafficDisplayData["detailAvailability"]> = {};
   for (const item of snapshot.traffic.competitors) {
+    const expected = detailInput?.expectedScopeByAsin[item.asin];
+    const candidate = detailInput?.candidateByAsin[item.asin];
+    const trusted = expected && candidate && sameTrafficDetailScope(expected, candidate.scope) ? candidate.overview : null;
+    detailAvailability[item.asin] = trusted ? "available" : candidate ? "invalid-scope" : "missing";
     overview[item.asin] = {
       totalScore: item.trafficVolume,
       naturalAd: [
         { label: "自然流量", score: item.naturalVolume, ratio: item.naturalShare },
         { label: "广告流量", score: item.advertisingVolume, ratio: item.advertisingShare },
       ],
-      adChannels: item.maxAdvertisingChannel === "none" ? [] : [{
-        label: item.maxAdvertisingChannel,
-        score: item.advertisingVolume,
-        ratio: item.maxAdvertisingChannelShare,
-      }],
-      recommendationSources: item.recommendationTraffic > 0
-        ? [{ label: "推荐流量", score: item.recommendationTraffic, ratio: 100 }]
-        : [],
-      children: [],
+      adChannels: trusted?.adChannels ?? [],
+      recommendationSources: trusted?.recommendationSources ?? [],
+      children: trusted?.children ?? [],
+      childCount: item.childCount,
       updatedThrough: snapshot.collectedAt.slice(0, 10),
     };
     monthlyTrend[item.asin] = {
@@ -194,6 +208,7 @@ export function trafficDisplayFromSnapshot(snapshot: TrafficSnapshotReadResponse
   return {
     overview,
     monthlyTrend,
+    detailAvailability,
     meta: {
       source: "SIF PostgreSQL dynamic snapshot",
       period: "当前 run 快照",
