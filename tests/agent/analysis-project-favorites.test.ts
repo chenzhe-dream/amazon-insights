@@ -135,6 +135,12 @@ test("favorite routes pass the actual web proxy allowlist and forward authentica
       { params: Promise.resolve({ path: [...path] }) }, client);
     assert.equal(response.status, 200, await response.text());
   }
+  for (const [method, handler] of [["PUT", PUT], ["DELETE", DELETE]] as const) {
+    const response = await handler(new Request(`http://localhost/api/agent/v1/local-data/projects/${projectId}/favorite`, {
+      method, headers: { cookie: headers.cookie, "content-type": "application/json" }, body: JSON.stringify({ organizationId: otherOrg }),
+    }), { params: Promise.resolve({ path: ["v1", "local-data", "projects", projectId, "favorite"] }) }, client);
+    assert.equal(response.status, 400, "the Web proxy must reject spoofed scope instead of dropping its body");
+  }
 });
 
 test("storage failures use safe public messages and leave previous data untouched", async t => {

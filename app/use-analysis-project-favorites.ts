@@ -29,7 +29,9 @@ export function useAnalysisProjectFavorites(scope: string | null) {
       const response = await localAgentFetch("/v1/local-data/project-favorites", { signal: controller.signal, cache: "no-store" });
       const payload = await response.json();
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "收藏加载失败，请刷新重试"));
-      const data = AnalysisFavoritesResponseSchema.parse(payload);
+      const parsed = AnalysisFavoritesResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("收藏数据格式不正确，请刷新重试");
+      const data = parsed.data;
       if (live()) setState({ scope, projectIds: data.projectIds, ready: true, loading: false, pending: false, error: null });
     } catch (error) {
       if (live()) setState(previous => ({ ...previous, loading: false, error: error instanceof Error ? error.message : "收藏加载失败" }));
@@ -50,7 +52,9 @@ export function useAnalysisProjectFavorites(scope: string | null) {
         { method: favorited ? "PUT" : "DELETE", signal: controller.signal });
       const payload = await response.json();
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "收藏保存失败，请重试"));
-      const data = AnalysisFavoriteResponseSchema.parse(payload);
+      const parsed = AnalysisFavoriteResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error("收藏数据格式不正确，请刷新重试");
+      const data = parsed.data;
       if (data.projectId !== projectId || data.favorited !== favorited) throw new Error("收藏状态不一致，请刷新重试");
       if (!live()) return false;
       setState(previous => ({ ...previous, pending: false, projectIds: favorited

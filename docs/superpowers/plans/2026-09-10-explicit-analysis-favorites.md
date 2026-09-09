@@ -19,23 +19,23 @@ The user approved separating analysis history from explicit team favorites, foll
 
 Files: shared/analysis-project-favorite-contracts.ts; server/services/analysis-project-favorite-store.ts; server/routes/analysis-project-favorites.ts; server/app.ts; tests/agent/analysis-project-favorites.test.ts.
 
-- [ ] RED: temporary-directory tests for empty/no-write reads, persistence across instances, team sharing/org isolation, idempotency, project byte preservation, invalid IDs, missing/wrong-kind projects and corrupt storage.
-- [ ] Implement separate store and strict GET /v1/local-data/project-favorites, PUT/DELETE /v1/local-data/projects/:id/favorite. Register using existing agent auth/proxy hook. Successful writes return only projectId/favorited, list returns projectIds.
-- [ ] GREEN: authenticated route tests cover member/admin, no session, anonymous-loopback, spoofed organization/body, and runtime-root selection. No calls to providers or formal DB.
+- [x] RED: temporary-directory tests for empty/no-write reads, persistence across instances, team sharing/org isolation, idempotency, project byte preservation, invalid IDs, missing/wrong-kind projects and corrupt storage.
+- [x] Implement separate store and strict GET /v1/local-data/project-favorites, PUT/DELETE /v1/local-data/projects/:id/favorite. Register using existing agent auth/proxy hook. Successful writes return only projectId/favorited, list returns projectIds.
+- [x] GREEN: authenticated route tests cover member/admin, no session, anonymous-loopback, spoofed organization/body, and runtime-root selection. No calls to providers or formal DB.
 
 ## Task 2: Library and current-project controls
 
 Files: app/use-analysis-project-favorites.ts; app/analysis-project-favorite-button.tsx; app/project-library-panel.tsx; app/page.tsx; tests/agent/analysis-project-favorites-ui.test.tsx; focused Vite harness under tests/agent/helpers.
 
-- [ ] RED: render real components; history does not appear as favorites; explicit add/remove persists on remount; unfavorite sends only sidecar DELETE; loading/error/pending states; session switch fences late responses; other kinds unchanged.
-- [ ] Implement one root-owned hook shared between current button and library; analysis-only tabs/counts and Chinese empty states. Keep original other-kind behavior. Save-as-new is clearly history-only.
-- [ ] GREEN: browser component tests, existing local-data and related regression suites; production build.
+- [x] RED: render real components; history does not appear as favorites; explicit add/remove persists on remount; unfavorite sends only sidecar DELETE; loading/error/pending states; session switch fences late responses; other kinds unchanged.
+- [x] Implement one root-owned hook shared between current button and library; analysis-only tabs/counts and Chinese empty states. Keep original other-kind behavior. Save-as-new is clearly history-only.
+- [x] GREEN: browser component tests and related regression suites; production build. Existing stale VOC source-string assertion documented separately; not a clean whole-repo result.
 
 ## Task 3: Independent review and controlled formal release
 
 Files: docs/verification/2026-09-10-explicit-analysis-favorites.md.
 
-- [ ] Read-only independent specification/security/quality review; fix blocking findings and rerun focused tests.
+- [x] Read-only independent specification/security/quality review; fix blocking findings and rerun focused tests.
 - [ ] Record candidate commit, build evidence, active-work check, formal baseline and rollback reference. Back up formal pointer/config and all generated/project files with hashes.
 - [ ] Fast-forward only the coordinated formal checkout, preserve 15 generated files, use manage-formal-stack.ps1 -PublishCode. Do not restart PostgreSQL or other worktrees.
 - [ ] Verify Web/Agent artifact agreement, local and LAN health, auth rejection, existing project hashes/counts unchanged; record and hand off.

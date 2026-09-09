@@ -22,8 +22,8 @@ export function createAnalysisProjectFavoriteStore(options: {
   dataRoot?: string; env?: Readonly<Record<string, string | undefined>>;
 } = {}) {
   const env = options.env ?? process.env;
-  const dataRoot = options.dataRoot ?? resolveRuntimeRoots({ codeRoot: getProjectRoot(), env,
-    formal: Boolean(env.AGENT_FORMAL_WORKTREE_ROOT) }).dataRoot;
+  const dataRoot = options.dataRoot ?? resolveRuntimeRoots({ codeRoot: getProjectRoot(), env: env as NodeJS.ProcessEnv,
+    formal: Boolean(env.AGENT_FORMAL_WORKTREE_ROOT), commit: undefined }).dataRoot;
   const root = join(dataRoot, "analysis-project-favorites");
   // Resolve using this store's runtime root, not project-store's import-time process.env.
   function readAnalysisProject(id: string) {

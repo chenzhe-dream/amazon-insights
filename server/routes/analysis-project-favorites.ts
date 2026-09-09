@@ -6,7 +6,7 @@ import { ContractRouteError } from "./analysis-runs";
 
 export function registerAnalysisProjectFavoriteRoutes(app: FastifyInstance, store: AnalysisProjectFavoriteStore) {
   function principal(request: FastifyRequest) {
-    if (request.authPrincipal?.kind !== "user") throw new ContractRouteError(401, "UNAUTHORIZED", "Authentication required");
+    if (request.authPrincipal?.kind !== "user") throw new ContractRouteError(401, "AUTHENTICATION_REQUIRED", "Authentication required");
     if (!FavoriteEmptySchema.safeParse(request.query).success ||
         !FavoriteEmptySchema.safeParse(request.body ?? {}).success) {
       throw new ContractRouteError(400, "VALIDATION_ERROR", "Favorite requests do not accept scope or project data");

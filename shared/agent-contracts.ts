@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
+import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
 
 import {
   createAdminUserPresenceContracts,
@@ -1902,7 +1902,7 @@ export const v1Contracts = [
   {
     method: "GET",
     path: "/v1/local-data/project-favorites",
-    query: FavoriteEmptySchema,
+    request: FavoriteEmptySchema,
     response: AnalysisFavoritesResponseSchema,
     error: ApiErrorResponseSchema,
   },
@@ -1910,6 +1910,7 @@ export const v1Contracts = [
     method: "PUT",
     path: "/v1/local-data/projects/:id/favorite",
     params: FavoriteParamsSchema,
+    request: FavoriteMutationRequestSchema,
     response: AnalysisFavoriteResponseSchema,
     error: ApiErrorResponseSchema,
   },
@@ -1917,6 +1918,7 @@ export const v1Contracts = [
     method: "DELETE",
     path: "/v1/local-data/projects/:id/favorite",
     params: FavoriteParamsSchema,
+    request: FavoriteMutationRequestSchema,
     response: AnalysisFavoriteResponseSchema,
     error: ApiErrorResponseSchema,
   },

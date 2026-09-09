@@ -18,7 +18,7 @@ async function fixture(t: test.TestContext, kind = "analysis") {
   page.setDefaultTimeout(10000);
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
-  const state = { favorite: false, fail: false, writes: [] as string[], hold: false, held: [] as (() => Promise<void>)[] };
+  const state = { favorite: false, fail: false, writes: [] as string[], hold: false, held: [] as (() => Promise<void>)[], projects: [{ ...project, kind }] };
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method();
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -33,7 +33,11 @@ async function fixture(t: test.TestContext, kind = "analysis") {
       state.favorite = method === "PUT";
       return reply({ projectId: id, favorited: state.favorite });
     }
-    if (path.endsWith("/projects") && method === "GET") return reply({ projects: [{ ...project, kind }] });
+    if (path.endsWith("/projects") && method === "GET") return reply({ projects: state.projects });
+    if (path.endsWith("/projects") && method === "POST") {
+      const saved = { ...project, kind, id: "10000000-0000-4000-8000-000000000002", name: "新的灯具分析" };
+      state.projects.push(saved); return reply({ project: saved });
+    }
     return reply({}, 404);
   });
   await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?kind=${kind}`);
@@ -86,4 +90,15 @@ test("other project kinds retain their existing list and delete workflow", async
   await page.getByText("历史灯具项目", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: /^历史项目（/ }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "删除", exact: true }).count(), 1);
+});
+
+test("saving a new analysis creates history only and opens the history view", async t => {
+  const { page, state } = await fixture(t);
+  await page.getByPlaceholder("如：儿童三轮滑板车 · 美国站").fill("新的灯具分析");
+  await page.getByRole("button", { name: "保存为历史项目", exact: true }).click();
+  await page.getByText("新的灯具分析", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /^历史项目（/ }).getAttribute("aria-pressed"), "true");
+  assert.deepEqual(state.writes, ["POST /api/projects"]);
+  await page.getByRole("button", { name: /^已收藏（/ }).click();
+  await page.getByText("尚未收藏项目").waitFor();
 });
