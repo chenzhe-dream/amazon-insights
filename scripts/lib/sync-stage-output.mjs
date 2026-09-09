@@ -327,8 +327,12 @@ function normalizedTrafficListing(source, asins) {
     const channelScore = (key, index) => trafficScore(Array.isArray(chars?.[key]) ? chars[key][index]?.score : 0);
     const children = dims?.flatMap((item, index) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const childAsin = typeof item.val === "string"
+        ? item.val.match(/(?:^|[^A-Z0-9])([A-Z0-9]{10})(?=$|[^A-Z0-9])/i)?.[1]?.toUpperCase()
+        : null;
+      if (!childAsin) return [];
       return [{
-        asin: String(item.val).match(/B0[A-Z0-9]{8}/i)?.[0]?.toUpperCase() ?? String(item.val),
+        asin: childAsin,
         label: Array.isArray(item.features) ? item.features.filter(Boolean).join(" / ") || "默认" : "默认",
         image: typeof item.img === "string" ? item.img : "",
         totalScore: trafficScore(item.sumScore),

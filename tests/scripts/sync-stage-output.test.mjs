@@ -281,6 +281,31 @@ test("traffic projection ignores malformed structure instead of inventing child 
   }
 });
 
+test("traffic projection rejects object-shaped children without an ASIN and retains source indices without mutation", () => {
+  const asin = "B0TEST0013";
+  const raw = {
+    overview: { overview: {} },
+    structure: { chars: {
+      dims: [{}, { val: null }, { val: "variant B0VALID001", features: ["Valid"] }],
+      nfs: [{ score: 901 }, { score: 902 }, { score: 103 }],
+      sps: [{ score: 911 }, { score: 912 }, { score: 113 }],
+      recs: [{ score: 921 }, { score: 922 }, { score: 123 }],
+      sbs: [{ score: 931 }, { score: 932 }, { score: 133 }],
+      sbvs: [{ score: 941 }, { score: 942 }, { score: 143 }],
+    } },
+  };
+  const original = structuredClone(raw);
+  const draft = projectStageOutput("traffic", [asin], {
+    readExport: (_file, name) => name === "sifListingTrafficRawByAsin" ? { [asin]: raw } : {},
+  });
+
+  assert.deepEqual(draft.data.listingByAsin[asin].children, [{
+    asin: "B0VALID001", label: "Valid", image: "", totalScore: 0, sharePct: 0,
+    organic: 103, sp: 113, spRecommend: 123, sb: 133, sbv: 143,
+  }]);
+  assert.deepEqual(raw, original);
+});
+
 test("traffic accepts only the explicitly whitelisted legacy normalized overview fallback", () => {
   const asin = "B0TEST0009";
   const draft = projectStageOutput("traffic", [asin], {
