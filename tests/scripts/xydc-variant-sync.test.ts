@@ -16,6 +16,7 @@ import {
   writeXydcVariantFamily,
   xydcVariantCachePath,
 } from "../../scripts/lib/xydc-variant-cache";
+import { readXydcOrderDisplaySnapshot } from "../../scripts/lib/xydc-order-display-cache";
 import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
@@ -120,8 +121,10 @@ function realInfoResponse() {
 
 function cacheFixture(initial: Record<string, XydcVariantFamily> = {}) {
   const records: Record<string, XydcVariantFamily> = { ...initial };
+  const writes: XydcVariantFamily[] = [];
   return {
     records,
+    writes,
     cache: {
       async readMany(_country: string, asins: readonly string[]) {
         const found: Array<[string, XydcVariantFamily]> = [];
@@ -129,11 +132,124 @@ function cacheFixture(initial: Record<string, XydcVariantFamily> = {}) {
         return Object.fromEntries(found);
       },
       async write(_country: string, family: XydcVariantFamily) {
+        writes.push(family);
         records[family.inputAsin] = family;
       },
     },
   };
 }
+
+function cachedRelationship(
+  asin: string,
+  status: "ready" | "partial" = "ready",
+  fetchedAt = "2026-09-03T08:00:00.000Z",
+) {
+  const family = projectXydcVariationFamily({
+    inputAsin: asin,
+    country: "US",
+    raw: variationResponse(),
+    fetchedAt,
+  });
+  family.status = status;
+  family.reasonCode = status === "ready" ? null : "PARTIAL_CHILD_INFO";
+  family.children = family.children.map(child => ({
+    ...child,
+    title: status === "ready" ? "Preserved child" : null,
+    imageUrl: status === "ready" ? "https://images.example.test/preserved.jpg" : null,
+    price: status === "ready" ? 12.5 : null,
+    currency: status === "ready" ? "USD" : null,
+    stars: status === "ready" ? 4.5 : null,
+    productPageRatings: status === "ready" ? 42 : null,
+    infoStatus: status === "ready" ? "ready" : "pending",
+  }));
+  return family;
+}
+
+test("missing token preserves ready and partial relationship evidence regardless of force", async () => {
+  for (const [token, force, status] of [
+    ["", false, "ready"],
+    ["   ", true, "ready"],
+    ["", true, "partial"],
+    ["\t", false, "partial"],
+  ] as const) {
+    const prior = cachedRelationship(inputAsin, status);
+    const before = structuredClone(prior);
+    const fixture = cacheFixture({ [inputAsin]: prior });
+    let toolCalls = 0;
+    const result = await syncXydcVariantFamilies({
+      asins: [inputAsin], country: " us ", token, force, now, cache: fixture.cache,
+      callTool: async () => { toolCalls += 1; throw new Error("unexpected provider call"); },
+    });
+    assert.deepEqual(result, [{ ...before, cacheState: "stale" }]);
+    assert.deepEqual(fixture.records[inputAsin], before);
+    assert.deepEqual(fixture.writes, []);
+    assert.equal(toolCalls, 0);
+  }
+});
+
+test("missing token preserves eligible cache hits while persisting unavailable misses", async () => {
+  const miss = "B0MISSING1";
+  const prior = cachedRelationship(inputAsin, "ready");
+  const fixture = cacheFixture({ [inputAsin]: prior });
+  const result = await syncXydcVariantFamilies({
+    asins: [inputAsin, miss], country: "US", token: " ", force: true, now, cache: fixture.cache,
+    callTool: async () => { throw new Error("unexpected provider call"); },
+  });
+  assert.equal(result.find(family => family.inputAsin === inputAsin)?.cacheState, "stale");
+  assert.equal(result.find(family => family.inputAsin === miss)?.reasonCode, "NOT_CONFIGURED");
+  assert.deepEqual(fixture.records[inputAsin], prior);
+  assert.deepEqual(fixture.writes.map(family => family.inputAsin), [miss]);
+});
+
+test("missing token does not reuse invalid or unsafe cached relationship candidates", async () => {
+  const cases: Array<[string, XydcVariantFamily]> = [
+    ["country", { ...cachedRelationship(inputAsin), country: "DE" }],
+    ["input", { ...cachedRelationship(inputAsin), inputAsin: "B0OTHER001" }],
+    ["status", { ...cachedRelationship(inputAsin), status: "unavailable", reasonCode: "NOT_FOUND" }],
+    ["future", cachedRelationship(inputAsin, "ready", "2099-01-01T00:00:00.000Z")],
+    ["no relationship", { ...cachedRelationship(inputAsin), children: [] }],
+  ];
+  for (const [, candidate] of cases) {
+    const fixture = cacheFixture({ [inputAsin]: candidate });
+    const result = await syncXydcVariantFamilies({
+      asins: [inputAsin], country: "US", token: "", now, cache: fixture.cache,
+      callTool: async () => { throw new Error("unexpected provider call"); },
+    });
+    assert.equal(result[0]?.reasonCode, "NOT_CONFIGURED");
+    assert.equal(fixture.writes.length, 1);
+  }
+});
+
+test("missing credential keeps variant cache bytes and annual order display readable", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-missing-token-"));
+  const prior = cachedRelationship(inputAsin, "ready");
+  const cache = createXydcVariantCache(root);
+  const orderWindow = getXydcOrderWindow(now);
+  const variantPath = xydcVariantCachePath(root, "US", inputAsin);
+  const orderPath = xydcOrderCachePath(root, prior, orderWindow);
+  try {
+    await cache.write("US", prior);
+    await mkdir(path.dirname(orderPath), { recursive: true });
+    await writeFile(orderPath, JSON.stringify({
+      version: 1, source: "xydc", aggregation: "children", country: "US", parentAsin: prior.parentAsin,
+      childAsins: prior.children.map(child => child.asin), window: orderWindow,
+      children: prior.children.map(child => ({
+        asin: child.asin, trends: orderWindow.months.map(date => ({ date, orders: 10 })),
+        fetchedAt: prior.fetchedAt, reasonCode: null,
+      })),
+      sourceUpdatedAt: prior.sourceUpdatedAt, fetchedAt: prior.fetchedAt, cacheState: "fresh", reasonCode: null,
+    }));
+    const before = await readFile(variantPath);
+    const [preserved] = await syncXydcVariantFamilies({
+      asins: [inputAsin], country: "US", token: "", force: true, now, cache,
+      callTool: async () => { throw new Error("unexpected provider call"); },
+    });
+    assert.equal(readXydcOrderDisplaySnapshot(root, preserved, orderWindow, now)?.children[0]?.trends.length, 12);
+    assert.deepEqual(await readFile(variantPath), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("projects the real XiYou variation and info contracts without materializing unlisted children", async () => {
   const rawVariations = realVariationResponse();

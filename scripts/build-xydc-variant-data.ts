@@ -443,9 +443,26 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   const asins = [...new Set(input.asins.map(normalizeAsin).filter((asin): asin is string => Boolean(asin)))];
   const cached = await input.cache.readMany(input.country, asins);
   if (!input.token.trim()) {
-    const unavailable = asins.map(asin => unavailableFamily(asin, input.country, input.now, "NOT_CONFIGURED"));
+    const expectedCountry = input.country.trim().toUpperCase();
+    const unavailable: XydcVariantFamily[] = [];
+    const families = asins.map(asin => {
+      const parsed = XydcVariantFamilySchema.safeParse(cached[asin]);
+      const prior = parsed.success ? parsed.data : undefined;
+      const fetchedAt = prior ? Date.parse(prior.fetchedAt) : Number.NaN;
+      if (prior?.country === expectedCountry
+        && prior.inputAsin === asin
+        && (prior.status === "ready" || prior.status === "partial")
+        && prior.children.length > 0
+        && Number.isFinite(fetchedAt)
+        && fetchedAt <= input.now.getTime()) {
+        return { ...prior, cacheState: "stale" as const };
+      }
+      const family = unavailableFamily(asin, input.country, input.now, "NOT_CONFIGURED");
+      unavailable.push(family);
+      return family;
+    });
     await Promise.all(unavailable.map(family => input.cache.write(input.country, family)));
-    return mergeFamilies(unavailable);
+    return mergeFamilies(families);
   }
   const drafts = new Map<string, XydcVariantFamily>();
   const ready = new Set<string>();
