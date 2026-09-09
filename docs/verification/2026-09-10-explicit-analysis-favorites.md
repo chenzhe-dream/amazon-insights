@@ -24,4 +24,16 @@ Live read-only project inventory: 24 analysis, 2 keyword-compare, 2 traffic-prom
 
 ## Activation
 
-Pending controlled release and final artifact/hash evidence. No formal service change has been made at this checkpoint.
+Released through `manage-formal-stack.ps1 -PublishCode`, exit 0; committed at `2026-09-09T17:42:00.482Z` (2026-09-10 01:42 China time).
+
+- Candidate / formal HEAD / manager / Agent / Web: `d391c9fcd03c9bb84c7604be95cc3787d11717a7`.
+- Web artifact and durable pointer: `6b1eeec0b6789938afe31f109d5e3a6ac050f118e49d3556ac873931e5870afb`.
+- Agent/Web source hash: `0cb6b95606fbf41b8f5cfa06ee86b0b68a4fea6382540d26d4fc2913b3c62515`.
+- Applied request: `f1e08e27c48f5550a10535550a1f28b9d4bb0f3670c6150ac3b8a5b78f8962da`.
+- Exact previous artifact, configuration, manager state, durable pointer, 15 generated files and 28 project files backed up and hash-verified (118 files) at private runtime backup `backups/explicit-favorites-20260910-014020`. No credentials committed.
+- After fast-forward, formal checkout's actual 36-test favorites/proxy suite passed. Controlled manager built its own exact formal candidate before activation and rechecked active work.
+- At `2026-09-09T17:42:23.967Z`: local Web, LAN Web and Agent healthy and identities agree; active work 0; manager ownership valid; publication queues idle; port 3000 absent. PostgreSQL PID remains 51004, not restarted.
+- All 44 preserved project/generated/config files retain their pre-release SHA-256. All 28 projects remain (24 analysis, 2 keyword-compare, 2 traffic-promo). Initial explicit favorite markers 0. Existing dataCurrent artifact unchanged.
+- New live unauthenticated favorites endpoint returns 401 through the real Web proxy, not a missing-route response. Authenticated add/remove/persistence were tested using isolated fixtures, not by modifying real user favorites or generating paid analyses.
+
+The release evidence/plan completion is committed separately after activation. Running services remain pinned to the candidate above. Unrelated WIP and known baseline checks remain untouched.

@@ -36,6 +36,6 @@ Files: app/use-analysis-project-favorites.ts; app/analysis-project-favorite-butt
 Files: docs/verification/2026-09-10-explicit-analysis-favorites.md.
 
 - [x] Read-only independent specification/security/quality review; fix blocking findings and rerun focused tests.
-- [ ] Record candidate commit, build evidence, active-work check, formal baseline and rollback reference. Back up formal pointer/config and all generated/project files with hashes.
-- [ ] Fast-forward only the coordinated formal checkout, preserve 15 generated files, use manage-formal-stack.ps1 -PublishCode. Do not restart PostgreSQL or other worktrees.
-- [ ] Verify Web/Agent artifact agreement, local and LAN health, auth rejection, existing project hashes/counts unchanged; record and hand off.
+- [x] Record candidate commit, build evidence, active-work check, formal baseline and rollback reference. Back up formal pointer/config and all generated/project files with hashes.
+- [x] Fast-forward only the coordinated formal checkout, preserve 15 generated files, use manage-formal-stack.ps1 -PublishCode. Do not restart PostgreSQL or other worktrees.
+- [x] Verify Web/Agent artifact agreement, local and LAN health, auth rejection, existing project hashes/counts unchanged; record and hand off.
