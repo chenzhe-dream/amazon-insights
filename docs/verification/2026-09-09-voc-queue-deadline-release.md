@@ -35,4 +35,32 @@ For these two runs, preservation baseline: AgentRun audit count 8, digest `7fad2
 
 ## Activation status
 
-Pending controlled activation. Only owned source/tests/docs may be committed. Preserve the formal worktree's 15 pre-existing generated files and source worktree's unrelated edits. Back up configuration, manager state and publication pointer before invoking the tested run-scoped expiry operation. Integrate by fast-forward, then activate exclusively through `manage-formal-stack.ps1 -PublishCode`. Record exact post-release identities and preservation checks below; do not infer publication from a build alone.
+Implementation committed as `2e5a29de2d051b565de910ea6314ffb9cc6f187e`, containing only owned source/tests/docs. Unrelated source worktree edits and generated typecheck metadata remain unstaged.
+
+Private operational backup: `C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/voc-queue-deadline-20260909-2042`. Contains formal configuration, manager state, durable publication pointer, all 15 generated files with SHA-256 manifest, 72 files of the previous immutable Web artifact, and before/after metadata audit. Each copied file was hash-verified. No private configuration was committed.
+
+At `2026-09-09T12:49:16.269Z`, a single direct call to the tested repository `expireVocQueue` used the explicit current run ID, 300000 ms timeout and batch limit 100. It expired exactly one never-started positioning attempt. Attempt/stage are now failed with `QUEUE_TIMEOUT`, retryable false, started null, lease generation 0. No service/worker was started for maintenance, and no Provider request was made.
+
+The first operational probe expected the entire run to be failed and therefore reported an assertion failure after the committed expiry. Read-only verification showed the existing aggregate policy correctly returns **partial**, because `traffic-analysis` already succeeded. The probe assumption was corrected; no second expiry, rollback, manual status rewrite or business-code change was performed. UI observes the VOC stage, so it still displays the timeout failure while retaining other-stage success.
+
+Read-only post-expiry checks: active aggregate 0; no remaining candidate passes the new claim predicate; cancelled historical attempts and all other attempt fields are unchanged; AgentRun/report/snapshot counts and digests match the recorded baseline. All due historical candidates were inspected, not only queued/running counts.
+
+Formal branch fast-forwarded from `fff8c3e` to `2e5a29d`. All 15 generated-file hashes and configuration hash remain unchanged; index empty. The committed candidate-range diff check passes. A whole dirty-worktree diff check additionally reports pre-existing generated-file CRLF/trailing whitespace; those bytes were deliberately preserved.
+
+After integration, the formal directory's six-suite queue/runtime/browser/normalization/job regression passed **84/84**, exit 0, 67.2 seconds. Activation is exclusively through `manage-formal-stack.ps1 -ProjectRoot <formal-root> -PublishCode`; final identity evidence is recorded below when complete.
+
+## Released and verified
+
+Controlled manager completed with exit 0. Durable commit time: `2026-09-09T12:54:25.106Z` (20:54:25 Asia/Shanghai).
+
+- Formal HEAD / manager / Agent / Web source commit: `2e5a29de2d051b565de910ea6314ffb9cc6f187e`.
+- Agent / Web source hash: `35465564ce4ef97ac44322f3be3f5fe1e2fb46e97d352aac5bf54a33522d3955`.
+- Web / durable current / applied record artifact: `375091a47271e25c260e4daca823da4c7430c327f8bde487652aea7111f3920b`.
+- Applied request: `c9f0b1bcbe3d80c05fabcff0a75f68402b0f821b695990b720c02fde7931bca8`.
+- Base artifact and `dataCurrent` remain the previous `d8a62ee5...032a82f9`, with all ten stage content hashes unchanged.
+- At `2026-09-09T12:56:19Z`, direct no-proxy checks returned HTTP 200 / status ok for local Web 31900, LAN Web 192.168.1.109:31900, and Agent 31901. The initial proxy-routed LAN probe returned 502; direct LAN access is healthy. No proxy or network configuration was changed.
+- Manager ownership true; publication queues idle; active aggregate 0; port 3000 unused; PostgreSQL remains listening on 58258 (PID 51004), not restarted.
+- Configuration and all 15 generated-file hashes unchanged. Previous artifact has a verified private copy.
+- At `2026-09-09T12:56:28.797Z`, all inspected job metadata exactly matches post-expiry state, no remaining eligible historical claim, and all audit/report/snapshot preservation digests remain unchanged. No automatic model resubmission occurred during this observation window.
+
+The evidence document is committed separately after activation; the running release intentionally remains pinned to the implementation commit above. No claim is made that unrelated pre-existing typecheck/lifecycle fixture failures were repaired, or that a real paid Provider analysis was executed for this release test.

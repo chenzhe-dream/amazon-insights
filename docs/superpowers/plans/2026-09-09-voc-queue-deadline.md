@@ -36,9 +36,9 @@ Files: `server/runtime/voc-queue-deadline-runtime.ts` (independent config loader
 
 - [x] Review preservation/cancellation/lineage/race invariants independently and resolve actual findings with regression tests.
 - [x] Run traffic regression, affected server suites, build and diff checks; report existing unrelated baseline failures separately.
-- [ ] Commit only owned source/tests/docs; record fresh source identity.
-- [ ] Back up formal config/state/generated files; inspect live pending/eligible tasks and data identities without leaking secrets. Apply only the tested approved timeout/cancellation operations; never fabricate authentication or manually rewrite status.
-- [ ] FF integrate without generated-file overlap, verify, then invoke existing `manage-formal-stack.ps1 -ProjectRoot <formal-root> -PublishCode`.
-- [ ] Verify exact current/applied artifact, Web/Agent source identity, no new active jobs or unexpected data changes; record results. If a gate fails, preserve the working service and report the blocker.
+- [x] Commit only owned source/tests/docs; record fresh source identity: `2e5a29de2d051b565de910ea6314ffb9cc6f187e`.
+- [x] Back up formal config/state/generated files; inspect live pending/eligible tasks and data identities without leaking secrets. Apply only the tested approved timeout/cancellation operations; never fabricate authentication or manually rewrite status.
+- [x] FF integrate without generated-file overlap, verify, then invoke existing `manage-formal-stack.ps1 -ProjectRoot <formal-root> -PublishCode`. Integrated six-suite regression: 84/84 passed; manager exit 0.
+- [x] Verify exact current/applied artifact, Web/Agent source identity, no new active jobs or unexpected data changes; record results. Artifact `375091a47271e25c260e4daca823da4c7430c327f8bde487652aea7111f3920b` applied at 2026-09-09T12:54:25.106Z; post-release audit active 0, preserved data/hash checks pass.
 
 Self-review: each design requirement maps to a task. SQLite/PostgreSQL signatures and error code are shared. No schema change or new Provider call is planned.
