@@ -1,6 +1,6 @@
 # 西柚缺凭据与缓存恢复验证
 
-Date: 2026-09-09. Status: in progress; no completion or activation claim yet.
+Date: 2026-09-09. Status: configuration, scoped recovery, reviewed code fix and guarded formal activation complete; user-operated new-ASIN acceptance remains pending.
 
 ## Scope and evidence boundaries
 
@@ -29,7 +29,7 @@ Source: test-results/xydc-current-asins-20260908/preview-props.json and acceptan
 | B0F18D9B5V | B0D9W22TTY | 7 | f14cdaa03ca0feda8a6ef4b367630af5a42cdece064875daed63a105bef65fb8 | 3750+ |
 | B0CDW797MM | B0HCC8ZN3W | 10 | e903ec64767246cc6e626a49d97e9500aa5e7289e7c933a9750521e435ed9908 | 59450+ |
 
-All three parse through the current family schema and match surviving annual snapshots by country/parent/full child set/window (2025-09 through 2026-08). Independent read-only recovery review confirmed the production order reader selects all three original snapshots when supplied these families. Four independent active-work counts were zero at preparation, to be rechecked before recovery and publication. No shared family changes have occurred yet.
+All three parse through the current family schema and match surviving annual snapshots by country/parent/full child set/window (2025-09 through 2026-08). Independent read-only recovery review confirmed the production order reader selects all three original snapshots when supplied these families. Four independent active-work counts were zero at preparation, to be rechecked before recovery and publication. All three broken files were subsequently backed up and replaced using apply_patch after a fresh all-zero active-work check. Restored hashes match the prepared stale copies exactly; all three order-file hashes remain unchanged.
 
 ## Code verification at 5b1c0ee
 
@@ -43,8 +43,30 @@ All three parse through the current family schema and match surviving annual sna
 
 - [x] Code TDD and independent task review; whole-change release review remains below.
 - [x] Source build, lint/type baseline and scoped integration verification.
-- [ ] Exact dirty-file preservation across formal fast-forward.
-- [ ] Current idle check, three-file backup, apply_patch recovery and order-file hash preservation.
-- [ ] Guarded code publication and exact health/source/artifact verification.
-- [ ] Runtime data read verifies three annual snapshots; new-ASIN analysis remains user initiated.
-- [ ] Final evidence review and OpenSpec handoff.
+- [x] Exact dirty-file preservation across formal fast-forward.
+- [x] Current idle check, three-file backup, apply_patch recovery and order-file hash preservation.
+- [x] Guarded code publication and exact health/source/artifact verification.
+- [x] Runtime data read verifies three annual snapshots; new-ASIN analysis remains user initiated.
+- [x] Final evidence review and OpenSpec handoff.
+
+## Final formal activation
+
+- Source candidate and formal deployed commit: fff8c3ec097ab52c5a8f74eb278a2558ac6b7981 (production fix 5b1c0ee). Whole-change independent review of 675fbfd..fff8c3e: Ready to integrate Yes, no Critical/Important findings.
+- Preserved every byte of the 15 pre-existing dirty generated files across ff-only integration, build and activation. Existing untracked test outputs and parallel WIP were not staged or removed. Committed-range diff-check passed; an unscoped formal diff-check reported pre-existing generated CRLF whitespace and was not used as a clean-worktree claim.
+- Repeated variant/order suites in the merged formal worktree: 55/55. Normal manager PublishCode prepared the build while the old service remained healthy, rechecked idle/ownership/health, restarted the owned stack and confirmed exact activation. No force bypass.
+- Activated at 2026-09-09T03:20:45.723Z. Supervisor PID 73520, start 2026-09-09T03:20:25.8225309Z.
+- Artifact: d71005fcc37cdb2a1004d874351b7af16038d33eec4b51dd5b746d95c8a599f1.
+- Source hash: f937306960dd0324cc6fbadf79ac8bf2717a52c5716d988ebe0cb266b89a454d.
+- Request: 0caef6d62702818cf7be173a1818f820913e56c858ec4066aa9326e8b845b1bc.
+- Web localhost and LAN 192.168.1.109 health, Agent health, current control, publication-status reader, dist fingerprint and freshly recomputed formal source hash all match. Current data artifact remains b888afb3223ad1ae72c4f0c8f8089124607944f17ecd57f31ecc449990d4d6fa.
+- Publication receipt stores request identity in its filename, not a requestId member. The initial diagnostic assertion used the wrong field; final verification uses the production status reader under the exact formal launcher environment and passes. No product change was needed.
+- Post-release production default data readers return three families and three order snapshots. Real React rendering from those exact runtime values produces three cards with 5,900+, 3,750+, 59,450+ and 4/7/10 child links; no missing-configuration banner or zero-child link. This is server data/SSR proof, not an authenticated live-browser acceptance claim.
+- Exact private-token scan of 40 built client files found zero matches. No token was printed or committed.
+- Final active counts: sync_jobs/run_stages/job_attempts/analysis_runs all zero. New ASIN project/job/submission counts remain zero. Unauthenticated runtime data request returns HTTP401; auth contracts unchanged.
+- OpenSpec completion handoff sent to 01a023cf-9b63-7f22-bbad-ebbdd57d0c00. This turn did not push GitHub or merge main.
+
+## Recovery and acceptance boundary
+
+Backups reside outside Git in runtime/backups/xydc-missing-token-20260909: original private config, prior control/state and each of the three replaced family files. Restoration retains original collection timestamps and marks serving family evidence stale. Orders were untouched during this recovery; a later explicitly initiated refresh may legitimately update order snapshots under the existing collector contract.
+
+No full live Provider test of B01E6CX34C/B07Y4PJJR4/B07WFC14VR was started. User should open http://192.168.1.109:31900/, hard-refresh, verify old three cards, then submit that new three-ASIN set and inspect the annual module after the task completes. Remote account quota/auth validity for that future collection is not claimed by this offline verification.
