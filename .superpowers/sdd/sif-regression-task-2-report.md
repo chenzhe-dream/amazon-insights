@@ -34,4 +34,4 @@ Result: exit 0.
 
 ## Commit
 
-Pending at report creation; see task handoff for the final commit hash.
+Implementation commit: `f53dcbf` (`fix: scope SIF traffic detail projections`).
