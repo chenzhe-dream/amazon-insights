@@ -257,6 +257,26 @@ function trendByNode(source, asins) {
   return byNode;
 }
 
+const trafficAdChannelOrder = [
+  ["sp", "SP(常规)"],
+  ["recommend", "SP(推荐)"],
+  ["sb", "SB(常规)"],
+  ["sbv", "SBV"],
+];
+
+function trafficScore(value) {
+  return Math.round(finiteNumber(value) ?? 0);
+}
+
+function trafficPercent(value) {
+  return Math.round((finiteNumber(value) ?? 0) * 1000) / 10;
+}
+
+function trafficUpdatedThrough(notice) {
+  if (typeof notice !== "string") return null;
+  return notice.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+}
+
 function normalizedTrafficListing(source, asins) {
   if (!source || typeof source !== "object" || Array.isArray(source)) return {};
   return Object.fromEntries(asins.flatMap((asin) => {
@@ -267,11 +287,71 @@ function normalizedTrafficListing(source, asins) {
     const total = finiteNumber(outerOverview?.total?.score ?? outerOverview?.total);
     const natural = finiteNumber(distribution?.nf?.score ?? outerOverview?.nf?.score);
     const advertising = finiteNumber(distribution?.ad?.score ?? outerOverview?.ad?.score);
+    const fetchedAt = typeof record.fetchedAt === "string" ? { fetchedAt: record.fetchedAt } : {};
+
+    if (!distribution || typeof distribution !== "object" || Array.isArray(distribution)) {
+      return [[asin, {
+        ...fetchedAt,
+        ...(total !== null ? { total } : {}),
+        ...(natural !== null ? { natural } : {}),
+        ...(advertising !== null ? { advertising } : {}),
+      }]];
+    }
+
+    const rawAdChannels = outerOverview?.ad;
+    const adChannels = rawAdChannels && typeof rawAdChannels === "object" && !Array.isArray(rawAdChannels)
+      ? trafficAdChannelOrder.flatMap(([key, label]) => {
+        const item = rawAdChannels[key];
+        return item && (finiteNumber(item.score) ?? 0) > 0
+          ? [{ label, score: trafficScore(item.score), ratio: trafficPercent(item.ratio) }]
+          : [];
+      })
+      : null;
+    const rawRecommendations = outerOverview?.recommend;
+    const recommendationSources = rawRecommendations && typeof rawRecommendations === "object" && !Array.isArray(rawRecommendations)
+      ? Object.values(rawRecommendations)
+        .filter((item) => item && (finiteNumber(item.score) ?? 0) > 0 && (finiteNumber(item.ratio) ?? 0) >= 0.01)
+        .sort((left, right) => (finiteNumber(right.score) ?? 0) - (finiteNumber(left.score) ?? 0))
+        .slice(0, 6)
+        .map((item) => ({
+          label: String(item.name),
+          score: trafficScore(item.score),
+          ratio: trafficPercent(item.ratio),
+        }))
+      : null;
+
+    const chars = record.structure?.chars;
+    const dims = chars && typeof chars === "object" && !Array.isArray(chars) && Array.isArray(chars.dims)
+      ? chars.dims
+      : null;
+    const channelScore = (key, index) => trafficScore(Array.isArray(chars?.[key]) ? chars[key][index]?.score : 0);
+    const children = dims?.flatMap((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      return [{
+        asin: String(item.val).match(/B0[A-Z0-9]{8}/i)?.[0]?.toUpperCase() ?? String(item.val),
+        label: Array.isArray(item.features) ? item.features.filter(Boolean).join(" / ") || "默认" : "默认",
+        image: typeof item.img === "string" ? item.img : "",
+        totalScore: trafficScore(item.sumScore),
+        sharePct: trafficPercent(item.ratio),
+        organic: channelScore("nfs", index),
+        sp: channelScore("sps", index),
+        spRecommend: channelScore("recs", index),
+        sb: channelScore("sbs", index),
+        sbv: channelScore("sbvs", index),
+      }];
+    });
+
     return [[asin, {
-      ...(typeof record.fetchedAt === "string" ? { fetchedAt: record.fetchedAt } : {}),
-      ...(total !== null ? { total } : {}),
-      ...(natural !== null ? { natural } : {}),
-      ...(advertising !== null ? { advertising } : {}),
+      ...fetchedAt,
+      totalScore: trafficScore(total),
+      naturalAd: [
+        { label: "自然流量", score: trafficScore(natural), ratio: trafficPercent(distribution.nf?.ratio) },
+        { label: "广告流量", score: trafficScore(advertising), ratio: trafficPercent(distribution.ad?.ratio) },
+      ],
+      ...(adChannels !== null ? { adChannels } : {}),
+      ...(recommendationSources !== null ? { recommendationSources } : {}),
+      ...(children !== undefined ? { children } : {}),
+      updatedThrough: trafficUpdatedThrough(outerOverview?.data_notice),
     }]];
   }));
 }
