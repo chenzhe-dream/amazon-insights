@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useVocReviewOutput } from "../../../app/lib/use-voc-review-output";
 import { scopedReviewRecords, reviewEmptyMessage, reviewEvidenceText } from "../../../app/lib/voc-review-display";
-import { buildVocDevelopmentSummary } from "../../../app/voc-development-summary";
+import { buildVocDevelopmentSummary } from "../../../app/features/voc/voc-development-summary";
 import type { SellerSpriteReviewAnalysisRecord } from "../../../app/seller-sprite-review-analysis";
 
 function Harness() {

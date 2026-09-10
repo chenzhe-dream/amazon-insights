@@ -26,8 +26,8 @@ Cache-first policy: sync scripts use local cache unless `FORCE_REFRESH=1` or `--
 
 | File | Role |
 |------|------|
-| `app/voc-development-summary.ts` | Seven-dimension theme aggregation + normalization |
-| `app/voc-theme-merge.ts` | Semantic theme dedup across dimensions |
+| `app/features/voc/voc-development-summary.ts` | Seven-dimension theme aggregation + normalization |
+| `app/features/voc/voc-theme-merge.ts` | Semantic theme dedup across dimensions |
 | `app/product-launch-analysis.ts` | **Analysis engine** — conclusions, cross-analysis, scoring |
 | `app/product-launch-recommendation.tsx` | **UI** for `?tab=launch` |
 | `app/product-definition-section.tsx` | **UI** for `?tab=definition` |
@@ -158,7 +158,7 @@ Modules: `launch-checklist.ts`, `launch-checklist-template.ts`, `launch-checklis
 
 ## Extending for new categories
 
-1. Add merge rules in `app/voc-theme-merge.ts` for category-specific theme aliases
+1. Add merge rules in `server/domain/voc/theme-normalization.ts` for category-specific theme aliases (`app/features/voc/voc-theme-merge.ts` re-exports them)
 2. Add/adjust opportunity templates in `app/product-launch-analysis.ts` `buildOpportunities()`
 3. Optionally tune supply-chain rows in `buildSupplyRows()` for category BOM realities
 4. Re-sync VOC + Sorftime data for new ASINs

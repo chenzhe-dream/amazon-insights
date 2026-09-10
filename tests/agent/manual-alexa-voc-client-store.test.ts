@@ -21,7 +21,7 @@ import {
   selectPageBlockingLoading,
   selectPendingAlexaVocPolls,
   abortAlexaVocPollsOutsideScope,
-} from "../../app/manual-alexa-voc-store";
+} from "../../app/features/voc/manual-alexa-voc-store";
 
 const ASIN = "B0T2TASK11";
 const OTHER_ASIN = "B07VY9Q95Q";

@@ -11,6 +11,7 @@ app/admin/                    管理页面
 app/features/shell/           导航定义、分组、图标与导航文字展示
 app/features/projects/        项目列表、收藏、历史切换与历史任务读取
 app/features/sync/            ASIN输入、同步进度与阶段缺口提示
+app/features/voc/             VOC录入、教程、状态、展示与定位
 app/components/               跨业务复用的展示组件（当前为星级评分）
 app/api/                      Web 侧接口与后端代理
 app/lib/                      现有浏览器客户端和页面辅助逻辑
@@ -24,14 +25,14 @@ app/lib/                      现有浏览器客户端和页面辅助逻辑
 | --- | --- | --- |
 | 项目、收藏和历史工作区 | `features/projects/project-library-panel.tsx`、`features/projects/workspace-history-strip.tsx`、`features/projects/use-analysis-project-favorites.ts` | `server/routes/` 下项目接口、`server/services/` 中对应服务 |
 | ASIN采集、进度与补抓 | `features/sync/batch-asin-input.tsx`、`features/sync/asin-sync-funnel.tsx`、`lib/sync-incomplete-repair-browser.ts` | `scripts/run-asin-sync-job.mjs`、`scripts/lib/` 中就绪判断/缓存/阶段存储、`server/services/` 中同步服务 |
-| 手工VOC录入 | `alexa-voc-import-panel.tsx`、`use-manual-alexa-voc.ts` | `server/routes/manual-alexa-voc.ts`、`server/services/manual-alexa-voc-service.ts`、标准化 worker |
-| VOC来源与新品定义 | `voc-evidence-definition.tsx`、`product-definition-section.tsx`、`lib/voc-evidence-browser.ts` | `server/services/voc-evidence-inventory-service.ts`、`analysis-run-service.ts`、VOC/产品定义 execution service |
-| VOC展示与定位 | `voc-development-summary.ts`、`voc-positioning-section.tsx` | `server/domain/voc/`、`server/runtime/` 中VOC运行逻辑 |
+| 手工VOC录入 | `features/voc/alexa-voc-import-panel.tsx`、`features/voc/use-manual-alexa-voc.ts` | `server/routes/manual-alexa-voc.ts`、`server/services/manual-alexa-voc-service.ts`、标准化 worker |
+| VOC来源与新品定义 | `features/voc/voc-evidence-definition.tsx`、`product-definition-section.tsx`、`lib/voc-evidence-browser.ts` | `server/services/voc-evidence-inventory-service.ts`、`analysis-run-service.ts`、VOC/产品定义 execution service |
+| VOC展示与定位 | `features/voc/voc-development-summary.ts`、`features/voc/voc-positioning-section.tsx` | `server/domain/voc/`、`server/runtime/` 中VOC运行逻辑 |
 | 关键词与流量 | `keyword-demand-section.tsx`、`keyword-demand-analysis.ts`、`traffic-detail-recovery.tsx`、`lib/traffic-*` | `server/domain/traffic/`、SIF采集脚本 |
 | Listing与图片 | `listing-images-section.tsx`、`listing-aplus-section.tsx` | `scripts/build-sorftime-listing-content.mjs`、`scripts/build-listing-image-remarks.mjs` |
 | 持久报告与历史结果 | `lib/saved-analysis-reports.ts`、各报告展示组件 | `server/db/` 中报告存储、`server/services/` 中执行与发布服务 |
 
-已完成导航/评分以及项目管理/同步界面的目录归拢。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`；同步服务端和共享客户端仍在原有位置。VOC、关键词、Listing和报告的前端入口尚未整体迁移，后续按业务逐块整理。
+已完成导航/评分、项目管理/同步界面和VOC前端文件的目录归拢。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`。VOC模块包含录入教程及其CSS、录入状态、展示规则、摘要与定位组件；共享客户端和服务端仍在原有位置，`page.tsx`仍持有页面编排和部分内联展示。关键词、Listing和产品报告的前端入口后续按业务逐块整理。
 
 ## 数据、接口与服务端
 

@@ -5,7 +5,7 @@
 
 import type { KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { formatSeasonMonthLabel } from "./keyword-demand-conclusions";
-import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "./voc-positioning";
+import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "./features/voc/voc-positioning";
 
 export type FinalProductRole =
   | "核心基础"

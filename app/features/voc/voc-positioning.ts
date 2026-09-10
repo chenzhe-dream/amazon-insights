@@ -3,16 +3,16 @@
  * 对齐 Skill：define-amazon-voc-positioning
  */
 
-import type { ProductFamily } from "./lib/product-family";
+import type { ProductFamily } from "../../lib/product-family";
 import type {
   NegativePriorityRow,
   PositivePriorityRow,
   UnmetOpportunityRow,
-} from "./product-launch-analysis";
+} from "../../product-launch-analysis";
 import {
   classifyVocPriority,
   priorityRank,
-} from "../server/domain/voc/priority-rules";
+} from "../../../server/domain/voc/priority-rules";
 
 export type VocPositioningRole =
   | "核心保留"

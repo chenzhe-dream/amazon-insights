@@ -1,4 +1,4 @@
-import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
+import type { ManualAlexaVocNormalizedRecord } from "../../../shared/agent-contracts";
 import { manualVocDimensions } from "./voc-display-schema";
 import {
   buildLegacyVocDevelopmentSummary,
@@ -7,8 +7,8 @@ import {
   type LegacyVocProduct,
   type LegacyVocThemeAggregate,
   type LegacyVocSummaryInput,
-} from "../server/domain/voc/legacy-summary";
-import type { VocDimension } from "../server/domain/voc/theme-normalization";
+} from "../../../server/domain/voc/legacy-summary";
+import type { VocDimension } from "../../../server/domain/voc/theme-normalization";
 
 type VocSummaryKey = VocDimension;
 type ProductLite = LegacyVocProduct;

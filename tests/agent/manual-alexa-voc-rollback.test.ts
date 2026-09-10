@@ -25,7 +25,7 @@ import {
   importSucceeded,
   reduceManualVoc,
   selectEffectiveVocByAsin,
-} from "../../app/manual-alexa-voc-store";
+} from "../../app/features/voc/manual-alexa-voc-store";
 import type { ManualAlexaVocRecord } from "../../shared/agent-contracts";
 
 const ORIGIN = "http://127.0.0.1:31900";

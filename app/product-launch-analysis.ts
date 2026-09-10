@@ -4,14 +4,14 @@ import {
   hasVocDevelopmentData,
   type VocDevelopmentDimensionSummary,
   type VocThemeAggregate,
-} from "./voc-development-summary";
-import { canonicalTheme } from "./voc-theme-merge";
+} from "./features/voc/voc-development-summary";
+import { canonicalTheme } from "./features/voc/voc-theme-merge";
 import {
   legacyNegativePriorityDisplay,
   legacyPositivePriorityDisplay,
 } from "../server/domain/voc/priority-rules";
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
-import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
+import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./features/voc/voc-positioning";
 import { familyFromProducts, type ProductFamily } from "./lib/product-family";
 import type { KeywordDemandAnalysis } from "./keyword-demand-analysis";
 import {

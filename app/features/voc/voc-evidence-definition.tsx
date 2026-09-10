@@ -1,10 +1,10 @@
 "use client";
-import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
+import { ProductDefinitionOutputSchema } from "../../../shared/product-definition-output";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { VocEvidenceInventory, VocEvidenceManifest } from "../shared/voc-evidence-contracts";
-import type { ProductLaunchRuntimeSources, LaunchProductInput } from "./product-launch-analysis";
-import { ProductDefinitionSection, type SavedProductDefinitionReport } from "./product-definition-section";
-import { readEvidenceInventory, readEvidenceRun, submitEvidenceRun, type EvidenceFetch } from "./lib/voc-evidence-browser";
+import type { VocEvidenceInventory, VocEvidenceManifest } from "../../../shared/voc-evidence-contracts";
+import type { ProductLaunchRuntimeSources, LaunchProductInput } from "../../product-launch-analysis";
+import { ProductDefinitionSection, type SavedProductDefinitionReport } from "../../product-definition-section";
+import { readEvidenceInventory, readEvidenceRun, submitEvidenceRun, type EvidenceFetch } from "../../lib/voc-evidence-browser";
 
 type Props = { projectId: string | null; baseSyncRunId: string | null; sessionKey: string; organizationId: string; marketplace: string; asins: string[]; initialSelectedAsins?: string[]; products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; initialRunId: string | null; initialHistoryRunId?: string | null; refreshToken: string; enabled: boolean; onRunStarted?: (runId: string, selectedAsins: string[], previousRunId: string | null) => void; fetchImpl?: EvidenceFetch };
 type Observation = Awaited<ReturnType<typeof readEvidenceRun>>;

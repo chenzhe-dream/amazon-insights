@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { manualAlexaVocImportErrorMessage } from "../../app/lib/manual-alexa-voc-import-feedback";
-import { manualAlexaVocPrimaryAsinAdvisory } from "../../app/alexa-voc-import-validation";
+import { manualAlexaVocPrimaryAsinAdvisory } from "../../app/features/voc/alexa-voc-import-validation";
 import {
   createAlexaVocImportSubmission,
   isAlexaVocWriteResponseForSubmission,
@@ -17,7 +17,7 @@ import {
   selectAlexaVocImportFeedback,
   selectAlexaVocStatus,
   setAlexaVocDraft,
-} from "../../app/manual-alexa-voc-store";
+} from "../../app/features/voc/manual-alexa-voc-store";
 
 const PROJECT_ID = "10000000-0000-4000-8000-000000000010";
 const RUN_ID = "10000000-0000-4000-8000-000000000011";
@@ -194,7 +194,7 @@ test("a durable exact-ASIN revision is readable while downstream publication is 
 });
 
 test("the import panel renders and submits only the selected card draft snapshot", () => {
-  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const panel = readFileSync("app/features/voc/alexa-voc-import-panel.tsx", "utf8");
   assert.match(panel, /useState\(initialAlexaVocDraftState\)/);
   assert.match(panel, /selectAlexaVocDraft\([\s\S]*?selectedAsin/);
   assert.match(panel, /manualAlexaVocPrimaryAsinAdvisory\(selectedDraft, selectedAsin\)/);
@@ -235,7 +235,7 @@ test("a rejected stale import clears only its captured card loading and normaliz
 });
 
 test("the panel terminates captured feedback and normalization when onImported rejects", () => {
-  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const panel = readFileSync("app/features/voc/alexa-voc-import-panel.tsx", "utf8");
   const rejected = panel.slice(panel.indexOf("if (!onImported(imported))"), panel.indexOf("const lines =", panel.indexOf("if (!onImported(imported))")));
   assert.match(rejected, /type: "cleared"/);
   assert.match(rejected, /type: "clear"/);
@@ -243,7 +243,7 @@ test("the panel terminates captured feedback and normalization when onImported r
 });
 
 test("normalization keeps polling until its exact durable revision is readable and applied", () => {
-  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const panel = readFileSync("app/features/voc/alexa-voc-import-panel.tsx", "utf8");
   const polling = panel.slice(
     panel.indexOf("const shouldStop = await deliverAlexaVocResultIfActive"),
     panel.indexOf("await waitForPoll(controller.signal);", panel.indexOf("const shouldStop = await deliverAlexaVocResultIfActive")) + 42,
@@ -255,7 +255,7 @@ test("normalization keeps polling until its exact durable revision is readable a
 });
 
 test("pending UI names its target and truthful phase with accessible indeterminate progress", () => {
-  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const panel = readFileSync("app/features/voc/alexa-voc-import-panel.tsx", "utf8");
   assert.match(panel, /<progress aria-label={`Alexa VOC 导入进度，目标 \$\{selectedAsin\}`} \/>/);
   assert.match(panel, /正在标准化处理/);
   assert.match(panel, /正在应用 revision/);
@@ -267,7 +267,7 @@ test("pending UI names its target and truthful phase with accessible indetermina
 });
 
 test("a polled normalization failure clears stale waiting feedback while retaining the failure card", () => {
-  const panel = readFileSync("app/alexa-voc-import-panel.tsx", "utf8");
+  const panel = readFileSync("app/features/voc/alexa-voc-import-panel.tsx", "utf8");
   const polling = panel.slice(panel.indexOf("const shouldStop ="), panel.indexOf("} catch (error)", panel.indexOf("const shouldStop =")));
 
   assert.match(polling, /observed\.phase === "failure"/);

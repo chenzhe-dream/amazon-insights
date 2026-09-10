@@ -32,9 +32,9 @@ import {
   manualVocDimensions,
   manualVocDisplayMeta,
   manualVocSourceBadge,
-} from "./voc-display-schema";
-import { VocDimensionLabel } from "./voc-dimension-label";
-import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
+} from "./features/voc/voc-display-schema";
+import { VocDimensionLabel } from "./features/voc/voc-dimension-label";
+import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./features/voc/voc-development-summary";
 import {
   formatReviewAnalysisItem,
   reviewMetricExplanation,
@@ -50,15 +50,15 @@ import { resolveOverviewPrice, resolveOverviewRank } from "./lib/competitor-over
 import { sorftimeRatingData } from "./sorftime-rating-data";
 import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
-import { VocPositioningSection } from "./voc-positioning-section";
-import { VocEvidenceDefinition } from "./voc-evidence-definition";
+import { VocPositioningSection } from "./features/voc/voc-positioning-section";
+import { VocEvidenceDefinition } from "./features/voc/voc-evidence-definition";
 import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
 import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { SegmentStackBar } from "./segment-stack-bar";
-import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
-import { useManualAlexaVoc } from "./use-manual-alexa-voc";
+import { AlexaVocImportPanel } from "./features/voc/alexa-voc-import-panel";
+import { useManualAlexaVoc } from "./features/voc/use-manual-alexa-voc";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./features/sync/asin-sync-funnel";
 import { createIncompleteSyncRepair } from "./lib/sync-incomplete-repair-browser";
 import { BatchAsinInput } from "./features/sync/batch-asin-input";

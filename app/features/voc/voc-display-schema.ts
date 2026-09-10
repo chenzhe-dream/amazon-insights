@@ -1,4 +1,4 @@
-import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
+import type { ManualAlexaVocRecord } from "../../../shared/agent-contracts";
 
 export type ManualVocDimensionKey =
   | "attention"

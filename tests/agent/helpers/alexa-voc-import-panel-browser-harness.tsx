@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { AlexaVocImportPanel } from "../../../app/alexa-voc-import-panel";
+import { AlexaVocImportPanel } from "../../../app/features/voc/alexa-voc-import-panel";
 import "../../../app/globals.css";
 
 const PROJECT_A = "10000000-0000-4000-8000-000000000010";

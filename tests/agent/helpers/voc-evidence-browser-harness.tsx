@@ -1,7 +1,7 @@
 import "../../../app/globals.css";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { VocEvidenceDefinition } from "../../../app/voc-evidence-definition";
+import { VocEvidenceDefinition } from "../../../app/features/voc/voc-evidence-definition";
 function Harness() {
  const [refresh, setRefresh] = useState(0), [enabled, setEnabled] = useState(true);
  const [project,setProject]=useState("10000000-0000-4000-8000-000000000002"), [session,setSession]=useState("fixture");

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ManualAlexaVocListResponseSchema,
   type ManualAlexaVocRecord,
-} from "../shared/agent-contracts";
+} from "../../../shared/agent-contracts";
 import {
   abortManualVocRequests,
   createManualVocOverlayState,

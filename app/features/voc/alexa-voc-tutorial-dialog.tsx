@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useModalInteraction } from "./lib/use-modal-interaction";
+import { useModalInteraction } from "../../lib/use-modal-interaction";
 import styles from "./alexa-voc-tutorial-dialog.module.css";
 
 const ALEXA_VOC_SEVEN_QUESTION_TEMPLATE =

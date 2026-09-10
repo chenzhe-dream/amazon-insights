@@ -2,7 +2,7 @@ import type {
   AlexaVocNormalizationStatus,
   AlexaVocNormalizationStatusResponse,
   ManualAlexaVocRecord,
-} from "../shared/agent-contracts";
+} from "../../../shared/agent-contracts";
 
 export type AlexaVocNormalizationClientState = Readonly<{
   statusByCard: ReadonlyMap<string, AlexaVocNormalizationStatus>;

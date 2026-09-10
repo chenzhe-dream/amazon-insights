@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { createVocReviewReader } from "../../app/lib/voc-review-reader";
-import { buildVocDevelopmentSummary, hasVocDevelopmentData } from "../../app/voc-development-summary";
+import { buildVocDevelopmentSummary, hasVocDevelopmentData } from "../../app/features/voc/voc-development-summary";
 
 const scope = { organizationId: "org", projectId: "10000000-0000-4000-8000-000000000002", runId: "10000000-0000-4000-8000-000000000003", jobId: "job", marketplace: "US", asins: ["B0F43M9KWW"] };
 const record = { asin: scope.asins[0], marketplace: "US", status: "ready" as const, sampledReviews: 33, fetchedAt: "2026-09-10T00:00:00Z", blocks: [{ key: "positives" as const, label: "好评", rows: [{ label: "brightness", sharePct: 80, count: 8 }] }] };

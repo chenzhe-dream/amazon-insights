@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import os from "node:os";
-import { hasManualAlexaVocText, manualAlexaVocPrimaryAsinAdvisory } from "../app/alexa-voc-import-validation";
+import { hasManualAlexaVocText, manualAlexaVocPrimaryAsinAdvisory } from "../app/features/voc/alexa-voc-import-validation";
 import { processAlexaVocText, saveAlexaVocToSystem } from "../scripts/lib/alexa-voc-pipeline.mjs";
 import { processAlexaVocText as processPureAlexaVocText } from "../scripts/lib/alexa-voc-processing.mjs";
 
@@ -88,7 +88,7 @@ test("recognizes a full-width primary title ASIN but excludes comparison ASINs f
 });
 
 test("manual import UI keeps presence validation while the proxy delegates strict text validation to the shared contract", () => {
-  const panel = fs.readFileSync(new URL("../app/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
+  const panel = fs.readFileSync(new URL("../app/features/voc/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
   const route = fs.readFileSync(new URL("../app/api/alexa-voc/import/route.ts", import.meta.url), "utf8");
 
   assert.match(panel, /!hasManualAlexaVocText\(selectedDraft\)/);

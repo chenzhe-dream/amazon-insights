@@ -48,7 +48,7 @@ test("Alexa normalization status surfaces pass the raw-data leakage allowlist", 
     slice("server/db/sqlite-repository.ts", "#listAlexaVocNormalizationStatuses", "#findCommittedAlexaVocNormalizationByFingerprint"),
     slice("server/db/postgres/manual-alexa-voc-store.ts", "listNormalizationStatuses", "findNormalizationInputByFingerprint"),
     readFileSync("app/api/alexa-voc/pending/route.ts", "utf8"),
-    readFileSync("app/manual-alexa-voc-store.ts", "utf8"),
+    readFileSync("app/features/voc/manual-alexa-voc-store.ts", "utf8"),
   ];
   for (const source of guarded) assert.doesNotMatch(source, forbidden);
 

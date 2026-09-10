@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { VOC_QUEUE_TIMEOUT_MESSAGE } from "../shared/voc-queue-timeout";
+import { VOC_QUEUE_TIMEOUT_MESSAGE } from "../../../shared/voc-queue-timeout";
 import {
   ManualAlexaVocWriteResponseSchema,
   type ManualAlexaVocRecord,
-} from "../shared/agent-contracts";
+} from "../../../shared/agent-contracts";
 import {
   hasManualAlexaVocText,
   manualAlexaVocPrimaryAsinAdvisory,
@@ -15,8 +15,8 @@ import {
   discoverAlexaVocNormalizationStatuses,
   pollAlexaVocNormalizationOnce,
   type AlexaVocPollResult,
-} from "./lib/alexa-voc-normalization-status-client";
-import { manualAlexaVocImportErrorMessage } from "./lib/manual-alexa-voc-import-feedback";
+} from "../../lib/alexa-voc-normalization-status-client";
+import { manualAlexaVocImportErrorMessage } from "../../lib/manual-alexa-voc-import-feedback";
 import {
   alexaVocCardKey,
   createAlexaVocImportSubmission,

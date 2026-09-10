@@ -9,7 +9,7 @@ import {
   buildProductLaunchAnalysis,
   type LaunchProductInput,
 } from "../../app/product-launch-analysis";
-import { buildVocDevelopmentSummary } from "../../app/voc-development-summary";
+import { buildVocDevelopmentSummary } from "../../app/features/voc/voc-development-summary";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 

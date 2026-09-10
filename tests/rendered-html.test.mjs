@@ -61,6 +61,6 @@ test("removes redundant A+ and standalone VOC entry points while retaining manua
   assert.match(pageSource, /AlexaVocImportPanel/);
   assert.match(pageSource, /VOC 核心主题/);
 
-  const importPanelSource = readFileSync(new URL("../app/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
+  const importPanelSource = readFileSync(new URL("../app/features/voc/alexa-voc-import-panel.tsx", import.meta.url), "utf8");
   assert.match(importPanelSource, /Alexa 七问 · 快速录入/);
 });
