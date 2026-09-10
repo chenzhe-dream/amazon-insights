@@ -26,4 +26,14 @@
 - 46 个 generated/项目文件与 72 个当前页面产物文件逐一核对散列；另备份 formal-stack.env、stack.json、current-known-good.json。凭据不进入代码仓库或报告。
 - 发布前仅检查到一个旧 normalization 阶段仍 queued，没有活动 job、analysis run 或 sync job。计划只通过测试过的 repository 超时方法收尾该旧 run；不执行直接状态 SQL、不重跑整批分析。
 
-最终测试及受控发布结果在完成后补记；以上不表示已经上线。
+## 正式发布结果
+
+- 独立审查批准，无阻断 P1/P2；代码提交 `97f74e401f4bf4610733c564602d2ad4c0c69241`。
+- 使用正式 migration runner 将 schema 28 升级到 30。首次本地连接池参数传递未成功，核验仍为 28 后修正连接创建；没有把失败调用当成成功迁移。
+- 对旧 run `0b1f247f-620b-4475-8a68-53964fdf4be7` 调用 repository 超时收尾。首次扫描返回 0，仍存在候选，复核条件和数据库活动后再次有限调用返回 2。没有绕过 SKIP LOCKED、强制解锁或直接更新状态。
+- 两条旧 normalization job 均为 failed / retryable=false / QUEUE_TIMEOUT，租约清空；旧 queued 阶段已 failed。原 95 个 data snapshots、88 个 agent audits、29 个 VOC revisions、29 个 publication outbox、33 个 normalization terminals 和 2 个 reports 的整表内容散列在收尾前后完全一致。
+- 正式目录无冲突快进至该提交，15 个 generated 数据文件保留。`manage-formal-stack.ps1 -PublishCode` 正常通过空闲/健康/进程归属检查并退出 0；未绕过发布检查。
+- 本机 Web、局域网 `192.168.1.109:31900` 和 Agent 31901 均 status=ok，Web/Agent sourceCommit 同上，sourceHash 一致为 `1c63718b2ff9aec5ec8dd971ac036fb385be14e554f39111bbbda280d5ee08f0`。
+- 新代码 artifact：`fa2d5bf6415cda2bbf5b5ead4dddbe6802563b15e7c3297ca45190447688d211`；原数据 artifact `9602179000313f8e85507d833a1698918252113ec21f553081ba1b366d5be711` 保留为 dataCurrent / baseArtifactId。
+- 发布后 job_attempts / run_stages / analysis_runs / sync_jobs 的 queued/running 数量均为 0。15 个 generated、31 个项目文件及正式配置，共 47 个文件逐字节与备份一致。
+- 未删除历史、未重跑整批分析，未把旧第三个 ASIN 标记为分析成功。用户可刷新后手动重试；新重试独立计时。

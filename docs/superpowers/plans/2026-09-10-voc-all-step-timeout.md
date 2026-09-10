@@ -14,7 +14,7 @@
 - [x] Extend shared expiry predicates and transactional settlement in both stores. Stop all eligible older normalization chains without modifying historical completed jobs. Derive aggregate stage status from remaining runnable work.
 - [x] Propagate the existing timeout configuration to normalization/product workers; heartbeat and post-handler checks revoke overdue work even if a provider ignores abort. Verify late settlement cannot overwrite timeout.
 - [x] Update Chinese deadline wording and replace obsolete tests that deliberately exempted publication forever. Test manual retries, no-model configuration, cancellation and PostgreSQL transaction races.
-- [ ] Independently review, run targeted full suites/build, document limitations and commit. Only after validated expiry is available, perform the already requested controlled release using preserved data and normal manager gates.
+- [x] Independently review, run targeted full suites/build, document limitations and commit. Only after validated expiry is available, perform the already requested controlled release using preserved data and normal manager gates. Completed: 223/223 tests, independent approval, controlled formal release of 97f74e4; see verification report.
 
 ## Review-driven refinements
 
