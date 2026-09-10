@@ -113,6 +113,77 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
   return { page, state, pending, open, close, recover: () => { recovered = true; } };
 }
 
+for (const width of [1280, 1920]) test(`sidebar stays visible while the desktop document scrolls at ${width}px`, async () => {
+  const f = await fixture('full', width);
+  try {
+    await f.open();
+    const initial = await f.page.locator('.nav-rail').boundingBox();
+    assert.ok(initial);
+    await f.page.evaluate(() => window.scrollTo({ top: 900, behavior: 'instant' }));
+    await f.page.waitForFunction(() => window.scrollY > 400);
+    const rail = await f.page.locator('.nav-rail').boundingBox();
+    const workspace = await f.page.locator('.workspace').boundingBox();
+    const footer = await f.page.locator('.sidebar-bottom').boundingBox();
+    assert.ok(rail && workspace && footer);
+    assert.ok(Math.abs(rail.y) < 1, `sidebar moved off screen: ${rail.y}`);
+    assert.equal(rail.height, 1000);
+    assert.ok(workspace.x >= rail.x + rail.width - 1, 'sidebar must not cover content');
+    assert.ok(footer.y >= 0 && footer.y + footer.height <= 1001, 'help and status remain visible');
+    await f.page.locator('.nav-group-trigger').first().hover();
+    const flyout = f.page.locator('#sidebar-flyout');
+    await flyout.waitFor({ state: 'visible' });
+    await flyout.locator('a').first().click({ trial: true });
+    const panel = await flyout.boundingBox();
+    assert.ok(panel && panel.x >= rail.width - 1 && panel.y >= 0 && panel.y + panel.height <= 1001, JSON.stringify({ panel, rail }));
+    assert.match((await flyout.locator('a').first().getAttribute('href'))!, /^\/p\/traffic-fixture\?/);
+    await f.page.keyboard.press('Escape');
+    await f.page.waitForFunction(() => document.querySelector('#sidebar-flyout')?.getAttribute('aria-hidden') === 'true');
+  } finally { await f.close(); }
+});
+
+test('sidebar short desktop scrolls only its menu and keeps the last entry reachable', async () => {
+  const f = await fixture();
+  try {
+    await f.page.setViewportSize({ width: 1280, height: 600 });
+    await f.open();
+    const dimensions = await f.page.locator('.sidebar nav').evaluate(nav => ({ height: nav.clientHeight, content: nav.scrollHeight }));
+    assert.ok(dimensions.content > dimensions.height, 'long menu needs an internal scroll area');
+    await f.page.locator('.sidebar nav').evaluate(nav => { nav.scrollTop = nav.scrollHeight; });
+    const menu = await f.page.locator('.sidebar nav').boundingBox();
+    const last = await f.page.locator('.sidebar nav .nav-item').last().boundingBox();
+    const footer = await f.page.locator('.sidebar-bottom').boundingBox();
+    assert.ok(menu && last && footer);
+    assert.ok(last.y >= menu.y && last.y + last.height <= menu.y + menu.height + 1);
+    assert.ok(menu.y + menu.height <= footer.y + 1 && footer.y + footer.height <= 601);
+    assert.equal(await f.page.evaluate(() => window.scrollY), 0, 'menu scrolling does not scroll the document');
+    await f.page.locator('.sidebar nav .nav-group-trigger').last().hover();
+    const flyout = f.page.locator('#sidebar-flyout');
+    await flyout.waitFor({ state: 'visible' });
+    const panel = await flyout.boundingBox();
+    assert.ok(panel && panel.y >= 0 && panel.y + panel.height <= 601, 'flyout fits the short viewport');
+    await flyout.locator('a').first().click({ trial: true });
+    await f.page.locator('.sidebar nav .nav-group-trigger').last().click();
+    await flyout.locator('a').last().click({ trial: true });
+    const pinned = await flyout.boundingBox();
+    assert.ok(pinned && pinned.y >= 0 && pinned.y + pinned.height <= 601, `pinned flyout escapes viewport: ${JSON.stringify(pinned)}`);
+  } finally { await f.close(); }
+});
+
+for (const width of [390, 760]) test(`sidebar remains an in-flow horizontal menu on mobile at ${width}px`, async () => {
+  const f = await fixture('full', width);
+  try {
+    await f.page.setViewportSize({ width, height: 844 });
+    await f.open();
+    const sidebar = await f.page.locator('.sidebar').boundingBox();
+    const workspace = await f.page.locator('.workspace').boundingBox();
+    assert.ok(sidebar && workspace && workspace.y >= sidebar.y + sidebar.height - 1);
+    assert.equal(await f.page.locator('.sidebar nav').evaluate(nav => getComputedStyle(nav).flexDirection), 'row');
+    await f.page.evaluate(() => window.scrollTo({ top: 900, behavior: 'instant' }));
+    await f.page.waitForFunction(() => window.scrollY > 400);
+    assert.ok((await f.page.locator('.nav-rail').boundingBox())!.y < 0, 'mobile header stays in document flow');
+  } finally { await f.close(); }
+});
+
 test('same-batch recovery displays details despite old compact stage and exposes bounded repair control', async () => {
   const f = await fixture('compact');
   try {

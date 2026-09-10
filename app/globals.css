@@ -62,8 +62,10 @@ button.nav-item {
 /* Amazon-style: tertiary panel slides out beside the clicked nav item */
 .nav-rail {
   display: block;
-  position: relative;
+  position: sticky;
+  align-self: start;
   height: 100vh;
+  height: 100dvh;
   top: 0;
   z-index: 200;
   overflow: visible;
@@ -89,6 +91,18 @@ button.nav-item {
   width: var(--sidebar-w);
   height: 100%;
   z-index: 13;
+}
+@media (min-width: 761px) {
+  .sidebar > .brand-mark,
+  .sidebar > .sidebar-bottom,
+  .sidebar nav > .nav-item {
+    flex-shrink: 0;
+  }
+  .sidebar nav {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
 }
 .nav-rail > .sidebar-flyout {
   position: absolute;

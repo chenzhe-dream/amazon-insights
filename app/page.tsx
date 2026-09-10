@@ -2225,7 +2225,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     const margin = 8;
     const maxTop = Math.max(margin, railHeight - height - margin);
     setFlyoutTop(current => Math.min(Math.max(current, margin), maxTop));
-  }, [flyoutGroupId]);
+  }, [flyoutGroupId, flyoutTop]);
 
   useEffect(() => {
     if (!flyoutGroupId) return;
