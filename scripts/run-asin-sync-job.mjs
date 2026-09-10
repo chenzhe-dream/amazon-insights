@@ -471,17 +471,24 @@ export function applyPersistedStagePostcondition(
     // Per-ASIN stages publish repeatedly. Preserve sibling results and their
     // bounded failure evidence, but discard old gaps for the refreshed cohort.
     const previousOutput = currentJob?.outputs?.find(output => output.stage === stageId);
+    const siblingGapItems = (previousOutput?.gap?.items ?? []).filter(item =>
+      projectionAsins.includes(item.asin) && !processedAsins.has(item.asin) &&
+      !projectionReadyAsins.includes(item.asin));
+    const projectedGapAsins = new Set(siblingGapItems.map(item => item.asin));
     const projectionGapItems = [
       ...gapItems,
-      ...boundedDiagnosticGapItems(
-        (currentJob?.diagnostics ?? []).filter(item => item.stage === stageId &&
-          !processedAsins.has(item.asin) &&
-          ["connector-failed", "timeout"].includes(currentJob?.asinProgress?.[item.asin]?.[stageId]?.status)),
-        projectionAsins,
-        projectionReadyAsins,
-      ),
-      ...(previousOutput?.gap?.items ?? []).filter(item =>
-        projectionAsins.includes(item.asin) && !processedAsins.has(item.asin)),
+      ...siblingGapItems,
+      // A previous projection is the sibling's current evidence. Historical
+      // diagnostics have no attempt identity; replaying them can turn a new
+      // timeout back into an old schema error. Without a projection, report
+      // only the cause supported by the current module state.
+      ...projectionAsins.flatMap(asin => {
+        if (processedAsins.has(asin) || projectedGapAsins.has(asin)) return [];
+        const moduleStatus = currentJob?.asinProgress?.[asin]?.[stageId]?.status;
+        if (moduleStatus === "timeout") return [{ asin, causeCode: "CONNECT_TIMEOUT" }];
+        if (moduleStatus === "connector-failed") return [{ asin, causeCode: "CONNECTOR_FAILED" }];
+        return [];
+      }),
     ];
     commitStage(jobId, {
       stageId,

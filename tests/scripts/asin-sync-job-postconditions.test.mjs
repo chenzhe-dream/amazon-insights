@@ -476,7 +476,7 @@ function fixtureCatalogProviders({ calls, catalog, seller, fallback }) {
   };
 }
 
-test("sequential traffic completion retains earlier ready data and earlier error reasons", () => {
+test("sequential traffic completion retains earlier ready data and unprojected failure status", () => {
   const asins = ["B09NNDX731", "B0BHHP21DP", "B0CZRBL776"];
   const job = {
     jobId: "fixture-traffic", asins,
@@ -510,7 +510,7 @@ test("sequential traffic completion retains earlier ready data and earlier error
     });
   }
   assert.deepEqual(job.outputs[0].gap.items, [
-    { asin: asins[1], causeCode: "MCP_SCHEMA" },
+    { asin: asins[1], causeCode: "CONNECTOR_FAILED" },
     { asin: asins[2], causeCode: "UPSTREAM_EMPTY" },
   ].sort((a, b) => a.asin.localeCompare(b.asin)));
   assert.equal(job.asinProgress[asins[0]].traffic.status, "ready");

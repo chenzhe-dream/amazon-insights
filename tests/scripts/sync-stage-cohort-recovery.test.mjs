@@ -56,6 +56,37 @@ test("stage detail counts the entire current job across success, empty and failu
   assert.equal(output.gap.items.length, 2);
 });
 
+for (const discardProjection of [false, true]) {
+  test(`schema failure repaired then timed out retains only the current timeout (${discardProjection ? "no projection" : "projected"})`, () => {
+    const { job, complete } = fixture();
+    complete(0, "connector-failed");
+    complete(0, "ready");
+    complete(0, "timeout");
+    if (discardProjection) job.outputs = [];
+    complete(1, "ready");
+    const output = complete(2, "upstream-empty");
+    assert.deepEqual(output.gap.items, [
+      { asin: asins[0], causeCode: "CONNECT_TIMEOUT" },
+      { asin: asins[2], causeCode: "UPSTREAM_EMPTY" },
+    ]);
+    assert.equal(output.gap.reasonCode, "CONNECT_TIMEOUT");
+    assert.deepEqual(Object.keys(output.data.listingByAsin), [asins[1]]);
+  });
+}
+
+test("without a current projection a connector failure does not inherit an earlier schema cause", () => {
+  const { job, complete } = fixture();
+  complete(0, "connector-failed");
+  complete(0, "ready");
+  complete(0, "connector-failed", { diagnostics: [] });
+  job.outputs = [];
+  const output = complete(1, "ready");
+  assert.deepEqual(output.gap.items.find(item => item.asin === asins[0]), {
+    asin: asins[0], causeCode: "CONNECTOR_FAILED",
+  });
+  assert.equal(output.gap.reasonCode, "CONNECTOR_FAILED");
+});
+
 test("single-ASIN repair clears its old gap and schema reason while updating full-cohort counts", () => {
   const { job, complete } = fixture();
   complete(0, "connector-failed");
