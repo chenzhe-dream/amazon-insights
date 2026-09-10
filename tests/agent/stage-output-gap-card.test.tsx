@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { StageOutputSnapshot } from "../../app/lib/stage-output-browser";
 import { StageOutputGapCard } from "../../app/stage-output-gap-card";
 
@@ -37,4 +38,25 @@ test("partial gaps disclose the failed ASIN and its bounded precise reason", () 
   const html = JSON.stringify(StageOutputGapCard({ snapshot, stage: "keywords" }));
   assert.match(html, /B0SCHEMA01/);
   assert.match(html, /关键词数据结构无效/);
+});
+
+test("partial child sales renders a compact per-ASIN gap and explains retained results", () => {
+  const snapshot: StageOutputSnapshot = {
+    child_sales: {
+      stage: "child_sales", stageStatus: "partial", data: { rowsByAsin: {} },
+      gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [
+        { asin: "B0F43M9KWW", causeCode: "UPSTREAM_EMPTY" },
+        { asin: "B0SCHEMA01", causeCode: "MCP_SCHEMA" },
+      ] },
+      jobId: "job", projectId: "10000000-0000-4000-8000-000000000001", runId: "10000000-0000-4000-8000-000000000002",
+      jobVersion: 1, outputVersion: 1, contentHash: "a".repeat(64), updatedAt: "2026-09-10T00:00:00.000Z",
+    },
+  };
+  const html = renderToStaticMarkup(StageOutputGapCard({ snapshot, stage: "child_sales" }));
+  assert.match(html, /stage-output-gap-notice/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /B0F43M9KWW：数据源暂无可用子体销量/);
+  assert.match(html, /B0SCHEMA01：数据源返回结构无效/);
+  assert.match(html, /已获取的商品数据正常保留/);
+  assert.doesNotMatch(html, /pending-box|class="card"/);
 });

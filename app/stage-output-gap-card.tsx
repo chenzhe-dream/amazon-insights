@@ -22,6 +22,19 @@ export function StageOutputGapCard({ snapshot, stage }: { snapshot: StageOutputS
     ? projection.reasonCode
     : projection.gap.reasonCode;
   const gapItems = projection.stageStatus === "missing-output" ? [] : projection.gap.items ?? [];
+  if (projection.stage === "child_sales" && projection.stageStatus === "partial") {
+    const reason = (code: keyof typeof stageOutputGapCopy) => code === "UPSTREAM_EMPTY"
+      ? "数据源暂无可用子体销量（不代表销量为 0）"
+      : stageOutputGapCopy[code].split("，")[0];
+    return (
+      <p className="stage-output-gap-notice" role="status" data-stage-output-gap={projection.stage}>
+        <strong>子体销量：部分数据未取得</strong>
+        <span>；{gapItems.length
+          ? gapItems.map(item => `${item.asin}：${reason(item.causeCode)}`).join("；")
+          : reason(reasonCode)}。已获取的商品数据正常保留。</span>
+      </p>
+    );
+  }
   return (
     <section className="card" data-stage-output-gap={projection.stage}>
       <div className="pending-box">

@@ -189,6 +189,21 @@ for (const fixture of [
   });
 }
 
+test("empty Customers Say does not discard available reviews or overwrite a successful sibling", async (t) => {
+  const provider = await fakeSorftimeProvider("empty-summary-with-reviews");
+  t.after(provider.close);
+  const sibling = { ...readyEmpty, asin: "B0SIBLING1", sampledReviews: 5, blocks: [] };
+  const result = await runProductionReviewScript(t, provider.endpoint, {
+    asin, marketplace: "US", fetchedAt: "2026-09-10", status: "ready", rating: 4.5, reviewCount: 100,
+  }, { existingRecords: { [sibling.asin]: sibling } });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.records[asin].status, "ready");
+  assert.equal(result.records[asin].sampledReviews, 1);
+  assert.equal(result.records[asin].mentionTopics, 0);
+  assert.deepEqual(result.records[sibling.asin], sibling);
+  assert.doesNotMatch(result.stderr, /MCP_SCHEMA/);
+});
+
 async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sorftime-review-empty-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -330,7 +345,13 @@ async function fakeSorftimeProvider(mode) {
       response.end("{}");
       return;
     }
-    const result = mode === "schema"
+    const result = mode === "empty-summary-with-reviews"
+      ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text:
+          payload.params.name === "product_customers_say" ? "No relevant data." : JSON.stringify({ data: [
+            { title: "Useful light", content: "The lamp is bright and easy to use.", star_rating: 5 },
+          ] }),
+        }] } }
+      : mode === "schema"
       ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text: "not-json" }] } }
       : mode === "consumer-shape"
         ? {

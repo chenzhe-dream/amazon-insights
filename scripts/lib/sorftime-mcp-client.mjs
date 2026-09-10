@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import {
+  McpTransportError,
   createMcpConsumerShapeError,
   normalizeMcpResult,
   parseMcpResponse,
@@ -110,9 +111,29 @@ export async function callSorftimeTool(key, toolName, args, options = {}) {
     env,
     emitDiagnostics: options.emitDiagnostics,
     allowCategorySiblingDispatch: options.allowCategorySiblingDispatch,
-  }, async () => normalizeMcpResult(
+  }, async () => normalizeSorftimeToolResult(toolName,
     await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args }, options),
   ));
+}
+
+export function normalizeSorftimeToolResult(toolName, result) {
+  if (result?.isError === true) {
+    throw new McpTransportError("rpc", null, { boundary: "tool-content" });
+  }
+  // Observed Sorftime responses, not a generic non-JSON fallback. An empty
+  // summary does not mean zero reviews; an empty variation list is not zero sales.
+  if (Array.isArray(result?.content) && result.content.length === 1 &&
+    result.content[0]?.type === "text" && typeof result.content[0].text === "string" &&
+    !Object.hasOwn(result, "structuredContent")) {
+    const text = result.content[0].text.trim();
+    if (toolName === "product_customers_say" && text === "No relevant data.") {
+      return { data: { details: [] } };
+    }
+    if (toolName === "product_variations" && text === "No data available.") {
+      return { data: [] };
+    }
+  }
+  return normalizeMcpResult(result);
 }
 
 export async function projectSorftimeConsumerCandidate(toolName, args, response, options = {}) {
