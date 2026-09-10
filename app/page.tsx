@@ -1946,7 +1946,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     runId: stageOutputRunId, jobId: stageOutputJobId, marketplace: market, asins: activeAsins,
   } : null, [authSession.logoutPending, authSession.user.organizationId, resumedProjectId, stageOutputRunId, stageOutputJobId, market, activeAsins]);
   // VOC has no funnel. Only read here while that tab owns the review view.
-  const pageReviewOutput = useVocReviewOutput(stageOutputScopeKey, reviewScope, activeTab === "voc");
+  const { snapshot: pageReviewOutput, refreshFailed: reviewRefreshFailed } = useVocReviewOutput(stageOutputScopeKey, reviewScope, activeTab === "voc", currentStageReceipt?.snapshot.reviews);
   const stageOutputSnapshot = useMemo<StageOutputSnapshot>(() => !authSession.logoutPending && currentStageReceipt
     ? { ...currentStageReceipt.snapshot, ...(activeTab === "voc" ? { reviews: pageReviewOutput.reviews } : {}) } : pageReviewOutput, [authSession.logoutPending, currentStageReceipt, pageReviewOutput, activeTab]);
   const visibleTrafficStage = trafficStageFromReceipt(currentStageReceipt, {
@@ -3459,6 +3459,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             reasonCode={reviewGapReasonCode}
           />
         ) : null}
+        {reviewRefreshFailed ? <p role="status">本次评论结果读取失败；如有本项目已验证结果，将继续保留显示。重新进入 VOC 页可重试读取。</p> : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
           description="Sorftime MCP · 按实际返回的 Customers Say 主题及评论样本展示 · 六维同屏对齐 · 格式：【分类】+ 提及占比；各 ASIN 的样本数和采集时间见表头。"

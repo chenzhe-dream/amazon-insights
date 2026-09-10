@@ -47,3 +47,41 @@ test("direct / refresh / overview to VOC agree; terminal reads stop; scope and l
   const logoutReads = reads; await page.waitForTimeout(200); assert.equal(reads, logoutReads);
   await page.close();
 });
+
+test("same-scope VOC tab reentry retains verified data on downgrade and failed refresh", async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  let mode: "initial" | "older" | "failed" | "newer" = "initial";
+  let failures = 0;
+  await page.route("**/api/agent/**", async route => {
+    if (!route.request().url().endsWith("/output")) return route.fulfill({ json: { jobId: "job", jobVersion: 13, asins: ["B0F43M9KWW"], marketplace: "US", scope: { projectId, runId }, stages: [{ id: "reviews", status: "done" }] } });
+    if (mode === "failed") { failures++; return route.fulfill({ status: 503, json: { error: "fixture unavailable" } }); }
+    const candidate = structuredClone(projection);
+    if (mode !== "initial") {
+      candidate.outputVersion = candidate.jobVersion = mode === "older" ? 11 : 13;
+      candidate.data.analysisByAsin.B0F43M9KWW.blocks[0].rows[0].label = mode === "older" ? "OLD_RESULT" : "NEW_RESULT";
+      candidate.contentHash = createHash("sha256").update(JSON.stringify(canonical({ stage: "reviews", data: candidate.data }))).digest("hex");
+    }
+    return route.fulfill({ json: candidate });
+  });
+  const reenter = async () => { await page.getByText("Overview", { exact: true }).click(); await page.getByText("VOC", { exact: true }).click(); };
+  await page.goto(base);
+  await page.locator("#matrix").filter({ hasText: "brightness" }).waitFor();
+  mode = "older";
+  await reenter();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#matrix").textContent(), "brightness");
+  mode = "failed";
+  await reenter();
+  await page.locator("#read-failure").filter({ hasText: "refresh failed" }).waitFor();
+  assert.equal(await page.locator("#matrix").textContent(), "brightness");
+  assert.equal(failures, 3);
+  await page.waitForTimeout(3200);
+  assert.equal(failures, 3);
+  mode = "newer";
+  await reenter();
+  await page.locator("#matrix").filter({ hasText: "NEW_RESULT" }).waitFor();
+  assert.equal(await page.locator("#read-failure").textContent(), "");
+  await page.getByText("Logout", { exact: true }).click();
+  assert.equal(await page.locator("#matrix").textContent(), "");
+});
