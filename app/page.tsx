@@ -116,6 +116,9 @@ import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
 import { XydcVariantSection } from "./xydc-variant-section";
+import { AmazonStarRating, RatingCell } from "./components/amazon-star-rating";
+import { groupIdForTab, isNavGroup, navigationEntries, type NavGroup, type NavGroupId } from "./features/shell/navigation";
+import { NavSubText, NavThemeIcon } from "./features/shell/navigation-presentation";
 
 function currentWebArtifactId(): string {
   return document.documentElement.dataset.webArtifactId ?? "legacy";
@@ -261,216 +264,12 @@ const markets = {
   DE: { label: "德国站", short: "DE", option: "Amazon.de｜德国站", domain: "www.amazon.de" },
 } as const;
 type MarketCode = keyof typeof markets;
-type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
 
 const savedReportStageLabels = {
   "traffic-analysis": "流量分析",
   "voc-positioning": "VOC 定位",
   "product-definition": "产品定义",
 } as const;
-
-type NavLeaf = { id: TabId; label: string; sub: string };
-type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
-type NavEntry = NavLeaf | NavGroup;
-
-function isNavGroup(entry: NavEntry): entry is NavGroup {
-  return "children" in entry;
-}
-
-function NavSubText({ text }: { text: string }) {
-  const parts = String(text ?? "")
-    .split(/\s*·\s*/)
-    .filter(Boolean);
-  if (parts.length <= 1) return <small>{text}</small>;
-  return (
-    <small className="nav-item-tags">
-      {parts.map((part, index) => (
-        <span key={`${part}-${index}`}>{part}</span>
-      ))}
-    </small>
-  );
-}
-
-function isOverviewFamilyTab(tabId: TabId) {
-  return tabId === "overview" || tabId === "overview-images";
-}
-
-function isVocFamilyTab(tabId: TabId) {
-  return tabId === "voc" || tabId === "launch" || tabId === "voc-positioning";
-}
-
-function isKeywordFamilyTab(tabId: TabId) {
-  return tabId === "keywords" || tabId === "keyword-insight";
-}
-
-function isProjectsFamilyTab(tabId: TabId) {
-  return tabId === "projects" || tabId === "keyword-compare" || tabId === "traffic-promo" || tabId === "checklist-library";
-}
-
-function groupIdForTab(tabId: TabId): NavGroupId | null {
-  if (isOverviewFamilyTab(tabId)) return "overview-group";
-  if (isVocFamilyTab(tabId)) return "voc-group";
-  if (isKeywordFamilyTab(tabId)) return "keywords-group";
-  if (isProjectsFamilyTab(tabId)) return "projects-group";
-  return null;
-}
-
-type NavTheme =
-  | "traffic"
-  | "convert"
-  | "define"
-  | "ads"
-  | "search"
-  | "insight"
-  | "profit"
-  | "stock"
-  | "review"
-  | "overview"
-  | "params"
-  | "gallery"
-  | "layout"
-  | "shield"
-  | "bookmark";
-
-const navThemeByDim: Record<string, NavTheme> = {
-  "overview-group": "overview",
-  overview: "params",
-  "overview-images": "gallery",
-  traffic: "traffic",
-  "projects-group": "bookmark",
-  projects: "stock",
-  "keyword-compare": "search",
-  "traffic-promo": "ads",
-  "checklist-library": "shield",
-  definition: "define",
-  checklist: "shield",
-  keywords: "search",
-  "keyword-insight": "insight",
-  "keywords-group": "search",
-  launch: "profit",
-  "voc-positioning": "convert",
-  voc: "review",
-  "voc-group": "review",
-};
-
-function NavThemeIcon({ dim }: { dim: string }) {
-  const theme = navThemeByDim[dim] ?? "traffic";
-  const glyph = {
-    traffic: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M4.2 16.8h3.1V20H4.2zM10.45 12.2h3.1V20h-3.1zM16.7 7.2h3.1V20h-3.1z" fill="currentColor" opacity=".92"/>
-        <path d="M4.4 11.2c2.2-3.4 4.5-4.2 6.8-2.2 2.1 1.8 3.7 1.9 5.7-.2l1.3-1.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-        <path d="M16.2 5.4h3.4v3.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-    ),
-    convert: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M3.5 5h2.2l1.4 9.2a1.6 1.6 0 0 0 1.6 1.35h8.4a1.6 1.6 0 0 0 1.55-1.2L20.5 8H7.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-        <circle cx="10" cy="19.2" r="1.35" fill="currentColor"/>
-        <circle cx="17.2" cy="19.2" r="1.35" fill="currentColor"/>
-      </svg>
-    ),
-    define: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M4 9.2 12 4.6l8 4.6v7.6L12 21.4 4 16.8V9.2Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="M12 4.6v8.2M12 12.8 20 9.2M12 12.8 4 9.2" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="M6.4 10.6h3.4M6.4 12.4h4.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity=".9"/>
-        <path d="M15.6 15.4 18.4 18.2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
-        <path d="m14.4 16.6 1.3-1.3 1.8 1.8-1.3 1.3-1.5-.2.2-1.6Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/>
-      </svg>
-    ),
-    ads: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M4.5 10.2v3.6c0 .9.7 1.6 1.6 1.6h2.2l5.4 3.4V5.2L8.3 8.6H6.1c-.9 0-1.6.7-1.6 1.6Z" fill="currentColor"/>
-        <path d="M16.8 8.6c1.1.9 1.8 2.2 1.8 3.4s-.7 2.5-1.8 3.4M18.9 6.4c1.8 1.5 2.9 3.4 2.9 5.6s-1.1 4.1-2.9 5.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
-      </svg>
-    ),
-    search: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <circle cx="10.5" cy="10.5" r="5.6" stroke="currentColor" strokeWidth="1.9"/>
-        <path d="m14.8 14.8 4.4 4.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/>
-        <path d="M8.2 10.5h4.6M10.5 8.2v4.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-      </svg>
-    ),
-    insight: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M12 3.6a5.4 5.4 0 0 0-3.2 9.7c.5.4.8 1 .8 1.6v.6h4.8v-.6c0-.6.3-1.2.8-1.6A5.4 5.4 0 0 0 12 3.6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
-        <path d="M10 16.8h4M10.6 19.2h2.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
-        <path d="M12 7.2v2.4M10.2 9.4 12 11.2l1.8-1.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-    ),
-    profit: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <ellipse cx="12" cy="6.2" rx="6.2" ry="2.4" fill="currentColor"/>
-        <path d="M5.8 6.2v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V6.2" stroke="currentColor" strokeWidth="1.7"/>
-        <path d="M5.8 9.8v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V9.8" stroke="currentColor" strokeWidth="1.7"/>
-        <path d="M5.8 13.4v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4v-3.6" stroke="currentColor" strokeWidth="1.7"/>
-      </svg>
-    ),
-    stock: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M3.8 10.2 12 4.8l8.2 5.4V19a1.2 1.2 0 0 1-1.2 1.2H5a1.2 1.2 0 0 1-1.2-1.2v-8.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="M9 20.2V13h6v7.2" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="M3.8 10.2h16.4" stroke="currentColor" strokeWidth="1.7"/>
-      </svg>
-    ),
-    review: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M5 16.8 3.6 20.2 7.4 18.5A8.2 8.2 0 1 0 5 16.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="m12 8.2 1.05 2.15 2.35.3-1.75 1.6.5 2.3L12 13.4l-2.15 1.15.5-2.3-1.75-1.6 2.35-.3L12 8.2Z" fill="currentColor"/>
-      </svg>
-    ),
-    overview: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <rect x="3.5" y="5.5" width="13" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.7"/>
-        <rect x="7.5" y="9" width="13" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.7" fill="currentColor" fillOpacity=".08"/>
-        <path d="M10.5 13.5h7M10.5 15.8h4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-      </svg>
-    ),
-    params: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <rect x="4" y="4.5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.7"/>
-        <path d="M4 9.5h16M4 14h16M9.5 9.5v10" stroke="currentColor" strokeWidth="1.5"/>
-      </svg>
-    ),
-    gallery: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <rect x="3.5" y="5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.7"/>
-        <path d="M3.5 13.5 7.2 10l2.4 2.1 2.6-3.2 4.3 4.6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-        <circle cx="8.2" cy="9" r="1.1" fill="currentColor"/>
-        <rect x="11" y="8" width="9.5" height="11" rx="2" stroke="currentColor" strokeWidth="1.7" opacity=".9"/>
-      </svg>
-    ),
-    layout: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <rect x="4" y="3.5" width="16" height="17" rx="2" stroke="currentColor" strokeWidth="1.7"/>
-        <rect x="6.5" y="6" width="11" height="4.5" rx="1" fill="currentColor" opacity=".32"/>
-        <rect x="6.5" y="12" width="5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.4"/>
-        <rect x="12.5" y="12" width="5" height="5.5" rx="1" stroke="currentColor" strokeWidth="1.4"/>
-        <path d="M8 8.2h8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-      </svg>
-    ),
-    shield: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M12 3.4 5.2 6.1v5.8c0 4.1 2.9 7.9 6.8 9.1 3.9-1.2 6.8-5 6.8-9.1V6.1L12 3.4Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="m9.2 12.1 1.8 1.8 3.8-3.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-    ),
-    bookmark: (
-      <svg viewBox="0 0 24 24" width={16} height={16} fill="none" aria-hidden="true">
-        <path d="M7.2 4.4h9.6c.7 0 1.2.5 1.2 1.2v14.1l-6-3.3-6 3.3V5.6c0-.7.5-1.2 1.2-1.2Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/>
-        <path d="M9.4 9.2h5.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-      </svg>
-    ),
-  }[theme];
-
-  return (
-    <span className="nav-icon-tile" data-theme={theme} aria-hidden="true">
-      {glyph}
-    </span>
-  );
-}
-
 const MAX_ASIN_SLOTS = 10;
 const PROJECT_REGISTRATION_FAILURE = "项目登记失败，未创建分析任务，请重试";
 
@@ -780,31 +579,6 @@ function renderVocMatrixItem(item: string, dimensionKey: string) {
     <>
       {parts[0]}｜<AmazonStarRating rating={starRating} compact />｜{parts.slice(2).join("｜")}
     </>
-  );
-}
-
-function AmazonStarRating({ rating, compact = false }: { rating: number; compact?: boolean }) {
-  const clamped = Math.max(0, Math.min(5, rating));
-  return (
-    <div
-      className={compact ? "amazon-star-rating amazon-star-rating-compact" : "amazon-star-rating"}
-      aria-label={`${clamped.toFixed(1)} 星，满分 5 星`}
-    >
-      <span className="amazon-star-rating-stars" aria-hidden="true">
-        <span className="amazon-star-rating-base">★★★★★</span>
-        <span className="amazon-star-rating-fill" style={{ width: `${(clamped / 5) * 100}%` }}>★★★★★</span>
-      </span>
-      {!compact ? <span className="amazon-star-rating-value">{clamped.toFixed(1)}</span> : null}
-    </div>
-  );
-}
-
-function RatingCell({ rating, reviews }: { rating: number; reviews: number | null }) {
-  return (
-    <div className="rating-cell">
-      <AmazonStarRating rating={rating} />
-      {reviews !== null && <small>{reviews.toLocaleString()} 条</small>}
-    </div>
   );
 }
 
@@ -2500,53 +2274,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     };
   }, [activeAsins.length, setMessage, syncJobId, workspaceReady]);
 
-  const nav: NavEntry[] = useMemo(
-    () => [
-      {
-        id: "overview-group",
-        label: "竞品概览",
-        sub: "参数 · 主辅图 · 变体",
-        children: [
-          { id: "overview", label: "竞品参数总览", sub: "参数 · 趋势 · 变体" },
-          { id: "overview-images", label: "主辅图", sub: "主图 · 辅图 · 图册对比" },
-        ],
-      },
-      {
-        id: "voc-group",
-        label: "VOC",
-        sub: "原始矩阵 · 洞察立项",
-        children: [
-          { id: "voc", label: "竞品VOC 汇总", sub: "七维 · 评论 · 综合" },
-          { id: "launch", label: "竞品 VOC 洞察", sub: "摘要 · 好评 · 差评 · 未满足" },
-          { id: "voc-positioning", label: "产品定义结论", sub: "定位 · 三表合并 · 优化优先级" },
-        ],
-      },
-      {
-        id: "keywords-group",
-        label: "关键词调研",
-        sub: "竞品词分析 · 洞察",
-        children: [
-          { id: "keywords", label: "竞品关键词分析", sub: "含义分类 · 流量词对比" },
-          { id: "keyword-insight", label: "关键词洞察", sub: "开品结论 · 需求分层" },
-        ],
-      },
-      { id: "definition", label: "新品定义", sub: "VOC×关键词 · 最终定义" },
-      { id: "checklist", label: "立项前确认清单", sub: "合规 · 专利 · 一票否决" },
-      { id: "traffic", label: "竞品流量分析", sub: "结构 · 月趋势 · 推广结论" },
-      {
-        id: "projects-group",
-        label: "收藏夹",
-        sub: "项目收藏 · 流量词对比 · 推广能力 · 确认清单",
-        children: [
-          { id: "projects", label: "项目收藏", sub: "对标组合 · 参数总览 · 团队共享" },
-          { id: "keyword-compare", label: "流量词对比", sub: "流量词矩阵 · 竞品对比 · 搜索意图" },
-          { id: "traffic-promo", label: "竞品推广能力分析", sub: "流量结构 · 广告分布 · 推广结论" },
-          { id: "checklist-library", label: "项目确认清单", sub: "合规认证 · 专利排查 · 一票否决" },
-        ],
-      },
-    ],
-    []
-  );
+  const nav = navigationEntries;
   const activeFlyoutGroup = flyoutGroupId
     ? nav.find((entry): entry is NavGroup => isNavGroup(entry) && entry.id === flyoutGroupId) ?? null
     : null;
