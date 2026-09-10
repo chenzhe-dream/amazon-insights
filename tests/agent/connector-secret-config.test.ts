@@ -212,7 +212,7 @@ test("connector and page sources contain no Cursor configuration fallback or pro
     "scripts/lib/sorftime-mcp-client.mjs",
     "scripts/lib/sellersprite-mcp-client.mjs",
     "scripts/fetch-sellersprite-review-analysis.mjs",
-    "app/keyword-demand-section.tsx",
+    "app/features/keywords/keyword-demand-section.tsx",
     "app/page.tsx",
     "app/seller-sprite-review-analysis.ts",
   ];

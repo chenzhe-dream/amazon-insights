@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { localAgentErrorMessage, localAgentFetch } from './lib/local-agent-browser';
+import { localAgentErrorMessage, localAgentFetch } from '../../lib/local-agent-browser';
 
 function requestUuid() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));

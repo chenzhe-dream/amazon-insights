@@ -1,14 +1,14 @@
 "use client";
 
 import { useMemo } from "react";
-import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./features/sync/asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "../sync/asin-sync-funnel";
 import {
   sifListingTrafficOverview,
   sifListingTrafficMeta,
   type TrafficDisplayData,
-} from "./sif-listing-traffic-data";
-import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "./sif-monthly-traffic-trend-data";
-import { amazonMediaSrc } from "./lib/amazon-image";
+} from "../../sif-listing-traffic-data";
+import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta } from "../../sif-monthly-traffic-trend-data";
+import { amazonMediaSrc } from "../../lib/amazon-image";
 
 type ProductLite = {
   asin: string;

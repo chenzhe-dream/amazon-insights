@@ -12,11 +12,11 @@ import {
   sifKeywordAnalysisMeta,
   type SifKeywordAnalysisRecord,
   type SifKeywordRecord,
-} from "./sif-keyword-analysis-data";
+} from "../../sif-keyword-analysis-data";
 import {
   sifKeywordEnrichmentData,
   type KeywordSearchTrendPoint,
-} from "./sif-keyword-enrichment-data";
+} from "../../sif-keyword-enrichment-data";
 
 export type KeywordDemandProduct = {
   asin: string;

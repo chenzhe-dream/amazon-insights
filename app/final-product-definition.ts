@@ -3,8 +3,8 @@
  * 对齐 Skill：define-amazon-product-from-voc-keywords
  */
 
-import type { KeywordLaunchConclusions } from "./keyword-demand-conclusions";
-import { formatSeasonMonthLabel } from "./keyword-demand-conclusions";
+import type { KeywordLaunchConclusions } from "./features/keywords/keyword-demand-conclusions";
+import { formatSeasonMonthLabel } from "./features/keywords/keyword-demand-conclusions";
 import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "./features/voc/voc-positioning";
 
 export type FinalProductRole =

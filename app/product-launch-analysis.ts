@@ -13,11 +13,11 @@ import {
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
 import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./features/voc/voc-positioning";
 import { familyFromProducts, type ProductFamily } from "./lib/product-family";
-import type { KeywordDemandAnalysis } from "./keyword-demand-analysis";
+import type { KeywordDemandAnalysis } from "./features/keywords/keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
   type KeywordLaunchConclusions,
-} from "./keyword-demand-conclusions";
+} from "./features/keywords/keyword-demand-conclusions";
 import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
 
 export type LaunchProductInput = {

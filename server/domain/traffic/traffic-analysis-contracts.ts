@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import { buildTrafficAnalysisConclusion } from "../../../app/traffic-analysis-conclusion";
+import { buildTrafficAnalysisConclusion } from "../../../app/features/traffic/traffic-analysis-conclusion";
 import { sifMonthlyTrafficTrend } from "../../../app/sif-monthly-traffic-trend-data";
 import { AsinSchema, DateTimeSchema, MarketplaceSchema, Sha256Schema } from "../../../shared/agent-contracts";
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sameTrafficDetailScope, mergeTrafficRecord, trafficStageFromReceipt, formatTrafficScore, formatTrafficPercent, trafficDetailMessage, trafficChildCountLabel, type TrafficDetailScope, type TrafficStageReceipt } from "../../app/lib/traffic-detail-view";
 import { trafficDisplayFromSnapshot } from "../../app/sif-listing-traffic-data";
-import { buildTrafficAnalysisConclusion } from "../../app/traffic-analysis-conclusion";
+import { buildTrafficAnalysisConclusion } from "../../app/features/traffic/traffic-analysis-conclusion";
 import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
 import { buildStageOutputView } from '../../app/lib/stage-output-view';
 

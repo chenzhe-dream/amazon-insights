@@ -5,7 +5,7 @@ import {
   type SifListingTrafficOverview,
   type TrafficDistributionItem,
   type TrafficDisplayData,
-} from "./sif-listing-traffic-data";
+} from "../../sif-listing-traffic-data";
 
 export type TrafficGrade = "强" | "中强" | "中" | "中弱" | "弱";
 export type TrafficHealth = "健康" | "基本健康" | "需观察" | "风险较高";

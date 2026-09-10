@@ -5,7 +5,7 @@ import { buildFinalProductDefinition } from "../../app/final-product-definition"
 import {
   buildKeywordDemandAnalysis,
   type KeywordDemandSources,
-} from "../../app/keyword-demand-analysis";
+} from "../../app/features/keywords/keyword-demand-analysis";
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,

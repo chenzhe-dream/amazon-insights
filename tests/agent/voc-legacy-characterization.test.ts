@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   buildKeywordDemandAnalysis,
   type KeywordDemandSources,
-} from "../../app/keyword-demand-analysis";
+} from "../../app/features/keywords/keyword-demand-analysis";
 import {
   buildProductLaunchAnalysis,
   type LaunchProductInput,

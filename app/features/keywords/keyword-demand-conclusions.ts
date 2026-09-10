@@ -7,7 +7,7 @@ import {
   type KeywordDemandProduct,
 } from "./keyword-demand-analysis";
 import type { KeywordCategory } from "./keyword-classifier";
-import { sifKeywordEnrichmentData, type KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
+import { sifKeywordEnrichmentData, type KeywordSearchTrendPoint } from "../../sif-keyword-enrichment-data";
 
 export type LaunchConclusionItem = { label: string; value: string };
 

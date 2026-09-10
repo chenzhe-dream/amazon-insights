@@ -9,18 +9,18 @@ import {
   type KeywordDemandProduct,
   type KeywordDemandSources,
 } from "./keyword-demand-analysis";
-import type { KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
+import type { KeywordSearchTrendPoint } from "../../sif-keyword-enrichment-data";
 import {
   categoryColorMap,
   keywordMeaningTaxonomy,
   type KeywordCategory,
 } from "./keyword-classifier";
-import { LaunchSection, LaunchTable } from "./launch-section";
-import { sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
-import { SegmentStackBar, segmentStackColors } from "./segment-stack-bar";
+import { LaunchSection, LaunchTable } from "../../launch-section";
+import { sifKeywordAnalysisMeta } from "../../sif-keyword-analysis-data";
+import { SegmentStackBar, segmentStackColors } from "../../segment-stack-bar";
 import { buildKeywordLaunchConclusions, type KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { sifKeywordFieldTitle } from "./sif-keyword-field-glossary";
-import { amazonMediaSrc } from "./lib/amazon-image";
+import { amazonMediaSrc } from "../../lib/amazon-image";
 
 function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
