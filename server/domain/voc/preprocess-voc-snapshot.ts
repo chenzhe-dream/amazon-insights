@@ -207,6 +207,38 @@ type MetricBasis = z.infer<typeof MetricBasisSchema>;
 type ThemeMetric = z.infer<typeof ThemeMetricSchema>;
 type EvidenceFact = z.infer<typeof EvidenceFactSchema>;
 
+export function reviewRowMetricInputs(
+  row: Readonly<{ metricKind?: string; numerator?: number; denominator?: number; sharePct: number }>,
+  sampledReviews: number,
+): Readonly<{ basis: MetricBasis; mentionCount: number | null; sampleCount: number | null; mentionPct: number | null }> {
+  if (
+    row.metricKind === "review_sample_incidence"
+    && Number.isInteger(row.numerator)
+    && Number.isInteger(row.denominator)
+    && row.denominator === sampledReviews
+  ) {
+    return {
+      basis: "review-share-percentage",
+      mentionCount: row.numerator!,
+      sampleCount: row.denominator!,
+      mentionPct: row.sharePct,
+    };
+  }
+  if (
+    row.metricKind === "customers_say_topic_share"
+    && Number.isInteger(row.numerator)
+    && Number.isInteger(row.denominator)
+  ) {
+    return {
+      basis: "presence-only",
+      mentionCount: null,
+      sampleCount: sampledReviews,
+      mentionPct: null,
+    };
+  }
+  return { basis: "presence-only", mentionCount: null, sampleCount: sampledReviews, mentionPct: null };
+}
+
 type MutableTheme = {
   key: string;
   label: string;
@@ -398,6 +430,7 @@ function collectReviewRecord(
   for (const block of record.blocks) {
     const dimension = REVIEW_BLOCK_TO_DIMENSION[block.key];
     for (const row of block.rows) {
+      const metric = reviewRowMetricInputs(row, record.sampledReviews);
       addMetric({
         snapshot,
         config,
@@ -406,10 +439,7 @@ function collectReviewRecord(
         dimension,
         family,
         rawLabel: row.label,
-        basis: "review-share-percentage",
-        mentionCount: null,
-        sampleCount: record.sampledReviews,
-        mentionPct: row.sharePct,
+        ...metric,
         themesByDimension,
         evidenceById,
       });
@@ -1161,9 +1191,16 @@ function assertMetricEvidencePair(
     );
   } else {
     requireIntegrity(
-      metric.basis === "review-share-percentage" &&
+      (metric.basis === "presence-only" &&
         metric.mentionCount === null &&
-        metric.mentionPct !== null,
+        metric.mentionPct === null) ||
+      (metric.basis === "review-share-percentage" &&
+        metric.mentionPct !== null &&
+        (metric.mentionCount === null || (
+          metric.sampleCount !== null &&
+          metric.mentionCount <= metric.sampleCount &&
+          metric.mentionPct === Number(((metric.mentionCount / metric.sampleCount) * 100).toFixed(2))
+        ))),
       "Review VOC metric basis or numerator is invalid",
     );
   }

@@ -37,6 +37,7 @@ import { VocDimensionLabel } from "./voc-dimension-label";
 import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
 import {
   formatReviewAnalysisItem,
+  reviewMetricExplanation,
   formatReviewSharePct,
   reviewAnalysisBarPalette,
   reviewAnalysisDimensions,
@@ -601,6 +602,7 @@ export function ReviewAnalysisMatrixSection({
         </div>
       ) : (
         <div className="matrix-wrap">
+          <p className="ss-review-metric-note">口径提示：评论样本发生率与 Customers Say 主题提及份额不可互换；同一条评论可命中多个主题，因此各行可能重叠，合计不要求等于 100%。</p>
           <table className="compare-matrix voc-matrix ss-review-matrix">
             <thead>
               <tr>
@@ -624,8 +626,6 @@ export function ReviewAnalysisMatrixSection({
                     const analysis = data[product.asin];
                     const block = analysis?.blocks.find(item => item.key === dimension.key);
                     const rows = block?.rows ?? [];
-                    const maxPct = Math.max(...rows.map(row => row.sharePct), 1);
-
                     if (analysis?.status !== "ready") {
                       return (
                         <td key={product.asin} className="bullet-cell ss-review-cell ss-review-cell-pending">
@@ -640,13 +640,13 @@ export function ReviewAnalysisMatrixSection({
                           <ul className="ss-review-theme-list">
                             {rows.map(row => (
                               <li key={`${product.asin}-${dimension.key}-${row.label}`}>
-                                <div className="ss-review-theme-row">
-                                  <b>{formatReviewAnalysisItem(row.label, row.sharePct)}</b>
+                                <div className="ss-review-theme-row" title={reviewMetricExplanation(row, analysis.sampledReviews)}>
+                                  <b>{formatReviewAnalysisItem(row, analysis.sampledReviews)}</b>
                                   <div className="ss-review-theme-bar">
                                     <i>
                                       <b
                                         style={{
-                                          width: `${Math.min(100, (row.sharePct / maxPct) * 100)}%`,
+                                          width: `${Math.min(100, Math.max(0, row.sharePct))}%`,
                                           background: reviewAnalysisBarPalette[dimension.key],
                                         }}
                                       />

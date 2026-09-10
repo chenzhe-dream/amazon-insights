@@ -272,7 +272,17 @@ export class PostgresJobStore implements JobRepositoryContract {
           [input.claimedAt, JSON.stringify(predecessorError), current.id],
         );
         const nextId = randomUUID();
-        const nextAttempt = current.attemptNumber + 1;
+        // Appending a normalization input can already have allocated a later
+        // job in this stage. Keep the predecessor's logical cycle, but allocate
+        // a free stage ordinal and consume exactly one of its remaining tries.
+        const latest = current.stage === "alexa-voc-normalization"
+          ? await this.#queries.query<{ latest_attempt: number }>(
+            `SELECT MAX(attempt_number) AS latest_attempt FROM job_attempts WHERE stage_id = $1`,
+            [current.stageId],
+          )
+          : null;
+        const nextAttempt = Math.max(current.attemptNumber, Number(latest?.rows[0]?.latest_attempt ?? 0)) + 1;
+        const nextMaxAttempts = nextAttempt + current.maxAttempts - current.attemptNumber - 1;
         await this.#queries.query(
           `INSERT INTO job_attempts (
              id, stage_id, attempt_number, max_attempts,
@@ -286,7 +296,7 @@ export class PostgresJobStore implements JobRepositoryContract {
             nextId,
             current.stageId,
             nextAttempt,
-            current.maxAttempts,
+            nextMaxAttempts,
             current.retryCycleStartAttempt,
             disposition.kind === "recover"
               ? current.logicalExecutionCycleId

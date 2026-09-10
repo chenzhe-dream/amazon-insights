@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
 import { PostgresAgentRepository } from "../../server/db/postgres-repository";
+import { DataSnapshotConflictError } from "../../server/db/data-snapshot-repository";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import type { RuntimeAgentRepository } from "../../server/db/repository";
 import {
@@ -112,6 +113,10 @@ after(async () => {
 
 for (const adapter of ["sqlite", "postgres"] as const) {
   for (const scenario of [
+    "positioning-running",
+    "positioning-staggered",
+    "publication-sibling",
+    "publication-sibling-exhausted",
     "publication",
     "at-limit",
     "absent-at-limit",
@@ -126,6 +131,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
     "transient-final-attempt",
     "permanent-sibling-final-attempt",
     "new-input-during-publication",
+    "new-input-pending-publication",
     "cancelled-audit",
     "publication-then-cancelled-audit",
   ] as const) {
@@ -177,7 +183,8 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         organizationId,
         name: "Recovery",
         marketplace: "US",
-        asins: [A, B, "B0NORM0003"],
+        // Caller order is authoritative, not the repository's lexical order.
+        asins: scenario.startsWith("positioning-") ? [C, B, A] : [A, B, C],
         createdBy: actorId,
         createdAt: now,
         updatedAt: now,
@@ -257,6 +264,9 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         );
       };
       const queued = [await queueInput(A), await queueInput(B)];
+      const initialThird = scenario === "positioning-running" || scenario.startsWith("publication-sibling");
+      const hasThird = initialThird || scenario.startsWith("new-input-");
+      if (initialThird) queued.push(await queueInput(C));
       assert.equal(queued[0]!.jobId, queued[1]!.jobId);
       if (scenario.includes("limit") || scenario.includes("final-attempt")) {
         if (pool)
@@ -273,7 +283,9 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           db.close();
         }
       }
-      let injectFailure = true;
+      const naturalPositioning = scenario === "positioning-running" || scenario === "positioning-staggered";
+      let injectFailure = !naturalPositioning;
+      let publicationFailures = 0;
       let failError: unknown;
       let initialFailureWasPersisted = false;
       let permitClaims = true;
@@ -322,8 +334,12 @@ for (const adapter of ["sqlite", "postgres"] as const) {
                   const job = await base.failJob(...args);
                   initialFailureWasPersisted =
                     job.status === "failed" || job.status === "cancelled";
-                  if (scenario === "exhausted" && job.retryable)
+                  if (scenario.includes("exhausted") && job.retryable)
                     permitClaims = true;
+                  if (scenario === "new-input-pending-publication" && claims === 2) {
+                    assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 0 });
+                    permitClaims = true;
+                  }
                   return job;
                 } catch (error) {
                   failError = error;
@@ -473,12 +489,15 @@ for (const adapter of ["sqlite", "postgres"] as const) {
                       terminal.status === "success",
                   )
                 ) {
-                  injectFailure = scenario === "exhausted";
+                  publicationFailures++;
+                  injectFailure = scenario.includes("exhausted") ||
+                    (scenario === "new-input-pending-publication" && publicationFailures < 2);
                   if (scenario === "already-committed") {
                     const result = await base.createDataSnapshotForRun(...args);
                     committedFailure = true;
                     return result;
                   }
+                  if (scenario.startsWith("publication-sibling")) throw new DataSnapshotConflictError();
                   throw new Error(
                     "B cumulative publication failed after durable revision",
                   );
@@ -489,7 +508,9 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             return typeof value === "function" ? value.bind(base) : value;
           },
         });
-      const calls: Record<string, number> = { [A]: 0, [B]: 0 };
+      const calls: Record<string, number> = { [A]: 0, [B]: 0,
+        ...(initialThird ? { [C]: 0 } : {}),
+      };
       const createRuntime = () =>
         createAlexaVocNormalizationRuntime({
           repository: wrap(repository),
@@ -515,6 +536,24 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             async generateStructured<T>(request: { input: unknown }) {
               const asin = (request.input as { asin: string }).asin;
               calls[asin]++;
+              if (scenario === "new-input-pending-publication" && asin === B) {
+                const next = await queueInput(C);
+                assert.equal(next.jobCreated, true);
+                assert.notEqual(next.jobId, queued[0]!.jobId);
+                queued.push(next);
+                calls[C] = 0;
+              }
+              if (naturalPositioning && asin === B) {
+                const positioning = await repository.claimNextJob({
+                  ownerId: "positioning-fixture", stage: "voc-positioning",
+                  claimedAt: new Date().toISOString(), leaseDurationMs: 30000,
+                });
+                assert.equal(positioning?.status, "running");
+                if (scenario === "positioning-staggered") {
+                  queued.push(await queueInput(C));
+                  calls[C] = 0;
+                }
+              }
               if (transientRetry && asin === B && calls[asin]! <= 3)
                 throw new ModelProviderError(
                   "transient",
@@ -546,6 +585,30 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       const runtime = await createRuntime();
       t.after(() => runtime.stop());
       runtime.start();
+      if (naturalPositioning) {
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          const jobs = await repository.listJobAttempts(queued[0]!.stageId);
+          if (jobs.some((job) => job.status === "failed") || jobs.every((job) => job.status === "succeeded")) break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        await runtime.stop();
+        assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 1 });
+        const jobs = await repository.listJobAttempts(queued[0]!.stageId);
+        assert.equal(jobs.at(-1)?.status, "succeeded", JSON.stringify(jobs.map((job) => job.error)));
+        const terminals = await repository.manualAlexaVoc.listNormalizationTerminals({
+          actorOrganizationId: organizationId, projectId, runId,
+        });
+        assert.equal(terminals.filter((terminal) => terminal.status === "success").length, 3);
+        const snapshots = await repository.listDataSnapshotsByRun({ actorOrganizationId: organizationId, runId });
+        assert.equal(snapshots.length, 3);
+        const complete = snapshots.find((snapshot) => snapshot.payload.records.alexaVoc.length === 3)!;
+        assert.deepEqual(complete.payload.records.alexaVoc.map((record) => record.asin), [C, B, A]);
+        assert.deepEqual((await repository.manualAlexaVoc.listAtCutoff({
+          organizationId, marketplace: "US", asins: [C, B, A], dataCutoffAt: cutoff,
+        })).map((revision) => revision.revision), ["1", "1", "1"]);
+        return;
+      }
       await Promise.race([
         failed,
         new Promise((_, reject) => {
@@ -567,6 +630,18 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         throw error;
       });
       assert.ifError(failError);
+      if (scenario === "new-input-pending-publication") {
+        const jobs = await repository.listJobAttempts(queued[0]!.stageId);
+        assert.equal(jobs[0]!.reportPublicationMaxAttempts, null);
+        assert.equal(jobs[0]!.status, "failed");
+        assert.equal(jobs[1]!.status, "queued");
+        assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 0 });
+      }
+      if (scenario.startsWith("publication-sibling")) {
+        // The publication transaction rolled back B's terminal, not its durable
+        // revision. C must finish under this lease before a retry is allowed.
+        assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 1 });
+      }
       assert.equal(initialFailureWasPersisted, !expired);
       const audits = await repository.listAgentRuns({ organizationId, runId });
       const auditCycles = pool
@@ -596,7 +671,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           scenario === "publication-then-cancelled-audit" ||
           scenario === "fresh-final-attempt"
           ? 1
-          : 2,
+          : initialThird ? 3 : 2,
       );
       if (scenario === "publication") {
         const job = (await repository.listJobAttempts(queued[0]!.stageId)).at(
@@ -719,7 +794,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           projectId,
           runId,
         });
-      if (scenario === "exhausted") {
+      if (scenario.includes("exhausted")) {
         const job = (await repository.listJobAttempts(queued[0]!.stageId)).at(
           -1,
         )!;
@@ -744,7 +819,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             ].includes(scenario)
               ? "failure"
               : "success",
-            ...(scenario === "new-input-during-publication"
+            ...(hasThird
               ? { [C]: "success" }
               : {}),
           },
@@ -752,6 +827,13 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       const lastJob = (await repository.listJobAttempts(queued[0]!.stageId)).at(
         -1,
       )!;
+      if (scenario === "new-input-pending-publication") {
+        assert.equal(lastJob.attemptNumber, 3);
+        assert.equal(lastJob.logicalExecutionCycleId, firstClaim!.logicalExecutionCycleId);
+        assert.equal(lastJob.retryCycleStartAttempt, firstClaim!.retryCycleStartAttempt);
+        assert.equal(lastJob.maxAttempts - lastJob.attemptNumber,
+          firstClaim!.maxAttempts - firstClaim!.attemptNumber - 1);
+      }
       if (transientRetry) {
         assert.equal(lastJob.attemptNumber, 2);
         assert.equal(lastJob.maxAttempts, 2);
@@ -771,7 +853,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         lastJob.status,
         scenario.includes("cancelled")
           ? "cancelled"
-          : scenario === "exhausted" || scenario.includes("budget")
+          : scenario.includes("exhausted") || scenario.includes("budget")
             ? "failed"
             : "succeeded",
       );
@@ -785,7 +867,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       const revisions = await repository.manualAlexaVoc.listAtCutoff({
         organizationId,
         marketplace: "US",
-        asins: scenario === "new-input-during-publication" ? [A, B, C] : [A, B],
+        asins: hasThird ? [A, B, C] : [A, B],
         dataCutoffAt: cutoff,
       });
       assert.deepEqual(
@@ -807,7 +889,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             : {
                 [A]: "1",
                 [B]: "1",
-                ...(scenario === "new-input-during-publication"
+                ...(hasThird
                   ? { [C]: "1" }
                   : {}),
               },
@@ -822,7 +904,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             : transientRetry
               ? 4
               : 1,
-        ...(scenario === "new-input-during-publication" ? { [C]: 1 } : {}),
+        ...(hasThird ? { [C]: 1 } : {}),
       });
       const statuses =
         await repository.manualAlexaVoc.listNormalizationStatuses({
@@ -831,7 +913,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           runId,
           marketplace: "US",
           asins:
-            scenario === "new-input-during-publication" ? [A, B, C] : [A, B],
+            hasThird ? [A, B, C] : [A, B],
         });
       assert.equal(
         statuses.some((status) => status.status === "pending"),
@@ -849,7 +931,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         "publication-then-cancelled-audit",
       ].includes(scenario)
         ? 1
-        : scenario === "new-input-during-publication"
+        : scenario.startsWith("new-input-")
           ? 3
           : 2;
       if (pool)

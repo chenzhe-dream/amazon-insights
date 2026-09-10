@@ -817,10 +817,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 26, name: "dingtalk_authentication" },
       { version: 27, name: "allow_empty_voc_dimensions" },
       { version: 28, name: "traffic_detail_recoveries" },
+      { version: 29, name: "review_metric_provenance" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 28);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 29);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -873,7 +874,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "28",
+    "29",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -882,6 +883,44 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   );
   assert.ok(columns.rows.some(row => row.column_name === "job_version"));
   assert.ok(columns.rows.some(row => row.column_name === "output_version"));
+});
+
+test("PostgreSQL VOC trigger accepts legacy, explicit and Customers Say-only review rows and rejects invalid provenance", async () => {
+  const pool = await freshSchemaPool();
+  await runPostgresMigrations(pool);
+  const cutoff = "2026-08-15T08:00:00.000Z";
+  const asin = "B000000001";
+  const makeCandidate = (kind: "legacy" | "new" | "cs-zero" | "rounding") => {
+    const row = kind === "legacy"
+      ? { label: "legacy", sharePct: 25, reason: "e" }
+      : kind === "new"
+        ? { label: "measured", sharePct: 25, reason: "e", metricKind: "review_sample_incidence" as const, numerator: 1, denominator: 4 }
+        : kind === "rounding"
+          ? { label: "rounding", sharePct: 0.01, reason: "e", metricKind: "customers_say_topic_share" as const, numerator: 3, denominator: 20_000 }
+          : { label: "topic", sharePct: 60, reason: "e", metricKind: "customers_say_topic_share" as const, numerator: 60, denominator: 100 };
+    return buildVocSnapshotCandidate({ marketplace: "US", asins: [asin], dataCutoffAt: cutoff, sourceBundles: [{ sourceId: "sorftime-review-analysis", type: "connector", reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis, marketplace: "US", capturedAt: cutoff, records: [{ asin, marketplace: "US", sampledReviews: kind === "cs-zero" ? 0 : 4, fetchedAt: "2026-08-15", status: "ready", blocks: [{ key: "positives", label: "好评", rows: [row] }] }] }] });
+  };
+  const insert = async (id: string, runId: string, candidate: ReturnType<typeof makeCandidate>) => pool.query(
+    `INSERT INTO data_snapshots (id, run_id, snapshot_kind, artifact_kind, schema_version, marketplace, asins_json, data_cutoff_at, sources_json, payload_json, content_hash, created_at)
+     VALUES ($1,$2,'voc','voc',$3,$4,$5::jsonb,$6,$7::jsonb,$8::jsonb,$9,$6)`,
+    [id, runId, candidate.schemaVersion, candidate.marketplace, JSON.stringify(candidate.asins), candidate.dataCutoffAt, JSON.stringify(candidate.sources), JSON.stringify(candidate.payload), candidate.contentHash],
+  );
+  for (const kind of ["legacy", "new", "cs-zero", "rounding"] as const) {
+    const seeded = await seedSnapshotRun(pool, { asins: [asin], cutoff, userId: `${kind}-u`, organizationId: `${kind}-o`, projectId: `${kind}-p`, runId: `${kind}-r` });
+    await insert(`${kind}-snapshot`, seeded.runId, makeCandidate(kind));
+  }
+  for (const kind of ["partial", "arithmetic", "denominator"] as const) {
+    const seeded = await seedSnapshotRun(pool, { asins: [asin], cutoff, userId: `${kind}-u`, organizationId: `${kind}-o`, projectId: `${kind}-p`, runId: `${kind}-r` });
+    const candidate = structuredClone(makeCandidate("new"));
+    const record = candidate.payload.records.sorftimeReviewAnalysis[0]!;
+    const row = record.blocks[0]!.rows[0]! as Record<string, unknown>;
+    if (kind === "partial") delete row.denominator;
+    if (kind === "arithmetic") row.sharePct = 90;
+    if (kind === "denominator") record.sampledReviews = 5;
+    candidate.sources[0]!.checksum = canonicalJsonSha256({ sourceId: "sorftime-review-analysis", marketplace: "US", records: candidate.payload.records.sorftimeReviewAnalysis });
+    candidate.contentHash = canonicalJsonSha256({ schemaVersion: candidate.schemaVersion, marketplace: candidate.marketplace, asins: candidate.asins, dataCutoffAt: candidate.dataCutoffAt, sources: candidate.sources, payload: candidate.payload });
+    await assert.rejects(insert(`${kind}-snapshot`, seeded.runId, candidate), /invalid review-analysis snapshot record/i);
+  }
 });
 
 test("PostgreSQL 0019 enforces equivalent fresh-install and 0018-upgrade constraints", async () => {
@@ -1021,7 +1060,7 @@ test("PostgreSQL 0027 upgrades legacy empty dimensions for cumulative publicatio
     await assert.rejects(insert(`invalid-${name}`, invalid), /invalid Alexa VOC snapshot record/);
   }
   const applied = await runPostgresMigrations(pool);
-  assert.equal(applied.at(-1)?.version, 28);
+  assert.equal(applied.at(-1)?.version, 29);
 });
 
 test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () => {
@@ -1050,7 +1089,7 @@ test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () 
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    28,
+    29,
   );
   assert.deepEqual(
     (
@@ -1142,7 +1181,7 @@ test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constr
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    28,
+    29,
   );
   const cutoff = "2026-08-31T08:00:00.000Z";
   const candidate = repositoryVocSnapshotFixture(cutoff);
@@ -1676,13 +1715,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "28",
+    "29",
   );
 });
 
@@ -1986,7 +2025,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

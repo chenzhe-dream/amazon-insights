@@ -31,7 +31,7 @@ test("merged full VOC page reads scoped output on direct entry and reload instea
   const runId = "10000000-0000-4000-8000-000000000002";
   const jobId = "merged-voc-fixture";
   const project = { id: projectId, kind: "analysis", slug: "merged-voc", name: "VOC集成验证", majorCategory: null, categoryLabel: null, marketplace: "US", asins, note: null, createdBy: null, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z" };
-  const data = { analysisByAsin: { [asins[0]]: { asin: asins[0], marketplace: "US", status: "ready", sampledReviews: 33, mentionTopics: 1, fetchedAt: "2026-09-10T00:00:00Z", blocks: [{ key: "positives", label: "好评点", rows: [{ label: "集成验证稳定光线", sharePct: 100, count: 33 }] }] } }, ratingByAsin: {} };
+  const data = { analysisByAsin: { [asins[0]]: { asin: asins[0], marketplace: "US", status: "ready", sampledReviews: 33, mentionTopics: 1, fetchedAt: "2026-09-10T00:00:00Z", blocks: [{ key: "positives", label: "好评点", rows: [{ label: "集成验证稳定光线", sharePct: 24.24, metricKind: "review_sample_incidence", numerator: 8, denominator: 33, reason: "fixture evidence" }] }] } }, ratingByAsin: {} };
   const gap = { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: asins.slice(1).map(asin => ({ asin, causeCode: "UPSTREAM_EMPTY" })) };
   const projection = { projectId, runId, jobId, jobVersion: 12, outputVersion: 2, updatedAt: "2026-09-10T00:00:00Z", stage: "reviews", stageStatus: "partial", data, gap, contentHash: createHash("sha256").update(JSON.stringify(canonical({ stage: "reviews", data, gap }))).digest("hex") };
   const job = { jobId, jobVersion: 12, marketplace: "US", asins, scope: { projectId, runId }, status: "completed", stages: [{ id: "reviews", status: "partial" }] };
@@ -63,6 +63,9 @@ test("merged full VOC page reads scoped output on direct entry and reload instea
     throw error;
   });
   assert.match(await matrix.innerText(), /评论样本：33/);
+  const metricRow = matrix.locator(".ss-review-theme-row").filter({ hasText: "集成验证稳定光线" }).first();
+  assert.match(await metricRow.getAttribute("title") ?? "", /8\/33 条评论.*各行比例可能重叠/);
+  assert.equal(await metricRow.locator(".ss-review-theme-bar i b").getAttribute("style"), "width: 24.24%; background: rgb(107, 203, 154);");
   assert.match(await matrix.innerText(), /上游暂无可用评论/);
   assert.ok(await page.getByText("集成验证稳定光线").count() >= 2, "matrix and seven-dimension summary both use the scoped result");
   assert.equal(await page.getByText("STALE_ERROR_MUST_NOT_APPEAR").count(), 0);

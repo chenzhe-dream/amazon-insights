@@ -180,7 +180,13 @@ function alexaRecord(asin: string, negatives: readonly string[], reviewCount = 1
 
 function reviewRecord(
   asin: string,
-  rows: readonly Readonly<{ label: string; sharePct: number }>[],
+  rows: readonly Readonly<{
+    label: string;
+    sharePct: number;
+    metricKind?: "review_sample_incidence" | "customers_say_topic_share";
+    numerator?: number;
+    denominator?: number;
+  }>[],
   options: Readonly<{
     family?: "scooter" | "lighting" | "generic";
     blockKey?: ReviewBlockKey;
@@ -281,8 +287,8 @@ function conflictInput() {
     "44444444-4444-4444-8444-444444444443",
     sourceBundles({
       alexa: [alexaRecord(EVAL_ASINS[0], ["【普通问题】约 2% 评论提及（2 条）"])],
-      sorftime: [reviewRecord(EVAL_ASINS[0], [{ label: "普通问题", sharePct: 6 }])],
-      sellerSprite: [reviewRecord(EVAL_ASINS[0], [{ label: "普通问题", sharePct: 11 }])],
+      sorftime: [reviewRecord(EVAL_ASINS[0], [{ label: "普通问题", sharePct: 6, metricKind: "review_sample_incidence", numerator: 6, denominator: 100 }])],
+      sellerSprite: [reviewRecord(EVAL_ASINS[0], [{ label: "普通问题", sharePct: 11, metricKind: "review_sample_incidence", numerator: 11, denominator: 100 }])],
     }),
   );
 }

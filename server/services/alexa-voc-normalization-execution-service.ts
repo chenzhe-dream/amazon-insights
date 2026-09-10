@@ -27,6 +27,7 @@ import type {
   SkillExecutionRequest,
 } from "../runtime/skill-runner";
 import type { AlexaVocNormalizationInputCipher } from "../security/alexa-voc-normalization-input-cipher";
+import { WorkerTaskError } from "../runtime/retry-policy";
 
 export interface AlexaVocNormalizationExecutionRequest {
   readonly snapshotId: string;
@@ -128,7 +129,7 @@ export class AlexaVocNormalizationExecutionService {
       snapshot.projectId !== context.projectId ||
       snapshot.runId !== context.runId
     ) {
-      throw new Error("Alexa normalization snapshot scope conflicts with execution authority");
+      throw new WorkerTaskError("configuration", "Alexa normalization snapshot scope conflicts with execution authority");
     }
     const fingerprint = Sha256Schema.parse(snapshot.executionFingerprint);
     const rawText = this.#normalizationInputCipher.decrypt({
@@ -163,7 +164,7 @@ export class AlexaVocNormalizationExecutionService {
       executionIdentity: actualIdentity,
     });
     if (fingerprint !== declaredFingerprint || fingerprint !== actualFingerprint) {
-      throw new Error("Alexa normalization execution identity conflicts with input snapshot");
+      throw new WorkerTaskError("configuration", "Alexa normalization execution identity conflicts with input snapshot");
     }
     const rawHeaderMeta = extractAlexaVocRawHeaderMeta(rawText);
     const input = AlexaVocNormalizationInputSchema.parse({
@@ -209,7 +210,7 @@ export class AlexaVocNormalizationExecutionService {
       ...(request.signal ? { signal: request.signal } : {}),
     }, { ...context, executionLineage: "stage-input" });
     if (audited.agentRun.executionFingerprint !== fingerprint) {
-      throw new Error("Alexa normalization audit fingerprint conflicts with input snapshot");
+      throw new WorkerTaskError("configuration", "Alexa normalization audit fingerprint conflicts with input snapshot");
     }
     const output = AlexaVocNormalizationOutputSchema.parse(audited.value);
     const normalizedRecord = ManualAlexaVocNormalizedRecordSchema.parse(

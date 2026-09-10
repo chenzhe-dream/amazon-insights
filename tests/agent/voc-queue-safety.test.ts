@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,8 @@ import { createAgentService } from "../../server/agent-service";
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { UnavailableSyncJobRepository } from "../../server/db/sync-job-repository";
 import { resolveVocPositioningRuntimeConfig } from "../../server/config";
+import { createAlexaVocNormalizationInputCipher } from "../../server/security/alexa-voc-normalization-input-cipher";
+import { createAlexaVocNormalizationFingerprint } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 
 const NOW = "2026-09-09T00:00:00.000Z";
 const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
@@ -46,7 +48,7 @@ async function fixture(t: TestContext, dialect: "sqlite" | "postgres") {
   const actor = randomUUID(), org = randomUUID(), project = randomUUID();
   await repository.createUser({ id: actor, organizationId: org, email: `${actor}@example.test`, displayName: "Fixture", role: "admin", status: "active", createdAt: NOW, updatedAt: NOW });
   await repository.createProject({ id: project, organizationId: org, name: "Fixture", marketplace: "US", asins: ["B012345678", "B012345679", "B012345680"], createdBy: actor, createdAt: NOW, updatedAt: NOW });
-  async function seed(stage: "voc-positioning" | "traffic-analysis" = "voc-positioning", availableAt = NOW) {
+  async function seed(stage: "voc-positioning" | "traffic-analysis" | "alexa-voc-normalization" = "voc-positioning", availableAt = NOW) {
     const runId = randomUUID(), stageId = randomUUID(), id = randomUUID();
     await repository.createAnalysisRun({ id: runId, projectId: project, mode: "existing-data", status: "queued", createdBy: actor, dataCutoffAt: NOW, idempotencyScope: runId, idempotencyKey: "fixture", createdAt: NOW, updatedAt: NOW });
     await repository.createRunStage({ id: stageId, runId, stage, status: "queued", progress: 0, attemptCount: 0, startedAt: null, completedAt: null, lastError: null, createdAt: NOW, updatedAt: NOW });
@@ -74,6 +76,46 @@ async function fixture(t: TestContext, dialect: "sqlite" | "postgres") {
 }
 
 for (const dialect of ["sqlite", "postgres"] as const) {
+  for (const expired of [false, true]) test(`${dialect}: normalization ${expired ? "expired" : "failed"} predecessor skips occupied attempt numbers without increasing retry budget`, async (t) => {
+    const f = await fixture(t, dialect);
+    const item = await f.seed("alexa-voc-normalization");
+    const cipher = createAlexaVocNormalizationInputCipher({
+      MANUAL_VOC_RAW_REPORT_KEYRING: JSON.stringify({ activeKeyId: "fixture", keys: { fixture: randomBytes(32).toString("base64url") } }),
+    });
+    const snapshotId = randomUUID(), asin = "B012345678";
+    const envelope = cipher.encrypt({ identity: { organizationId: f.org, projectId: f.project, runId: item.runId, snapshotId, marketplace: "US", asin, schema: "alexa-voc-normalization-input/v1" }, plaintext: "ASIN B012345678 模拟测试输入" });
+    const executionIdentity = { providerName: "fixture", model: { name: "fixture", estimatedInputTokens: 100, maxOutputTokens: 100, timeoutMs: 1000, pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 } } };
+    await f.repository.transaction(scoped => (scoped as RuntimeAgentRepository).manualAlexaVoc.queueNormalizationInput({
+      actorUserId: f.actor, actorOrganizationId: f.org, projectId: f.project, runId: item.runId, marketplace: "US", asin, snapshotId, stageId: randomUUID(), jobId: randomUUID(),
+      rawReportSha256: envelope.plaintextSha256, plaintextBytes: envelope.plaintextBytes, envelope, executionIdentity,
+      executionFingerprint: createAlexaVocNormalizationFingerprint({ marketplace: "US", asin, rawReportSha256: envelope.plaintextSha256, executionIdentity }), queuedAt: NOW,
+    }));
+    const first = await f.repository.claimNextJob({ ownerId: "normalization-first", stage: "alexa-voc-normalization", claimedAt: at(1), leaseDurationMs: 100 });
+    assert.equal(first?.id, item.id);
+    if (!expired) await f.repository.failJob({ jobId: first!.id, ownerId: "normalization-first", leaseGeneration: first!.leaseGeneration, failedAt: at(2), error: { classification: "upstream-temporary", message: "publication retry" }, retryable: true, retryAt: at(3) });
+    const successorId = randomUUID();
+    await f.repository.enqueueJob({ id: successorId, stageId: item.stageId, attemptNumber: 2, maxAttempts: 4, createdAt: at(4), availableAt: at(10000) });
+    const before = (await f.repository.listJobAttempts(item.stageId)).find(job => job.id === successorId);
+    const recovered = await f.repository.claimNextJob({ ownerId: "normalization-recovery", stage: "alexa-voc-normalization", claimedAt: at(200), leaseDurationMs: 1000 });
+    assert.ok(recovered);
+    assert.equal(recovered.attemptNumber, 3);
+    assert.equal(recovered.maxAttempts - recovered.attemptNumber, first!.maxAttempts - first!.attemptNumber - 1, "one recovery consumes exactly one remaining attempt even when another cycle occupies a number");
+    assert.equal(recovered.logicalExecutionCycleId, first!.logicalExecutionCycleId);
+    assert.equal(recovered.retryCycleStartAttempt, first!.retryCycleStartAttempt);
+    assert.deepEqual((await f.repository.listJobAttempts(item.stageId)).find(job => job.id === successorId), before, "the queued sibling is unchanged");
+    await assert.rejects(f.repository.completeJob({ jobId: first!.id, ownerId: "normalization-first", leaseGeneration: first!.leaseGeneration, completedAt: at(201) }), /lease/i);
+    await f.repository.failJob({ jobId: recovered.id, ownerId: "normalization-recovery", leaseGeneration: recovered.leaseGeneration, failedAt: at(210), error: { classification: "upstream-temporary", message: "retry still unavailable" }, retryable: true, retryAt: at(211) });
+    const finalTry = await f.repository.claimNextJob({ ownerId: "normalization-final", stage: "alexa-voc-normalization", claimedAt: at(212), leaseDurationMs: 1000 });
+    assert.ok(finalTry);
+    assert.equal(finalTry.attemptNumber, finalTry.maxAttempts);
+    await f.repository.failJob({ jobId: finalTry.id, ownerId: "normalization-final", leaseGeneration: finalTry.leaseGeneration, failedAt: at(215), error: { classification: "upstream-temporary", message: "retry exhausted" }, retryable: true, retryAt: at(216) });
+    assert.equal(await f.repository.claimNextJob({ ownerId: "normalization-extra", stage: "alexa-voc-normalization", claimedAt: at(217), leaseDurationMs: 1000 }), null);
+    const settled = await f.repository.listJobAttempts(item.stageId);
+    assert.equal(settled.length, 4, "no unbounded recovery attempts are allocated");
+    assert.equal(settled.find(job => job.id === finalTry.id)?.retryable, false);
+    assert.equal((await f.repository.claimNextJob({ ownerId: "normalization-sibling", stage: "alexa-voc-normalization", claimedAt: at(10001), leaseDurationMs: 1000 }))?.id, successorId, "independent queued work remains claimable after predecessor exhaustion");
+  });
+
   test(`${dialect}: superseded failed predecessor cannot duplicate its successor or starve a new job`, async (t) => {
     const f = await fixture(t, dialect);
     const old = await f.seed();

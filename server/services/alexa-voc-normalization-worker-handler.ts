@@ -1,4 +1,4 @@
-import type { JobAttemptRecord } from "../db/repository";
+import { JobLeaseLostError, type JobAttemptRecord } from "../db/repository";
 import {
   AlexaVocAsinMismatchError,
 } from "../domain/voc/alexa-voc-normalization-contracts";
@@ -9,6 +9,7 @@ import {
 import { SkillRuntimeError, type ModelExecutionConfig } from "../runtime/skill-runner";
 import { WorkerTaskError } from "../runtime/retry-policy";
 import type { JobHandler } from "../runtime/worker-loop";
+import { AlexaVocPublicationConflictError } from "./alexa-voc-publication-error";
 import type {
   AlexaVocNormalizationExecutionContext,
   AlexaVocNormalizationExecutionRequest,
@@ -81,6 +82,7 @@ export function createAlexaVocNormalizationJobHandler(
     }
     const processedSnapshotIds = new Set<string>();
     while (true) {
+      signal?.throwIfAborted();
       const prepared = await options.prepare(job);
       const page = prepared.snapshots.filter(
         (snapshot) => !processedSnapshotIds.has(snapshot.id),
@@ -93,7 +95,9 @@ export function createAlexaVocNormalizationJobHandler(
         if (completed) return { status: "succeeded" } as const;
         continue;
       }
+      let publicationFailure: AlexaVocPublicationConflictError | undefined;
       for (const snapshot of page) {
+        signal?.throwIfAborted();
         processedSnapshotIds.add(snapshot.id);
         try {
           if (snapshot.reconciliationBlocked) {
@@ -148,6 +152,10 @@ export function createAlexaVocNormalizationJobHandler(
             agentRunId: result.agentRunId,
           });
         } catch (error) {
+          if (error instanceof AlexaVocPublicationConflictError) {
+            publicationFailure ??= error;
+            continue;
+          }
           if (isInfrastructureFailure(error)) throw error;
           await options.onTerminal({
             job,
@@ -160,6 +168,9 @@ export function createAlexaVocNormalizationJobHandler(
           });
         }
       }
+      // Keep missing publication truthful. Retry under the existing bounded
+      // worker policy, never finalize/spin on the incomplete processed page.
+      if (publicationFailure) throw publicationFailure;
     }
   };
 }
@@ -187,14 +198,18 @@ function classifyTerminalFailure(
 }
 
 function isInfrastructureFailure(error: unknown): boolean {
+  if (error instanceof JobLeaseLostError) return true;
   if (error instanceof WorkerTaskError) {
     return (
       error.category === "infrastructure" ||
+      error.category === "configuration" ||
+      error.category === "authentication" ||
+      error.category === "cancelled" ||
       error.category === "upstream-temporary"
     );
   }
   return (
     error instanceof ManualAlexaVocRepositoryError &&
-    (error.kind === "connection" || error.kind === "timeout")
+    (error.kind === "connection" || error.kind === "timeout" || error.kind === "permission")
   );
 }

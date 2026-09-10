@@ -18,11 +18,11 @@ const HUMAN_RATING_DIMENSIONS = [
 ] as const;
 
 const EXPECTED_INPUT_DIGESTS = {
-  "scooter-complete": "13b0f157978e08bdc557bae7dbbe0c8ede362701a701df279f12ef65b0f4bde6",
-  "lighting-complete": "ec833f02c0203790020d4daa02db7a7eafbb178afc32a7224ff6aa60487d2601",
+  "scooter-complete": "6546a611a02e6f0f63b952ec888cdcccb3c96ee775a51b3104bd2ce7cce5c467",
+  "lighting-complete": "819b020bb6efad24629d8a1ebd259e14673d23a3520154e30cbbeee241c59cb2",
   "missing-voc-keyword": "4d99b9a010ae2d111877e7f26c6158a5d46cf80b595e466d05eeb2639f2dd4d9",
-  "third-party-metric-conflict": "c79170b6ddd1075758a79c511e9e694c18f9086fe53b257b8d12c39896bc2276",
-  "safety-p0": "c7538ec00ba98436c2a3d33f760409229e67880a38cd141a5d68792fa80109ca",
+  "third-party-metric-conflict": "98e9f01ed3a3ec1e714b3f6fffbf49138aab5678da16169092d389b0a18e82da",
+  "safety-p0": "808462423ec467f2f64b7db01ba71cb62b39695c79946e263c268b6cb3a7dee9",
 } as const;
 
 function isDeepFrozen(value: unknown): boolean {

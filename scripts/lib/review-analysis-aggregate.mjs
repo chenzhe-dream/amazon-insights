@@ -4,7 +4,7 @@ import { translateReviewReason } from "./review-label-zh.mjs";
 const blockLabels = {
   consumerProfile: "消费者画像",
   scenarios: "使用场景",
-  unmet: "未被满足的需求",
+  unmet: "未满足需求候选",
   positives: "好评点",
   negatives: "差评点",
   motives: "购买动机",
@@ -221,6 +221,9 @@ function aggregateBlock(reviews, key, family, limit = 5) {
       .map(([label, entry]) => ({
         label,
         sharePct: Number(((entry.count / total) * 100).toFixed(2)),
+        metricKind: "review_sample_incidence",
+        numerator: entry.count,
+        denominator: reviews.length,
         reason: translateReviewReason(label, entry.reason, family),
       }))
       .filter(row => row.sharePct >= 2 || family === "scooter")

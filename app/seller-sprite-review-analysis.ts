@@ -2,6 +2,9 @@ export type ReviewAnalysisRow = {
   label: string;
   sharePct: number;
   reason: string;
+  metricKind?: "review_sample_incidence" | "customers_say_topic_share";
+  numerator?: number;
+  denominator?: number;
 };
 
 export type ReviewAnalysisBlockKey =
@@ -48,7 +51,7 @@ type ThemeRule = {
 const blockLabels: Record<ReviewAnalysisBlockKey, string> = {
   consumerProfile: "消费者画像",
   scenarios: "使用场景",
-  unmet: "未被满足的需求",
+  unmet: "未满足需求候选",
   positives: "好评",
   negatives: "差评",
   motives: "购买动机",
@@ -161,6 +164,9 @@ function aggregateBlock(
     .map(([label, entry]) => ({
       label,
       sharePct: Number(((entry.count / total) * 100).toFixed(2)),
+      metricKind: "review_sample_incidence" as const,
+      numerator: entry.count,
+      denominator: reviews.length,
       reason: entry.reason,
     }))
     .sort((a, b) => b.sharePct - a.sharePct || a.label.localeCompare(b.label))
@@ -239,7 +245,7 @@ export const reviewAnalysisDimensions: Array<{
 }> = [
   { key: "consumerProfile", label: "消费者画像", formatHint: "【分类】+ 提及占比" },
   { key: "scenarios", label: "使用场景", formatHint: "【分类】+ 提及占比" },
-  { key: "unmet", label: "未被满足的需求", formatHint: "【分类】+ 提及占比" },
+  { key: "unmet", label: "未满足需求候选", formatHint: "基于负向证据的候选项" },
   { key: "positives", label: "好评点", formatHint: "【分类】+ 提及占比" },
   { key: "negatives", label: "差评点", formatHint: "【分类】+ 提及占比" },
   { key: "motives", label: "购买动机", formatHint: "【分类】+ 提及占比" },
@@ -249,6 +255,38 @@ export function formatReviewSharePct(sharePct: number) {
   return sharePct >= 1 ? sharePct.toFixed(1) : sharePct.toFixed(2);
 }
 
-export function formatReviewAnalysisItem(label: string, sharePct: number) {
-  return `【${label}】约 ${formatReviewSharePct(sharePct)}% 评论提及`;
+function evidenceFraction(row: ReviewAnalysisRow, unit: "条" | "次") {
+  return Number.isFinite(row.numerator) && Number.isFinite(row.denominator) && row.denominator! > 0
+    ? `（${row.numerator}/${row.denominator} ${unit}）`
+    : "";
+}
+
+function validMetricTuple(row: ReviewAnalysisRow, sampledReviews?: number) {
+  if (!Number.isInteger(row.numerator) || !Number.isInteger(row.denominator) || row.denominator! <= 0 || row.numerator! < 0 || row.numerator! > row.denominator!) return false;
+  if (row.sharePct !== Number(((row.numerator! / row.denominator!) * 100).toFixed(2))) return false;
+  return row.metricKind !== "review_sample_incidence" || sampledReviews === undefined || row.denominator === sampledReviews;
+}
+
+export function formatReviewAnalysisItem(row: ReviewAnalysisRow, sampledReviews?: number) {
+  const percentage = formatReviewSharePct(row.sharePct);
+  if (row.metricKind === "review_sample_incidence" && validMetricTuple(row, sampledReviews)) {
+    return `【${row.label}】约 ${percentage}% 评论样本提及${evidenceFraction(row, "条")}`;
+  }
+  if (row.metricKind === "customers_say_topic_share" && validMetricTuple(row, sampledReviews)) {
+    return `【${row.label}】占 Customers Say 主题提及约 ${percentage}%${evidenceFraction(row, "次")}`;
+  }
+  return `【${row.label}】${percentage}%（旧缓存未记录指标口径）`;
+}
+
+export function reviewMetricExplanation(row: ReviewAnalysisRow, sampledReviews?: number) {
+  if (!validMetricTuple(row, sampledReviews)) return "该记录的分母不可用、指标证据不完整或与评论样本数不一致，因此按未知口径展示，不推算。";
+  const denominatorAvailable = Number.isFinite(row.denominator) && row.denominator! > 0;
+  if (!denominatorAvailable) return "该记录的分母不可用，因此不推算计数或重新解释百分比。";
+  if (row.metricKind === "review_sample_incidence") {
+    return `评论样本发生率：${row.numerator}/${row.denominator} 条评论提及该主题。同一条评论可提及多个主题，各行比例可能重叠，合计不要求等于 100%。`;
+  }
+  if (row.metricKind === "customers_say_topic_share") {
+    return `Customers Say 主题提及份额：${row.numerator}/${row.denominator} 次主题提及归于该主题。同一条评论可提及多个主题，不能解读为评论占比或好评/差评率。`;
+  }
+  return "旧缓存未记录指标来源、分子或分母；保留原值展示，但不解释为评论发生率。";
 }

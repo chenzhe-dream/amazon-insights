@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
 import type { RuntimeAgentRepository } from "../db/repository";
+import { DataSnapshotConflictError } from "../db/data-snapshot-repository";
+import { AlexaVocPublicationConflictError } from "../services/alexa-voc-publication-error";
 import {
   VOC_SOURCE_REFERENCES,
   buildVocSnapshotCandidate,
@@ -346,6 +348,7 @@ async function trustedNormalizationCommitSubject(
 }
 
 function normalizationPublicationRetry(error: unknown) {
+  if (error instanceof DataSnapshotConflictError) return new AlexaVocPublicationConflictError(error);
   if (error instanceof WorkerTaskError && error.category !== "infrastructure") return error;
   return new WorkerTaskError(
     "upstream-temporary",
@@ -460,11 +463,23 @@ export async function publishCumulativeVocSnapshotAndWake(
   repository: RuntimeAgentRepository,
   input: AlexaVocCumulativePublicationInput,
 ): Promise<Readonly<{ snapshotCreated: boolean; wakeCreated: boolean }>> {
-  const revisions = await repository.manualAlexaVoc.listAtCutoff({
+  const storedRevisions = await repository.manualAlexaVoc.listAtCutoff({
     organizationId: input.actorOrganizationId,
     marketplace: "US",
     asins: input.asins,
     dataCutoffAt: input.dataCutoffAt,
+  });
+  // Store ordering is lexical; snapshot records and provenance must follow the
+  // trusted project's target order, including when only a subset is ready.
+  const byAsin = new Map(storedRevisions.map((revision) => [revision.asin, revision]));
+  if (byAsin.size !== storedRevisions.length ||
+    new Set(input.asins).size !== input.asins.length ||
+    storedRevisions.some((revision) => !input.asins.includes(revision.asin))) {
+    throw trustedSubjectError();
+  }
+  const revisions = input.asins.flatMap((asin) => {
+    const revision = byAsin.get(asin);
+    return revision ? [revision] : [];
   });
   if (revisions.length === 0) {
     throw new WorkerTaskError("infrastructure", "Committed Alexa VOC revision was not readable");

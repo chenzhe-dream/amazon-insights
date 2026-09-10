@@ -25,6 +25,7 @@ import {
   buildVocSnapshotCandidate,
 } from "../../server/data/voc-data-snapshot";
 import { repositoryVocCandidateFixture } from "./helpers/voc-positioning-fixture";
+import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 
 const createdAt = "2026-08-15T00:00:00.000Z";
 const targetAsins = ["B09V5RW2VK", "B07VY9Q95Q", "B0BPXRVWYK"];
@@ -88,6 +89,32 @@ function snapshotCandidate() {
   return repositoryVocCandidateFixture(targetAsins, createdAt);
 }
 
+function reviewMetricCandidate(kind: "legacy" | "new" | "cs-zero" | "partial" | "arithmetic" | "denominator") {
+  const candidate = snapshotCandidate();
+  const adapt = (records: typeof candidate.payload.records.sorftimeReviewAnalysis) => records.map((record) => {
+    const copy = structuredClone(record);
+    const row = copy.blocks[0]!.rows[0]! as Record<string, unknown>;
+    if (kind === "legacy") return copy;
+    if (kind === "cs-zero") {
+      copy.sampledReviews = 0;
+      Object.assign(row, { sharePct: 60, metricKind: "customers_say_topic_share", numerator: 60, denominator: 100 });
+    } else {
+      Object.assign(row, { sharePct: 25, metricKind: "review_sample_incidence", numerator: 1, denominator: 4 });
+      copy.sampledReviews = 4;
+      if (kind === "partial") delete row.denominator;
+      if (kind === "arithmetic") row.sharePct = 90;
+      if (kind === "denominator") copy.sampledReviews = 5;
+    }
+    return copy;
+  });
+  const sorftime = adapt(candidate.payload.records.sorftimeReviewAnalysis);
+  const sellerSprite = adapt(candidate.payload.records.sellerSpriteReviewAnalysis);
+  return buildVocSnapshotCandidate({ marketplace: candidate.marketplace, asins: candidate.asins, dataCutoffAt: candidate.dataCutoffAt, sourceBundles: [
+    { sourceId: "sorftime-review-analysis", type: "connector", reference: VOC_SOURCE_REFERENCES.sorftimeReviewAnalysis, marketplace: candidate.marketplace, capturedAt: candidate.sources[1]!.capturedAt, records: sorftime },
+    { sourceId: "seller-sprite-review-analysis", type: "connector", reference: VOC_SOURCE_REFERENCES.sellerSpriteReviewAnalysis, marketplace: candidate.marketplace, capturedAt: candidate.sources[2]!.capturedAt, records: sellerSprite },
+  ] });
+}
+
 function createInput(
   target: SeededTarget,
   overrides: Partial<CreateDataSnapshotForRunInput> = {},
@@ -106,6 +133,54 @@ function createInput(
     ...overrides,
   };
 }
+
+test("SQLite snapshot adapter accepts legacy, explicit and Customers Say-only rows and rejects invalid provenance", async () => {
+  for (const kind of ["legacy", "new", "cs-zero"] as const) {
+    const { directory, path } = temporaryDatabase();
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    const target = await seedTarget(repository);
+    const operation = repository.createDataSnapshotForRun(createInput(target, { candidate: reviewMetricCandidate(kind) }));
+    await operation;
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+  for (const kind of ["partial", "arithmetic", "denominator"] as const) {
+    assert.throws(() => reviewMetricCandidate(kind));
+  }
+});
+
+test("SQLite VOC trigger applies the review provenance insertion matrix", async () => {
+  for (const kind of ["legacy", "new", "cs-zero", "partial", "arithmetic", "denominator"] as const) {
+    const { directory, path } = temporaryDatabase();
+    const repository = openSqliteAgentRepository({ path, busyTimeoutMs: 5_000 });
+    const target = await seedTarget(repository);
+    repository.close();
+    const database = new DatabaseSync(path);
+    registerVocSnapshotIntegrityFunction(database);
+    database.exec("PRAGMA foreign_keys = ON");
+    const candidate = structuredClone(reviewMetricCandidate(kind === "legacy" || kind === "cs-zero" ? kind : "new"));
+    if (kind === "partial" || kind === "arithmetic" || kind === "denominator") {
+      for (const records of [candidate.payload.records.sorftimeReviewAnalysis, candidate.payload.records.sellerSpriteReviewAnalysis]) {
+        for (const record of records) {
+          const row = record.blocks[0]!.rows[0]! as Record<string, unknown>;
+          if (kind === "partial") delete row.denominator;
+          if (kind === "arithmetic") row.sharePct = 90;
+          if (kind === "denominator") record.sampledReviews = 5;
+        }
+      }
+      for (const [index, sourceId, records] of [[0, "sorftime-review-analysis", candidate.payload.records.sorftimeReviewAnalysis], [1, "seller-sprite-review-analysis", candidate.payload.records.sellerSpriteReviewAnalysis]] as const) {
+        candidate.sources[index]!.checksum = canonicalJsonSha256({ sourceId, marketplace: "US", records });
+      }
+      candidate.contentHash = canonicalJsonSha256({ schemaVersion: candidate.schemaVersion, marketplace: candidate.marketplace, asins: candidate.asins, dataCutoffAt: candidate.dataCutoffAt, sources: candidate.sources, payload: candidate.payload });
+    }
+    const values = [randomUUID(), target.runId, candidate.schemaVersion, candidate.marketplace, JSON.stringify(candidate.asins), candidate.dataCutoffAt, JSON.stringify(candidate.sources), JSON.stringify(candidate.payload), candidate.contentHash, createdAt];
+    const operation = () => database.prepare(`INSERT INTO data_snapshots (id,run_id,snapshot_kind,artifact_kind,schema_version,marketplace,asins_json,data_cutoff_at,sources_json,payload_json,content_hash,created_at) VALUES (?,?,'voc','voc',?,?,?,?,?,?,?,?)`).run(...values);
+    if (["legacy", "new", "cs-zero"].includes(kind)) operation();
+    else assert.throws(operation, /invalid VOC data snapshot/i);
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function changedCandidate() {
   const candidate = snapshotCandidate();
@@ -836,7 +911,7 @@ test("database rejects malformed new VOC rows without NULL or JSON-shape bypasse
     ["Alexa report empty prompt", { payload_json: withAlexaReport((report) => { report.prompt = ""; }) }],
     ["Alexa report invalid optional capture status", { payload_json: withAlexaReport((report) => { report.captureStatus = "ready"; }) }],
     ["review marketplace mismatch", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.marketplace = "CA"; }) }],
-    ["review sampled count positive", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.sampledReviews = 0; }) }],
+    ["review sampled count nonnegative", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.sampledReviews = -1; }) }],
     ["review mention count integer", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.mentionTopics = 1.5; }) }],
     ["review invalid repository date", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.fetchedAt = "2026-02-30"; }) }],
     ["review invalid status", { payload_json: withReviewRecord("sorftimeReviewAnalysis", (record) => { record.status = "pending"; }) }],

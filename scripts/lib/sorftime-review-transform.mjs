@@ -4,7 +4,7 @@ import { localizeReviewBlocks, localizeReviewRow, translateReviewLabel } from ".
 const blockLabels = {
   consumerProfile: "消费者画像",
   scenarios: "使用场景",
-  unmet: "未被满足的需求",
+  unmet: "未满足需求候选",
   positives: "好评点",
   negatives: "差评点",
   motives: "购买动机",
@@ -41,16 +41,20 @@ function pickRows(regexRows, csRows, family) {
   return regex.length ? regex : cs;
 }
 
-function rowsFromCustomersSay(details, filter, sortKey, family, limit = 5) {
-  const total = details.reduce((sum, item) => sum + item.mention, 0) || 1;
+function rowsFromCustomersSay(details, filter, sortKey, family, limit = 5, allowGenericFallback = true) {
+  const total = details.reduce((sum, item) => sum + (Number.isFinite(item.mention) ? item.mention : 0), 0);
+  if (total <= 0) return [];
   const matched = [...details].filter(filter);
-  const source = matched.length ? matched : family === "generic" ? [...details] : matched;
+  const source = matched.length ? matched : family === "generic" && allowGenericFallback ? [...details] : matched;
   return source
     .sort((a, b) => b[sortKey] - a[sortKey] || b.mention - a.mention)
     .slice(0, limit)
     .map(item => localizeReviewRow({
       label: humanizeKeyword(item.keyword, family),
       sharePct: mentionPct(item.mention, total),
+      metricKind: "customers_say_topic_share",
+      numerator: item.mention,
+      denominator: total,
       reason: item.content,
     }, family));
 }
@@ -99,10 +103,14 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
       rows: rowsFromCustomersSay(
         details,
         item =>
-          item.negative > item.positive ||
-          /mixed|report|issue|break|don't|doesn't|difficult|poor|fail|wobbly|dim|glare/i.test(item.content),
+          item.negative > 0 && (
+            item.negative > item.positive ||
+            /\b(?:issue|break|fail|wobbly|dim|glare)\b|don't|doesn't|difficult|poor|need(?:s|ed)?\b/i.test(item.content)
+          ),
         "negative",
-        family
+        family,
+        5,
+        false
       ),
     },
     {
@@ -110,9 +118,11 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
       label: blockLabels.positives,
       rows: rowsFromCustomersSay(
         details,
-        item => item.positive > item.negative,
+        item => item.positive > 0 && item.positive > item.negative,
         "positive",
-        family
+        family,
+        5,
+        false
       ),
     },
     {
@@ -120,9 +130,11 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
       label: blockLabels.negatives,
       rows: rowsFromCustomersSay(
         details,
-        item => item.negative >= Math.max(12, item.positive * 0.35),
+        item => item.negative > 0 && item.negative > item.positive,
         "negative",
-        family
+        family,
+        5,
+        false
       ),
     },
     {

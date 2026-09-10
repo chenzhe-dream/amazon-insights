@@ -5510,7 +5510,15 @@ export class SqliteAgentRepository
       );
 
     const nextId = randomUUID();
-    const nextAttempt = current.attemptNumber + 1;
+    // A newly appended ASIN may own the next stage ordinal already. Ordinals
+    // are stage-wide; the retry budget and execution identity remain cycle-wide.
+    const latest = current.stage === "alexa-voc-normalization"
+      ? this.#database.prepare(
+        "SELECT MAX(attempt_number) AS latest_attempt FROM job_attempts WHERE stage_id = ?",
+      ).get(current.stageId) as SqliteRow
+      : null;
+    const nextAttempt = Math.max(current.attemptNumber, Number(latest?.latest_attempt ?? 0)) + 1;
+    const nextMaxAttempts = nextAttempt + current.maxAttempts - current.attemptNumber - 1;
     const leaseExpiresAt = addMilliseconds(
       input.claimedAt,
       input.leaseDurationMs,
@@ -5530,7 +5538,7 @@ export class SqliteAgentRepository
         nextId,
         current.stageId,
         nextAttempt,
-        current.maxAttempts,
+        nextMaxAttempts,
         current.retryCycleStartAttempt,
         disposition.kind === "recover"
           ? current.logicalExecutionCycleId

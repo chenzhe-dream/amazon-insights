@@ -38,10 +38,34 @@ export const ReviewAnalysisBlockKeySchema = z.enum([
   "motives",
 ]);
 
+const ReviewAnalysisSnapshotRowSchema = z.strictObject({
+  label: NonEmptyTextSchema,
+  sharePct: z.number().min(0).max(100),
+  reason: z.string(),
+  metricKind: z.enum(["review_sample_incidence", "customers_say_topic_share"]).optional(),
+  numerator: z.number().int().nonnegative().optional(),
+  denominator: z.number().int().positive().optional(),
+}).superRefine((row, context) => {
+  const present = [row.metricKind, row.numerator, row.denominator].filter(value => value !== undefined).length;
+  if (present !== 0 && present !== 3) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Review metric provenance must be complete" });
+  }
+  if (row.numerator !== undefined && row.denominator !== undefined && row.numerator > row.denominator) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Review metric numerator exceeds denominator" });
+  }
+  if (
+    row.numerator !== undefined &&
+    row.denominator !== undefined &&
+    row.sharePct !== Number(((row.numerator / row.denominator) * 100).toFixed(2))
+  ) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Review metric percentage does not match its evidence" });
+  }
+});
+
 export const ReviewAnalysisSnapshotRecordSchema = z.strictObject({
   asin: AsinSchema,
   marketplace: MarketplaceSchema,
-  sampledReviews: z.number().int().positive(),
+  sampledReviews: z.number().int().nonnegative(),
   mentionTopics: z.number().int().nonnegative().optional(),
   fetchedAt: RepositoryDateOnlySchema,
   status: z.literal("ready"),
@@ -52,14 +76,18 @@ export const ReviewAnalysisSnapshotRecordSchema = z.strictObject({
       key: ReviewAnalysisBlockKeySchema,
       label: NonEmptyTextSchema,
       rows: z.array(
-        z.strictObject({
-          label: NonEmptyTextSchema,
-          sharePct: z.number().min(0).max(100),
-          reason: z.string(),
-        }),
+        ReviewAnalysisSnapshotRowSchema,
       ),
     }),
   ),
+}).superRefine((record, context) => {
+  for (const [blockIndex, block] of record.blocks.entries()) {
+    for (const [rowIndex, row] of block.rows.entries()) {
+      if (row.metricKind === "review_sample_incidence" && row.denominator !== record.sampledReviews) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["blocks", blockIndex, "rows", rowIndex, "denominator"], message: "Review incidence denominator must equal sampledReviews" });
+      }
+    }
+  }
 });
 
 const PayloadAsinListSchema = z

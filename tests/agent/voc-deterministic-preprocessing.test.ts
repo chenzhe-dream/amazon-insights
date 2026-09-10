@@ -53,7 +53,7 @@ function alexaRecord(
 }
 
 function reviewRecord(
-  rows: readonly Readonly<{ label: string; sharePct: number }>[],
+  rows: readonly Readonly<{ label: string; sharePct: number; metricKind?: "review_sample_incidence" | "customers_say_topic_share"; numerator?: number; denominator?: number }>[],
   sampledReviews = 100,
   options: Readonly<{
     asin?: string;
@@ -82,6 +82,10 @@ function reviewRecord(
       },
     ],
   };
+}
+
+function reviewIncidence(label: string, numerator: number, denominator = 100) {
+  return { label, sharePct: Number(((numerator / denominator) * 100).toFixed(2)), metricKind: "review_sample_incidence" as const, numerator, denominator };
 }
 
 function sourceBundles(args: Readonly<{
@@ -256,8 +260,8 @@ test("real scooter snapshot produces strict source-scoped facts and resolvable e
         metric.mentionPct,
       ]),
     [
-      ["sorftime-review-analysis", null, 100, 12.1],
-      ["seller-sprite-review-analysis", null, 99, 13.13],
+      ["sorftime-review-analysis", null, 100, null],
+      ["seller-sprite-review-analysis", null, 99, null],
     ],
   );
   const evidenceIds = new Set(result.evidenceIndex.map((evidence) => evidence.id));
@@ -338,8 +342,8 @@ test("partial three-source conflicts remain independent and do not create an agg
   const snapshot = syntheticSnapshot(
     sourceBundles({
       alexa: alexaRecord(["【普通问题】约 2% 评论提及（2 条）"]),
-      sorftime: reviewRecord([{ label: "普通问题", sharePct: 6 }]),
-      sellerSprite: reviewRecord([{ label: "普通问题", sharePct: 11 }]),
+      sorftime: reviewRecord([reviewIncidence("普通问题", 6)]),
+      sellerSprite: reviewRecord([reviewIncidence("普通问题", 11)]),
     }),
   );
   const result = preprocessVocSnapshot(snapshot);
@@ -367,9 +371,9 @@ test("synonyms merge deterministically while identical evidence rows deduplicate
   const snapshot = syntheticSnapshot(
     sourceBundles({
       sorftime: reviewRecord([
-        { label: "  Durability  ", sharePct: 10 },
-        { label: "耐用性", sharePct: 10 },
-        { label: "  Durability  ", sharePct: 10 },
+        reviewIncidence("  Durability  ", 10),
+        reviewIncidence("耐用性", 10),
+        reviewIncidence("  Durability  ", 10),
       ]),
     }),
   );
@@ -519,7 +523,7 @@ test("source presence cannot recanonicalize another source family", () => {
   );
 
   const scooterSorftime = reviewRecord(
-    [{ label: "LED lighting issue", sharePct: 6 }],
+    [reviewIncidence("LED lighting issue", 6)],
     100,
     { family: "scooter" },
   );
@@ -631,7 +635,7 @@ test("review metrics preserve canonical per-record capture time", () => {
 test("whitelist facts digest separates semantic facts from snapshot provenance", () => {
   const baseAlexa = alexaRecord(["【普通问题】约 5% 评论提及"]);
   const baseReview = reviewRecord(
-    [{ label: "LED lighting issue", sharePct: 6 }],
+    [reviewIncidence("LED lighting issue", 6)],
     100,
     {
       family: "generic",
@@ -656,7 +660,7 @@ test("whitelist facts digest separates semantic facts from snapshot provenance",
         },
       },
       sorftime: reviewRecord(
-        [{ label: "LED lighting issue", sharePct: 6 }],
+        [reviewIncidence("LED lighting issue", 6)],
         100,
         {
           family: "generic",
@@ -706,20 +710,20 @@ test("whitelist facts digest separates semantic facts from snapshot provenance",
     syntheticSnapshot(
       sourceBundles({
         alexa: baseAlexa,
-        sorftime: reviewRecord([{ label: "changed label", sharePct: 6 }]),
+        sorftime: reviewRecord([reviewIncidence("changed label", 6)]),
       }),
     ),
     syntheticSnapshot(
       sourceBundles({
         alexa: baseAlexa,
-        sorftime: reviewRecord([{ label: "LED lighting issue", sharePct: 9 }]),
+        sorftime: reviewRecord([reviewIncidence("LED lighting issue", 9)]),
       }),
     ),
     syntheticSnapshot(
       sourceBundles({
         alexa: baseAlexa,
         sorftime: reviewRecord(
-          [{ label: "LED lighting issue", sharePct: 6 }],
+          [reviewIncidence("LED lighting issue", 6)],
           100,
           { fetchedAt: "2026-08-09" },
         ),
@@ -729,7 +733,7 @@ test("whitelist facts digest separates semantic facts from snapshot provenance",
       sourceBundles({
         alexa: baseAlexa,
         sorftime: reviewRecord(
-          [{ label: "LED lighting issue", sharePct: 6 }],
+          [reviewIncidence("LED lighting issue", 6)],
           100,
           { family: "scooter" },
         ),
@@ -739,7 +743,7 @@ test("whitelist facts digest separates semantic facts from snapshot provenance",
       sourceBundles({
         alexa: baseAlexa,
         sorftime: reviewRecord(
-          [{ label: "LED lighting issue", sharePct: 6 }],
+          [reviewIncidence("LED lighting issue", 6)],
           100,
           { blockKey: "positives" },
         ),
