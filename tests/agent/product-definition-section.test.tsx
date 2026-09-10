@@ -3,7 +3,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ProductDefinitionSection } from "../../app/product-definition-section";
+import { ProductDefinitionSection } from "../../app/features/product-reports/product-definition-section";
 import { PRODUCT_DEFINITION_DATA_BOUNDARY } from "../../shared/product-definition-output";
 
 const products = [{ asin: "B000000001", brand: "Local Brand", title: "LOCAL_SYNTHESIS_MARKER" }];

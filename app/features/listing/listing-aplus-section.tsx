@@ -1,10 +1,10 @@
 "use client";
 
-import { amazonMediaSrc } from "./lib/amazon-image";
+import { amazonMediaSrc } from "../../lib/amazon-image";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
-} from "./sorftime-listing-content-data";
+} from "../../sorftime-listing-content-data";
 
 type ProductRef = {
   asin: string;

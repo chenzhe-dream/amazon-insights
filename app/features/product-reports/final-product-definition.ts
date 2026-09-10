@@ -3,9 +3,9 @@
  * 对齐 Skill：define-amazon-product-from-voc-keywords
  */
 
-import type { KeywordLaunchConclusions } from "./features/keywords/keyword-demand-conclusions";
-import { formatSeasonMonthLabel } from "./features/keywords/keyword-demand-conclusions";
-import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "./features/voc/voc-positioning";
+import type { KeywordLaunchConclusions } from "../keywords/keyword-demand-conclusions";
+import { formatSeasonMonthLabel } from "../keywords/keyword-demand-conclusions";
+import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "../voc/voc-positioning";
 
 export type FinalProductRole =
   | "核心基础"

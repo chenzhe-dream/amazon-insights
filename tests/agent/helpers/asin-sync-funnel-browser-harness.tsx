@@ -11,7 +11,7 @@ import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../../app/fea
 import { CategoryNodeTrendSection } from "../../../app/category-node-trend-section";
 import { KeywordFetchStatusSection } from "../../../app/features/keywords/keyword-fetch-status";
 import { KeywordDemandSection } from "../../../app/features/keywords/keyword-demand-section";
-import { ListingAplusSection } from "../../../app/listing-aplus-section";
+import { ListingAplusSection } from "../../../app/features/listing/listing-aplus-section";
 import { TrafficFetchStatusSection } from "../../../app/features/traffic/traffic-fetch-status";
 import { TrafficAnalysisConclusionSection } from "../../../app/page";
 import { sifKeywordAnalysisData } from "../../../app/sif-keyword-analysis-data";

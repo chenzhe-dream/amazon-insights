@@ -1,24 +1,24 @@
-import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
+import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "../../sorftime-sales-trend-data";
 import {
   buildVocDevelopmentSummary,
   hasVocDevelopmentData,
   type VocDevelopmentDimensionSummary,
   type VocThemeAggregate,
-} from "./features/voc/voc-development-summary";
-import { canonicalTheme } from "./features/voc/voc-theme-merge";
+} from "../voc/voc-development-summary";
+import { canonicalTheme } from "../voc/voc-theme-merge";
 import {
   legacyNegativePriorityDisplay,
   legacyPositivePriorityDisplay,
-} from "../server/domain/voc/priority-rules";
+} from "../../../server/domain/voc/priority-rules";
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
-import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./features/voc/voc-positioning";
-import { familyFromProducts, type ProductFamily } from "./lib/product-family";
-import type { KeywordDemandAnalysis } from "./features/keywords/keyword-demand-analysis";
+import { buildVocPositioningConclusion, type VocPositioningConclusion } from "../voc/voc-positioning";
+import { familyFromProducts, type ProductFamily } from "../../lib/product-family";
+import type { KeywordDemandAnalysis } from "../keywords/keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
   type KeywordLaunchConclusions,
-} from "./features/keywords/keyword-demand-conclusions";
-import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
+} from "../keywords/keyword-demand-conclusions";
+import type { ManualAlexaVocNormalizedRecord } from "../../../shared/agent-contracts";
 
 export type LaunchProductInput = {
   asin: string;

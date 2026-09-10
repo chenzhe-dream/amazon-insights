@@ -1,9 +1,9 @@
 "use client";
 
-import type { ProductDefinitionOutput } from "../shared/product-definition-output";
-import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
+import type { ProductDefinitionOutput } from "../../../shared/product-definition-output";
+import { ProductDefinitionOutputSchema } from "../../../shared/product-definition-output";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
-import { LaunchSection, LaunchTable } from "./launch-section";
+import { LaunchSection, LaunchTable } from "../../components/launch-section";
 
 type DefinitionProduct = {
   asin: string;

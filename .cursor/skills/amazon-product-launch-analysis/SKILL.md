@@ -28,11 +28,11 @@ Cache-first policy: sync scripts use local cache unless `FORCE_REFRESH=1` or `--
 |------|------|
 | `app/features/voc/voc-development-summary.ts` | Seven-dimension theme aggregation + normalization |
 | `app/features/voc/voc-theme-merge.ts` | Semantic theme dedup across dimensions |
-| `app/product-launch-analysis.ts` | **Analysis engine** — conclusions, cross-analysis, scoring |
-| `app/product-launch-recommendation.tsx` | **UI** for `?tab=launch` |
-| `app/product-definition-section.tsx` | **UI** for `?tab=definition` |
-| `app/launch-section.tsx` | Shared section/table layout |
-| `app/launch-checklist.ts` | **立项前确认清单** — 通用 + 五大品类专项 + VOC 动态项 |
+| `app/features/product-reports/product-launch-analysis.ts` | **Analysis engine** — conclusions, cross-analysis, scoring |
+| `app/features/product-reports/product-launch-recommendation.tsx` | **UI** for `?tab=launch` |
+| `app/features/product-reports/product-definition-section.tsx` | **UI** for `?tab=definition` |
+| `app/components/launch-section.tsx` | Shared section/table layout |
+| `app/features/product-reports/launch-checklist.ts` | **立项前确认清单** — 通用 + 五大品类专项 + VOC 动态项 |
 | `app/page.tsx` | Tab nav: 立项决策 · 新产品定义 |
 
 ## Analysis workflow
@@ -159,7 +159,7 @@ Modules: `launch-checklist.ts`, `launch-checklist-template.ts`, `launch-checklis
 ## Extending for new categories
 
 1. Add merge rules in `server/domain/voc/theme-normalization.ts` for category-specific theme aliases (`app/features/voc/voc-theme-merge.ts` re-exports them)
-2. Add/adjust opportunity templates in `app/product-launch-analysis.ts` `buildOpportunities()`
+2. Add/adjust opportunity templates in `app/features/product-reports/product-launch-analysis.ts` `buildOpportunities()`
 3. Optionally tune supply-chain rows in `buildSupplyRows()` for category BOM realities
 4. Re-sync VOC + Sorftime data for new ASINs
 5. `npm run build` — verify `/?tab=launch`

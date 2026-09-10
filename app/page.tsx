@@ -49,14 +49,14 @@ import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales
 import { resolveOverviewPrice, resolveOverviewRank } from "./lib/competitor-overview-fallback";
 import { sorftimeRatingData } from "./sorftime-rating-data";
 import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
-import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
+import { ProductLaunchRecommendationSection } from "./features/product-reports/product-launch-recommendation";
 import { VocPositioningSection } from "./features/voc/voc-positioning-section";
 import { VocEvidenceDefinition } from "./features/voc/voc-evidence-definition";
-import { LaunchChecklistSection } from "./launch-checklist-section";
-import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
+import { LaunchChecklistSection } from "./features/product-reports/launch-checklist-section";
+import type { ProductLaunchRuntimeSources } from "./features/product-reports/product-launch-analysis";
 import { KeywordDemandSection } from "./features/keywords/keyword-demand-section";
 import { buildKeywordDemandAnalysis } from "./features/keywords/keyword-demand-analysis";
-import { SegmentStackBar } from "./segment-stack-bar";
+import { SegmentStackBar } from "./components/segment-stack-bar";
 import { AlexaVocImportPanel } from "./features/voc/alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./features/voc/use-manual-alexa-voc";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./features/sync/asin-sync-funnel";
@@ -69,7 +69,7 @@ import { TrafficFetchStatusSection } from "./features/traffic/traffic-fetch-stat
 import { TrafficDetailRecoveryControl } from './features/traffic/traffic-detail-recovery';
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
-import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
+import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./features/listing/listing-images-section";
 import { listingImageRemarks } from "./listing-image-remarks";
 import { ProjectLibraryPage, type AnalysisProject } from "./features/projects/project-library-panel";
 import { useAnalysisProjectFavorites } from "./features/projects/use-analysis-project-favorites";

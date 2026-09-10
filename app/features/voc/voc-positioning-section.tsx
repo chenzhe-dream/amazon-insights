@@ -5,9 +5,9 @@ import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
   type ProductLaunchRuntimeSources,
-} from "../../product-launch-analysis";
-import { LaunchSection, LaunchTable } from "../../launch-section";
-import { ActionStepsCell } from "../../action-steps-cell";
+} from "../product-reports/product-launch-analysis";
+import { LaunchSection, LaunchTable } from "../../components/launch-section";
+import { ActionStepsCell } from "../../components/action-steps-cell";
 
 type PositioningProduct = {
   asin: string;

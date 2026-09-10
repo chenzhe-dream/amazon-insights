@@ -21,10 +21,10 @@ description: >-
 | Asset | Role |
 |-------|------|
 | `产品立项前确认清单 (1).md` | Business template V1.0（十个大章） |
-| `app/launch-checklist-template.ts` | 否决项、评分维度、七大品类合规矩阵 |
-| `app/launch-checklist.ts` | **Engine** — vertical inference + research context + section builder |
-| `app/launch-checklist-section.tsx` | **UI** for `/?tab=checklist` |
-| `app/product-launch-analysis.ts` | Feeds VOC/market into checklist via `buildLaunchChecklist()` |
+| `app/features/product-reports/launch-checklist-template.ts` | 否决项、评分维度、七大品类合规矩阵 |
+| `app/features/product-reports/launch-checklist.ts` | **Engine** — vertical inference + research context + section builder |
+| `app/features/product-reports/launch-checklist-section.tsx` | **UI** for `/?tab=checklist` |
+| `app/features/product-reports/product-launch-analysis.ts` | Feeds VOC/market into checklist via `buildLaunchChecklist()` |
 
 Do **not** duplicate checklist prose in UI components. All sections flow from `buildLaunchChecklist()`.
 

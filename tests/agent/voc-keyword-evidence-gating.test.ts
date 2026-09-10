@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hasProductLaunchAnalysis } from "../../app/product-launch-analysis";
+import { hasProductLaunchAnalysis } from "../../app/features/product-reports/product-launch-analysis";
 import { hasVocDevelopmentData } from "../../app/features/voc/voc-development-summary";
 import { hasLegacyVocDevelopmentData } from "../../server/domain/voc/legacy-summary";
 const products = [{ asin: "B08L7DD8L9", brand: "Dimunt" }];

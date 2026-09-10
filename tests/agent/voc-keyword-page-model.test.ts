@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildFinalProductDefinition } from "../../app/final-product-definition";
+import { buildFinalProductDefinition } from "../../app/features/product-reports/final-product-definition";
 import {
   buildKeywordDemandAnalysis,
   type KeywordDemandSources,
@@ -9,7 +9,7 @@ import {
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
-} from "../../app/product-launch-analysis";
+} from "../../app/features/product-reports/product-launch-analysis";
 import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 
 const asin = "B0UNIT1001";

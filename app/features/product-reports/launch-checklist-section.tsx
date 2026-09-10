@@ -6,7 +6,7 @@ import {
   formatUsd,
   parseMoneyInput,
   resolveReferralFeeFromProducts,
-} from "./amazon-us-referral-fees";
+} from "../../amazon-us-referral-fees";
 import { downloadBlobFile, exportChecklistDocx } from "./launch-checklist-export";
 import {
   checklistSourceLabels,

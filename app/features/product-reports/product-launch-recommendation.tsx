@@ -8,7 +8,7 @@ import {
   type LaunchVerdict,
   type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
-import { LaunchSection, LaunchTable } from "./launch-section";
+import { LaunchSection, LaunchTable } from "../../components/launch-section";
 
 type LaunchProduct = {
   asin: string;

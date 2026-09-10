@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
-import { amazonMediaSrc } from "./lib/amazon-image";
+import { getListingImageRemark, listingImageRemarksMeta } from "../../listing-image-remarks";
+import { amazonMediaSrc } from "../../lib/amazon-image";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
   type SorftimeListingContentRecord,
-} from "./sorftime-listing-content-data";
+} from "../../sorftime-listing-content-data";
 
 type ProductRef = {
   asin: string;

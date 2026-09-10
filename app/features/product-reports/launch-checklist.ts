@@ -3,7 +3,7 @@ import {
   parseMoneyInput,
   resolveReferralFeeFromProducts,
   type ResolvedReferralFee,
-} from "./amazon-us-referral-fees";
+} from "../../amazon-us-referral-fees";
 import {
   approvalRoles,
   companyLaunchMarginThresholdPct,

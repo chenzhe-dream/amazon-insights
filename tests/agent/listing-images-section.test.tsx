@@ -8,7 +8,7 @@ import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer as createViteServer } from "vite";
 
-import { ListingImagesSection } from "../../app/listing-images-section";
+import { ListingImagesSection } from "../../app/features/listing/listing-images-section";
 import { amazonMediaSrc } from "../../app/lib/amazon-image";
 import type { SorftimeListingContentRecord } from "../../app/sorftime-listing-content-data";
 
@@ -98,7 +98,7 @@ function browserFixtureEntry() {
   return `
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { ListingImagesSection } from "/app/listing-images-section.tsx";
+import { ListingImagesSection } from "/app/features/listing/listing-images-section.tsx";
 
 const product = ${JSON.stringify({ asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage })};
 const listing = ${JSON.stringify(listing)};

@@ -8,7 +8,7 @@ import type {
   NegativePriorityRow,
   PositivePriorityRow,
   UnmetOpportunityRow,
-} from "../../product-launch-analysis";
+} from "../product-reports/product-launch-analysis";
 import {
   classifyVocPriority,
   priorityRank,

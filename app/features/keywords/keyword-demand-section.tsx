@@ -15,9 +15,9 @@ import {
   keywordMeaningTaxonomy,
   type KeywordCategory,
 } from "./keyword-classifier";
-import { LaunchSection, LaunchTable } from "../../launch-section";
+import { LaunchSection, LaunchTable } from "../../components/launch-section";
 import { sifKeywordAnalysisMeta } from "../../sif-keyword-analysis-data";
-import { SegmentStackBar, segmentStackColors } from "../../segment-stack-bar";
+import { SegmentStackBar, segmentStackColors } from "../../components/segment-stack-bar";
 import { buildKeywordLaunchConclusions, type KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { sifKeywordFieldTitle } from "./sif-keyword-field-glossary";
 import { amazonMediaSrc } from "../../lib/amazon-image";
