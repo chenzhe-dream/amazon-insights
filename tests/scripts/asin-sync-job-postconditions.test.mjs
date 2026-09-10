@@ -475,3 +475,44 @@ function fixtureCatalogProviders({ calls, catalog, seller, fallback }) {
     },
   };
 }
+
+test("sequential traffic completion retains earlier ready data and earlier error reasons", () => {
+  const asins = ["B09NNDX731", "B0BHHP21DP", "B0CZRBL776"];
+  const job = {
+    jobId: "fixture-traffic", asins,
+    stages: [{ id: "traffic", status: "running" }],
+    asinProgress: Object.fromEntries(asins.map(asin => [asin, { traffic: { status: "pending" } }])),
+    outputs: [], diagnostics: [],
+  };
+  const failure = { asin: asins[1], stage: "traffic", connector: "sif", failureKind: "schema", causeCode: "MCP_SCHEMA" };
+  for (const current of asins) {
+    if (current === asins[1]) job.diagnostics.push(failure);
+    applyPersistedStagePostcondition(job.jobId, "traffic", [current], {
+      commandSucceeded: current !== asins[1],
+      resultStatusesByAsin: current === asins[1] ? { [current]: "connector-failed" } : {},
+      diagnostics: current === asins[1] ? [failure] : [],
+      readJob: () => job,
+      readReadiness: () => ({
+        items: [{ ...base, asin: current, traffic: current === asins[0] ? "ready" : "missing" }],
+        missingAsins: current === asins[0] ? [] : [current],
+      }),
+      markModule: (_id, asin, stage, patch) => { job.asinProgress[asin][stage] = patch; },
+      commitStage: (_id, { stageId, stagePatch, output }) => {
+        job.stages = [{ id: stageId, ...stagePatch }];
+        job.outputs = [output];
+      },
+      projectOutput: (stage, candidates, options) => projectStageOutput(stage, candidates, {
+        ...options,
+        readExport: (_file, name) => name === "sifListingTrafficRawByAsin"
+          ? { [asins[0]]: { overview: { total: { score: 7 }, nf: { score: 5 }, ad: { score: 2 } } } }
+          : {},
+      }),
+    });
+  }
+  assert.deepEqual(job.outputs[0].gap.items, [
+    { asin: asins[1], causeCode: "MCP_SCHEMA" },
+    { asin: asins[2], causeCode: "UPSTREAM_EMPTY" },
+  ].sort((a, b) => a.asin.localeCompare(b.asin)));
+  assert.equal(job.asinProgress[asins[0]].traffic.status, "ready");
+  assert.deepEqual(job.outputs[0].data.listingByAsin, { [asins[0]]: { total: 7, natural: 5, advertising: 2 } });
+});

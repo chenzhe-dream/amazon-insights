@@ -450,15 +450,35 @@ export function applyPersistedStagePostcondition(
     isProjectableSyncStage(stageId) &&
     ["done", "partial", "failed"].includes(status)
   ) {
-    const projectionAsins = readJob(jobId)?.asins ?? asins;
+    const currentJob = readJob(jobId);
+    const projectionAsins = currentJob?.asins ?? asins;
+    const processedAsins = new Set(asins);
+    const projectionReadyAsins = [...new Set([
+      ...readyAsins,
+      ...projectionAsins.filter(asin => !processedAsins.has(asin) &&
+        currentJob?.asinProgress?.[asin]?.[stageId]?.status === "ready"),
+    ])];
+    // Per-ASIN stages publish repeatedly. Preserve sibling results and their
+    // bounded failure evidence, but discard old gaps for the refreshed cohort.
+    const previousOutput = currentJob?.outputs?.find(output => output.stage === stageId);
+    const projectionGapItems = [
+      ...gapItems,
+      ...boundedDiagnosticGapItems(
+        (currentJob?.diagnostics ?? []).filter(item => item.stage === stageId && !processedAsins.has(item.asin)),
+        projectionAsins,
+        projectionReadyAsins,
+      ),
+      ...(previousOutput?.gap?.items ?? []).filter(item =>
+        projectionAsins.includes(item.asin) && !processedAsins.has(item.asin)),
+    ];
     commitStage(jobId, {
       stageId,
       stagePatch,
       output: projectOutput(stageId, projectionAsins, {
         stageStatus: status,
-        gapReasonCode: gapReasonCode ?? gapItems[0]?.causeCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
-        gapItems,
-        dataAsins: status === "partial" ? readyAsins : projectionAsins,
+        gapReasonCode: gapReasonCode ?? projectionGapItems.find(item => item.causeCode !== "UPSTREAM_EMPTY")?.causeCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
+        gapItems: projectionGapItems,
+        dataAsins: status === "partial" ? projectionReadyAsins : projectionAsins,
         updatedAt: completedAt,
       }),
     });
