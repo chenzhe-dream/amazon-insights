@@ -55,6 +55,13 @@ function sanitizeRow(row) {
 }
 
 export function adaptSifKeywordResponse(payload, requestedAsin, requestedMarketplace) {
+  // Observed no-record envelope. Keep the allowlist exact so an error or a
+  // conflicting data container cannot silently become an empty keyword set.
+  if (isRecord(payload) && payload.message === "no data returned for this asin/period" &&
+    Object.keys(payload).every(key => ["message", "data_notice"].includes(key)) &&
+    isOptionalString(payload.data_notice)) {
+    return { kind: "valid", topKeywords: [], summary: null, dataNotice: payload.data_notice ?? null };
+  }
   if (!isRecord(payload) || !hasOwn(payload, "top_keywords") || !Array.isArray(payload.top_keywords)) {
     return invalidResult();
   }

@@ -46,6 +46,9 @@ function mergeByMonth(volume, avgPrice) {
 async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
   const detail = await callTool(key, "product_detail", { asin, amz_site: marketplace });
   const data = detail?.data ?? detail;
+  // A matching product with the observed empty node field has no category
+  // trend to request. Missing/malformed envelopes still fail schema checks.
+  if (data?.asin === asin && data.node_id === "") return null;
   const nodeId = data?.node_id != null ? String(data.node_id) : null;
   if (!nodeId) {
     throw Object.assign(new Error("category node unavailable"), {
@@ -104,7 +107,7 @@ export async function runSorftimeCategoryCli(options = {}) {
   const currentFailureKeys = catalog
     .filter(product => !plannedAsins.has(product.asin))
     .map(product => `asin-error:${product.asin}`)
-    .filter(key => records[key]?.status === "error");
+    .filter(key => ["error", "empty"].includes(records[key]?.status));
   const keepIds = new Set([...nodePlan.keys(), ...currentFailureKeys]);
   if (!asinFilter && keepIds.size) {
     for (const nodeId of Object.keys(records)) {
@@ -214,6 +217,14 @@ export async function collectSorftimeCategoryRecords({
     try {
       if (!key) throw new Error("Sorftime key unavailable");
       const resolved = await resolveNodeFromAsin(invokeTool, key, product.asin, marketplace);
+      if (resolved === null) {
+        records[`asin-error:${product.asin}`] = {
+          ...categoryFailureRecord({ asin: product.asin, marketplace, fetchedAt, reason: "UPSTREAM_EMPTY" }),
+          status: "empty",
+        };
+        console.log("empty · UPSTREAM_EMPTY");
+        continue;
+      }
       const current = nodePlan.get(resolved.nodeId) ?? { ...resolved, asins: [] };
       current.asins.push(product.asin);
       if (!current.categoryName && resolved.categoryName) current.categoryName = resolved.categoryName;
