@@ -62,6 +62,34 @@ test("each parent is checkpointed before the next parent request can fail", asyn
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("repair optional failures preserve existing variant details and original provenance", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "variant-repair-"));
+  const outputPath = path.join(root, "data.ts");
+  const oldMode = process.env.AGENT_SYNC_REPAIR_INCOMPLETE;
+  const oldExit = process.exitCode;
+  const row = { asin: "B000000002", image: "https://example.test/old.jpg", launch: "2020-01", reviewShare: null, reviewSamples: 0, childSales: 3, salesMonth: "2026-08" };
+  const outcome = { state: "partial", fetchedAt: "2026-08-01" };
+  try {
+    process.env.AGENT_SYNC_REPAIR_INCOMPLETE = "1";
+    for (const emptyResponse of [false, true, "empty-variations"]) {
+    await writeFile(outputPath, `export const sorftimeVariantMeta = ${JSON.stringify({ outcomes: { B000000001: outcome } })};\nexport const sorftimeVariantData = ${JSON.stringify({ B000000001: [row] })};`);
+    await variant.syncSorftimeVariants({ outputPath, asins: ["B000000001"], key: "fixture", callTool: async (_key, name, args) => {
+      if (name === "product_variations") return emptyResponse === "empty-variations" ? [] : [{ Asin: "B000000002", SalesAmount: 12 }];
+      if (name === "product_reviews") { if (emptyResponse) return []; throw new Error("optional unavailable"); }
+      if (args.asin === "B000000001") return { parent_asin: "B000000001" };
+      if (emptyResponse) return {};
+      throw new Error("optional detail unavailable");
+    } });
+    assert.deepEqual(readCachedDataExport(outputPath, "sorftimeVariantData").B000000001, [row]);
+    assert.equal(readCachedDataExport(outputPath, "sorftimeVariantMeta").outcomes.B000000001.fetchedAt, outcome.fetchedAt);
+    }
+  } finally {
+    if (oldMode === undefined) delete process.env.AGENT_SYNC_REPAIR_INCOMPLETE; else process.env.AGENT_SYNC_REPAIR_INCOMPLETE = oldMode;
+    process.exitCode = oldExit;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("cached and unrelated runs preserve durable partial outcomes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "variant-outcomes-"));
   const outputPath = path.join(root, "data.ts");

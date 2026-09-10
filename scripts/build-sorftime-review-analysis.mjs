@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, hasCompleteReviewRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
@@ -39,8 +40,7 @@ export function shouldReuseSorftimeReviewRecord({ record, ratingRecord, catalog,
     !shouldUseCachedRecord(record, { forceRefresh })) {
     return false;
   }
-  const isReadyEmpty = record.sampledReviews === 0 && Array.isArray(record.blocks) && record.blocks.length === 0;
-  return !isReadyEmpty || hasVerifiedEmptyReviewEvidence(ratingRecord, catalog, asin, marketplace);
+  return hasCompleteReviewRecord(record, hasVerifiedEmptyReviewEvidence(ratingRecord, catalog, asin, marketplace));
 }
 
 async function main() {
@@ -52,7 +52,7 @@ async function main() {
   const ratings = readCachedDataExport(ratingPath, "sorftimeRatingData");
   const catalog = ensureCatalogProductFamilies();
   const catalogByAsin = Object.fromEntries(catalog.map(item => [item.asin, item]));
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
   const force = isForceRefresh();
 
   if (force) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");

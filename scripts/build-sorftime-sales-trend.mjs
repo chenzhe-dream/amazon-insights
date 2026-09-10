@@ -1,3 +1,4 @@
+import { reportIncompleteRepair, createRepairSafeRecordMap, isRepairIncomplete, hasUsableTrendRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -18,15 +19,7 @@ function readCatalogAsins() {
   return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => match[1]);
 }
 
-function hasFullTrend(record) {
-  return (
-    record?.status === "ready" &&
-    Array.isArray(record.volume) &&
-    Array.isArray(record.amount) &&
-    Array.isArray(record.price) &&
-    Array.isArray(record.rank)
-  );
-}
+function hasFullTrend(record) { return hasUsableTrendRecord(record); }
 
 async function main() {
   const key = readSorftimeKey();
@@ -34,7 +27,7 @@ async function main() {
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeSalesTrendData");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
 
   if (!key && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -52,6 +45,27 @@ async function main() {
 
     if (!key) {
       console.log(`[skip] ${asin} · 无 MCP key，保留已有缓存或跳过`);
+      continue;
+    }
+
+    if (isRepairIncomplete()) {
+      const next = {...existing[asin], asin, marketplace, fetchedAt: existing[asin]?.fetchedAt ?? fetchedAt};
+      let failed = false;
+      for (const [field, trendType] of Object.entries({volume:"SalesVolume",amount:"SalesAmount",price:"Price",rank:"Rank"})) {
+        if (hasUsableTrendRecord({status:"ready", [field]: next[field]})) continue;
+        try {
+          const raw = await callSorftimeTool(key, "product_trend", {asin, amz_site:marketplace, product_trend_type:trendType});
+          const points = parseSorftimeTrend(raw);
+          if (!hasUsableTrendRecord({status:"ready", [field]:points})) throw new Error(`${field}: empty provider response`);
+          next[field] = points;
+        } catch (error) {
+          failed = true;
+          next[field] ??= [];
+          console.error(`[repair-incomplete] ${asin} ${field}: ${error instanceof Error ? error.message : String(error)}`);
+          reportIncompleteRepair(asin);
+        }
+      }
+      records[asin] = {...next, status:failed ? "error" : "ready", ...(failed ? {statusMessage:"Trend repair incomplete; retained available cached portions"} : {})};
       continue;
     }
 

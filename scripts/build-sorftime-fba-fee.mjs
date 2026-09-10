@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -33,7 +34,7 @@ async function main() {
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeFbaFeeData");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
   const forceRefresh = isForceRefresh();
 
   if (!sorftimeKey && !jobId && requiresSorftimeFbaCredential(asins, existing, { forceRefresh })) {
@@ -54,7 +55,7 @@ async function main() {
       evidenceByOperation,
       expectedScope: { jobId, marketplace, asin },
     });
-    if (!jobId && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
+    if ((!jobId || isRepairIncomplete()) && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
       logCacheHit(asin, existing[asin]);
       records[asin] = existing[asin];
       continue;
@@ -81,7 +82,7 @@ async function main() {
       if (result) {
         records[asin] = result;
         console.log("connection error · same-job Sorftime evidence");
-      } else if (!jobId && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
+      } else if ((!jobId || isRepairIncomplete()) && shouldUseCachedSorftimeFbaRecord(existing[asin], { forceRefresh })) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {

@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -167,7 +168,7 @@ async function main() {
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimePriceStrategies");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
 
   if (!key && !jobId && !Object.values(existing).some(Boolean)) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -187,7 +188,7 @@ async function main() {
       evidenceByOperation,
       expectedScope: { jobId, marketplace, asin },
     });
-    if (!jobId && !isForceRefresh() && existing[asin]?.anchor) {
+    if ((!jobId || isRepairIncomplete()) && !isForceRefresh() && existing[asin]?.status === "ready" && Number(existing[asin]?.currentPrice) > 0) {
       logCacheHit(asin, { status: "ready", fetchedAt: existing[asin].fetchedAt });
       records[asin] = existing[asin];
       continue;
@@ -234,7 +235,7 @@ async function main() {
       if (result) {
         records[asin] = result;
         console.log("connection error · same-job Sorftime evidence");
-      } else if (!jobId && existing[asin]?.anchor) {
+      } else if (!jobId && existing[asin]?.status === "ready" && Number(existing[asin]?.currentPrice) > 0) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {

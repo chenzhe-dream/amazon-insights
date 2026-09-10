@@ -402,6 +402,20 @@ test("local sync POST and GET preserve a strict catalog provider plan", async (t
   assert.deepEqual(polled.json().stages, plannedJob.stages);
 });
 
+test("repair start forwards parent identity and returns a no-work response without a job", async (t) => {
+  const deps = fakeDeps();
+  let captured: unknown;
+  deps.authorizeSyncScope = async (principal, input) => ({ organizationId: principal.kind === "user" ? principal.organizationId : "", projectId: input.projectId });
+  deps.startAsinSyncJob = async input => { captured = input; return { noWork: true, message: "暂无待补抓数据" }; };
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "POST", url: "/v1/local-data/sync-asins", headers: { ...authenticatedHeaders(), "content-type": "application/json" }, payload: { asins: [asin], projectId: "10000000-0000-4000-8000-000000000003", mode: "repair-incomplete", parentJobId: "parent" } });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(response.json(), { noWork: true, message: "暂无待补抓数据" });
+  assert.equal((captured as { mode: string }).mode, "repair-incomplete");
+  assert.equal((captured as { parentJobId: string }).parentJobId, "parent");
+});
+
 test("authenticated sync GET preserves canonical resumability without leaking it across organizations", async (t) => {
   const principal = memberPrincipal();
   const record: SyncJobRecord = {

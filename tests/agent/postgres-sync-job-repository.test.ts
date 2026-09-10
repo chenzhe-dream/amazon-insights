@@ -67,6 +67,14 @@ test("PostgreSQL sync jobs survive restart and deduplicate only inside tenant sc
   assert.notEqual(otherTenant.job.jobId, created.job.jobId);
 });
 
+test("repair stage targets survive PostgreSQL admission and a separate repository read", async () => {
+  const { first, second } = await createRepositories();
+  const input = syncJobInput({ organizationId: randomUUID(), projectId: null, runId: null, fingerprint: randomUUID(), asins: ["B0SYNC0001"] });
+  const stages = [{ id: "catalog", label: "Catalog", kind: "auto" as const, status: "pending", estimatedSeconds: 0, repairAsins: [], repairParentJobId: "parent", repairXydcAsins: ["B0SYNC0001"] }];
+  const admitted = await first.admit({ ...input, stages });
+  assert.deepEqual((await second.findById(admitted.job.jobId))?.stages, stages);
+});
+
 test("active scoped sync rejects a different explicit run without creating durable work", async () => {
   const { first, second, firstPool } = await createRepositories();
   const organizationId = randomUUID();

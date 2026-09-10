@@ -1352,7 +1352,9 @@ export const LocalDataSyncStartRequestSchema = strictObject({
   marketplace: MarketplaceSchema.optional(),
   projectId: EntityIdSchema.optional(),
   runId: EntityIdSchema.optional(),
-});
+  mode: z.literal("repair-incomplete").optional(),
+  parentJobId: z.string().trim().min(1).max(200).optional(),
+}).refine(value => value.mode === "repair-incomplete" ? Boolean(value.projectId && value.parentJobId && !value.runId) : !value.parentJobId, { message: "Repair requires projectId and parentJobId and cannot reuse runId" });
 export const LocalDataSyncReadinessResponseSchema = strictObject({
   asins: LocalDataAsinListSchema,
   items: z.array(LocalDataSyncStatusSchema),
@@ -1386,10 +1388,13 @@ export const LocalDataSyncStageSchema = strictObject({
   startedAt: DateTimeSchema.nullable().optional(),
   completedAt: DateTimeSchema.nullable().optional(),
   catalogProviderPlan: LocalDataCatalogProviderPlanSchema.optional(),
+  repairAsins: z.array(AsinSchema).optional(),
+  repairParentJobId: z.string().trim().min(1).max(200).optional(),
+  repairXydcAsins: z.array(AsinSchema).optional(),
 }).refine((stage) => stage.catalogProviderPlan === undefined || stage.id === "catalog", {
   message: "Catalog provider plan is only valid on the catalog stage",
 });
-export const LocalDataSyncStartResponseSchema = strictObject({
+export const LocalDataSyncStartResponseSchema = z.union([strictObject({ noWork: z.literal(true), message: z.literal("暂无待补抓数据") }), strictObject({
   jobId: z.string().trim().min(1).max(200),
   status: z.string().min(1),
   message: z.string().min(1),
@@ -1402,7 +1407,7 @@ export const LocalDataSyncStartResponseSchema = strictObject({
     projectId: EntityIdSchema.nullable(),
     runId: EntityIdSchema.nullable(),
   }),
-});
+})]);
 export const LocalDataSyncJobIdParamsSchema = strictObject({ jobId: z.string().trim().min(1).max(200) });
 export const ProjectableSyncStageSchema = z.enum([
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",

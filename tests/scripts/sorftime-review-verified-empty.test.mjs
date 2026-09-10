@@ -69,7 +69,7 @@ test("verified zero reviews bypasses review provider tools without schema degrad
       blocks: [],
     },
   });
-  assert.equal(deriveAsinModuleStatus(asin, statusSources(result.records)).reviews, "ready");
+  assert.equal(deriveAsinModuleStatus(asin, {...statusSources(result.records), ratings: {[asin]: {asin, marketplace:"US", fetchedAt:"2026-08-23", status:"ready", reviewCount:0}}}).reviews, "ready");
 });
 
 for (const forceRefresh of [false, true]) {
@@ -104,7 +104,7 @@ for (const includeReusableSibling of [false, true]) {
       mentionTopics: 1,
       fetchedAt: "2026-08-23",
       status: "ready",
-      blocks: [{ key: "positives", label: "好评", rows: [] }],
+      blocks: [{ key: "positives", label: "好评", rows: [{ label: "quality" }] }],
     };
     const provider = await fakeSorftimeProvider("schema");
     t.after(provider.close);

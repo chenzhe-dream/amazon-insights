@@ -18,8 +18,8 @@ const listingRecord = {
 
 const sources = {
   catalogAsins: [asin],
-  keywords: { [asin]: { status: "ready" } },
-  reviews: { [asin]: { status: "ready" } },
+  keywords: { [asin]: { status: "ready", keywords: [{ keyword: "desk" }] } },
+  reviews: { [asin]: { status: "ready", blocks: [{ rows: [{ label: "quality" }] }] } },
   sales: { [asin]: { status: "empty", volume: [], amount: [], price: [], rank: [] } },
   childSales: { [asin]: [{ asin, sales: 4 }] },
   priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "price" } },
@@ -99,4 +99,11 @@ test("stale zero price and FBA records are missing while positive cached values 
   });
   assert.equal(valid.priceStrategy, "ready");
   assert.equal(valid.fba, "ready");
+});
+
+
+test("ready labels without keyword/review content remain repair targets", () => {
+  const result = deriveAsinModuleStatus(asin, {...sources, keywords: {[asin]: {status:"ready",keywords:[]}}, reviews:{[asin]:{status:"ready",sampledReviews:10,blocks:[]}}});
+  assert.equal(result.keywords,"missing");
+  assert.equal(result.reviews,"missing");
 });

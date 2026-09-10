@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import { createSorftimeBudget } from "./lib/sorftime-request-budget.mjs";
 import { classifyProviderFailure, formatProviderDiagnosticLine } from "./lib/provider-diagnostics.mjs";
 import fs from "node:fs";
@@ -106,7 +107,7 @@ export async function syncSorftimeChildSales({ outputPath = outPath, asins: sele
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outputPath, "sorftimeChildSales30d");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
   const outcomes = {};
   const deadline = Math.min(Number(process.env.SORFTIME_COLLECTION_DEADLINE) || Infinity, Date.now() + 180_000);
 
@@ -159,7 +160,7 @@ export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 
       evidenceByOperation,
       expectedScope: { jobId, marketplace, asin: parentAsin },
     });
-    if (!jobId && !isForceRefresh() && Array.isArray(cached) && cached.length) {
+    if ((!jobId || isRepairIncomplete()) && !isForceRefresh() && Array.isArray(cached) && cached.some(row => Number.isFinite(row?.sales) && row.sales >= 0)) {
       logCacheHit(parentAsin, { status: "ready", fetchedAt: cached[0]?.observedAt, volume: cached });
       records[parentAsin] = cached;
       continue;
@@ -210,7 +211,7 @@ export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 
         records[parentAsin] = result.rows;
         outcomes[parentAsin] = result;
         console.log("connection error · same-job Sorftime evidence");
-      } else if (!jobId && Array.isArray(cached) && cached.length) {
+      } else if (!jobId && Array.isArray(cached) && cached.some(row => Number.isFinite(row?.sales) && row.sales >= 0)) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[parentAsin] = cached;
       } else {

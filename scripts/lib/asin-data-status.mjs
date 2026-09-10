@@ -2,13 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
-import { readCachedDataExport } from "./sync-cache.mjs";
-import { positiveMoneyOrNull } from "./commerce-data-validity.mjs";
+import { readCachedDataExport, readCachedArrayExport, hasCompleteKeywordRecord, hasCompleteReviewRecord } from "./sync-cache.mjs";
+import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-data-validity.mjs";
 
 const root = getProjectRoot();
 
 const paths = {
   keywords: path.join(root, "app", "sif-keyword-analysis-data.ts"),
+  ratings: path.join(root, "app", "sorftime-rating-data.ts"),
   reviews: path.join(root, "app", "sorftime-review-analysis-data.ts"),
   sales: path.join(root, "app", "sorftime-sales-trend-data.ts"),
   childSales: path.join(root, "app", "sorftime-child-sales-data.ts"),
@@ -75,7 +76,7 @@ function isVideoThumb(url) {
 
 function analyzableGalleryImages(record) {
   const gallery = record?.galleryImages ?? [];
-  return gallery.filter(url => !isVideoThumb(url));
+  return gallery.filter(url => typeof url === "string" && url.trim() && !isVideoThumb(url));
 }
 
 export function hasListingGallery(asin) {
@@ -123,6 +124,8 @@ export function countPendingImageRemarks(asins, sources = readAsinStatusSources(
 export function readAsinStatusSources() {
   return {
     catalogAsins: readCatalogAsins(),
+    catalogProducts: readCachedArrayExport(paths.catalog, "refreshedCatalog"),
+    ratings: readCachedDataExport(paths.ratings, "sorftimeRatingData"),
     keywords: readCachedDataExport(paths.keywords, "sifKeywordAnalysisData"),
     reviews: readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData"),
     sales: readCachedDataExport(paths.sales, "sorftimeSalesTrendData"),
@@ -143,11 +146,18 @@ export function readImageRemarkStatuses() {
 }
 
 export function deriveAsinModuleStatus(asin, sources) {
+  const review = sources.reviews[asin];
+  const rating = sources.ratings?.[asin];
+  const verifiedEmptyReview = rating?.status === "ready" && rating.asin === asin &&
+    rating.marketplace === review?.marketplace && rating.reviewCount === 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(rating.fetchedAt ?? "") &&
+    !hasCatalogRatingReviewConflict(rating.rating, rating.reviewCount, sources.catalogProducts?.find(item => item.asin === asin));
   const listingRecord = sources.listing[asin];
   const childRows = sources.childSales[asin];
   const fbaRecord = sources.fbaFees[asin];
   const categoryReady = Object.values(sources.categoryTrends).some(
-    record => record?.status === "ready" && Array.isArray(record.asins) && record.asins.includes(asin),
+    record => record?.status === "ready" && Array.isArray(record.asins) && record.asins.includes(asin) &&
+      Array.isArray(record.volume) && record.volume.some(point => /^\d{4}-\d{2}$/.test(String(point?.month ?? "")) && Number.isFinite(point?.value) && point.value >= 0),
   );
   const trafficRecord = sources.traffic[asin];
   const vocBlock = new RegExp(`${asin}:\\s*\\{[\\s\\S]*?captureStatus:\\s*"dialog"`, "m");
@@ -155,8 +165,8 @@ export function deriveAsinModuleStatus(asin, sources) {
   return {
     asin,
     inCatalog: sources.catalogAsins.includes(asin),
-    keywords: sources.keywords[asin]?.status === "ready" ? "ready" : "missing",
-    reviews: sources.reviews[asin]?.status === "ready" ? "ready" : "missing",
+    keywords: hasCompleteKeywordRecord(sources.keywords[asin]) ? "ready" : "missing",
+    reviews: hasCompleteReviewRecord(sources.reviews[asin], verifiedEmptyReview) ? "ready" : "missing",
     sales: hasUsableTrendPoint(sources.sales[asin]) ? "ready" : "missing",
     childSales: Array.isArray(childRows) && childRows.some(row => Number.isFinite(row?.sales) && row.sales >= 0) ? "ready" : "missing",
     priceStrategy: sources.priceStrategies[asin]?.status === "ready" && positiveMoneyOrNull(sources.priceStrategies[asin].currentPrice) != null ? "ready" : "missing",

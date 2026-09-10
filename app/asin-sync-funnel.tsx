@@ -79,7 +79,8 @@ type Props = {
   onComplete?: (job: SyncJob) => void;
   onTerminal?: (job: SyncJob) => void;
   onDismiss?: () => void;
-  onRestart?: () => void;
+  onRestart?: (job: SyncJob) => void;
+  restartPending?: boolean;
   canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
   restoredFromHistory?: boolean;
@@ -118,7 +119,8 @@ export type SyncResumeBundle = {
   onDismiss?: () => void;
   onComplete?: (job: SyncJob) => SyncCompletionDisposition;
   onTerminal?: (job: SyncJob) => void;
-  onRestart?: () => void;
+  onRestart?: (job: SyncJob) => void;
+  restartPending?: boolean;
   canResumeFailedStages?: boolean;
   allowDismiss?: boolean;
   knownSessionJobIds?: ReadonlySet<string>;
@@ -184,6 +186,7 @@ export function UrlResumableAsinSyncFunnel({
         onDismiss?.();
       }}
       onRestart={resume.onRestart}
+      restartPending={resume.restartPending}
       canResumeFailedStages={resume.canResumeFailedStages}
       allowDismiss={resume.allowDismiss}
     />
@@ -315,7 +318,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, sessionIdentity = "", stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; sessionIdentity?: string; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot, reason?: "owner-disposed") => void }) {
+export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, sessionIdentity = "", stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, restartPending = false, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; sessionIdentity?: string; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot, reason?: "owner-disposed") => void }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -677,7 +680,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             <button type="button" className="ghost-btn sync-progress-dismiss" aria-expanded="false" onClick={() => setHistoryExpanded(true)}>
               查看详情
             </button>
-            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>重新发起</button> : null}
+            {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart ? <button type="button" className="ghost-btn sync-progress-dismiss" disabled={restartPending} onClick={() => onRestart(job)}>{restartPending ? "补抓启动中…" : "补抓未完成"}</button> : null}
             {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss ? <button type="button" className="ghost-btn sync-progress-dismiss" onClick={dismissSync}>关闭</button> : null}
           </div>
         </div>
@@ -768,8 +771,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
             </button>
           ) : null}
           {!publicationBlocksTerminalActions && !historicalActionsBlocked && onRestart && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed") ? (
-            <button type="button" className="ghost-btn sync-progress-dismiss" onClick={onRestart}>
-              重新发起
+            <button type="button" className="ghost-btn sync-progress-dismiss" disabled={restartPending} onClick={() => onRestart(job)}>
+              {restartPending ? "补抓启动中…" : "补抓未完成"}
             </button>
           ) : null}
           {!publicationBlocksTerminalActions && !historicalActionsBlocked && onDismiss && allowDismiss && (job?.status === "completed" || job?.status === "completed-with-gaps" || job?.status === "failed" || overall.focusReady) ? (
@@ -861,7 +864,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
         <div className="sync-progress-foot" data-asin-module-gaps="true">
           {collectAsinModuleGaps(job.asinProgress).map(gap => (
             <p key={`${gap.asin}-${gap.module}`}>
-              {gap.asin} · {gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+              {gap.asin} · {gap.module === "xydc_orders" ? "西柚子体与全年订单" : gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
             </p>
           ))}
         </div>

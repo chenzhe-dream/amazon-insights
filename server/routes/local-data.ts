@@ -53,6 +53,8 @@ import { SyncJobRunConflictError } from "../db/sync-job-repository";
 import {
   isSyncJobAdmissionLimitError,
   SyncJobService,
+  SyncRepairScopeError,
+  type SyncJobStartInput,
 } from "../services/sync-job-service";
 import { ConnectorCredentialService } from "../services/connector-credential-service";
 import {
@@ -82,7 +84,7 @@ export type LocalDataBridgeDeps = {
   authorizeProjectDeletion?(principal: RequestPrincipal, id: string): Promise<boolean>;
   normalizeAsins(values: unknown): Promise<string[] | null>;
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
-  startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
+  startAsinSyncJob(input: SyncJobStartInput): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
   readStageOutput?(input: {
     organizationId: string;
@@ -312,6 +314,7 @@ function publicSyncJob(job: SyncJob, publication?: SyncPublication) {
 }
 
 function rethrowLegacyError(error: unknown): never {
+  if (error instanceof SyncRepairScopeError) throw new ContractRouteError(409, "CONFLICT", error.message);
   if (error instanceof SyncJobRunConflictError) {
     throw new ContractRouteError(
       409,
@@ -450,7 +453,9 @@ export function registerLocalDataRoutes(
         ...scope,
         asins,
         marketplace: body.marketplace ?? "US",
+        ...(body.mode ? { mode: body.mode, parentJobId: body.parentJobId } : {}),
       });
+      if ("noWork" in result) return LocalDataSyncStartResponseSchema.parse(result);
       reply.status(202);
       return LocalDataSyncStartResponseSchema.parse({
         jobId: result.job.jobId,

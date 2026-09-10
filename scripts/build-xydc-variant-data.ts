@@ -12,6 +12,7 @@ import { syncXydcOrderFamilies } from "./lib/xydc-order-sync";
 import { createXydcVariantCache, isFreshXydcVariantCache } from "./lib/xydc-variant-cache";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 import { createXydcOrderJobLifetime } from "./lib/xydc-order-job-lifetime";
+import { readXydcRepairStatuses } from "./lib/xydc-repair-readiness";
 
 type Cache = {
   readMany(country: string, asins: readonly string[]): Promise<Record<string, XydcVariantFamily>>;
@@ -291,6 +292,9 @@ function withInformation(family: XydcVariantFamily, information: ReturnType<type
   const requestedSet = new Set(requested);
   return {
     ...family,
+    // A successful response covering every unresolved child supersedes an earlier transport failure.
+    reasonCode: family.children.filter(child => child.infoStatus !== "ready").every(child => requestedSet.has(child.asin))
+      ? null : family.reasonCode,
     children: family.children.map(child => {
       if (!requestedSet.has(child.asin) || child.infoStatus === "ready") return child;
       const info = information.get(child.asin);
@@ -319,9 +323,7 @@ function statusFor(family: XydcVariantFamily): Pick<XydcVariantFamily, "status" 
       : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
   }
   if (family.children.every(child => child.infoStatus === "ready")) return { status: "ready", reasonCode: null };
-  return family.reasonCode === "SCHEMA_INVALID"
-    ? { status: "partial", reasonCode: "SCHEMA_INVALID" }
-    : { status: "partial", reasonCode: "PARTIAL_CHILD_INFO" };
+  return { status: "partial", reasonCode: family.reasonCode ?? "PARTIAL_CHILD_INFO" };
 }
 
 function unavailableFamily(inputAsin: string, country: string, now: Date, reasonCode: XydcVariantReasonCode): XydcVariantFamily {
@@ -408,7 +410,7 @@ function mergeFamilies(families: readonly XydcVariantFamily[]) {
   });
 }
 
-function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: readonly string[]) {
+function markFailedInformationBatch(drafts: Map<string, XydcVariantFamily>, batch: readonly string[], reasonCode: XydcVariantReasonCode) {
   const affectedChildren = new Set(batch);
   for (const [inputAsin, family] of drafts) {
     if (!family.children.some(child => affectedChildren.has(child.asin) && child.infoStatus !== "ready")) continue;
@@ -418,7 +420,7 @@ function markSchemaInvalidBatch(drafts: Map<string, XydcVariantFamily>, batch: r
         ? { ...child, infoStatus: "unavailable" as const }
         : child),
       status: "partial",
-      reasonCode: "SCHEMA_INVALID",
+      reasonCode,
     });
   }
 }
@@ -523,10 +525,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
     } catch (error) {
       input.signal?.throwIfAborted();
       restoreForcedReadyFallbacks(input, cached, drafts, batch);
-      if (reasonFor(error) === "SCHEMA_INVALID") {
-        markSchemaInvalidBatch(drafts, batch);
-        continue;
-      }
+      markFailedInformationBatch(drafts, batch, reasonFor(error));
       // A later run uses the checked parent/child cache evidence and only retries these children.
     }
   }
@@ -545,7 +544,7 @@ export async function retryFailedXydcVariantFamilies(input: SyncXydcVariantInput
     const family = cached[asin];
     return family?.country === input.country.trim().toUpperCase() && family.inputAsin === asin
       && (family.status === "unavailable" && ["RPC_ERROR", "TIMEOUT"].includes(family.reasonCode ?? "")
-        || family.status === "partial" && family.reasonCode === "PARTIAL_CHILD_INFO"
+        || family.status === "partial" && ["PARTIAL_CHILD_INFO", "RPC_ERROR", "TIMEOUT"].includes(family.reasonCode ?? "")
           && family.cacheState === "fresh" && family.children.some(child => child.infoStatus !== "ready"));
   });
   if (!asins.length) return families;
@@ -589,7 +588,11 @@ async function main() {
     throw new Error("XYDC_COORDINATION_ROOT_REQUIRED");
   }
   const country = process.env.XYDC_COUNTRY ?? "US";
-  const lifetime = await createXydcOrderJobLifetime(process.env, roots.runtimeRoot, asins, country);
+  const scopeAsins = (process.env.XYDC_JOB_ASINS ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  if (scopeAsins.length && (scopeAsins.some(asin => !/^[A-Z0-9]{10}$/.test(asin)) || asins.some(asin => !scopeAsins.includes(asin)))) {
+    throw new Error("XYDC_JOB_CONTEXT_INVALID");
+  }
+  const lifetime = await createXydcOrderJobLifetime(process.env, roots.runtimeRoot, scopeAsins.length ? scopeAsins : asins, country);
   try {
   const variantInput: SyncXydcVariantInput = {
     asins,
@@ -625,6 +628,10 @@ async function main() {
     // Order history is optional enrichment and cannot change core variant sync success.
   }
   process.stdout.write(`[xydc] ${families.length} family snapshots cached; ${orderCount} order snapshots cached\n`);
+  if (process.env.AGENT_SYNC_REPAIR_INCOMPLETE === "1") {
+    const statuses = await readXydcRepairStatuses(asins, country, { dataRoot: roots.dataRoot });
+    for (const { asin, status } of statuses) process.stderr.write(`[xydc-repair] ${asin} ${status}\n`);
+  }
   } finally { await lifetime.close(); }
 }
 

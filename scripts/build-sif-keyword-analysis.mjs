@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete, hasCompleteKeywordRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
@@ -132,7 +133,7 @@ async function main() {
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sifKeywordAnalysisData");
   const existingEnrichment = readCachedDataExport(enrichPath, "sifKeywordEnrichmentData");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
 
   if (!headers && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 SIF MCP 密钥，且无可用缓存");
@@ -143,7 +144,7 @@ async function main() {
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (shouldUseCachedRecord(existing[asin]) && matchesKeywordQueryWindow(existing[asin])) {
+    if (hasCompleteKeywordRecord(existing[asin]) && (isRepairIncomplete() || (shouldUseCachedRecord(existing[asin]) && matchesKeywordQueryWindow(existing[asin])))) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
@@ -190,7 +191,7 @@ async function main() {
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${asins.length} ASIN → app/sif-keyword-analysis-data.ts`);
 
-  const uniqueKeywords = collectUniqueKeywords(records);
+  const uniqueKeywords = collectUniqueKeywords(isRepairIncomplete() ? Object.fromEntries(asins.map(asin => [asin, records[asin]])) : records);
   if (!uniqueKeywords.length) {
     writeKeywordEnrichmentFile(existingEnrichment, fetchedAt, marketplace);
     return;

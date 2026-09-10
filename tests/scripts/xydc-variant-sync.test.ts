@@ -18,6 +18,7 @@ import {
   xydcVariantCachePath,
 } from "../../scripts/lib/xydc-variant-cache";
 import { readXydcOrderDisplaySnapshot } from "../../scripts/lib/xydc-order-display-cache";
+import { readXydcRepairStatuses } from "../../scripts/lib/xydc-repair-readiness";
 import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
@@ -39,6 +40,32 @@ test("bounded recovery retries only a failed discovery and leaves ready children
   assert.deepEqual(calls, [failedAsin]);
   assert.deepEqual(fixture.records[inputAsin], good);
   assert.ok(result.some(family => family.status === "unavailable"));
+});
+
+test("info transport failures retain their reason in real cache and bounded recovery clears it", async () => {
+  for (const [reason, expected] of [["TIMEOUT", "timeout"], ["RPC_ERROR", "connector-failed"]] as const) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "xydc-info-failure-"));
+    try {
+      const cache = createXydcVariantCache(root);
+      const input = { asins: [inputAsin], country: "US", token: "fixture", now, cache };
+      const failed = await syncXydcVariantFamilies({ ...input, callTool: async ({ toolName }) => {
+        if (toolName === "get_asin_variations") return variationResponse();
+        throw new Error(reason);
+      } });
+      assert.equal(failed[0]?.reasonCode, reason);
+      assert.equal((await readXydcVariantFamily(root, "US", inputAsin))?.reasonCode, reason);
+      assert.deepEqual(await readXydcRepairStatuses([inputAsin], "US", { dataRoot: root, now }), [{ asin: inputAsin, status: expected }]);
+      const calls: string[] = [];
+      const recovered = await retryFailedXydcVariantFamilies({ ...input, callTool: async ({ toolName, args }) => {
+        calls.push(toolName);
+        return infoResponse(args.asins as string[]);
+      } }, failed);
+      assert.deepEqual(calls, ["get_asin_info"]);
+      assert.equal(recovered[0]?.status, "ready");
+      assert.equal(recovered[0]?.reasonCode, null);
+      assert.equal((await readXydcVariantFamily(root, "US", inputAsin))?.reasonCode, null);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("cancellation during the final variation request is propagated without writing failure cache", async () => {
@@ -454,7 +481,7 @@ test("hydrates globally deduplicated children in batches and checkpoints a parti
   assert.equal(calls.filter(call => call.toolName === "get_asin_variations").length, 1);
   assert.deepEqual(calls.filter(call => call.toolName === "get_asin_info").map(call => (call.args.asins as string[]).length), [20, 1]);
   assert.equal(first[0].status, "partial");
-  assert.equal(first[0].reasonCode, "PARTIAL_CHILD_INFO");
+  assert.equal(first[0].reasonCode, "RPC_ERROR");
   assert.equal(first[0].children[0].price, 12.5);
   assert.equal(first[0].children[0].stars, 4.5);
   assert.equal(first[0].children[0].productPageRatings, 42);

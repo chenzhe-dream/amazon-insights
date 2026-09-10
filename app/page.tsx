@@ -60,6 +60,7 @@ import { SegmentStackBar } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./use-manual-alexa-voc";
 import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { createIncompleteSyncRepair } from "./lib/sync-incomplete-repair-browser";
 import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
@@ -1735,7 +1736,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const [publicationConvergenceNotice, setPublicationConvergenceNotice] = useState<string | null>(null);
   const [stageOutputReceipt, setStageOutputReceipt] = useState<(TrafficStageReceipt & { ownerToken: object }) | null>(null);
   const [terminalPointerRetained, setTerminalPointerRetained] = useState(false);
-  const [terminalRestartRequest, setTerminalRestartRequest] = useState(0);
+  const [terminalRepairPending, setTerminalRepairPending] = useState(false);
+  const terminalRepairInFlight = useRef(false);
+  const terminalRepair = useRef(createIncompleteSyncRepair(localAgentFetch));
+  const terminalRepairScope = useRef(createRuntimeAnalysisScopeGuard());
   const analysisStartInFlight = useRef(false);
   const workspaceKey = slugParam || projectParam;
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState<string | null>(workspaceKey ? null : "");
@@ -1856,6 +1860,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     resumedSyncScope,
   });
   const resumedProjectId = resumedSyncScope.context?.projectId ?? (baseSyncRunId ? null : currentProjectId);
+  useLayoutEffect(() => {
+    const guard = terminalRepairScope.current;
+    guard.activate(workspaceReady && !authSession.logoutPending && resumedSyncScope.canAdopt
+      ? `${runtimeScopeKey}:${workspacePath}:${market}:${resumedProjectId}` : null);
+    return () => guard.activate(null);
+  }, [runtimeScopeKey, workspacePath, market, resumedProjectId, workspaceReady, authSession.logoutPending, resumedSyncScope.canAdopt]);
   const terminalOwnerFor = useCallback((values: string[], options?: { projectId?: string | null; marketplace?: string }) => createTerminalSyncOwner({
     storage: browserSessionStorage(),
     pathname: workspacePath,
@@ -1873,9 +1883,41 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
   }, [activeAsins, terminalPointerRetained]);
-  const restartTerminalSync = useCallback(() => {
-    setTerminalRestartRequest(request => request + 1);
-  }, []);
+  const restartTerminalSync = useCallback(async (parentJob: SyncJob) => {
+    if (terminalRepairInFlight.current || !workspaceReady || !resumedSyncScope.canAdopt || !resumedProjectId || authSession.logoutPending) return;
+    const captured = terminalRepairScope.current.capture();
+    const isCurrent = () => terminalRepairScope.current.isCurrent(captured);
+    terminalRepairInFlight.current = true;
+    setTerminalRepairPending(true);
+    try {
+      const result = await terminalRepair.current({ asins: activeAsins, marketplace: market, projectId: resumedProjectId, parentJobId: parentJob.jobId }, isCurrent);
+      if (!result || !isCurrent()) return;
+      if ("noWork" in result) {
+        setMessage(result.message);
+        return;
+      }
+      terminalOwnerFor(activeAsins).clearForExplicitStart();
+      syncSuppressedKey.current = null;
+      autoSyncStartedKey.current = activeAsins.join(",");
+      rememberSyncJob(result.jobId);
+      setTerminalSyncJob(null);
+      setTerminalPointerRetained(false);
+      setSyncAsins(null);
+      setSyncRunContext(result.scope);
+      restoringVocRun.current = null;
+      setVocRun(null);
+      setSelectedReportIds({});
+      const params = clearVocRunFromSearch(new URLSearchParams(searchWithSyncJobId(window.location.search, result.jobId)));
+      params.set("run", result.scope.runId);
+      replaceAppUrl(params, window.location.pathname);
+      setMessage("补抓未完成数据已启动");
+    } catch (error) {
+      if (isCurrent()) setMessage(error instanceof Error ? error.message : "补抓启动失败");
+    } finally {
+      terminalRepairInFlight.current = false;
+      setTerminalRepairPending(false);
+    }
+  }, [activeAsins, authSession.logoutPending, market, rememberSyncJob, resumedProjectId, resumedSyncScope.canAdopt, setMessage, terminalOwnerFor, workspaceReady]);
   const handleTerminalSyncJob = useCallback((job: SyncJob): SyncCompletionDisposition => {
     const resumable = hasResumableFailedStages(job);
     const terminalOwner = terminalOwnerFor(job.asins ?? activeAsins, {
@@ -1977,9 +2019,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     onComplete: handleTerminalSyncJob,
     onTerminal: handleTerminalSyncJob,
     onRestart: restartTerminalSync,
+    restartPending: terminalRepairPending,
     canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
-  }), [authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, onScopedStageOutput, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  }), [authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, onScopedStageOutput, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, terminalRepairPending, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
 
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
@@ -2306,12 +2349,6 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
   }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalSyncJob?.status, workspaceReady]);
-
-  useEffect(() => {
-    if (!terminalRestartRequest) return;
-    setTerminalRestartRequest(0);
-    void startSyncIfNeeded(activeAsins, { force: true });
-  }, [activeAsins, startSyncIfNeeded, terminalRestartRequest]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);

@@ -1,7 +1,9 @@
+import { formatProviderDiagnosticLine } from "./provider-diagnostics.mjs";
 import fs from "node:fs";
 
 /** 是否强制刷新（忽略缓存，重新调用 MCP） */
 export function isForceRefresh() {
+  if (isRepairIncomplete()) return false;
   if (process.env.FORCE_REFRESH === "1" || process.env.FORCE_REFRESH === "true") return true;
   return process.argv.includes("--force");
 }
@@ -30,9 +32,9 @@ export function isCacheStale(record, maxAgeDays) {
 export function shouldUseCachedRecord(record, options = {}) {
   const forceRefresh = options.forceRefresh ?? isForceRefresh();
   const maxAgeDays = options.maxAgeDays ?? cacheMaxAgeDays();
-  if (forceRefresh) return false;
+  if (!isRepairIncomplete() && forceRefresh) return false;
   if (!record || record.status !== "ready") return false;
-  if (isCacheStale(record, maxAgeDays)) return false;
+  if (!isRepairIncomplete() && isCacheStale(record, maxAgeDays)) return false;
   return true;
 }
 
@@ -133,4 +135,59 @@ export function logCacheHit(asin, record) {
   if (record.volume?.length) parts.push(`${record.volume.length} months`);
   parts.push(`· ${record.fetchedAt ?? "cached"}`);
   console.log(parts.join(" · "));
+}
+export function isRepairIncomplete() {
+  return process.env.AGENT_SYNC_REPAIR_INCOMPLETE === "1";
+}
+
+export function hasCompleteKeywordRecord(record) {
+  return Boolean(record?.status === "ready" && Array.isArray(record.keywords)
+    && record.keywords.some(row => typeof row?.keyword === "string" && row.keyword.trim()));
+}
+
+export function hasCompleteReviewRecord(record, verifiedEmpty = false) {
+  return record?.status === "ready" && Boolean((Array.isArray(record.blocks) && record.blocks.some(block => Array.isArray(block?.rows) && block.rows.length > 0)) ||
+    (verifiedEmpty && record.sampledReviews === 0 && Array.isArray(record.blocks) && record.blocks.length === 0));
+}
+
+export function hasUsableTrendRecord(record) {
+  return record?.status === "ready" && ["volume", "amount", "price", "rank"].some(key =>
+    Array.isArray(record[key]) && record[key].some(point => /^\d{4}-\d{2}$/.test(String(point?.month ?? "")) && Number.isFinite(point?.value) && point.value >= 0));
+}
+
+/** Preserve the original record, including its timestamp/provenance, if repair cannot replace it completely. */
+export function createRepairSafeRecordMap(existing, { repair = isRepairIncomplete(), onPreserve = reportIncompleteRepair } = {}) {
+  const records = { ...existing };
+  if (!repair) return records;
+  const metadata = new Set(["status", "statusMessage", "fetchedAt", "provenance", "provenanceByAsin", "terminalReason", "errorCode"]);
+  function losesContent(old, next) {
+    if (Array.isArray(old)) return old.length > 0 && (!Array.isArray(next) || !next.length);
+    if (old && typeof old === "object" && next && typeof next === "object") {
+      return Object.entries(old).some(([field, value]) => !metadata.has(field) && losesContent(value, next[field]));
+    }
+    return old != null && old !== "" && (next == null || next === "");
+  }
+  return new Proxy(records, {
+    set(target, key, value) {
+      const previous = target[key];
+      const failed = value?.status && !["ready", "empty"].includes(value.status);
+      if (previous && (failed || losesContent(previous, value))) onPreserve(key);
+      else target[key] = value;
+      return true;
+    },
+    deleteProperty(target, key) {
+      if (Object.hasOwn(target, key)) { onPreserve(key); return true; }
+      return Reflect.deleteProperty(target, key);
+    },
+  });
+}
+
+export function reportIncompleteRepair(key) {
+  const stage = process.env.AGENT_SYNC_STAGE_ID ?? "unknown";
+  const connector = ["keywords", "traffic"].includes(stage) ? "sif" : "sorftime";
+  const asins = /^[A-Z0-9]{10}$/.test(String(key)) ? [String(key)]
+    : (process.env.SORFTIME_ASINS ?? process.env.SIF_ASINS ?? "").split(",").map(asin => asin.trim()).filter(Boolean);
+  console.error(`[repair-incomplete] ${String(key)} · replacement incomplete; retained prior cached portions`);
+  for (const asin of asins) console.error(formatProviderDiagnosticLine({connector, stage, asin, failureKind:"schema", causeCode:"MCP_SCHEMA", boundary:"consumer-shape"}));
+  process.exitCode = 1;
 }

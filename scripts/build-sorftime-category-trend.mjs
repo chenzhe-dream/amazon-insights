@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -109,7 +110,7 @@ export async function runSorftimeCategoryCli(options = {}) {
     .map(product => `asin-error:${product.asin}`)
     .filter(key => ["error", "empty"].includes(records[key]?.status));
   const keepIds = new Set([...nodePlan.keys(), ...currentFailureKeys]);
-  if (!asinFilter && keepIds.size) {
+  if (!isRepairIncomplete() && !asinFilter && keepIds.size) {
     for (const nodeId of Object.keys(records)) {
       if (!keepIds.has(nodeId)) delete records[nodeId];
     }
@@ -182,7 +183,7 @@ export async function collectSorftimeCategoryRecords({
       emitDiagnostics: false,
       allowCategorySiblingDispatch: true,
     }));
-  const records = jobId ? {} : { ...existing };
+  const records = createRepairSafeRecordMap(jobId && !isRepairIncomplete() ? {} : existing);
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
   const fallbackRecords = new Map();
@@ -213,6 +214,13 @@ export async function collectSorftimeCategoryRecords({
   };
 
   for (const product of catalog) {
+    if (isRepairIncomplete()) {
+      const cachedEntry = Object.entries(existing).find(([, record]) => record?.status === "ready" && record.asins?.includes(product.asin) && record.volume?.some(point => Number.isFinite(point?.value) && point.value >= 0));
+      if (cachedEntry) {
+        logCacheHit(product.asin, cachedEntry[1]);
+        continue;
+      }
+    }
     process.stdout.write(`[node] ${product.asin} ... `);
     try {
       if (!key) throw new Error("Sorftime key unavailable");
@@ -265,11 +273,11 @@ export async function collectSorftimeCategoryRecords({
     const cacheHasMonopoly = Boolean(
       cached?.listingMonopoly?.length && cached?.brandMonopoly?.length && cached?.sellerMonopoly?.length,
     );
-    if (!jobId && shouldUseCachedRecord(cached) && cacheHasMonopoly) {
+    if ((!jobId || isRepairIncomplete()) && shouldUseCachedRecord(cached) && cacheHasMonopoly) {
       logCacheHit(plan.nodeId, cached);
       records[plan.nodeId] = {
         ...cached,
-        asins: plan.asins,
+        asins: [...new Set([...(isRepairIncomplete() ? cached?.asins ?? [] : []), ...plan.asins])],
         categoryName: plan.categoryName || cached.categoryName,
         topCategory: plan.topCategory || cached.topCategory,
         sourceAsin: plan.sourceAsin || cached.sourceAsin,
@@ -313,7 +321,7 @@ export async function collectSorftimeCategoryRecords({
         categoryName: plan.categoryName,
         topCategory: plan.topCategory,
         sourceAsin: plan.sourceAsin,
-        asins: plan.asins,
+        asins: [...new Set([...(isRepairIncomplete() ? cached?.asins ?? [] : []), ...plan.asins])],
         marketplace,
         fetchedAt,
         status: volume.length ? "ready" : "empty",
@@ -340,7 +348,7 @@ export async function collectSorftimeCategoryRecords({
           nodeId: plan.nodeId,
           categoryName: plan.categoryName,
           topCategory: plan.topCategory,
-          asins: plan.asins,
+          asins: [...new Set([...(isRepairIncomplete() ? cached?.asins ?? [] : []), ...plan.asins])],
           marketplace,
           fetchedAt,
           reason: nodeDiagnostics[0].causeCode,

@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -43,7 +44,7 @@ async function main() {
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeListingContentData");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
 
   if (!sorftimeKey && !jobId && !Object.values(existing).some(record => record?.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -67,7 +68,7 @@ async function main() {
       evidence,
       existingRecord: existing[asin],
       forceRefresh: isForceRefresh(),
-      requireScopedEvidence: Boolean(jobId),
+      requireScopedEvidence: Boolean(jobId) && !isRepairIncomplete(),
     });
     if (selected) {
       records[asin] = selected;

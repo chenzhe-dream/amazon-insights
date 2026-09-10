@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap } from "./sync-cache.mjs";
 import { callSifTool } from "./sif-mcp-client.mjs";
 import { buildKeywordEnrichment, normalizeKeywordKey } from "./sif-keyword-transform.mjs";
 
@@ -10,7 +11,7 @@ function chunk(items, size) {
 }
 
 export async function enrichKeywords(keywords, marketplace, fetchedAt, existing = {}) {
-  const enrichment = { ...existing };
+  const enrichment = createRepairSafeRecordMap(existing);
   const pending = keywords.filter(keyword => {
     const key = normalizeKeywordKey(keyword);
     const record = enrichment[key];

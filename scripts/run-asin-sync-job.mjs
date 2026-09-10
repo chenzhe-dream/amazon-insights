@@ -80,7 +80,9 @@ export function shouldReactivateImageRemarks({
 }
 
 export function imageRemarkRunAsins(job, asins) {
-  return asins.filter(asin => job?.asinProgress?.[asin]?.image_remarks?.status === "pending");
+  const planned = job?.stages?.find(stage => stage.id === "image_remarks")?.repairAsins;
+  return asins.filter(asin => (!Array.isArray(planned) || planned.includes(asin))
+    && job?.asinProgress?.[asin]?.image_remarks?.status === "pending");
 }
 
 function reactivateImageRemarksForReadyGalleries(jobId, asins) {
@@ -150,11 +152,27 @@ export function markPreflightUnavailableStages(jobId, job) {
 const resumableRepairStatuses = new Set(["connector-failed", "timeout", "pending"]);
 
 export function asinsForSyncStage(job, stageId, readinessCandidates, requestedAsins = readinessCandidates) {
+  const repairAsins = job?.stages?.find(stage => stage.id === stageId)?.repairAsins;
+  if (Array.isArray(repairAsins)) return requestedAsins.filter(asin => repairAsins.includes(asin));
   if (!Array.isArray(job?.resumeStages)) return [...readinessCandidates];
   if (!job.resumeStages.includes(stageId)) return [];
   return requestedAsins.filter((asin) =>
     resumableRepairStatuses.has(job.asinProgress?.[asin]?.[stageId]?.status)
   );
+}
+
+export function repairProviderEnvironment(job, stageId, env = {}) {
+  return Array.isArray(job?.stages?.find(stage => stage.id === stageId)?.repairAsins)
+    ? { ...env, FORCE_REFRESH: "0", AGENT_SYNC_REPAIR_INCOMPLETE: "1" }
+    : env;
+}
+
+export function finalizeRepairCachedStages(jobId, job, finalize = finalizeCachedStage) {
+  for (const stage of job?.stages ?? []) {
+    if (Array.isArray(stage.repairAsins) && stage.repairAsins.length === 0) {
+      finalize(jobId, stage.id, job.asins);
+    }
+  }
 }
 
 const explicitSensitiveEnvironmentKeys = new Set([
@@ -648,10 +666,11 @@ const xydcSafeStopReasons = new Set([
   "XYDC_JOB_DATABASE_NOT_CONFIGURED", "XYDC_COLLECTION_STOPPED",
 ]);
 
-export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env = process.env }) {
+export function runOptionalXydcVariantEnrichment({ asins, marketplace, scopeAsins, run, env = process.env }) {
   const childEnvironment = {
     XYDC_ASINS: asins.join(","),
     XYDC_COUNTRY: marketplace,
+    ...(scopeAsins ? { XYDC_JOB_ASINS: scopeAsins.join(","), FORCE_REFRESH: "0", AGENT_SYNC_REPAIR_INCOMPLETE: "1" } : {}),
   };
   if (run) {
     const result = run("variant:xydc:sync", "npm", ["run", "variant:xydc:sync"], childEnvironment);
@@ -663,6 +682,7 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env 
       env: { ...env, ...childEnvironment, AGENT_XYDC_PARENT_IPC: "1" },
     });
     let safeReason;
+    const repairStatuses = {};
     let diagnosticLine = "";
     let discardLine = false;
     child.stderr.on("data", chunk => {
@@ -670,6 +690,8 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env 
       // Drain all stderr, but retain at most 128 ASCII bytes and never echo provider text.
       for (const byte of chunk) {
         if (byte === 10) {
+          const repair = scopeAsins && !discardLine && /^\[xydc-repair\] ([A-Z0-9]{10}) (ready|upstream-empty|timeout|connector-failed)\r?$/.exec(diagnosticLine);
+          if (repair && asins.includes(repair[1])) repairStatuses[repair[1]] = repair[2];
           const match = !discardLine && /^\[xydc\] (XYDC_[A-Z_]+)\r?$/.exec(diagnosticLine);
           diagnosticLine = ""; discardLine = false;
           if (match && xydcSafeStopReasons.has(match[1])) { safeReason = match[1]; return; }
@@ -692,7 +714,7 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, run, env 
       // Preserve the runner's original termination semantics after its directly owned child has drained.
       if (terminationSignal) { process.kill(process.pid, terminationSignal); return; }
       if (code !== 0) console.error(`[warn] optional XYDC collection stopped${safeReason ? `: ${safeReason}` : ""}`);
-      resolve(Object.freeze({ succeeded: code === 0 }));
+      resolve(Object.freeze({ succeeded: code === 0, ...(scopeAsins ? { repairStatuses } : {}) }));
     });
   });
 }
@@ -753,7 +775,7 @@ export function jobProviderEnvironment(jobId, stage, env = {}) {
   };
 }
 
-function createJobProviderController(jobId) {
+function createJobProviderController(jobId, initialJob) {
   const tracker = createProviderDegradationTracker({ threshold: 1 });
   const diagnostics = [];
   const persist = () => patchSyncJob(jobId, {
@@ -785,7 +807,7 @@ function createJobProviderController(jobId) {
         return { ...result, diagnostics: invocationDiagnostics,
           statusesByAsin: diagnosticStatusesByAsin(asins, invocationDiagnostics) };
       };
-      const commandEnv = jobProviderEnvironment(jobId, stage, dispatch.env);
+      const commandEnv = jobProviderEnvironment(jobId, stage, repairProviderEnvironment(initialJob, stage, dispatch.env));
       if (streamingScript) {
         const deadline = Number(commandEnv.SORFTIME_COLLECTION_DEADLINE);
         return runSorftimeCommand({ args: [path.join(root, "scripts", streamingScript)], asins,
@@ -919,7 +941,13 @@ export function runCatalogPhase({
   } else if (shouldRun(job, "catalog")) {
     finalizeCached(jobId, "catalog", asins);
   }
-  return runXydc({ asins, marketplace });
+  const catalogStage = job?.stages?.find(stage => stage.id === "catalog");
+  const xydcAsins = Array.isArray(catalogStage?.repairAsins)
+    ? asins.filter(asin => (catalogStage.repairXydcAsins ?? []).includes(asin))
+    : asins;
+  return xydcAsins.length ? runXydc({ asins: xydcAsins, marketplace,
+    ...(Array.isArray(catalogStage?.repairAsins) ? { scopeAsins: asins } : {}),
+  }) : undefined;
 }
 
 function catalogProviderPlanForJob(job) {
@@ -954,9 +982,10 @@ async function main() {
   const { asins, marketplace } = job;
   const catalogProviderPlan = catalogProviderPlanForJob(job);
   const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins), asins);
-  const providers = createJobProviderController(jobId);
+  const providers = createJobProviderController(jobId, job);
 
   try {
+    finalizeRepairCachedStages(jobId, job);
     if (shouldRunSyncStage(job, "queue")) {
       activateStage(jobId, "queue");
       patchSyncJob(jobId, {
@@ -970,7 +999,7 @@ async function main() {
       setAlexaManualStage(jobId, asins, asins.map(asin => ({ asin })), new Date().toISOString());
     }
 
-    await runCatalogPhase({
+    const xydcResult = await runCatalogPhase({
       jobId,
       job,
       asins,
@@ -979,6 +1008,12 @@ async function main() {
       catalogProviderPlan,
       providers,
     });
+    for (const asin of job.stages.find(stage => stage.id === "catalog")?.repairXydcAsins ?? []) {
+      markAsinModule(jobId, asin, "xydc_orders", {
+        status: xydcResult?.repairStatuses?.[asin] ?? "connector-failed",
+        reason: xydcResult?.repairStatuses?.[asin] === "ready" ? null : "西柚子体或全年订单仍有缺口",
+      });
+    }
 
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
@@ -1231,13 +1266,13 @@ async function main() {
         command: "npm",
         args: ["run", "image-remarks:sync"],
         cwd: root,
-        env: {
+        env: repairProviderEnvironment(job, "image_remarks", {
           ...process.env,
           REMARK_ASINS: imageAsins.join(","),
           AGENT_SYNC_JOB_ID: jobId,
           AGENT_SYNC_STAGE_ID: "image_remarks",
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
-        },
+        }),
         onProgress: (event) => {
           latestImageStageDetail = formatImageRemarkStageDetail(event);
           setStage(jobId, "image_remarks", {
@@ -1247,7 +1282,8 @@ async function main() {
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
       });
-      applyPersistedStagePostcondition(jobId, "image_remarks", imageAsins, {
+      finalizeProcessedStageCohort(jobId, "image_remarks", imageAsins, asins, {
+        initialJob: job,
         commandSucceeded: imageProcess.succeeded,
         resultStatusesByAsin: readImageRemarkStatuses(),
         unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",

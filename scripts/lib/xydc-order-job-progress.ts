@@ -31,6 +31,11 @@ const JobSchema = z.object({
   jobId: z.string(), organizationId: z.string(), projectId: z.string(), runId: z.string(), country: z.string(),
   asins: z.array(z.string()), state: z.enum(["queued", "running", "completed", "failed"]), workerId: z.string().nullable(),
   leaseGeneration: z.number().int().nonnegative(), leaseValid: z.boolean(), runState: z.string(),
+  stages: z.array(z.object({
+    id: z.string(),
+    repairParentJobId: z.string().trim().min(1).optional(),
+    repairXydcAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).optional(),
+  })).optional(),
 });
 type Job = z.infer<typeof JobSchema>;
 function sameSet(left: readonly string[], right: readonly string[]) {
@@ -41,7 +46,7 @@ export function createXydcJobAuthority(pool: Pick<Pool, "query">) {
     if (!scope.currentRunId) return null;
     const query = {
       text: `SELECT job.job_id AS "jobId", job.organization_id AS "organizationId", job.project_id AS "projectId",
-        job.run_id AS "runId", job.marketplace AS country, job.asins, job.status AS state,
+        job.run_id AS "runId", job.marketplace AS country, job.asins, job.stages, job.status AS state,
         job.leased_by AS "workerId", job.lease_generation AS "leaseGeneration",
         COALESCE(job.lease_expires_at > clock_timestamp(), false) AS "leaseValid", run.status AS "runState"
         FROM sync_jobs job JOIN analysis_runs run ON run.id=job.run_id AND run.project_id=job.project_id
@@ -160,7 +165,18 @@ export async function readXydcOrderProgress(
     || JSON.stringify(record.window) !== JSON.stringify(getXydcOrderWindow(now))
     || Date.parse(record.updatedAt) > now.getTime()
     || (isXydcOrderProgressTerminal(record.state) && now.getTime() - Date.parse(record.updatedAt) > DAY_MS)) return view;
-  const expected = familyScope(families, scope);
+  // Only authoritative persisted repair metadata can narrow displayed family progress.
+  // The job/lease authority above still validates the entire original ASIN scope.
+  const repairStages = job.stages?.filter(stage => stage.id === "catalog" && stage.repairXydcAsins !== undefined) ?? [];
+  let progressScope = scope;
+  if (repairStages.length) {
+    const repair = repairStages[0]!;
+    const targets = repair.repairXydcAsins!;
+    if (repairStages.length !== 1 || !repair.repairParentJobId || new Set(targets).size !== targets.length
+      || targets.some(asin => !scope.asins.includes(asin))) return view;
+    progressScope = { ...scope, asins: targets };
+  }
+  const expected = familyScope(families, progressScope);
   const actual = record.families.map(family => ({ ...family, childAsins: [...family.childAsins].sort() })).sort((a, b) => a.parentAsin.localeCompare(b.parentAsin));
   if (!expected.length || JSON.stringify(actual) !== JSON.stringify(expected)) return view;
   let state = record.state;

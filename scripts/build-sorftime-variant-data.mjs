@@ -5,6 +5,7 @@ import { createSorftimeBudget } from "./lib/sorftime-request-budget.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   isForceRefresh,
+  isRepairIncomplete,
   logCacheHit,
   readCachedDataExport,
 } from "./lib/sync-cache.mjs";
@@ -285,6 +286,7 @@ export const sorftimeVariantData: Record<string, SorftimeVariant[]> = ${JSON.str
 
   for (const parentAsin of asins) {
     const cached = existing[parentAsin];
+    const priorOutcome = outcomes[parentAsin];
     if (
       !isForceRefresh() &&
       Array.isArray(cached) &&
@@ -309,12 +311,24 @@ export const sorftimeVariantData: Record<string, SorftimeVariant[]> = ${JSON.str
           console.log(`@@sorftime-progress@@${JSON.stringify(progress)}`);
         },
       });
+      const losesCachedDetail = Array.isArray(cached) && cached.some(previous => {
+        const next = records[parentAsin].find(row => row.asin === previous.asin);
+        return !next || ["image", "launch", "reviews", "reviewShare", "childSales"].some(field => previous[field] != null && next[field] == null);
+      });
+      if (isRepairIncomplete() && (outcomes[parentAsin]?.state === "partial" || losesCachedDetail) && Array.isArray(cached) && cached.length) {
+        records[parentAsin] = cached;
+        outcomes[parentAsin] = { ...priorOutcome, state: "partial", reasonCode: "REPAIR_RETAINED_CACHE" };
+        // Optional enrichment must not trip the connector breaker for the following core-sales request.
+        console.error(`[repair-incomplete] ${parentAsin} optional variant details retained`);
+        process.exitCode = 1;
+      }
       console.log(` ${records[parentAsin].length} children`);
     } catch (error) {
       outcomes[parentAsin] = { state: "partial", reasonCode: error?.name === "TimeoutError" || error?.diagnostic?.failureKind === "timeout" ? "REQUEST_TIMEOUT" : "CONNECTOR_FAILED", fetchedAt };
       if (Array.isArray(cached) && cached.length) {
         console.log(` error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[parentAsin] = cached;
+        if (isRepairIncomplete()) outcomes[parentAsin] = { ...priorOutcome, state: "partial", reasonCode: "REPAIR_RETAINED_CACHE" };
       } else {
         records[parentAsin] = [];
         console.log(` error: ${error instanceof Error ? error.message : String(error)}`);

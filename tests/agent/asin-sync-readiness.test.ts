@@ -106,7 +106,7 @@ test("idle readiness maps every stage to its own field", () => {
   assert.equal(imageStage?.detail, "最多同时分析 4 张图片 · 单图上限 120 秒");
 });
 
-test("sync display truthfully exposes base-ready, enriching, manual and partial per-ASIN gaps", () => {
+test("sync display exposes automatic data gaps without listing manual Alexa VOC as a gap", () => {
   assert.equal(jobLifecycleLabel("base-ready"), "基础数据已就绪");
   assert.equal(jobLifecycleLabel("enriching"), "正在补充图片备注");
   assert.deepEqual(collectAsinModuleGaps({
@@ -116,7 +116,6 @@ test("sync display truthfully exposes base-ready, enriching, manual and partial 
       image_remarks: { status: "timeout", reason: "图片分析超过 90 秒", updatedAt: "2026-08-22T00:00:00.000Z" },
     },
   }), [
-    { asin: "B0C4XRN398", module: "alexa_voc", status: "manual", reason: "需人工录入" },
     { asin: "B0C4XRN398", module: "image_remarks", status: "timeout", reason: "图片分析超过 90 秒" },
   ]);
 });

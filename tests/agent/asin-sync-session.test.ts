@@ -2177,7 +2177,7 @@ test("a restored failed job with pending publication keeps terminal actions gate
     await page.waitForTimeout(200);
     assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 1);
     assert.equal(await page.getByRole("button", { name: "查看详情", exact: true }).count(), 1);
-    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 0);
     assert.equal(await page.getByRole("button", { name: "关闭", exact: true }).count(), 0);
     assert.equal(calls.post, 0);
   } finally {
@@ -2241,7 +2241,7 @@ test("a current failed job with pending publication keeps terminal actions visib
     await page.waitForTimeout(1_700);
     assert.equal(calls.post, 1);
     assert.equal(await page.locator('[data-sync-history="collapsed"]').count(), 0);
-    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "关闭", exact: true }).count(), 1);
   } finally {
     await page.close();
@@ -2362,7 +2362,7 @@ test("storage failure retains completed and failed URL pointers without reload o
       assert.equal(documentNavigations.length, 2, `${status} has only the initial visit and the explicit test reload`);
       assert.equal(calls.post, 0, `${status} cannot auto-start on a fresh mount`);
       if (status === "failed") {
-        await page.getByRole("button", { name: "重新发起", exact: true }).click();
+        await page.getByRole("button", { name: "补抓未完成", exact: true }).click();
         await page.waitForTimeout(120);
         assert.equal(calls.post, 1, "an explicit failed-job restart may clear the retained URL pointer and start once");
       }
@@ -2433,8 +2433,8 @@ test("retained completed terminal UI exposes exactly one explicit restart in eve
         const wrapper = tab === "overview" ? "&wrapper=progress" : "";
         await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=${tab}${wrapper}&storage=fail&run=${runId}&syncJob=job-1`);
         await page.waitForTimeout(160);
-        assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1, `${tab}/${status} exposes explicit retained-terminal restart`);
-        await page.getByRole("button", { name: "重新发起", exact: true }).click();
+        assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 1, `${tab}/${status} exposes explicit retained-terminal restart`);
+        await page.getByRole("button", { name: "补抓未完成", exact: true }).click();
         await page.waitForTimeout(130);
         assert.equal(calls.get, 1, `${tab}/${status} does not reread the retired terminal job`);
         assert.equal(calls.post, 1, `${tab}/${status} starts exactly one replacement job`);
@@ -2946,7 +2946,7 @@ test("terminal publication blocks through two pending GETs then converges to the
     assert.equal(calls.post, 0);
     assert.deepEqual({
       resume: await page.getByRole("button", { name: "续跑失败阶段", exact: true }).count(),
-      restart: await page.getByRole("button", { name: "重新发起", exact: true }).count(),
+      restart: await page.getByRole("button", { name: "补抓未完成", exact: true }).count(),
       dismiss: await page.getByRole("button", { name: "收起", exact: true }).count(),
     }, { resume: 0, restart: 0, dismiss: 0 }, "terminal actions are unavailable while publication is pending");
     assert.equal(new URL(page.url()).searchParams.get("syncJob"), "job-1", "pending publication cannot dismiss the canonical job pointer");
@@ -2968,7 +2968,7 @@ test("terminal publication blocks through two pending GETs then converges to the
     assert.equal(convergedUrl.searchParams.get("webArtifact"), null);
     assert.equal(documentNavigations.length, 2, "one automatic document navigation follows the initial visit");
     assert.equal(await page.getByRole("button", { name: "续跑失败阶段", exact: true }).count(), 1, "applied publication restores resumable repair");
-    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1, "applied publication restores explicit restart");
+    assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 1, "applied publication restores explicit restart");
     await page.waitForTimeout(1_700);
     assert.equal(calls.post, 0, "the converged page does not create or resume a job");
     assert.deepEqual(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { completions: number; reloads: number } }).syncTerminalEvents), { completions: 1, reloads: 1 });
@@ -3030,7 +3030,7 @@ test("an applied artifact already on the root reports published without reloadin
     assert.equal(documentNavigations.length, 1, "removing the marker does not reload the page");
     assert.equal(new URL(page.url()).searchParams.get("webArtifact"), null);
     assert.equal(new URL(page.url()).searchParams.get("artifact"), currentArtifactId);
-    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1);
     assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
   } finally {
@@ -3073,7 +3073,7 @@ test("failed publication preserves business progress, shows fixed copy, and neve
     assert.deepEqual(calls, { get: 1, post: 0, health: 0 });
     assert.equal(await page.getByText("新数据已发布，请手动刷新", { exact: true }).count(), 0);
     assert.equal(navigations.length, 1);
-    assert.equal(await page.getByRole("button", { name: "重新发起", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "补抓未完成", exact: true }).count(), 1);
     assert.equal(await page.getByRole("button", { name: "收起", exact: true }).count(), 1);
     assert.equal(await page.evaluate(() => (window as unknown as { syncTerminalEvents: { reloads: number } }).syncTerminalEvents.reloads), 0);
   } finally {

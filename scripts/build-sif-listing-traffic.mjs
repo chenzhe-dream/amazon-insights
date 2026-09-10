@@ -1,3 +1,4 @@
+import { createRepairSafeRecordMap, isRepairIncomplete, reportIncompleteRepair } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
@@ -111,8 +112,8 @@ async function main() {
 
   const existingListing = readCachedDataExport(listingRawPath, "sifListingTrafficRawByAsin");
   const existingMonthly = readCachedDataExport(monthlyRawPath, "sifMonthlyTrafficRawByAsin");
-  const listingRecords = { ...existingListing };
-  const monthlyRecords = { ...existingMonthly };
+  const listingRecords = createRepairSafeRecordMap(existingListing);
+  const monthlyRecords = createRepairSafeRecordMap(existingMonthly);
 
   if (!headers && !Object.keys(existingListing).length) {
     console.error("[error] 未找到 SIF MCP 密钥，且无可用流量缓存");
@@ -143,6 +144,33 @@ async function main() {
 
     if (!headers) {
       console.log(`[skip] ${asin} · 无 MCP key，保留已有缓存或跳过`);
+      continue;
+    }
+
+    if (isRepairIncomplete()) {
+      // Commit each missing part separately: a failed sibling must not lose a successful response.
+      for (const part of ["overview", "structure", "monthly"]) {
+        const complete = part === "overview" ? cachedListing?.overview?.total > 0
+          : part === "structure" ? cachedListing?.structure?.chars?.dims?.length > 0 : monthlyReady;
+        if (complete) continue;
+        try {
+          const payload = await callSifTool(part === "overview" ? "ops_get_listing_traffic_overview"
+            : part === "structure" ? "ops_get_listing_traffic_structure" : "ops_get_asin_traffic_trend", {
+            asin, country: marketplace,
+            ...(part === "monthly" ? {granularity: "month", lastMonths: 6, listingSearch: true}
+              : {...TRAFFIC_QUERY, ...(part === "structure" ? {pageSize: 20} : {})}),
+          });
+          const value = part === "overview" ? normalizeOverview(payload) : part === "structure" ? normalizeStructure(payload) : normalizeMonthlyTrend(payload);
+          const valid = part === "overview" ? value.total > 0 : part === "structure" ? value.chars.dims.length > 0 : value.dates.length && value.nf.length;
+          if (!valid) throw new Error(`${part}: empty provider response`);
+          if (part === "monthly") monthlyRecords[asin] = {fetchedAt, ...value};
+          else listingRecords[asin] = {...listingRecords[asin], fetchedAt: cachedListing?.fetchedAt ?? fetchedAt, [part]: value};
+          latestNotice = payload.data_notice ?? latestNotice;
+        } catch (error) {
+          console.error(`[repair-incomplete] ${asin} ${part}: ${error instanceof Error ? error.message : String(error)}`);
+          reportIncompleteRepair(asin);
+        }
+      }
       continue;
     }
 

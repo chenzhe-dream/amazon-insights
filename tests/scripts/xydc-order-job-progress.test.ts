@@ -81,7 +81,7 @@ test("isolated PostgreSQL authority and bounded sidecars follow fixed lease, run
   try {
     await fixture.pool.query(`CREATE TABLE analysis_runs(id text PRIMARY KEY, organization_id text, project_id text, status text);
       CREATE TABLE sync_jobs(job_id text PRIMARY KEY, organization_id text, project_id text, run_id text, marketplace text,
-      asins jsonb, status text, leased_by text, lease_generation integer, lease_expires_at timestamptz, created_at timestamptz DEFAULT now());
+      asins jsonb, stages jsonb DEFAULT '[]', status text, leased_by text, lease_generation integer, lease_expires_at timestamptz, created_at timestamptz DEFAULT now());
       INSERT INTO analysis_runs VALUES ('run','org','project','running')`);
     await fixture.pool.query(`INSERT INTO sync_jobs(job_id,organization_id,project_id,run_id,marketplace,asins,status,leased_by,lease_generation,lease_expires_at)
       VALUES ('job','org','project','run','US',$1,'running','worker',1,now()+interval '1 hour')`, [JSON.stringify(asins)]);
@@ -140,5 +140,16 @@ test("isolated PostgreSQL authority and bounded sidecars follow fixed lease, run
     const phase = new AbortController();
     await assert.rejects(() => writeXydcOrderProgress(root, { ...record(), state: "failed" }, async () => { phase.abort(); }, phase.signal));
     assert.equal(await readFile(file, "utf8"), before);
+    const repairScope = { ...scope, asins: asins.slice(0, 2) };
+    const repairFamilies = repairScope.asins.map((asin, index) => ({ ...families[0]!, inputAsin: asin, parentAsin: `B00000001${index}`, children: [families[0]!.children[index]!] }));
+    await fixture.pool.query("UPDATE sync_jobs SET asins=$1, stages=$2", [JSON.stringify(repairScope.asins), JSON.stringify([{ id: "catalog", repairParentJobId: "previous", repairXydcAsins: [asins[1]] }])]);
+    const repairRecord = { ...record(), families: [{ parentAsin: repairFamilies[1]!.parentAsin, childAsins: [asins[1]!] }], children: [{ asin: asins[1]!, state: "ready" as const, reasonCode: null }], state: "completed" as const };
+    await writeXydcOrderProgress(root, repairRecord, () => authority.assert(identity, repairScope, signal), signal);
+    assert.deepEqual((await readXydcOrderProgress(root, repairScope, repairFamilies, authority))?.progress?.total, 1, "a DB-authorized one-ASIN repair remains visible inside a two-ASIN job");
+    await assert.rejects(() => authority.assert(identity, { ...repairScope, asins: [asins[1]!] }, signal), /CANCELLED/, "provider authority still requires the full job ASIN set");
+    for (const stages of [[], [{ id: "catalog", repairParentJobId: "previous", repairXydcAsins: [asins[0]] }], [{ id: "catalog", repairXydcAsins: [asins[1]] }], [{ id: "catalog", repairParentJobId: "previous", repairXydcAsins: ["B000000099"] }]]) {
+      await fixture.pool.query("UPDATE sync_jobs SET stages=$1", [JSON.stringify(stages)]);
+      assert.equal((await readXydcOrderProgress(root, repairScope, repairFamilies, authority))?.progress, null, "arbitrary or mismatched subsets remain hidden");
+    }
   } finally { await fixture.close(); await rm(root, { recursive: true, force: true }); }
 });

@@ -4,6 +4,7 @@ import {
   IMAGE_REMARK_POLICY_DETAIL,
 } from "../../scripts/lib/image-remark-policy.mjs";
 import { readSyncJob } from "../../scripts/lib/sync-job-store.mjs";
+import { asinsNeedingXydcRepair } from "../../scripts/lib/xydc-repair-readiness";
 
 import type {
   AsinModuleStatus,
@@ -67,6 +68,7 @@ type StatusModule = {
 };
 
 type SyncJobServiceDependencies = {
+  findXydcRepairAsins?: (asins: readonly string[], marketplace: string) => Promise<string[]>;
   loadStatusModule?: () => Promise<StatusModule>;
   now?: () => string;
   providerReadiness?: Pick<SyncProviderReadinessService, "plan"> | null;
@@ -74,8 +76,25 @@ type SyncJobServiceDependencies = {
   loadSyncJobMirror?: (jobId: string) => unknown | Promise<unknown>;
 };
 
+export class SyncRepairScopeError extends Error {}
+export type SyncJobStartInput = SyncJobScope & {
+  asins: string[];
+  marketplace: string;
+  mode?: "repair-incomplete";
+  parentJobId?: string;
+};
+export type SyncJobStartedResult = {
+  job: SyncJob;
+  reused: boolean;
+  mcpAsinsPending: string[];
+  estimatedAutoSeconds: number;
+  estimatedAlexaSeconds: number;
+};
+export type SyncJobStartResult = SyncJobStartedResult | { noWork: true; message: "暂无待补抓数据" };
+
 export class SyncJobService {
   readonly #syncJobs: SyncJobRepository;
+  readonly #findXydcRepairAsins: (asins: readonly string[], marketplace: string) => Promise<string[]>;
   readonly #loadStatusModule: () => Promise<StatusModule>;
   readonly #now: () => string;
   readonly #providerReadiness: Pick<SyncProviderReadinessService, "plan"> | null;
@@ -87,6 +106,7 @@ export class SyncJobService {
     dependencies: SyncJobServiceDependencies = {},
   ) {
     this.#syncJobs = syncJobs;
+    this.#findXydcRepairAsins = dependencies.findXydcRepairAsins ?? asinsNeedingXydcRepair;
     this.#loadStatusModule = dependencies.loadStatusModule ?? loadStatusModule;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#providerReadiness = dependencies.providerReadiness ?? null;
@@ -94,9 +114,24 @@ export class SyncJobService {
     this.#loadSyncJobMirror = dependencies.loadSyncJobMirror ?? readSyncJob;
   }
 
-  async start(input: SyncJobScope & { asins: string[]; marketplace: string }) {
+  async start(input: SyncJobStartInput & { mode?: undefined }): Promise<SyncJobStartedResult>;
+  async start(input: SyncJobStartInput): Promise<SyncJobStartResult>;
+  async start(input: SyncJobStartInput): Promise<SyncJobStartResult> {
     const marketplace = normalizeMarketplace(input.marketplace);
     const asins = normalizeAsins(input.asins);
+    if (input.mode === "repair-incomplete") {
+      if (!input.projectId || !input.parentJobId || input.runId) {
+        throw new SyncRepairScopeError("Repair requires a project and parent without run reuse");
+      }
+      const parent = await this.#syncJobs.findById(input.parentJobId);
+      if (!parent || parent.organizationId !== input.organizationId || parent.projectId !== input.projectId || parent.marketplace !== marketplace || !sameStringArray(normalizeAsins(parent.asins), asins)) {
+        throw new SyncRepairScopeError("Repair parent scope does not match");
+      }
+      if (["queued", "running"].includes(parent.status)) {
+        return { job: toPublicSyncJob(parent), reused: true, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
+      }
+      if (!["completed", "failed"].includes(parent.status)) throw new SyncRepairScopeError("Repair parent must be terminal");
+    } else if (input.parentJobId) throw new SyncRepairScopeError("Repair parent requires repair mode");
     const statusMod = await this.#loadStatusModule();
     const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
     const needing = statusMod.asinsNeedingMcpSync(asins);
@@ -104,6 +139,11 @@ export class SyncJobService {
     const listingPending = statusMod.asinsNeedingListingSync(asins);
     const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
+    const repairTargets = input.mode === "repair-incomplete" ? repairTargetsFor(statuses) : undefined;
+    const repairXydcAsins = repairTargets ? await this.#findXydcRepairAsins(asins, marketplace) : undefined;
+    if (repairTargets && !Object.values(repairTargets).some(targets => targets.length) && !repairXydcAsins?.length) {
+      return { noWork: true, message: "暂无待补抓数据" };
+    }
     const vocPending = statuses.filter((item) => item.voc === "missing");
     const automaticStages = automaticStagesNeedingSync(statuses);
     const readinessPlan = !this.#bypassProviderReadiness && this.#providerReadiness
@@ -143,6 +183,7 @@ export class SyncJobService {
         createdAt,
         automaticStages,
         unavailable: readinessPlan?.unavailable ?? [],
+        ...(repairTargets ? { repairTargets, repairParentJobId: input.parentJobId, repairXydcAsins } : {}),
       }),
       currentStageId: "queue",
       message: "任务已排队",
@@ -344,6 +385,11 @@ function automaticStagesNeedingSync(statuses: readonly AsinModuleStatus[]) {
   return stages;
 }
 
+function repairTargetsFor(statuses: readonly AsinModuleStatus[]): Record<string, string[]> {
+  const fields = { catalog: "inCatalog", keywords: "keywords", reviews: "reviews", sales_trend: "sales", child_sales: "childSales", price_strategy: "priceStrategy", fba: "fba", listing: "listing", category: "category", traffic: "traffic", image_remarks: "imageRemarks" } as const;
+  return Object.fromEntries(Object.entries(fields).map(([stage, field]) => [stage, statuses.filter(status => field === "inCatalog" ? !status.inCatalog : status[field] === "missing").map(status => status.asin)]));
+}
+
 export function isSyncJobAdmissionLimitError(error: unknown): boolean {
   return error instanceof Error &&
     /(?:queued sync job limit|sync job backlog limit)/i.test(error.message);
@@ -414,6 +460,9 @@ function buildInitialStages(input: {
   createdAt: string;
   automaticStages: readonly string[];
   unavailable: readonly SyncProviderReadinessDetail[];
+  repairTargets?: Record<string, string[]>;
+  repairParentJobId?: string;
+  repairXydcAsins?: string[];
 }): readonly SyncJobStageRecord[] {
   const automaticStageIds = new Set(input.automaticStages);
   const unavailableConnectorIds = new Set(input.unavailable.map(item => item.connectorId));
@@ -464,6 +513,8 @@ function buildInitialStages(input: {
         : detail,
       startedAt: null,
       completedAt: connectorIds ? input.createdAt : null,
+      ...(input.repairTargets && id in input.repairTargets ? { repairAsins: input.repairTargets[id], repairParentJobId: input.repairParentJobId } : {}),
+      ...(input.repairTargets && id === "catalog" ? { repairXydcAsins: input.repairXydcAsins ?? [] } : {}),
       ...(id === "alexa_voc"
         ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }
         : {}),

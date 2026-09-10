@@ -162,6 +162,7 @@ export const moduleStatusLabel: Record<AsinModuleResult["status"], string> = {
 
 export function collectAsinModuleGaps(progress: Record<string, Record<string, AsinModuleResult>>) {
   return Object.entries(progress).flatMap(([asin, modules]) => Object.entries(modules)
-    .filter(([, result]) => result.status !== "ready" && result.status !== "pending")
+    .filter(([module, result]) => result.status !== "ready" && result.status !== "pending"
+      && !(module === "alexa_voc" && result.status === "manual"))
     .map(([module, result]) => ({ asin, module, status: result.status, reason: result.reason })));
 }

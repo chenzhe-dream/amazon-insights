@@ -39,7 +39,7 @@ for (const cancellation of ["parent-death", "sigterm", "db-cancelled", "heartbea
     try {
       await postgres.pool.query(`CREATE TABLE analysis_runs(id text PRIMARY KEY, project_id text, status text);
         CREATE TABLE sync_jobs(job_id text PRIMARY KEY, organization_id text, project_id text, run_id text, marketplace text,
-        asins jsonb, status text, leased_by text, lease_generation integer, lease_expires_at timestamptz, created_at timestamptz DEFAULT now());
+        asins jsonb, stages jsonb DEFAULT '[]', status text, leased_by text, lease_generation integer, lease_expires_at timestamptz, created_at timestamptz DEFAULT now());
         INSERT INTO analysis_runs VALUES ('run','project','succeeded');
         INSERT INTO sync_jobs(job_id,organization_id,project_id,run_id,marketplace,asins,status,leased_by,lease_generation,lease_expires_at)
           VALUES ('job','org','project','run','US','["B0CHILD001","B0CHILD002"]','running','worker',1,now()+interval '1 hour')`);

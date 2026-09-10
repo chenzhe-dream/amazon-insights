@@ -21,6 +21,9 @@ export type AsinModuleStatus = {
 };
 
 export type SyncStage = {
+  repairAsins?: string[];
+  repairParentJobId?: string;
+  repairXydcAsins?: string[];
   id: string;
   label: string;
   kind: "auto" | "manual";
