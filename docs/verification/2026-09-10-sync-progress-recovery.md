@@ -43,4 +43,4 @@
 - 使用正式西柚客户端和协调锁执行一次30秒内的失败项恢复，固定两ASIN范围并在请求/写入前检查idle及缓存散列，耗时23612ms。Dimunt取得7子体、QiMH取得1子体；Brightech原ready缓存散列不变。原RPC_ERROR已被真实有效响应替换，不能据此倒推先前错误原因。
 - 对两新父体执行一次最多30秒订单采集，耗时21635ms；原73个订单缓存文件散列全部不变。无整批重跑、无直接任务状态更新。
 - 按页面实际 `readXydcOrderDisplaySnapshot` + `summarizeXydcOrders` 读取：Dimunt父体B0HHN1ZM1W共7子体，Brightech父体B07HDTC939共4子体，QiMH共1子体；三组complete=true、fresh、reasonCode=null，12个子体各返回12个月（2025-09至2026-08）。完整响应不意味着每个月销量非零。
-- 最后活动任务总数0，原sync job仍completed且completed_at不变；除授权更新的两份失败变体缓存及预期stack状态外，原226个受保护文件散列不变。新订单缓存属于本次真实补采。
+- 最后活动任务总数0，原sync job仍completed且completed_at不变。最后散列检查发现除两份失败变体缓存及stack状态外，项目文件也有变化；逐字段比较仅majorCategory由null变为字符串、updatedAt更新，名称/ASIN/其他项目数据不变。现有 `app/lib/project-server.ts` 读取项目时会补充majorCategory并保存，与该变化一致；本次补采脚本不写项目文件，未用备份覆盖此并发更新。其余225个受保护文件散列不变。新订单缓存属于本次真实补采。
