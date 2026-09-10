@@ -1,0 +1,13 @@
+# VOC evidence gating formal release
+
+- User authorized local commit, publication, local Git checkpoint, then module organization; GitHub push remains excluded.
+- Committed completed VOC implementation as `cbfa04d`, merged with repair-incomplete at `5ba042f` in the isolated coordinator worktree. Source commit published: `5ba042f05633b56c7cf2a35bd20bf5a91de4a3c3`.
+- Fresh source checks: backend 103/103; browser/renderer initially 13/14 because the history notice appears during POST busy state before the URL update. Waiting for the expected run URL before asserting fixed the test synchronization; fresh 14/14. Product code unchanged for that correction.
+- Merged checks: backend and repair 114/114, cache/repair scripts 12/12, browser/renderer/page 24/25. The terminal runtime-refresh count case fails with 2 versus 1 in both merged code and an isolated Git archive of formal baseline 1551ed0. This existing failure is not counted as green or silently removed. Build passed.
+- Independent review found no blocking issue. Existing global TypeScript/lint/skill-ZIP debt remains described in the VOC implementation evidence; no real Provider acceptance claimed.
+- Backup: `C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/voc-evidence-20260910T122718Z`; 339 files copied and hash verified, PostgreSQL custom dump 4487117 bytes / 44 TABLE DATA entries.
+- Restored that dump to a disposable localhost-only PostgreSQL container, ran the normal migration runner, verified the new scope trigger and unchanged row digests across all 43 non-migration business tables. Temporary container removed afterward.
+- Formal worktree fast-forwarded from 1551ed0 to 5ba042f. Normal `scripts/manage-formal-stack.ps1 -ProjectRoot <formal> -PublishCode` exited 0. Activity pre/post 0; scope trigger present after normal startup migration.
+- Local Web, LAN Web and Agent health passed. Code hash `fac01b3838ad2626b11ecd0f857bda4555a74393d2a9de87932322223250b9b0` matches both services. Code artifact `0596cc5bf652e9fc092871e174f5fa1964101b58171f2a98a990502517dc94b7` retains current data artifact `6aba1c7eb007738f72dcbdbbf1e67d923258adc33672c36c8f2aecec419d314c` as its base.
+- All 193 protected generated/project/shared/config files remain unchanged. Expected stack/pointer updates occurred. The older 8d9e25f code artifact was pruned by managed artifact retention; its complete verified backup is retained above. This is not loss of business cache data.
+- Local tag `checkpoint/voc-released-before-module-organization-20260910` records the complete published source. No GitHub push; no real provider or collection replay was triggered by this release.
