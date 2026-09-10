@@ -132,6 +132,9 @@ export function normalizeSorftimeToolResult(toolName, result) {
     if (toolName === "product_variations" && text === "No data available.") {
       return { data: [] };
     }
+    if (toolName === "product_reviews" && text === "No reviews found.") {
+      return { data: [] };
+    }
   }
   return normalizeMcpResult(result);
 }

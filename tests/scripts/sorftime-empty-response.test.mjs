@@ -43,3 +43,13 @@ test("valid JSON data remains unchanged", async () => {
   const data = { data: [{ Asin: "B0F43M9KWW", SalesAmount: 12, Property: "Color: Black" }] };
   assert.deepEqual(await call("product_variations", textResult(JSON.stringify(data))), data);
 });
+
+test("observed product_reviews no-review message is empty without inventing reviews", async () => {
+  assert.deepEqual(await call("product_reviews", textResult("No reviews found.")), { data: [] });
+  for (const result of [
+    textResult("No reviews found. Retry later"),
+    { ...textResult("No reviews found."), isError: true },
+    { ...textResult("No reviews found."), structuredContent: { data: [] } },
+    { content: [...textResult("No reviews found.").content, ...textResult("other").content] },
+  ]) await assert.rejects(call("product_reviews", result));
+});

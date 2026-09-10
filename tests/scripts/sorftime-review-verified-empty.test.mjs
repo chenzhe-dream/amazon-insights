@@ -204,6 +204,20 @@ test("empty Customers Say does not discard available reviews or overwrite a succ
   assert.doesNotMatch(result.stderr, /MCP_SCHEMA/);
 });
 
+test("explicit no-review text remains a missing sample rather than inventing zero total reviews", async (t) => {
+  const provider = await fakeSorftimeProvider("no-review-records");
+  t.after(provider.close);
+  const sibling = { ...readyEmpty, asin: "B0SIBLING1", sampledReviews: 5, blocks: [] };
+  const result = await runProductionReviewScript(t, provider.endpoint, {
+    asin, marketplace: "US", fetchedAt: "2026-09-10", status: "ready", rating: 4.5, reviewCount: 100,
+  }, { existingRecords: { [sibling.asin]: sibling } });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.records[asin].status, "pending");
+  assert.equal(deriveAsinModuleStatus(asin, statusSources(result.records)).reviews, "missing");
+  assert.deepEqual(result.records[sibling.asin], sibling);
+  assert.doesNotMatch(result.stderr, /MCP_SCHEMA/);
+});
+
 async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sorftime-review-empty-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -345,7 +359,11 @@ async function fakeSorftimeProvider(mode) {
       response.end("{}");
       return;
     }
-    const result = mode === "empty-summary-with-reviews"
+    const result = mode === "no-review-records"
+      ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text:
+          payload.params.name === "product_customers_say" ? "No relevant data." : "No reviews found.",
+        }] } }
+      : mode === "empty-summary-with-reviews"
       ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text:
           payload.params.name === "product_customers_say" ? "No relevant data." : JSON.stringify({ data: [
             { title: "Useful light", content: "The lamp is bright and easy to use.", star_rating: 5 },

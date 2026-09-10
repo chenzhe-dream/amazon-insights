@@ -1,5 +1,5 @@
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
-import { normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
+import { McpTransportError, normalizeMcpResult, parseMcpResponse } from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
 import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
@@ -67,9 +67,11 @@ export async function callSifTool(toolName, args, options = {}) {
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(args),
     env,
-  }, async () => normalizeMcpResult(
-    await requestSifMcp("tools/call", { name: toolName, arguments: args }, options),
-  ));
+  }, async () => {
+    const result = await requestSifMcp("tools/call", { name: toolName, arguments: args }, options);
+    if (result?.isError === true) throw new McpTransportError("rpc", null, { boundary: "tool-content" });
+    return normalizeMcpResult(result);
+  });
 }
 
 function providerAsin(value) {

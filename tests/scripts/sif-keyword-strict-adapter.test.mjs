@@ -90,3 +90,26 @@ test("does not expose the raw response in runner-facing output", () => {
   assert.equal(result.status, "ready");
   assert.doesNotMatch(JSON.stringify(result), new RegExp(sentinel));
 });
+
+test("recognizes the observed SIF no-data message without reporting zero total keywords", () => {
+  const result = build({ message: "no data returned for this asin/period", data_notice: "Data updated daily" });
+  assert.equal(result.status, "empty");
+  assert.equal(result.totalKeywordsInPeriod, null);
+  assert.deepEqual(result.keywords, []);
+});
+
+test("no-data text cannot hide conflicts, errors or malformed responses", () => {
+  for (const extra of [{ isError: true }, { code: "DENIED" }, { error: "denied" },
+    { top_keywords: "bad" }, { asin: "B000000000" }, { data_notice: {} }, { data: [] }]) {
+    assert.equal(build({ message: "no data returned for this asin/period", ...extra }).status, "schema-error");
+  }
+  assert.equal(build({ message: "no data returned for this asin/period; retry" }).status, "schema-error");
+});
+
+test("SIF tool errors cannot become valid empty keyword responses", async () => {
+  const { callSifTool } = await import('../../scripts/lib/sif-mcp-client.mjs');
+  await assert.rejects(callSifTool('market_get_asin_keyword_signals', { asin, country: marketplace }, {
+    env: { SIF_MCP_SECRET: 'fixture-secret', NODE_ENV: 'test' },
+    fetchImpl: async () => new Response(JSON.stringify({ result: { isError: true, content: [{ type: 'text', text: JSON.stringify({ message: 'no data returned for this asin/period' }) }] } })),
+  }), error => error.kind === 'rpc');
+});
