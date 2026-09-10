@@ -1,3 +1,4 @@
+import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema } from "./voc-evidence-contracts";
 import { z } from "zod";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
@@ -1090,11 +1091,13 @@ export type LegacyProjectEligibilityResponse = z.infer<
 >;
 
 export const CreateRunRequestSchema = strictObject({
+  evidenceSelection: VocEvidenceSelectionRequestSchema.optional(),
   mode: RunModeSchema,
   idempotencyKey: z.string().trim().min(1).max(200),
 });
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export const CreateRunResponseSchema = strictObject({
+  evidenceSelection: VocEvidenceManifestSchema.optional(),
   run: AnalysisRunSchema,
   stages: z.array(RunStageSchema),
 });
@@ -1103,6 +1106,7 @@ export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export const RunIdParamsSchema = strictObject({ runId: EntityIdSchema });
 export type RunIdParams = z.infer<typeof RunIdParamsSchema>;
 export const GetRunResponseSchema = strictObject({
+  evidenceSelection: VocEvidenceManifestSchema.optional(),
   run: AnalysisRunSchema,
   stages: z.array(RunStageSchema),
 });

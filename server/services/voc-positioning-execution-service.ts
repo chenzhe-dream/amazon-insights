@@ -151,6 +151,7 @@ export class VocPositioningExecutionService {
       expectedProjectId: context.projectId,
       expectedMarketplace: snapshot.marketplace,
       expectedAsins: snapshot.asins,
+      ...(snapshot.payload.evidenceSelection ? { allowAsinSubset: true } : {}),
       expectedRunCutoffAt: snapshot.dataCutoffAt,
     });
     if (facts.evidenceIndex.length === 0) {
@@ -173,6 +174,7 @@ export class VocPositioningExecutionService {
             "kind",
             "snapshot",
             "factsDigest",
+            "evidenceSelection",
             "coverage",
             "dimensions",
             "evidenceIndex",

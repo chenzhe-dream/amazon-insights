@@ -1,3 +1,6 @@
+import { buildVocEvidenceInventory } from "./voc-evidence-inventory-service";
+import type { VocEvidenceSelectionRequest } from "../../shared/voc-evidence-contracts";
+import type { RuntimeAgentRepository } from "../db/repository";
 import { randomUUID } from "node:crypto";
 import { vocQueueTimeoutError } from "../domain/voc/queue-deadline";
 
@@ -149,6 +152,16 @@ export class AnalysisRunService {
       options.dependencyStateProvider ?? unavailableDependencyStateProvider;
   }
 
+  async getVocInputs(projectId: string, baseSyncRunId: string, selectedAsins: readonly string[]) {
+    const { project } = await this.getProject(projectId);
+    try {
+      const result = await buildVocEvidenceInventory({ repository: this.#repository as RuntimeAgentRepository, project, baseSyncRunId, selectedAsins, dataCutoffAt: this.#now() });
+      return result.inventory;
+    } catch (error) {
+      throw new AnalysisLifecycleError(409, error instanceof Error ? error.message : "VOC inputs unavailable");
+    }
+  }
+
   createProject(input: CreateProjectRequest, idempotencyKey: string): Promise<{
     response: CreateProjectResponse;
     created: boolean;
@@ -197,6 +210,7 @@ export class AnalysisRunService {
       projectId,
       mode: input.mode,
       idempotencyKey: input.idempotencyKey,
+      evidenceSelection: input.evidenceSelection,
     });
     return this.getRun(created.run.id);
   }
@@ -206,6 +220,7 @@ export class AnalysisRunService {
     projectId: string;
     mode: "existing-data" | "collect-missing";
     idempotencyKey: string;
+    evidenceSelection?: VocEvidenceSelectionRequest;
   }>): Promise<Readonly<{
     run: AnalysisRun;
     snapshot: VocDataSnapshotRecord;
@@ -222,12 +237,17 @@ export class AnalysisRunService {
         if (project.marketplace !== "US") {
           throw new AnalysisLifecycleError(409, "Project marketplace is not supported");
         }
+        const selection = input.evidenceSelection;
+        if (selection && input.mode !== "existing-data") throw new AnalysisLifecycleError(409, "Evidence analysis uses existing data only");
+        const selectedAsins = selection ? [...selection.selectedAsins].sort() : project.asins;
+        if (!selectedAsins.length || selectedAsins.some(asin => !project.asins.includes(asin))) throw new AnalysisLifecycleError(409, "Invalid analysis ASIN selection");
         const fingerprint = createRunCreationFingerprint({
           organizationId: project.organizationId,
           projectId: project.id,
           marketplace: "US",
-          asins: project.asins,
+          asins: selectedAsins,
           mode: input.mode,
+          ...(selection ? { evidenceSelection: selection } : {}),
         });
         const claim = await repository.manualAlexaVoc.claimRunCreation({
           organizationId: project.organizationId,
@@ -250,11 +270,11 @@ export class AnalysisRunService {
           asins: [...project.asins].sort(),
         });
         const dataCutoffAt = await repository.manualAlexaVoc.readDatabaseClock();
-        const source = await this.#sourceReader.read({
-          organizationId: project.organizationId,
-          marketplace: "US",
-          asins: project.asins,
-          dataCutoffAt,
+        const evidence = selection ? await buildVocEvidenceInventory({ repository: repository as RuntimeAgentRepository, project, baseSyncRunId: selection.baseSyncRunId, selectedAsins, dataCutoffAt }) : null;
+        const manifest = selection?.sourcePolicy === "manual-with-review-fallback" ? evidence?.inventory.fallback : evidence?.inventory.manual;
+        if (manifest && manifest.fingerprint !== selection!.expectedInputFingerprint) throw new AnalysisLifecycleError(409, "输入已变化，请刷新来源清单后再次点击分析");
+        const source = evidence ? { candidate: selection!.sourcePolicy === "manual-with-review-fallback" ? evidence.fallbackCandidate : evidence.manualCandidate } : await this.#sourceReader.read({
+          organizationId: project.organizationId, marketplace: "US", asins: selectedAsins, dataCutoffAt,
         });
         if (!source.candidate) {
           throw new AnalysisLifecycleError(
@@ -281,6 +301,7 @@ export class AnalysisRunService {
           repository,
           creation.run,
           dataCutoffAt,
+          !!selection,
         );
         const snapshot = await persistVocDataSnapshot({
           repository,
@@ -289,12 +310,19 @@ export class AnalysisRunService {
           runId: creation.run.id,
           projectId: project.id,
           marketplace: "US",
-          asins: project.asins,
+          asins: selectedAsins,
           dataCutoffAt,
           candidateId: this.#createId(),
           createdAt: dataCutoffAt,
           candidate: source.candidate,
         });
+        if (evidence?.keywordCandidate) {
+          await (repository as RuntimeAgentRepository).createKeywordAnalysisSnapshotForRun({
+            actorId: this.#context.actorId, actorOrganizationId: this.#context.organizationId, runId: creation.run.id,
+            expectedProjectId: project.id, expectedMarketplace: "US", expectedAsins: selectedAsins,
+            expectedRunCutoffAt: dataCutoffAt, allowAsinSubset: true, candidateId: this.#createId(), createdAt: dataCutoffAt, candidate: evidence.keywordCandidate,
+          });
+        }
         await repository.manualAlexaVoc.completeRunCreation({
           organizationId: project.organizationId,
           idempotencyKey: input.idempotencyKey,
@@ -331,8 +359,9 @@ export class AnalysisRunService {
       !snapshot ||
       snapshot.runId !== run.id ||
       snapshot.marketplace !== project.marketplace ||
-      snapshot.asins.length !== project.asins.length ||
-      !snapshot.asins.every((asin, index) => asin === project.asins[index]) ||
+      (snapshot.payload.evidenceSelection
+        ? !snapshot.asins.every(asin => project.asins.includes(asin))
+        : snapshot.asins.length !== project.asins.length || !snapshot.asins.every((asin, index) => asin === project.asins[index])) ||
       snapshot.dataCutoffAt !== run.dataCutoffAt
     ) {
       throw new AnalysisLifecycleError(
@@ -347,10 +376,11 @@ export class AnalysisRunService {
     repository: AnalysisRunRepository,
     run: AnalysisRunRecord,
     createdAt: string,
+    vocOnly = false,
   ): Promise<void> {
     const stages: RunStageRecord[] = [];
     for (const definition of stageDefinitions) {
-      if (definition.creationPolicy !== "initial") continue;
+      if (definition.creationPolicy !== "initial" || (vocOnly && definition.name !== "voc-positioning" && definition.name !== "product-definition")) continue;
       const waitingForProductDependencies = definition.name === "product-definition";
       const stage = await repository.createRunStage({
         id: this.#createId(),
@@ -685,7 +715,11 @@ export class AnalysisRunService {
       throw new AnalysisLifecycleError(404, "Run not found");
     }
     const stages = await repository.listRunStages(run.id);
+    const snapshotRepository = repository as Partial<DataSnapshotRepository>;
+    const snapshots = snapshotRepository.listDataSnapshotsByRun ? await snapshotRepository.listDataSnapshotsByRun({ actorOrganizationId: project.organizationId, runId: run.id }) : [];
+    const evidenceSelection = snapshots.find(snapshot => snapshot.payload.evidenceSelection)?.payload.evidenceSelection;
     return GetRunResponseSchema.parse({
+      ...(evidenceSelection ? { evidenceSelection } : {}),
       run: publicRun(run),
       stages: stages.map(publicStage),
     });

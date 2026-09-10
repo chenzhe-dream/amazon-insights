@@ -31,6 +31,7 @@ import {
 } from "../../server/runtime/skill-runner";
 import { SkillRegistry } from "../../server/skills/registry";
 import { createTrustedExecutionAbortReason } from "../../server/runtime/execution-abort";
+import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
 
 const inputSchema = z
   .object({
@@ -266,6 +267,31 @@ test("local runner applies an optional output canonicalizer before Zod validatio
 
   assert.deepEqual(result.value, { summary: "canonical" });
   assert.equal(provider.requests.length, 1);
+});
+
+test("response schema can differ from the trusted canonical output schema", async () => {
+  const provider = new FakeProvider(async () => ({
+    value: { draft: "provider-value" },
+    responseId: "resp_projection",
+    inputTokens: 10,
+    outputTokens: 5,
+  }));
+  const { runner } = await createRunner(provider);
+  const responseSchema = z.strictObject({ draft: z.string() });
+  const result = await runSkill(runner, executionRequest({
+    outputContract: {
+      name: "VocPositioningOutput@1.0.0",
+      schema: outputSchema,
+      responseSchema,
+      canonicalizeOutput: (candidate: unknown) => ({
+        summary: (candidate as { draft: string }).draft,
+      }),
+    },
+  }));
+
+  assert.deepEqual(result.value, { summary: "provider-value" });
+  assert.deepEqual(provider.requests[0]?.responseFormat.format.schema,
+    createStructuredResponseFormat(responseSchema, "VocPositioningOutput@1.0.0").format.schema);
 });
 
 test("undeclared top-level input is rejected before provider invocation", async () => {

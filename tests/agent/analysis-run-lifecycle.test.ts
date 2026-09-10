@@ -2000,3 +2000,25 @@ test("releasing a lease restores a persisted queued run aggregate", async (t) =>
 
   assert.equal((await lifecycle.getRun(created.run.id)).run.status, "queued");
 });
+
+test("VOC inventory GET is authorized, read-only and validates selected scope", async t => {
+ const repository=openSqliteAgentRepository({path:":memory:",busyTimeoutMs:5000});await seedProject(repository);
+ const baseRunId="80000000-0000-4000-8000-000000000001";
+ const project=(await repository.findProjectById(projectId))!;
+ await repository.createAnalysisRun({id:baseRunId,projectId,createdBy:actorId,mode:"existing-data",status:"succeeded",dataCutoffAt:now,idempotencyScope:`sync:${organizationId}:${projectId}`,idempotencyKey:"inventory-job",createdAt:now,updatedAt:now});
+ let reads=0,writes=0;
+ const wrap=(target: typeof repository): typeof repository=>new Proxy(target,{get(target,key){
+  if(key==="syncJobs")return {findById:async()=>({jobId:"inventory-job",organizationId,projectId,runId:baseRunId,marketplace:"US",asins:project.asins}),readStageOutput:async()=>{reads++;return null;}};
+  if(key==="transaction")return (fn:(repo:typeof repository)=>Promise<unknown>)=>target.transaction(transaction=>fn(wrap(transaction as typeof repository)));
+  if(typeof key==="string" && /^(create|update|enqueue|publish|complete|delete)/.test(key))return ()=>{writes++;throw new Error("GET attempted mutation");};
+  const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+ }});
+ const app=buildAgentApp({env:securityEnv,repository:wrap(repository) as never,executionContext:{actorId,organizationId},authConfig,authService:asAuthService(new FakeAuthService(memberPrincipal()))});
+ t.after(async()=>{await app.close();repository.close();});
+ const url=`/v1/projects/${projectId}/voc-inputs?baseSyncRunId=${baseRunId}&asins=${project.asins[0]}`;
+ assert.equal((await app.inject({method:"GET",url,headers:proxyHeaders})).statusCode,401);
+ for(let i=0;i<2;i++){const response=await app.inject({method:"GET",url,headers:sessionHeaders()});assert.equal(response.statusCode,200,response.body);assert.equal(response.json().manual.keywords.state,"missing");}
+ assert.equal(writes,0);assert.equal(reads,4);
+ assert.equal((await app.inject({method:"GET",url:url+","+project.asins[0],headers:sessionHeaders()})).statusCode,400);
+ assert.equal((await app.inject({method:"GET",url:url.replace(projectId,"80000000-0000-4000-8000-000000000002"),headers:sessionHeaders()})).statusCode,404);
+});

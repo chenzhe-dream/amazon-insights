@@ -57,6 +57,7 @@ export interface RepositoryVocSourceReaderOptions {
 }
 
 export interface RepositoryVocReadInput {
+  readonly sourcePolicy?: "manual-only" | "manual-with-review-fallback";
   readonly organizationId: string;
   readonly marketplace: string;
   readonly asins: readonly string[];
@@ -128,24 +129,24 @@ export class RepositoryVocSourceReader {
       : addMarketplaceMismatch(asins, missingSources);
     if (alexa) sourceBundles.push(alexa);
 
-    const sorftime = readReviewSource(
+    const sorftime = input.sourcePolicy === "manual-with-review-fallback" ? readReviewSource(
       "sorftime-review-analysis",
       this.#reviewSources.sorftime,
       asins,
       marketplace,
       dataCutoffAt,
       missingSources,
-    );
+    ) : null;
     if (sorftime) sourceBundles.push(sorftime);
 
-    const sellerSprite = readReviewSource(
+    const sellerSprite = input.sourcePolicy === "manual-with-review-fallback" ? readReviewSource(
       "seller-sprite-review-analysis",
       this.#reviewSources.sellerSprite,
       asins,
       marketplace,
       dataCutoffAt,
       missingSources,
-    );
+    ) : null;
     if (sellerSprite) sourceBundles.push(sellerSprite);
 
     const recordCount = sourceBundles.reduce(
@@ -368,7 +369,7 @@ function readReviewSource(
       continue;
     }
     const parsed = ReviewAnalysisSnapshotRecordSchema.safeParse(raw);
-    if (!parsed.success || parsed.data.asin !== asin) {
+    if (!parsed.success || parsed.data.asin !== asin || !parsed.data.blocks.some(block => block.rows.some(row => row.label.trim()))) {
       addMissing(missing, sourceId, asin, "source-error");
       continue;
     }

@@ -1,6 +1,6 @@
 {
   "id": "define-amazon-product-from-voc-keywords",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entry": "SKILL.md",
   "allowedReferences": [
     "references/integration-rules.md",
@@ -11,5 +11,5 @@
   "fixtures": [
     "voc-keywords-complete-v1"
   ],
-  "contentHash": "27f297ae123b13ccc1014867ed14cc1b88846fe89c036f63ce42de06f9f77860"
+  "contentHash": "0c3a0a580d540ca70906aae371bf1e28200a93c692d387a784654852c8c813df"
 }

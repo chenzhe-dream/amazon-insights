@@ -51,7 +51,7 @@ import { sorftimeRatingData } from "./sorftime-rating-data";
 import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
-import { ProductDefinitionSection } from "./product-definition-section";
+import { VocEvidenceDefinition } from "./voc-evidence-definition";
 import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
@@ -3670,7 +3670,21 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
-        <ProductDefinitionSection products={products} sources={productLaunchSources} />
+        <VocEvidenceDefinition
+          key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
+          projectId={currentProjectId} baseSyncRunId={baseSyncRunId}
+          sessionKey={runtimeSessionKey} organizationId={authSession.user.organizationId}
+          marketplace={market} asins={activeAsins} products={products} sources={productLaunchSources}
+          initialRunId={vocRunIdFromSearch(appSearch)} initialHistoryRunId={new URLSearchParams(appSearch).get("vocHistory")} initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")} refreshToken={JSON.stringify(manualVocByAsin)}
+          enabled={!authSession.logoutPending && workspaceReady}
+          onRunStarted={(runId, selectedAsins, previousRunId) => {
+            const params = new URLSearchParams(window.location.search);
+            params.set("vocRun", runId);
+            if (previousRunId) params.set("vocHistory", previousRunId);
+            params.set("vocAsins", selectedAsins.join(","));
+            replaceAppUrl(params);
+          }}
+        />
       </div>}
 
       {activeTab === "checklist" && <div className="page-content compare-page">

@@ -1,3 +1,4 @@
+import { VocModelEvidenceSchema, toModelEvidenceSelection } from "../../../shared/voc-evidence-contracts";
 import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
@@ -114,6 +115,7 @@ const InputEvidenceSchema = z.strictObject({
 });
 
 export const VocPositioningInputSchema = z.strictObject({
+  evidenceSelection: VocModelEvidenceSchema.optional(),
   schemaVersion: z.literal("1.0.0"),
   kind: z.literal("voc-positioning-input"),
   snapshot: z.strictObject({
@@ -341,6 +343,7 @@ export function buildVocPositioningInput(
       dataCutoffAt: facts.snapshot.dataCutoffAt,
     },
     factsDigest: facts.factsDigest,
+    ...(facts.evidenceSelection ? { evidenceSelection: toModelEvidenceSelection(facts.evidenceSelection) } : {}),
     coverage: facts.availability.map((source) => ({
       sourceId: source.sourceId,
       sourceType: source.sourceType,

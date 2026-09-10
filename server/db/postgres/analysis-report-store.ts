@@ -204,7 +204,7 @@ implements AnalysisReportRepository {
             validated.result.positioningProjection.identity.dataCutoffAt,
           ) ||
           subject.project_marketplace !== facts.snapshot.marketplace ||
-          !isDeepStrictEqual(storedTextList(subject.project_asins_json), facts.snapshot.asins)
+          !(snapshot.payload.evidenceSelection ? facts.snapshot.asins.every(asin => storedTextList(subject.project_asins_json)?.includes(asin)) : isDeepStrictEqual(storedTextList(subject.project_asins_json), facts.snapshot.asins))
         ) {
           throw new AnalysisReportConflictError();
         }
@@ -368,11 +368,13 @@ implements AnalysisReportRepository {
           validated.keywordSnapshotId,
           validated.runId,
         );
+        const vocSnapshot = await this.#requireVocSnapshot(vocReport.snapshotIds[0], validated.runId);
         if (
+          !isDeepStrictEqual(vocSnapshot.asins, keywordSnapshot.asins) ||
           !isDeepStrictEqual(stored.snapshotIds, vocReport.snapshotIds) ||
           keywordSnapshot.marketplace !== "US" ||
           subject.project_marketplace !== keywordSnapshot.marketplace ||
-          !isDeepStrictEqual(storedTextList(subject.project_asins_json), keywordSnapshot.asins) ||
+          !(vocSnapshot.payload.evidenceSelection ? keywordSnapshot.asins.every(asin => storedTextList(subject.project_asins_json)?.includes(asin)) : isDeepStrictEqual(storedTextList(subject.project_asins_json), keywordSnapshot.asins)) ||
           !sameDateTimeInstant(
             mapDateTime(subject.run_data_cutoff_at),
             keywordSnapshot.dataCutoffAt,
@@ -381,6 +383,7 @@ implements AnalysisReportRepository {
           throw new AnalysisReportConflictError();
         }
         const productInput = buildProductDefinitionInput({
+          evidenceSelection: vocSnapshot.payload.evidenceSelection,
           marketplace: "US",
           asins: keywordSnapshot.asins,
           dataCutoffAt: keywordSnapshot.dataCutoffAt,

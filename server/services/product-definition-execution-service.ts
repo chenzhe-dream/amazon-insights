@@ -4,6 +4,14 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
 import { EntityIdSchema } from "../../shared/agent-contracts";
+import {
+  ProductDefinitionOutputShapeSchema,
+  validateProductDefinitionOutputStructure,
+} from "../../shared/product-definition-output";
+import {
+  VocModelEvidenceSchema,
+  toModelEvidenceSelection,
+} from "../../shared/voc-evidence-contracts";
 import type { AnalysisReportRepository } from "../db/analysis-report-repository";
 import {
   AnalysisReportConflictError,
@@ -32,6 +40,23 @@ import { SkillRuntimeError, type ModelExecutionConfig } from "../runtime/skill-r
 const ProductDefinitionAgentDefinition = agentDefinitions.find(
   ({ id }) => id === "product-definition",
 )!;
+
+const ProductDefinitionModelInputSchema = ProductDefinitionInputSchema.extend({
+  evidenceSelection: VocModelEvidenceSchema.optional(),
+});
+
+export const ProductDefinitionModelOutputSchema = z.strictObject({
+  ...ProductDefinitionOutputShapeSchema.shape,
+  evidenceSelection: z.null(),
+  identity: z.strictObject({
+    ...ProductDefinitionOutputShapeSchema.shape.identity.shape,
+    inputFingerprint: z.null(),
+  }),
+  opportunity: z.strictObject({
+    ...ProductDefinitionOutputShapeSchema.shape.opportunity.shape,
+    pendingReason: z.string().trim().min(1).max(2_000).nullable(),
+  }),
+}).superRefine(validateProductDefinitionOutputStructure);
 
 type ProductDefinitionRepository = AnalysisReportRepository &
   KeywordAnalysisSnapshotRepository & DataSnapshotRepository;
@@ -97,10 +122,17 @@ export class ProductDefinitionExecutionService {
       actorOrganizationId: context.organizationId,
       snapshotId: keywordSnapshotId,
     });
+    const vocSnapshotId = vocReport?.snapshotIds[0];
+    const vocSnapshot = vocSnapshotId ? await this.#repository.findDataSnapshotById({
+      actorOrganizationId: context.organizationId,
+      snapshotId: vocSnapshotId,
+    }) : null;
     if (!vocReport || vocReport.runId !== context.runId ||
       vocReport.stage !== "voc-positioning" ||
       (vocReport.status !== "complete" && vocReport.status !== "partial") ||
-      !keywordSnapshot || keywordSnapshot.runId !== context.runId
+      !keywordSnapshot || keywordSnapshot.runId !== context.runId ||
+      !vocSnapshot || vocSnapshot.runId !== context.runId ||
+      !isDeepStrictEqual(keywordSnapshot.asins, vocSnapshot.asins)
     ) {
       throw new WorkerTaskError("data-quality", "Product definition dependencies are unavailable");
     }
@@ -113,6 +145,7 @@ export class ProductDefinitionExecutionService {
       dataCutoffAt: keywordSnapshot.dataCutoffAt,
       vocReport,
       keywordSnapshot,
+      ...(vocSnapshot.payload.evidenceSelection ? { evidenceSelection: vocSnapshot.payload.evidenceSelection } : {}),
     });
     if (!isDeepStrictEqual(input, expectedInput) || input.dataCutoffAt !== context.dataCutoffAt) {
       throw new SkillRuntimeError("INPUT_VALIDATION_ERROR", "Product definition dependency identity conflicts with execution input");
@@ -125,23 +158,31 @@ export class ProductDefinitionExecutionService {
       expectedMarketplace: keywordSnapshot.marketplace,
       expectedAsins: keywordSnapshot.asins,
       expectedRunCutoffAt: keywordSnapshot.dataCutoffAt,
+      ...(vocSnapshot.payload.evidenceSelection ? { allowAsinSubset: true } : {}),
     });
 
     let audited;
     try {
+      const modelInput = {
+        ...input,
+        ...(input.evidenceSelection
+          ? { evidenceSelection: toModelEvidenceSelection(input.evidenceSelection) }
+          : {}),
+      };
       audited = await this.#auditedRunner.run({
         skill: ProductDefinitionAgentDefinition.skill,
         inputContract: {
           name: ProductDefinitionAgentDefinition.inputSchema,
-          schema: ProductDefinitionInputSchema,
-          allowedFields: ["schemaVersion", "kind", "marketplace", "asins", "dataCutoffAt", "voc", "keywords", "commercialData"],
+          schema: ProductDefinitionModelInputSchema,
+          allowedFields: ["schemaVersion", "kind", "marketplace", "asins", "dataCutoffAt", "evidenceSelection", "voc", "keywords", "commercialData"],
         },
         outputContract: {
           name: ProductDefinitionAgentDefinition.outputSchema,
           schema: createProductDefinitionOutputSchema(input),
+          responseSchema: ProductDefinitionModelOutputSchema,
           canonicalizeOutput: (candidate) => canonicalizeProductDefinitionOutput(candidate, input),
         },
-        input,
+        input: modelInput,
         snapshotIds: input.voc.snapshotIds,
         model: request.model,
         ...(request.signal ? { signal: request.signal } : {}),

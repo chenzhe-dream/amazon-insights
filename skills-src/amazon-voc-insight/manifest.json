@@ -1,6 +1,6 @@
 {
   "id": "amazon-voc-insight",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "SKILL.md",
   "allowedReferences": [
     "references/output-templates.md"
@@ -10,5 +10,5 @@
   "fixtures": [
     "amazon-voc-insight-complete-v1"
   ],
-  "contentHash": "7248e2cf73af3c5f3442e409837e93b076c1f14d4650130169080fa7815a553a"
+  "contentHash": "f95c9adef3d0b7ef27f45e37d02241640d7ff96ffe6b3262d6db81c74bc9b5f3"
 }

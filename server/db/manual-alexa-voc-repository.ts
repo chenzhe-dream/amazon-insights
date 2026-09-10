@@ -145,6 +145,7 @@ export type RunCreationCompleteInput = RunCreationClaimInput &
   }>;
 
 export type RunCreationFingerprintInput = Readonly<{
+  evidenceSelection?: import("../../shared/voc-evidence-contracts").VocEvidenceSelectionRequest;
   organizationId: string;
   projectId: string;
   marketplace: "US";
@@ -164,6 +165,7 @@ export function createRunCreationFingerprint(
     projectId: input.projectId,
     mode: input.mode,
     immutableProjectScopeHash,
+    ...(input.evidenceSelection ? { evidenceSelection: { ...input.evidenceSelection, selectedAsins: [...input.evidenceSelection.selectedAsins].sort() } } : {}),
   });
 }
 

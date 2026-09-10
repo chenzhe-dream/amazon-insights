@@ -1,3 +1,4 @@
+import { VocEvidenceInventorySchema } from "../../shared/voc-evidence-contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -98,6 +99,13 @@ export function registerAnalysisRunRoutes(
     );
   });
 
+  app.get("/v1/projects/:projectId/voc-inputs", async (request) => {
+    const params = parseContract(ProjectIdParamsSchema, request.params);
+    const query = parseContract(z.strictObject({ baseSyncRunId: z.uuid(), asins: z.string().min(1) }), request.query);
+    const asins = parseContract(z.array(z.string().regex(/^[A-Z0-9]{10}$/)).min(1).max(10).refine(values => new Set(values).size === values.length), query.asins.split(","));
+    return VocEvidenceInventorySchema.parse(await requireService(service, request.authPrincipal).getVocInputs(params.projectId, query.baseSyncRunId, asins));
+  });
+
   app.post("/v1/projects/:projectId/runs", async (request) => {
     const params = parseContract(ProjectIdParamsSchema, request.params);
     const body = parseContract(CreateRunRequestSchema, request.body);
@@ -107,6 +115,7 @@ export function registerAnalysisRunRoutes(
       projectId: params.projectId,
       mode: body.mode,
       idempotencyKey: body.idempotencyKey,
+      evidenceSelection: body.evidenceSelection,
     });
     return CreateRunResponseSchema.parse(
       await lifecycle.getRun(created.run.id),

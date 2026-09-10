@@ -101,6 +101,7 @@ export async function persistVocDataSnapshot(
       expectedProjectId: input.projectId,
       expectedMarketplace: input.marketplace,
       expectedAsins: input.asins,
+      ...(input.candidate.payload.evidenceSelection ? { allowAsinSubset: true } : {}),
       expectedRunCutoffAt: input.dataCutoffAt,
       candidateId: input.candidateId,
       createdAt: input.createdAt,

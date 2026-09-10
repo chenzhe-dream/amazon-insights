@@ -1,13 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
-import {
-  buildProductLaunchAnalysis,
-  hasProductLaunchAnalysis,
-  type ProductLaunchRuntimeSources,
-} from "./product-launch-analysis";
-import { buildFinalProductDefinition } from "./final-product-definition";
-import { ActionStepsCell } from "./action-steps-cell";
+import type { ProductDefinitionOutput } from "../shared/product-definition-output";
+import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
+import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { LaunchSection, LaunchTable } from "./launch-section";
 
 type DefinitionProduct = {
@@ -21,107 +16,124 @@ type DefinitionProduct = {
   productFamily?: "scooter" | "lighting" | "generic";
 };
 
-function priorityChipClass(priority: string) {
-  if (priority === "P0") return "launch-priority-chip p0";
-  if (priority === "P1") return "launch-priority-chip p1";
-  if (priority === "P2") return "launch-priority-chip p2";
-  if (priority === "P3") return "launch-priority-chip p3";
-  return "launch-priority-chip pending";
+export type SavedProductDefinitionReport = {
+  id: string;
+  status: string;
+  result: unknown;
+};
+
+export type ProductDefinitionExecutionState =
+  | string
+  | { kind?: string; status?: string; message?: string };
+
+type Feature = ProductDefinitionOutput["configurationLayers"]["mustHave"][number];
+
+const labels: Record<string, string> = {
+  "dual-validation": "VOC 与关键词双重验证",
+  "voc-only": "VOC 单侧验证",
+  "keyword-candidate": "关键词候选",
+  conflict: "证据冲突",
+  avoid: "避坑",
+  "core-foundation": "核心基础",
+  "core-strengthening": "核心强化",
+  "retain-and-redesign": "保留并重做",
+  differentiation: "差异化突破",
+  "experience-optimization": "体验优化",
+  "new-product-avoidance": "新品避坑",
+  optional: "可选配置",
+  "do-not-build": "暂不开发",
+  validate: "待验证",
+  include: "纳入",
+  redesign: "重做",
+  exclude: "排除",
+  supported: "已有证据",
+  "requires-validation": "待验证",
+  "target-market": "目标市场",
+  demand: "需求",
+  seasonality: "季节性",
+  audience: "目标人群",
+  scenario: "使用场景",
+  motivation: "购买动机",
+  "pain-point": "核心痛点",
+  "product-form": "产品形态",
+  "base-feature": "基础功能",
+  specification: "规格",
+  "material-structure": "材质与结构",
+  "color-sku": "颜色与 SKU",
+  "price-tier": "价格档位",
+  "selling-point": "核心卖点",
+  avoidance: "避坑要求",
+  cost: "成本",
+  profitability: "盈利能力",
+  patent: "专利",
+  compliance: "合规",
+  "supply-chain": "供应链",
+  "core-term": "核心词",
+  feature: "功能词",
+  "long-tail": "长尾词",
+  risk: "风险词",
+};
+
+function chineseLabel(value: string) {
+  return labels[value] ?? value;
 }
 
-function PriorityChip({ priority }: { priority: string }) {
-  return <span className={priorityChipClass(priority)}>{priority}</span>;
+function evidenceLabel(ids: readonly string[]) {
+  return ids.length ? ids.join("、") : "—";
 }
 
-function roleChipClass(role: string) {
-  if (role === "核心基础" || role === "核心强化") return "launch-role-chip keep";
-  if (role === "保留并重做") return "launch-role-chip rework";
-  if (role === "差异化突破") return "launch-role-chip breakthrough";
-  if (role === "新品避坑") return "launch-role-chip avoid";
-  if (role === "体验优化" || role === "可选配置") return "launch-role-chip selective";
-  if (role === "暂不开发") return "launch-role-chip observe";
-  return "launch-role-chip pending";
+function executionStatus(state: ProductDefinitionExecutionState | undefined) {
+  if (typeof state === "string") return state;
+  return state?.status ?? state?.kind ?? "unknown";
 }
 
-function RoleChip({ role }: { role: string }) {
-  return <span className={roleChipClass(role)}>{role}</span>;
+function executionLabel(status: string) {
+  if (["running", "active", "queued"].includes(status)) return "当前执行中";
+  if (status === "failed") return "当前执行失败";
+  if (status === "waiting-input") return "当前等待输入";
+  return "等待已保存的新品定义报告";
 }
 
-function gradeChipClass(grade: string) {
-  if (grade === "A") return "launch-priority-chip p1";
-  if (grade === "B") return "launch-priority-chip p2";
-  if (grade === "C") return "launch-priority-chip pending";
-  return "launch-priority-chip p0";
-}
-
-function demandChipClass(demand: string) {
-  const text = demand.trim();
-  if (text.startsWith("高") && !text.includes("中高")) return "final-demand-chip high";
-  if (text.includes("中高")) return "final-demand-chip mid-high";
-  if (text.startsWith("中")) return "final-demand-chip mid";
-  if (text.includes("隐性") || text.includes("体验")) return "final-demand-chip implicit";
-  if (text.includes("无法判断") || text === "—" || text === "待验证") return "final-demand-chip unknown";
-  if (text.startsWith("低")) return "final-demand-chip low";
-  return "final-demand-chip unknown";
-}
-
-function DemandChip({ demand, priority }: { demand: string; priority?: string }) {
-  const tone = demandChipClass(demand);
-  const focus = priority === "P0" && (tone.includes("implicit") || tone.includes("low")) ? " focus" : "";
-  return <span className={`${tone}${focus}`}>{demand}</span>;
-}
-
-function FeatureLayerCard({
-  title,
-  items,
-  tone = "default",
-}: {
-  title: string;
-  items: Array<{ item: string; evidence: string }>;
-  tone?: "default" | "avoid";
-}) {
+function FeatureLayer({ title, items }: { title: string; items: readonly Feature[] }) {
   return (
-    <article className={tone === "avoid" ? "avoid" : undefined}>
+    <article>
       <h4>{title}</h4>
       <ul>
-        {items.length ? (
-          items.map(row => (
-            <li key={row.item}>
-              {row.item}
-              <small className="final-def-evidence">{row.evidence}</small>
-            </li>
-          ))
-        ) : (
-          <li>暂无足够证据</li>
-        )}
+        {items.length ? items.map((item) => (
+          <li key={item.item}>
+            {item.item}
+            <small className="final-def-evidence">证据：{evidenceLabel(item.evidenceIds)}</small>
+          </li>
+        )) : <li>暂无已保存内容</li>}
       </ul>
     </article>
   );
 }
 
-export function ProductDefinitionSection({ products, sources }: {
+export function ProductDefinitionSection({
+  savedReport,
+  current = false,
+  sourceLabel,
+  executionState,
+}: {
   products: DefinitionProduct[];
   sources: ProductLaunchRuntimeSources;
+  savedReport?: SavedProductDefinitionReport | null;
+  current?: boolean;
+  sourceLabel?: string;
+  executionState?: ProductDefinitionExecutionState;
 }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
-  const ready = hasProductLaunchAnalysis(products, sources);
-  const priceBand =
-    analysis.marketRows.find(row => row.metric.includes("价格"))?.data ??
-    analysis.productDefinition.targetPrice;
-
-  const report = useMemo(
-    () =>
-      buildFinalProductDefinition({
-        categoryLabel: analysis.meta.categoryLabel,
-        productCount: analysis.meta.productCount,
-        dataMonth: analysis.meta.dataMonth,
-        vocPositioning: analysis.vocPositioning,
-        keyword: analysis.keywordConclusions,
-        priceBand,
-        hasVocData: ready,
-      }),
-    [analysis, priceBand, ready]
-  );
+  const state = executionStatus(executionState);
+  const savedStatusAllowed = savedReport?.status === "complete" || savedReport?.status === "partial";
+  const parsed = savedStatusAllowed
+    ? ProductDefinitionOutputSchema.safeParse(savedReport?.result)
+    : null;
+  const output = parsed?.success ? parsed.data : null;
+  const outputAvailable = output?.status === "complete" || output?.status === "partial";
+  const currentReady = current && state === "succeeded" && outputAvailable;
+  const historicalReady = !current && outputAvailable;
+  const visible = currentReady || historicalReady ? output : null;
+  const invalid = Boolean(savedReport && savedStatusAllowed && parsed && !parsed.success);
 
   return (
     <div className="launch-page definition-page">
@@ -130,266 +142,100 @@ export function ProductDefinitionSection({ products, sources }: {
           <div className="launch-section-head-main">
             <span className="status-chip">define-amazon-product-from-voc-keywords</span>
             <h2 className="launch-page-title">新品定义</h2>
-            <p>
-              将「产品定义结论（VOC）」与「关键词需求分析」交叉验证，输出可进入 PRD 的最终产品定义：人群、场景、形态、功能分层、词群承接与机会等级。
-            </p>
+            <p>展示已保存的 VOC 与关键词交叉验证结果。</p>
           </div>
           <span className="source-badge">
-            {report.meta.productCount} 竞品 · {report.meta.dataMonth}
+            {historicalReady ? "历史报告" : currentReady ? "当前结果已保存" : executionLabel(state)}
           </span>
         </div>
         <div className="launch-meta-row">
-          <span>
-            类目 <b>{report.meta.categoryLabel}</b>
-          </span>
-          <span>
-            机会等级 <b>{ready ? report.opportunity.gradeLabel : "—"}</b>
-          </span>
-          <span>
-            数据源 <b>VOC 定位 · 关键词需求 · 交叉矩阵</b>
-          </span>
-          <span>
-            关键词 <b>{analysis.keywordConclusions?.hasData ? analysis.keywordConclusions.verdict.gradeLabel : "未就绪"}</b>
-          </span>
+          <span>报告 <b>{sourceLabel ?? savedReport?.id ?? "—"}</b></span>
+          <span>机会等级 <b>{visible?.opportunity.grade ?? "待验证"}</b></span>
+          {visible?.opportunity.grade === null && visible.opportunity.pendingReason ? (
+            <span>待验证原因 <b>{visible.opportunity.pendingReason}</b></span>
+          ) : null}
         </div>
       </section>
 
-      {!ready ? (
+      {!visible ? (
         <section className="card launch-block">
           <div className="pending-box">
-            待 VOC 核心主题就绪后生成最终产品定义。请先完成「竞品 VOC 洞察」与「产品定义结论」页同步。
+            {invalid ? "报告格式无法识别，无法作为最终结果展示。" : executionLabel(state)}
           </div>
         </section>
       ) : (
         <>
-          <LaunchSection
-            title="1. 最终产品定义结论"
-            description="8 格要点与「产品定义结论 · 定位方向表」同源，完整展示不截断"
-            badge={<span className={gradeChipClass(report.opportunity.grade)}>{report.opportunity.gradeLabel}</span>}
-          >
-            <div className="definition-synthesis">
-              <div className="final-oneliner-grid">
-                {report.oneLinerCards.map(card => (
-                  <article key={card.key} className={`final-oneliner-card tone-${card.tone}`}>
-                    <span className="final-oneliner-label">{card.label}</span>
-                    <strong>{card.value}</strong>
-                  </article>
-                ))}
+          {historicalReady && state !== "unknown" && state !== "succeeded" ? (
+            <section className="card launch-block">
+              <div className="pending-box">
+                {executionLabel(state)}；以下为历史报告，不代表当前执行结果。
               </div>
-              <div className="final-oneliner-full">
-                <h4 className="voc-pos-subtitle">完整一句话定义</h4>
-                <p className="definition-synthesis-merged">{report.oneLiner}</p>
-              </div>
-              <h4 className="voc-pos-subtitle">为什么选这个方向</h4>
-              <div className="final-rationale-grid">
-                {report.rationale.map(item => (
-                  <article key={item.key} className={`final-rationale-card tone-${item.tone}`}>
-                    <span className="final-rationale-label">{item.label}</span>
-                    {item.highlight ? <strong className="final-rationale-highlight">{item.highlight}</strong> : null}
-                    <p>{item.value}</p>
-                  </article>
-                ))}
-              </div>
-            </div>
-          </LaunchSection>
+            </section>
+          ) : null}
 
-          <LaunchSection title="2. 机会等级与决策" description="A建议立项 · B优化后立项 · C观察/小范围验证 · D不建议">
-            <LaunchTable className="launch-conclusion-table">
-              <thead>
-                <tr>
-                  <th>机会等级</th>
-                  <th>最终判断</th>
-                  <th>需求依据</th>
-                  <th>进入方式</th>
-                  <th>主要风险</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th>
-                    <span className={gradeChipClass(report.opportunity.grade)}>{report.opportunity.gradeLabel}</span>
-                  </th>
-                  <td>{report.opportunity.judgment}</td>
-                  <td className="launch-muted">{report.opportunity.demandBasis}</td>
-                  <td>{report.opportunity.entryPath}</td>
-                  <td className="launch-muted">{report.opportunity.mainRisks}</td>
-                </tr>
-              </tbody>
-            </LaunchTable>
-            <p className="definition-synthesis-gaps">{report.opportunity.note}</p>
-          </LaunchSection>
-
-          <LaunchSection
-            title="3. VOC 与关键词交叉验证表"
-            description="搜索需求 ≠ 产品需求；体验痛点不因搜索弱而删除 · 市场需求色标：红=高 · 橙=中高 · 蓝=中 · 紫=低/隐性 · P0 另加红框"
-          >
+          <LaunchSection title="1. 机会等级与证据交叉验证" description="内容直接来自已保存报告">
             <LaunchTable stickyHeader>
-              <thead>
-                <tr>
-                  <th>需求主题</th>
-                  <th>VOC证据</th>
-                  <th>关键词证据</th>
-                  <th>市场需求</th>
-                  <th>用户价值</th>
-                  <th>竞争供给</th>
-                  <th>综合判断</th>
-                  <th>产品角色</th>
-                  <th>优先级</th>
+              <thead><tr><th>VOC 主题</th><th>关键词组</th><th>VOC 证据</th><th>关键词证据</th><th>判断</th><th>产品角色</th><th>优先级</th></tr></thead>
+              <tbody>{visible.evidenceMatrix.map((row, index) => (
+                <tr key={`${row.themeKey ?? "none"}-${row.keywordGroupId ?? "none"}-${index}`}>
+                  <th>{row.themeKey ?? "—"}</th>
+                  <td>{row.keywordGroupId ?? "—"}</td>
+                  <td>{evidenceLabel(row.vocEvidenceIds)}</td>
+                  <td>{evidenceLabel(row.keywordEvidenceIds)}</td>
+                  <td>{chineseLabel(row.judgment)}</td>
+                  <td>{chineseLabel(row.productRole)}</td>
+                  <td>{row.priority}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {report.crossRows.map(row => (
-                  <tr key={row.theme}>
-                    <th>{row.theme}</th>
-                    <td className="launch-muted">{row.vocEvidence}</td>
-                    <td className="launch-muted">{row.keywordEvidence}</td>
-                    <td>
-                      <DemandChip demand={row.marketDemand} priority={row.priority} />
-                    </td>
-                    <td className="launch-muted">{row.userValue}</td>
-                    <td className="launch-muted">{row.competition}</td>
-                    <td>{row.judgment}</td>
-                    <td>
-                      <RoleChip role={row.role} />
-                    </td>
-                    <td>
-                      <PriorityChip priority={row.priority} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}</tbody>
             </LaunchTable>
           </LaunchSection>
 
-          <LaunchSection title="4. 最终产品定义表" description="覆盖市场、人群、场景、形态、功能、规格、价格与避坑 · 表头吸顶可下滑对照">
+          <LaunchSection title="2. 最终产品定义">
             <LaunchTable stickyHeader>
-              <thead>
-                <tr>
-                  <th>产品定义维度</th>
-                  <th>最终结论</th>
-                  <th>VOC依据</th>
-                  <th>关键词依据</th>
-                  <th>产品动作</th>
-                  <th>优先级</th>
-                  <th>待验证</th>
+              <thead><tr><th>维度</th><th>结论</th><th>VOC 证据</th><th>关键词证据</th><th>产品动作</th><th>优先级</th><th>验证状态</th></tr></thead>
+              <tbody>{visible.finalDefinition.map((row) => (
+                <tr key={row.dimension}>
+                  <th>{chineseLabel(row.dimension)}</th><td>{row.conclusion}</td>
+                  <td>{evidenceLabel(row.vocEvidenceIds)}</td><td>{evidenceLabel(row.keywordEvidenceIds)}</td>
+                  <td>{chineseLabel(row.action)}</td><td>{row.priority}</td><td>{chineseLabel(row.validationStatus)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {report.definitionRows.map(row => (
-                  <tr key={row.dimension}>
-                    <th>{row.dimension}</th>
-                    <td>{row.conclusion}</td>
-                    <td className="launch-muted">{row.vocBasis}</td>
-                    <td className="launch-muted">{row.keywordBasis}</td>
-                    <td>
-                      <ActionStepsCell value={row.action} maxItems={3} />
-                    </td>
-                    <td>
-                      <PriorityChip priority={row.priority} />
-                    </td>
-                    <td className="launch-muted">{row.pending}</td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}</tbody>
             </LaunchTable>
           </LaunchSection>
 
-          <LaunchSection title="5. 功能与配置分层" description="基础必备 / 差异化 / 可选 / 首版不做 / P0避坑">
+          <LaunchSection title="3. 功能与配置分层">
             <div className="launch-product-def-grid final-def-layers">
-              <FeatureLayerCard title="基础版必须具备" items={report.featureLayers.mustHave} />
-              <FeatureLayerCard title="核心差异化" items={report.featureLayers.differentiation} />
-              <FeatureLayerCard title="可选配置 / 变体" items={report.featureLayers.optional} />
-              <FeatureLayerCard title="首版暂不开发" items={report.featureLayers.notInV1} tone="avoid" />
-              <FeatureLayerCard title="P0 避坑与验收方向" items={report.featureLayers.p0Avoid} tone="avoid" />
+              <FeatureLayer title="基础版必须具备" items={visible.configurationLayers.mustHave} />
+              <FeatureLayer title="核心差异化" items={visible.configurationLayers.differentiation} />
+              <FeatureLayer title="可选配置 / 变体" items={visible.configurationLayers.optional} />
+              <FeatureLayer title="首版暂不开发" items={visible.configurationLayers.notInV1} />
+              <FeatureLayer title="P0 避坑" items={visible.configurationLayers.p0Avoid} />
             </div>
           </LaunchSection>
 
-          <LaunchSection title="6. 关键词承接方案" description="用于验证产品与需求匹配，不替代完整 Listing / 广告词库">
-            <LaunchTable stickyHeader>
-              <thead>
-                <tr>
-                  <th>词群类型</th>
-                  <th>关键词</th>
-                  <th>对应产品功能</th>
-                  <th>页面卖点角度</th>
-                  <th>适用 SKU</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.keywordGroups.map(row => (
-                  <tr key={row.type}>
-                    <th>{row.type}</th>
-                    <td>{row.keywords}</td>
-                    <td className="launch-muted">{row.productLink}</td>
-                    <td className="launch-muted">{row.listingAngle}</td>
-                    <td>{row.skuHint}</td>
-                  </tr>
-                ))}
-              </tbody>
+          <LaunchSection title="4. 关键词承接方案">
+            <LaunchTable><thead><tr><th>关键词组</th><th>角色</th><th>产品承接</th><th>页面角度</th><th>适用 SKU</th><th>证据</th></tr></thead>
+              <tbody>{visible.keywordLanding.map((row) => <tr key={`${row.groupId}-${row.role}`}><th>{row.groupId}</th><td>{chineseLabel(row.role)}</td><td>{row.productLink}</td><td>{row.listingAngle}</td><td>{row.skuHint}</td><td>{evidenceLabel(row.evidenceIds)}</td></tr>)}</tbody>
             </LaunchTable>
           </LaunchSection>
 
-          <LaunchSection title="7. 产品方案优先级" description="保留 P0–P3 口径，优先展示影响定义的关键项">
-            <LaunchTable stickyHeader>
-              <thead>
-                <tr>
-                  <th>优先级</th>
-                  <th>产品方向</th>
-                  <th>数据证据</th>
-                  <th>商业影响</th>
-                  <th>产品动作</th>
-                  <th>验收方向</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.priorityRows.map(row => (
-                  <tr key={`${row.priority}-${row.direction}`}>
-                    <th>
-                      <PriorityChip priority={row.priority} />
-                    </th>
-                    <td>{row.direction}</td>
-                    <td className="launch-muted">{row.evidence}</td>
-                    <td>{row.businessImpact}</td>
-                    <td>
-                      <ActionStepsCell value={row.action} />
-                    </td>
-                    <td className="launch-muted">{row.acceptance}</td>
-                  </tr>
-                ))}
-              </tbody>
+          <LaunchSection title="5. 产品方案优先级">
+            <LaunchTable><thead><tr><th>优先级</th><th>方向</th><th>证据</th><th>动作</th><th>验收方向</th></tr></thead>
+              <tbody>{visible.priorities.map((row) => <tr key={`${row.priority}-${row.direction}`}><th>{row.priority}</th><td>{row.direction}</td><td>{evidenceLabel(row.evidenceIds)}</td><td>{chineseLabel(row.action)}</td><td>{row.acceptance}</td></tr>)}</tbody>
             </LaunchTable>
           </LaunchSection>
 
-          <LaunchSection title="8. 风险与下一步验证" description="只列影响当前产品定义的关键项">
-            <div className="definition-synthesis-grid">
-              <article>
-                <h4>主要风险</h4>
-                <ul className="final-def-plain-list">
-                  {report.risks.map(item => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </article>
-              <article>
-                <h4>下一步验证</h4>
-                <ul className="final-def-plain-list">
-                  {report.nextValidations.map(item => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </article>
-            </div>
+          <LaunchSection title="6. 风险与商业验证">
+            <LaunchTable><thead><tr><th>领域</th><th>状态</th><th>下一步</th></tr></thead>
+              <tbody>{visible.risks.map((row) => <tr key={row.area}><th>{chineseLabel(row.area)}</th><td>{chineseLabel(row.status)}</td><td>{row.nextStep}</td></tr>)}</tbody>
+            </LaunchTable>
           </LaunchSection>
 
-          <LaunchSection title="9. 数据边界" description="VOC 与关键词的角色边界">
-            <p className="definition-synthesis-merged">{report.dataBoundary}</p>
+          <LaunchSection title="7. 数据边界">
+            <p className="definition-synthesis-merged">{visible.dataBoundary}</p>
           </LaunchSection>
         </>
       )}
-
-      <p className="voc-source-footnote launch-footnote">
-        分析引擎：final-product-definition.ts（Skill define-amazon-product-from-voc-keywords） · 更新 {report.meta.analyzedAt}
-      </p>
     </div>
   );
 }

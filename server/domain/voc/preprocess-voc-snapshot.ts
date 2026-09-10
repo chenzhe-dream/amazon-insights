@@ -1,3 +1,4 @@
+import { VocEvidenceManifestSchema } from "../../../shared/voc-evidence-contracts";
 import { z } from "zod";
 
 import {
@@ -167,6 +168,7 @@ const VocDeterministicPreprocessingResultShapeSchema = z.strictObject({
   dimensions: z.array(DimensionFactSchema).length(7),
   evidenceIndex: z.array(EvidenceFactSchema),
   factsDigest: Sha256Schema,
+  evidenceSelection: VocEvidenceManifestSchema.optional(),
 });
 
 export const VocDeterministicPreprocessingResultSchema =
@@ -362,6 +364,7 @@ export function preprocessVocSnapshot(
       asins: [...snapshot.asins],
       dataCutoffAt: snapshot.dataCutoffAt,
     },
+    ...(snapshot.payload.evidenceSelection ? { evidenceSelection: snapshot.payload.evidenceSelection } : {}),
     availability: buildAvailability(snapshot),
     dimensions,
     evidenceIndex,
@@ -805,6 +808,7 @@ function calculateFactsDigest(value: VocDeterministicFactsContainer) {
     })),
     dimensions: value.dimensions,
     evidenceIndex: value.evidenceIndex,
+    ...(value.evidenceSelection ? { evidenceSelection: value.evidenceSelection } : {}),
   });
 }
 

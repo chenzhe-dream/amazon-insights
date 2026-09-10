@@ -1,3 +1,5 @@
+import { manualEvidenceDimensions, reviewEvidenceDimensions, selectEvidenceDimensions } from "./voc-evidence-selection";
+import { VocEvidenceManifestSchema } from "../../shared/voc-evidence-contracts";
 import { z } from "zod";
 
 import {
@@ -102,6 +104,7 @@ export const VocSnapshotPayloadSchema = z
   .strictObject({
     schemaVersion: z.literal(VOC_SNAPSHOT_SCHEMA_VERSION),
     kind: z.literal("voc"),
+    evidenceSelection: VocEvidenceManifestSchema.optional(),
     marketplace: MarketplaceSchema,
     asins: PayloadAsinListSchema,
     records: z.strictObject({
@@ -111,6 +114,26 @@ export const VocSnapshotPayloadSchema = z
     }),
   })
   .superRefine((payload, context) => {
+    if (payload.evidenceSelection && (
+      payload.evidenceSelection.marketplace !== payload.marketplace ||
+      !sameTextList(payload.evidenceSelection.selectedAsins, payload.asins) ||
+      (payload.evidenceSelection.sourcePolicy === "manual-only" && (payload.records.sorftimeReviewAnalysis.length || payload.records.sellerSpriteReviewAnalysis.length))
+    )) context.addIssue({ code: "custom", path: ["evidenceSelection"], message: "Evidence selection scope or policy mismatch" });
+    if (payload.evidenceSelection) {
+      const { fingerprint, ...unsigned } = payload.evidenceSelection;
+      if (canonicalJsonSha256(unsigned) !== fingerprint) context.addIssue({ code: "custom", path: ["evidenceSelection", "fingerprint"], message: "Evidence fingerprint mismatch" });
+      if (!sameTextList(payload.evidenceSelection.coverage.map(row => row.asin), payload.asins)) context.addIssue({ code: "custom", path: ["evidenceSelection", "coverage"], message: "Evidence coverage must match the fixed target" });
+      const expectedSourceMode = payload.evidenceSelection.coverage.some(row => row.review) ? "review-fallback" : "manual";
+      if (payload.evidenceSelection.sourceMode !== expectedSourceMode) context.addIssue({ code: "custom", path: ["evidenceSelection", "sourceMode"], message: "Evidence source mode mismatch" });
+      for (const row of payload.evidenceSelection.coverage) {
+        const manual = payload.records.alexaVoc.find(record => record.asin === row.asin);
+        const review = payload.records.sorftimeReviewAnalysis.find(record => record.asin === row.asin);
+        const manualDimensions = manual ? manualEvidenceDimensions(manual) : [];
+        const selected = selectEvidenceDimensions(manualDimensions, review ? reviewEvidenceDimensions(review) : [], payload.evidenceSelection.sourcePolicy === "manual-with-review-fallback");
+        const primary = manualDimensions.length ? "manual" : selected.reviewDimensions.length ? "review" : "missing";
+        if (row.primary !== primary || !sameTextList(row.manualDimensions, manualDimensions) || Object.entries(selected).some(([key, values]) => !sameTextList(row[key as keyof typeof selected], values))) context.addIssue({ code: "custom", path: ["evidenceSelection", "coverage"], message: "Evidence coverage does not match source records" });
+      }
+    }
     const targetOrdinals = new Map(
       payload.asins.map((asin, ordinal) => [asin, ordinal] as const),
     );
@@ -276,6 +299,7 @@ export const VocSnapshotCandidateSchema = z
 export type VocSnapshotCandidate = z.infer<typeof VocSnapshotCandidateSchema>;
 
 export const VocDataSnapshotRecordSchema = DataSnapshotSchema.extend({
+  asins: PayloadAsinListSchema,
   schemaVersion: z.literal(VOC_SNAPSHOT_SCHEMA_VERSION),
   sources: z.array(VocSnapshotSourceSchema).min(1),
   payload: VocSnapshotPayloadSchema,
@@ -289,6 +313,7 @@ export function buildVocSnapshotCandidate(input: Readonly<{
   asins: readonly string[];
   dataCutoffAt: string;
   sourceBundles: readonly VocSnapshotSourceBundle[];
+  evidenceSelection?: import("../../shared/voc-evidence-contracts").VocEvidenceManifest;
 }>): VocSnapshotCandidate {
   const marketplace = MarketplaceSchema.parse(input.marketplace);
   const asins = PayloadAsinListSchema.parse(input.asins);
@@ -380,6 +405,7 @@ export function buildVocSnapshotCandidate(input: Readonly<{
   const payload = VocSnapshotPayloadSchema.parse({
     schemaVersion: VOC_SNAPSHOT_SCHEMA_VERSION,
     kind: "voc",
+    ...(input.evidenceSelection ? { evidenceSelection: input.evidenceSelection } : {}),
     marketplace,
     asins,
     records,

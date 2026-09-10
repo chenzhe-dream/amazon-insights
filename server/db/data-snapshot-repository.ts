@@ -4,6 +4,8 @@ import type {
 } from "../data/voc-data-snapshot";
 
 export interface DataSnapshotSubjectInput {
+  /** Internal: authorized, explicitly selected VOC scope. Never accepted from HTTP directly. */
+  allowAsinSubset?: boolean;
   actorId: string;
   actorOrganizationId: string;
   runId: string;
