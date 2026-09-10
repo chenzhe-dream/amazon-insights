@@ -6,7 +6,7 @@
     "app/lib/sync-server.ts",
     "app/lib/agent-service-client.ts",
     "app/lib/stage-output-browser.ts",
-    "app/asin-sync-funnel.tsx",
+    "app/features/sync/asin-sync-funnel.tsx",
     "app/page.tsx",
     "app/keyword-fetch-status.tsx",
     "app/keyword-demand-analysis.ts",
