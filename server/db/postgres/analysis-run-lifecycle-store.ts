@@ -184,6 +184,7 @@ export class PostgresAnalysisRunLifecycleStore {
                     retry_scheduled_at = NULL, completed_at = NULL,
                     error_json = NULL,
                     report_publication_cycle = report_publication_cycle + 1,
+                    voc_deadline_started_at = $1,
                     report_publication_attempt_count = 0,
                     report_publication_max_attempts = NULL,
                     report_publication_initial_delay_ms = NULL,
@@ -228,6 +229,13 @@ export class PostgresAnalysisRunLifecycleStore {
             createLogicalExecutionCycleId(),
             retriedAt,
           ],
+        );
+        if (latestJob) await this.#queries.query(
+          `INSERT INTO alexa_voc_normalization_input_jobs(snapshot_id, origin_job_id)
+           SELECT ownership.snapshot_id, $1 FROM alexa_voc_normalization_input_jobs ownership
+           JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+           WHERE origin.stage_id = $2 AND origin.attempt_number = $3
+           ON CONFLICT DO NOTHING`, [jobId, stageId, latestJob.retryCycleStartAttempt],
         );
         await this.#refreshAnalysisRunStatus(runId, retriedAt);
         return {
@@ -284,7 +292,7 @@ export class PostgresAnalysisRunLifecycleStore {
               SET status = 'queued', available_at = $1, leased_by = NULL,
                   lease_expires_at = NULL, retryable = FALSE,
                   retry_scheduled_at = NULL, completed_at = NULL,
-                  error_json = NULL, updated_at = $1
+                  error_json = NULL, updated_at = $1, voc_deadline_started_at = $1
             WHERE id = $2 AND status = 'failed' AND retryable = FALSE`,
           [resumedAt, latest.id],
         );

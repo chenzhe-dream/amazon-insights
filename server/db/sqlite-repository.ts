@@ -916,24 +916,33 @@ export class SqliteAgentRepository
           OR (status = 'failed' AND retryable = 1
               AND retry_scheduled_at IS NULL)
         )
-          AND attempt.attempt_number = (
-            SELECT MAX(latest_attempt.attempt_number)
-              FROM job_attempts latest_attempt
-             WHERE latest_attempt.stage_id = attempt.stage_id
+          AND NOT EXISTS (
+            SELECT 1 FROM job_attempts successor
+            WHERE successor.stage_id = attempt.stage_id
+              AND successor.retry_cycle_start_attempt = attempt.retry_cycle_start_attempt
+              AND successor.attempt_number > attempt.attempt_number
           )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = ?
                AND terminal.job_attempt_id = attempt.id
           )
+          AND EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+            JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+            WHERE ownership.snapshot_id = ? AND origin.stage_id = attempt.stage_id
+              AND origin.attempt_number = attempt.retry_cycle_start_attempt
+          )
         ORDER BY attempt.attempt_number DESC LIMIT 1`,
     ).get(
       String(stage.id),
       Number(insertedSnapshot.changes),
       snapshot.id,
+      snapshot.id,
     ) as SqliteRow | undefined;
     let jobId = active ? String(active.id) : null;
-    if (active && Number(insertedSnapshot.changes) === 1 && (active.report_publication_max_attempts !== null || (active.status === "failed" && Number(active.attempt_number) >= Number(active.max_attempts)))) jobId = null;
+    // A new input owns a fresh deadline; an idempotent replay may reuse work.
+    if (Number(insertedSnapshot.changes) === 1) jobId = null;
     if (active?.status === "failed") {
       const candidate = this.#findJob(String(active.id))!;
       const disposition = this.#durableCycleDisposition(candidate);
@@ -977,6 +986,13 @@ export class SqliteAgentRepository
       jobId = normalized.jobId;
       jobCreated = true;
     }
+    this.#database.prepare(
+      `INSERT OR IGNORE INTO alexa_voc_normalization_input_jobs(snapshot_id, origin_job_id)
+       SELECT ?, origin.id FROM job_attempts current_job
+       JOIN job_attempts origin ON origin.stage_id = current_job.stage_id
+         AND origin.attempt_number = current_job.retry_cycle_start_attempt
+       WHERE current_job.id = ?`,
+    ).run(snapshot.id, jobId);
     return Object.freeze({
       snapshot,
       snapshotCreated: Number(insertedSnapshot.changes) === 1,
@@ -1045,6 +1061,7 @@ export class SqliteAgentRepository
     actorOrganizationId: string;
     projectId: string;
     runId: string;
+    jobAttemptId?: string;
   }>): readonly AlexaVocNormalizationInputSnapshot[] {
     const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
     const projectId = EntityIdSchema.parse(input.projectId);
@@ -1059,8 +1076,15 @@ export class SqliteAgentRepository
           AND project.organization_id = ?
           AND ds.artifact_kind = 'alexa-voc-normalization-input'
           AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+          AND (? IS NULL OR EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+            JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+            JOIN job_attempts current_job ON current_job.stage_id = origin.stage_id
+              AND current_job.retry_cycle_start_attempt = origin.attempt_number
+            WHERE ownership.snapshot_id = ds.id AND current_job.id = ?
+          ))
         ORDER BY ds.created_at, ds.id`,
-    ).all(runId, projectId, organizationId) as SqliteRow[];
+    ).all(runId, projectId, organizationId, input.jobAttemptId ? EntityIdSchema.parse(input.jobAttemptId) : null, input.jobAttemptId ?? null) as SqliteRow[];
     return Object.freeze(rows.map(mapAlexaVocNormalizationInputSnapshot));
   }
 
@@ -1158,6 +1182,7 @@ export class SqliteAgentRepository
                  LIMIT 1
               ) AS revision,
               newest_attempt.status AS newest_attempt_status,
+              json_extract(newest_attempt.error_json, '$.code') AS newest_attempt_error_code,
               newest_attempt.retryable AS newest_attempt_retryable,
               CASE WHEN EXISTS (
                    SELECT 1 FROM agent_runs agent_run
@@ -1200,6 +1225,12 @@ export class SqliteAgentRepository
               JOIN run_stages candidate_stage ON candidate_stage.id = candidate.stage_id
              WHERE candidate_stage.run_id = ?
                AND candidate_stage.stage = 'alexa-voc-normalization'
+               AND EXISTS (
+                 SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+                 JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+                 WHERE ownership.snapshot_id = ranked.snapshot_id AND origin.stage_id = candidate.stage_id
+                   AND origin.attempt_number = candidate.retry_cycle_start_attempt
+               )
              ORDER BY candidate.attempt_number DESC
              LIMIT 1
           )
@@ -1231,7 +1262,10 @@ export class SqliteAgentRepository
         fingerprint: row.execution_fingerprint,
         status,
         revision: status === "success" ? row.revision : null,
-        error: status === "failure" ? (row.error_category ?? "persistence") : null,
+        error: status === "failure"
+          ? terminalStatus === "failure" ? row.error_category ?? "persistence"
+            : row.newest_attempt_error_code === "QUEUE_TIMEOUT" ? "timeout" : "persistence"
+          : null,
       });
     }));
   }
@@ -5179,6 +5213,7 @@ export class SqliteAgentRepository
                    retry_scheduled_at = NULL, completed_at = NULL,
                    error_json = NULL,
                    report_publication_cycle = report_publication_cycle + 1,
+                   voc_deadline_started_at = ?,
                    report_publication_attempt_count = 0,
                    report_publication_max_attempts = NULL,
                    report_publication_initial_delay_ms = NULL,
@@ -5186,7 +5221,7 @@ export class SqliteAgentRepository
                    report_publication_retry_at = NULL, updated_at = ?
                WHERE id = ? AND status = 'failed'`,
             )
-            .run(input.retriedAt, input.retriedAt, latestJob.id);
+            .run(input.retriedAt, input.retriedAt, input.retriedAt, latestJob.id);
           if (Number(reset.changes) !== 1) throw new JobLeaseLostError();
           this.#refreshAnalysisRunStatus(input.runId, input.retriedAt);
           return {
@@ -5249,6 +5284,12 @@ export class SqliteAgentRepository
             input.retriedAt,
             input.retriedAt,
           );
+        if (latestJob) this.#database.prepare(
+          `INSERT OR IGNORE INTO alexa_voc_normalization_input_jobs(snapshot_id, origin_job_id)
+           SELECT ownership.snapshot_id, ? FROM alexa_voc_normalization_input_jobs ownership
+           JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+           WHERE origin.stage_id = ? AND origin.attempt_number = ?`,
+        ).run(input.jobId, input.stageId, latestJob.retryCycleStartAttempt);
         this.#refreshAnalysisRunStatus(input.runId, input.retriedAt);
         return {
           stage: mapRunStage(
@@ -5601,10 +5642,10 @@ export class SqliteAgentRepository
              SET status = 'queued', available_at = ?, leased_by = NULL,
                  lease_expires_at = NULL, retryable = 0,
                  retry_scheduled_at = NULL, completed_at = NULL,
-                 error_json = NULL, updated_at = ?
+                 error_json = NULL, updated_at = ?, voc_deadline_started_at = ?
              WHERE id = ? AND status = 'failed' AND retryable = 0`,
           )
-          .run(input.resumedAt, input.resumedAt, job.id);
+          .run(input.resumedAt, input.resumedAt, input.resumedAt, job.id);
         if (Number(jobUpdate.changes) !== 1) {
           throw new JobLeaseLostError();
         }
@@ -6350,6 +6391,7 @@ export class SqliteAgentRepository
       .prepare(
         `UPDATE job_attempts
          SET status = ?, retryable = 0, leased_by = NULL,
+             report_publication_retry_at = NULL,
              lease_expires_at = NULL, completed_at = COALESCE(completed_at, ?),
              error_json = ?, updated_at = ?
          WHERE id = ?`,
@@ -6374,6 +6416,14 @@ export class SqliteAgentRepository
         settledAt,
         current.stageId,
       );
+    if (current.stage === "alexa-voc-normalization" && disposition.error?.code === "QUEUE_TIMEOUT") {
+      this.#database.prepare(`UPDATE run_stages SET status = CASE
+        WHEN EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = ? AND status = 'running') THEN 'running'
+        ELSE 'queued' END, completed_at = NULL
+        WHERE id = ? AND EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = ?
+          AND (status IN ('queued', 'running') OR (status = 'failed' AND retryable = TRUE AND retry_scheduled_at IS NULL)))`
+      ).run(current.stageId, current.stageId, current.stageId);
+    }
     this.#refreshAnalysisRunStatus(current.runId, settledAt);
   }
 
@@ -6489,6 +6539,15 @@ export class SqliteAgentRepository
              WHERE id = ?`,
           )
           .run(input.completedAt, input.completedAt, job.stageId);
+        if (job.stage === "alexa-voc-normalization") this.#database.prepare(
+          `UPDATE run_stages SET status = CASE
+             WHEN EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = run_stages.id AND status = 'running') THEN 'running'
+             ELSE 'queued' END, progress = 0, completed_at = NULL
+           WHERE id = ? AND EXISTS (
+             SELECT 1 FROM job_attempts WHERE stage_id = run_stages.id AND (status IN ('queued','running')
+               OR (status = 'failed' AND retryable = 1 AND retry_scheduled_at IS NULL))
+           )`,
+        ).run(job.stageId);
         this.#refreshAnalysisRunStatus(job.runId, input.completedAt);
         return job;
       };

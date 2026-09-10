@@ -526,6 +526,10 @@ test("normalization queue replaces exhausted work but reuses at-max durable reco
     asin: ASIN, executionFingerprint: fingerprint, status: "failure",
     category: "model-output", completedAt: addMilliseconds(CREATED_AT, 1),
   }));
+  await pool.query("UPDATE job_attempts SET error_json = $1::jsonb WHERE id = $2", [
+    JSON.stringify({ code: "QUEUE_TIMEOUT", message: "fixture deadline" }), first.jobId,
+  ]);
+  assert.equal((await readStatus())[0]?.error, "model-output", "an existing ASIN terminal keeps its actual failure category");
   const replacement = await queue(addMilliseconds(CREATED_AT, 1));
   assert.equal(replacement.jobCreated, true);
   assert.notEqual(replacement.jobId, first.jobId);
@@ -601,8 +605,8 @@ test("normalization queue replaces exhausted work but reuses at-max durable reco
     [randomUUID(), replacement.stageId, hash("b"), addMilliseconds(CREATED_AT, 5)],
   );
   assert.deepEqual((await readStatus())[0], {
-    asin: ASIN, fingerprint, status: "failure", revision: null, error: "model-output",
-  });
+    asin: ASIN, fingerprint, status: "pending", revision: null, error: null,
+  }, "an unowned sibling attempt cannot replace this input's durable recovery status");
   assert.deepEqual(await repository.manualAlexaVoc.listNormalizationStatuses({
     actorOrganizationId: randomUUID(), projectId, runId, marketplace: "US", asins: [ASIN],
   }), []);

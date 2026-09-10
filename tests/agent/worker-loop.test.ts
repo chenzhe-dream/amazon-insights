@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { AgentRepository } from "../../server/db/repository";
+import type {
+  AgentRepository,
+  JobAttemptRecord,
+} from "../../server/db/repository";
 import { openSqliteAgentRepository as openSqliteAgentRepositoryBase } from "../../server/db/sqlite-repository";
 import { AnalysisRunService } from "../../server/services/analysis-run-service";
 import { BudgetExceededError } from "../../server/runtime/budget-policy";
@@ -102,7 +105,11 @@ function repositoryWithOverrides(
   });
 }
 
-async function seedJob(repository: AgentRepository, maxAttempts = 3) {
+async function seedJob(
+  repository: AgentRepository,
+  maxAttempts = 3,
+  stage: JobAttemptRecord["stage"] = "voc-positioning",
+) {
   const createdAt = "2026-08-14T08:00:00.000Z";
   const userId = randomUUID();
   const organizationId = randomUUID();
@@ -146,7 +153,7 @@ async function seedJob(repository: AgentRepository, maxAttempts = 3) {
   await repository.createRunStage({
     id: stageId,
     runId,
-    stage: "voc-positioning",
+    stage,
     status: "queued",
     progress: 0,
     attemptCount: 0,
@@ -451,6 +458,36 @@ test("stop settles a direct runOnce and prevents a queued runOnce claim", async 
   assert.equal(clock.pendingSleeps, 0);
 });
 
+for (const late of [false, true]) test(`all-step VOC deadline aborts ignored cancellation and rejects late outcome: late=${late}`, async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-voc-deadline-"));
+  const repository = openSqliteAgentRepository({ path: join(directory, "agent.sqlite"), busyTimeoutMs: 5000 });
+  t.after(() => { repository.close(); rmSync(directory, { recursive: true, force: true }); });
+  const { stageId } = await seedJob(repository);
+  const clock = new ManualClock();
+  let started!: () => void, finish!: (value: unknown) => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let executionSignal!: AbortSignal;
+  const loop = new JobAttemptWorkerLoop({ repository, ownerId: "deadline", stage: "voc-positioning", queueTimeoutMs: 300000,
+    handler: ({ signal }) => { executionSignal = signal; started(); return new Promise(resolve => { finish = resolve; }); },
+    clock, leaseDurationMs: 600000, heartbeatIntervalMs: 1000, pollIntervalMs: 100, stopTimeoutMs: 1000,
+    retryPolicy: { maxAttempts: 3, initialDelayMs: 100, maxDelayMs: 1000, jitterRatio: 0 } });
+  const execution = loop.runOnce();
+  await ready;
+  clock.advance(299000);
+  if (late) finish({ status: "succeeded" });
+  await flushAsyncWork();
+  const [attempt] = await repository.listJobAttempts(stageId);
+  assert.equal(attempt.error?.code, "QUEUE_TIMEOUT");
+  assert.equal(attempt.status, "failed");
+  assert.equal(attempt.retryable, false);
+  if (!late) assert.equal(executionSignal.aborted, true);
+  await execution;
+  finish({ status: "succeeded" });
+  await flushAsyncWork();
+  assert.equal((await repository.listJobAttempts(stageId))[0].status, "failed");
+  await loop.stop();
+});
+
 test("heartbeat renews the active lease with its fencing generation", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "worker-loop-heartbeat-"));
   const repository = openSqliteAgentRepository({
@@ -682,6 +719,114 @@ test("temporary failures stop at the lower persisted or policy attempt limit", a
   assert.equal(attempts.length, 2);
   assert.equal(attempts[1]?.retryable, false);
   assert.equal((await repository.findRunStage(stageId))?.status, "failed");
+});
+
+test("sparse stage ordinals retain three logical attempts and the original VOC deadline", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-loop-sparse-retry-"));
+  const repository = openSqliteAgentRepository({
+    path: join(directory, "agent.sqlite"),
+    busyTimeoutMs: 5_000,
+  });
+  t.after(() => {
+    repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const { stageId } = await seedJob(repository, 3, "alexa-voc-normalization");
+  const clock = new ManualClock();
+  let executions = 0;
+  let thirdStarted!: () => void;
+  const thirdReady = new Promise<void>((resolve) => {
+    thirdStarted = resolve;
+  });
+  const loop = new JobAttemptWorkerLoop({
+    repository,
+    ownerId: "sparse-retry-worker",
+    stage: "alexa-voc-normalization",
+    queueTimeoutMs: 300_000,
+    handler: async ({ signal }) => {
+      executions += 1;
+      if (executions < 3) {
+        throw new WorkerTaskError("upstream-temporary", "Provider unavailable");
+      }
+      thirdStarted();
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "succeeded" };
+    },
+    leaseDurationMs: 600_000,
+    heartbeatIntervalMs: 1_000,
+    pollIntervalMs: 100,
+    stopTimeoutMs: 1_000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+      jitterRatio: 0,
+    },
+    clock,
+  });
+
+  assert.equal(await loop.runOnce(), true);
+  for (const attemptNumber of [2, 3]) {
+    await repository.enqueueJob({
+      id: randomUUID(),
+      stageId,
+      attemptNumber,
+      maxAttempts: attemptNumber + 2,
+      availableAt: clock.now(),
+      createdAt: clock.now(),
+    });
+  }
+  for (let sibling = 0; sibling < 2; sibling += 1) {
+    const claimed = await repository.claimNextJob({
+      ownerId: `sparse-sibling-${sibling}`,
+      claimedAt: clock.now(),
+      leaseDurationMs: 10_000,
+      stage: "alexa-voc-normalization",
+    });
+    assert.ok(claimed);
+    assert.ok(claimed.attemptNumber === 2 || claimed.attemptNumber === 3);
+    await repository.completeJob({
+      jobId: claimed.id,
+      ownerId: claimed.leasedBy!,
+      leaseGeneration: claimed.leaseGeneration,
+      completedAt: clock.now(),
+    });
+  }
+
+  clock.advance(100);
+  assert.equal(await loop.runOnce(), true);
+  const afterSecondCall = await repository.listJobAttempts(stageId);
+  const sparseRetry = afterSecondCall.find(({ attemptNumber }) => attemptNumber === 4);
+  assert.equal(executions, 2);
+  assert.equal(sparseRetry?.retryCycleStartAttempt, 1);
+  assert.equal(sparseRetry?.maxAttempts, 5);
+  assert.equal(sparseRetry?.retryable, true);
+  assert.equal(sparseRetry?.availableAt, "2026-08-14T08:00:01.300Z");
+
+  clock.advance(200);
+  const thirdExecution = loop.runOnce();
+  await thirdReady;
+  const runningSparseRetry = (await repository.listJobAttempts(stageId)).at(-1);
+  assert.equal(runningSparseRetry?.attemptNumber, 5);
+  assert.equal(runningSparseRetry?.createdAt, "2026-08-14T08:00:01.300Z");
+  const remainingDeadlineMs =
+    Date.parse("2026-08-14T08:05:00.000Z") - Date.parse(clock.now());
+  clock.advance(remainingDeadlineMs);
+  await flushAsyncWork();
+  await thirdExecution;
+
+  const attempts = await repository.listJobAttempts(stageId);
+  assert.equal(executions, 3);
+  assert.deepEqual(
+    attempts.map(({ attemptNumber }) => attemptNumber),
+    [1, 2, 3, 4, 5],
+  );
+  assert.equal(attempts.at(-1)?.error?.code, "QUEUE_TIMEOUT");
+  assert.equal(attempts.at(-1)?.retryable, false);
+  assert.equal(attempts.at(-1)?.status, "failed");
+  await loop.stop();
 });
 
 test("manual retry starts a fresh bounded automatic retry cycle after restart", async (t) => {

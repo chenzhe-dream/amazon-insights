@@ -282,8 +282,8 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
     }),
   );
   assert.equal(late.snapshotCreated, true);
-  assert.equal(late.jobCreated, false);
-  assert.equal(late.jobId, first.jobId);
+  assert.equal(late.jobCreated, true);
+  assert.notEqual(late.jobId, first.jobId);
 
   const leased = await repository.claimNextJob({
     ownerId: "normalizer",
@@ -308,7 +308,7 @@ test("normalization input is ciphertext-only, run-scoped, idempotent while activ
   );
   const immediateRetry = await queue(addMilliseconds(CREATED_AT, 3));
   assert.equal(immediateRetry.snapshot.id, first.snapshot.id);
-  assert.equal(immediateRetry.jobCreated, true);
+  assert.equal(immediateRetry.jobCreated, true, "a manual retry never borrows another ASIN's chain");
   assert.notEqual(immediateRetry.jobId, first.jobId);
   const siblingTerminalAt = addMilliseconds(CREATED_AT, 4);
   await repository.transaction(() =>
@@ -458,7 +458,7 @@ test("normalization status selects the latest fingerprint inside the exact proje
        id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
        logical_execution_cycle_id, status, available_at, lease_generation,
        retryable, retry_scheduled_at, created_at, updated_at
-     ) VALUES (?, ?, 2, 3, 1, ?, 'failed', ?, 0, 1, ?, ?, ?)`,
+     ) VALUES (?, ?, 3, 4, 2, ?, 'failed', ?, 0, 1, ?, ?, ?)`,
   ).run(retryId, latest.stage_id, hash("a"), addMilliseconds(CREATED_AT, 4),
     addMilliseconds(CREATED_AT, 4), addMilliseconds(CREATED_AT, 4), addMilliseconds(CREATED_AT, 4));
   injector.prepare(
@@ -466,9 +466,12 @@ test("normalization status selects the latest fingerprint inside the exact proje
        id, stage_id, attempt_number, max_attempts, retry_cycle_start_attempt,
        logical_execution_cycle_id, status, available_at, lease_generation,
        retryable, retry_scheduled_at, created_at, updated_at
-     ) VALUES (?, ?, 3, 3, 1, ?, 'failed', ?, 0, 0, NULL, ?, ?)`,
+     ) VALUES (?, ?, 4, 4, 2, ?, 'failed', ?, 0, 0, NULL, ?, ?)`,
   ).run(exhaustedId, latest.stage_id, hash("b"), addMilliseconds(CREATED_AT, 5),
     addMilliseconds(CREATED_AT, 5), addMilliseconds(CREATED_AT, 5));
+  injector.prepare("UPDATE job_attempts SET error_json = ? WHERE id = ?").run(
+    JSON.stringify({ code: "QUEUE_TIMEOUT", message: "fixture deadline" }), exhaustedId,
+  );
   injector.close();
   assert.deepEqual((await status(runA))[0], {
     asin: ASIN, fingerprint: hash("b"), status: "failure", revision: null, error: "model-output",

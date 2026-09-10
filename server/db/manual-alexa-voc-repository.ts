@@ -239,6 +239,7 @@ export interface ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
+    jobAttemptId?: string;
   }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]>;
   lockNormalizationRunAndStage(input: Readonly<{
     runId: string;

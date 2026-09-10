@@ -222,6 +222,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                 ) AS retry_pending,
                 revision.revision::text AS revision,
                 newest_attempt.status AS newest_attempt_status,
+                newest_attempt.error_json ->> 'code' AS newest_attempt_error_code,
                 newest_attempt.retryable AS newest_attempt_retryable,
                 newest_attempt.claim_eligible AS newest_attempt_claim_eligible
            FROM latest
@@ -236,8 +237,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
               LIMIT 1
            ) terminal ON true
            LEFT JOIN LATERAL (
-             SELECT attempt.attempt_number, attempt.status, attempt.retryable,
-                    attempt.retry_scheduled_at,
+             SELECT attempt.stage_id, attempt.attempt_number, attempt.status, attempt.retryable,
+                    attempt.retry_scheduled_at, attempt.error_json,
                     (
                       EXISTS (
                         SELECT 1 FROM agent_runs agent_run
@@ -274,6 +275,12 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                JOIN run_stages stage ON stage.id = attempt.stage_id
               WHERE stage.run_id = $1
                 AND stage.stage = 'alexa-voc-normalization'
+                AND EXISTS (
+                  SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+                  JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+                  WHERE ownership.snapshot_id = latest.snapshot_id AND origin.stage_id = attempt.stage_id
+                    AND origin.attempt_number = attempt.retry_cycle_start_attempt
+                )
               ORDER BY attempt.attempt_number DESC
               LIMIT 1
            ) newest_attempt ON true
@@ -313,7 +320,10 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           fingerprint: row.execution_fingerprint,
           status,
           revision: status === "success" ? row.revision : null,
-          error: status === "failure" ? (row.error_category ?? "persistence") : null,
+          error: status === "failure"
+            ? terminalStatus === "failure" ? row.error_category ?? "persistence"
+              : row.newest_attempt_error_code === "QUEUE_TIMEOUT" ? "timeout" : "persistence"
+            : null,
         });
       }));
     });
@@ -394,6 +404,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
+    jobAttemptId?: string;
   }>): Promise<readonly AlexaVocNormalizationInputSnapshot[]> {
     return this.#execute(async () => {
       const result = await this.#queries.query<QueryResultRow>(
@@ -406,11 +417,19 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
             AND project.organization_id = $3
             AND ds.artifact_kind = 'alexa-voc-normalization-input'
             AND ds.snapshot_kind = 'alexa-voc-normalization-input'
+            AND ($4::text IS NULL OR EXISTS (
+              SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+              JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+              JOIN job_attempts current_job ON current_job.stage_id = origin.stage_id
+                AND current_job.retry_cycle_start_attempt = origin.attempt_number
+              WHERE ownership.snapshot_id = ds.id AND current_job.id = $4
+            ))
           ORDER BY ds.created_at, ds.id`,
         [
           EntityIdSchema.parse(input.runId),
           EntityIdSchema.parse(input.projectId),
           EntityIdSchema.parse(input.actorOrganizationId),
+          input.jobAttemptId ? EntityIdSchema.parse(input.jobAttemptId) : null,
         ],
       );
       return Object.freeze(result.rows.map(mapNormalizationInputSnapshot));
@@ -1329,22 +1348,30 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           OR (status = 'failed' AND retryable = TRUE
               AND retry_scheduled_at IS NULL)
         )
-          AND attempt.attempt_number = (
-            SELECT MAX(latest_attempt.attempt_number)
-              FROM job_attempts latest_attempt
-             WHERE latest_attempt.stage_id = attempt.stage_id
+          AND NOT EXISTS (
+            SELECT 1 FROM job_attempts successor
+            WHERE successor.stage_id = attempt.stage_id
+              AND successor.retry_cycle_start_attempt = attempt.retry_cycle_start_attempt
+              AND successor.attempt_number > attempt.attempt_number
           )
           AND NOT EXISTS (
             SELECT 1 FROM alexa_voc_normalization_terminals terminal
              WHERE terminal.snapshot_id = $3
                AND terminal.job_attempt_id = attempt.id
           )
+          AND EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+            JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+            WHERE ownership.snapshot_id = $3 AND origin.stage_id = attempt.stage_id
+              AND origin.attempt_number = attempt.retry_cycle_start_attempt
+          )
         ORDER BY attempt.attempt_number DESC LIMIT 1`,
       [stage.id, insertedSnapshot.rowCount === 1, snapshot.id],
     );
     let jobId = typeof active.rows[0]?.id === "string" ? active.rows[0].id : null;
     const activeRow = active.rows[0];
-    if (activeRow && insertedSnapshot.rowCount === 1 && (activeRow.report_publication_max_attempts !== null || (activeRow.status === "failed" && Number(activeRow.attempt_number) >= Number(activeRow.max_attempts)))) jobId = null;
+    // A new input owns a fresh deadline; an idempotent replay may reuse work.
+    if (insertedSnapshot.rowCount === 1) jobId = null;
     if (activeRow?.status === "failed") {
       const candidate: NormalizationRecoveryJob = {
         id: String(activeRow.id), stageId: String(stage.id), runId: normalized.runId,
@@ -1392,6 +1419,13 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       jobId = normalized.jobId;
       jobCreated = true;
     }
+    await this.#queries.query(
+      `INSERT INTO alexa_voc_normalization_input_jobs(snapshot_id, origin_job_id)
+       SELECT $1, origin.id FROM job_attempts current_job
+       JOIN job_attempts origin ON origin.stage_id = current_job.stage_id
+         AND origin.attempt_number = current_job.retry_cycle_start_attempt
+       WHERE current_job.id = $2 ON CONFLICT DO NOTHING`, [snapshot.id, jobId],
+    );
     return Object.freeze({
       snapshot,
       snapshotCreated: insertedSnapshot.rowCount === 1,

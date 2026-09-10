@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { DEFAULT_VOC_QUEUE_TIMEOUT_MS } from "../domain/voc/queue-deadline";
 
 import type { VocPositioningRuntimeConfig } from "../config";
 import type { RuntimeAgentRepository } from "../db/repository";
@@ -14,6 +15,7 @@ import { SkillRunner } from "./skill-runner";
 import { JobAttemptWorkerLoop, type WorkerClock, type WorkerLogger } from "./worker-loop";
 
 export async function createProductDefinitionRuntime(options: {
+  queueTimeoutMs?: number;
   repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
   provider: ModelProvider;
@@ -89,6 +91,7 @@ export async function createProductDefinitionRuntime(options: {
     ...options.config.worker,
     repository: options.repository,
     stage: "product-definition",
+    queueTimeoutMs: options.queueTimeoutMs ?? DEFAULT_VOC_QUEUE_TIMEOUT_MS,
     handler,
     ...(options.workerClock ? { clock: options.workerClock } : {}),
     ...(options.logger ? { logger: options.logger } : {}),

@@ -429,6 +429,15 @@ export class PostgresJobStore implements JobRepositoryContract {
             WHERE id = $2`,
           [input.completedAt, job.stageId],
         );
+        if (job.stage === "alexa-voc-normalization") await this.#queries.query(
+          `UPDATE run_stages SET status = CASE
+             WHEN EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = $1 AND status = 'running') THEN 'running'
+             ELSE 'queued' END, progress = 0, completed_at = NULL
+           WHERE id = $1 AND EXISTS (
+             SELECT 1 FROM job_attempts WHERE stage_id = $1 AND (status IN ('queued','running')
+               OR (status = 'failed' AND retryable = TRUE AND retry_scheduled_at IS NULL))
+           )`, [job.stageId],
+        );
         await this.#refreshAnalysisRunStatus(job.runId, input.completedAt);
         return job;
       });
@@ -704,6 +713,7 @@ export class PostgresJobStore implements JobRepositoryContract {
       `UPDATE job_attempts
           SET status = $1, retryable = FALSE, leased_by = NULL,
               lease_expires_at = NULL,
+              report_publication_retry_at = NULL,
               completed_at = COALESCE(completed_at, $2),
               error_json = $3::jsonb, updated_at = $2
         WHERE id = $4`,
@@ -726,6 +736,15 @@ export class PostgresJobStore implements JobRepositoryContract {
         current.stageId,
       ],
     );
+    if (current.stage === "alexa-voc-normalization" && disposition.error?.code === "QUEUE_TIMEOUT") {
+      // New ASIN submissions own separate deadlines. Closing an older chain
+      // cannot terminalize a still-runnable sibling in the shared stage.
+      await this.#queries.query(`UPDATE run_stages SET status = CASE
+        WHEN EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = $1 AND status = 'running') THEN 'running'
+        ELSE 'queued' END, completed_at = NULL
+        WHERE id = $1 AND EXISTS (SELECT 1 FROM job_attempts WHERE stage_id = $1
+          AND (status IN ('queued', 'running') OR (status = 'failed' AND retryable = TRUE AND retry_scheduled_at IS NULL)))`, [current.stageId]);
+    }
     await this.#refreshAnalysisRunStatus(current.runId, settledAt);
   }
 
@@ -870,7 +889,8 @@ function mapJob(row: JobRow): JobAttemptRecord {
       (!retryPending && (row.retryable || reportPublicationRetryAt !== null)) ||
       (row.status === "failed" &&
         !retryPending &&
-        reportPublicationAttemptCount !== reportPublicationMaxAttempts)
+        reportPublicationAttemptCount !== reportPublicationMaxAttempts &&
+        row.error_json?.code !== "QUEUE_TIMEOUT")
     ) {
       throw new PostgresJobStoreError();
     }

@@ -113,6 +113,7 @@ after(async () => {
 
 for (const adapter of ["sqlite", "postgres"] as const) {
   for (const scenario of [
+    "deadline-isolation",
     "positioning-running",
     "positioning-staggered",
     "publication-sibling",
@@ -259,7 +260,9 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             executionFingerprint,
             executionIdentity,
             envelope,
-            queuedAt: asin === C ? new Date().toISOString() : now,
+            queuedAt: scenario === "deadline-isolation" && asin === A
+              ? new Date(Date.parse(now) - 300001).toISOString()
+              : asin === C ? new Date().toISOString() : now,
           }),
         );
       };
@@ -267,7 +270,49 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       const initialThird = scenario === "positioning-running" || scenario.startsWith("publication-sibling");
       const hasThird = initialThird || scenario.startsWith("new-input-");
       if (initialThird) queued.push(await queueInput(C));
-      assert.equal(queued[0]!.jobId, queued[1]!.jobId);
+      assert.notEqual(queued[0]!.jobId, queued[1]!.jobId, "new ASIN submissions own independent deadline origins");
+      if (scenario === "deadline-isolation") {
+        assert.equal((await queueInput(A)).jobId, queued[0]!.jobId, "network replay stays in its owned active chain, not a newer sibling");
+        const beforeInputs = await repository.manualAlexaVoc.listNormalizationInputSnapshots({ actorOrganizationId: organizationId, projectId, runId });
+        assert.equal(await repository.expireVocQueue({ runId, checkedAt: now, timeoutMs: 300000 }), 1);
+        const calls: string[] = [];
+        const runtime = await createAlexaVocNormalizationRuntime({
+          repository, config, normalizationInputCipher: cipher,
+          provider: { async generateStructured<T>(request: { input: unknown }) {
+            calls.push((request.input as { asin: string }).asin);
+            return { value: { schemaVersion: "1.0.0", kind: "alexa-voc-normalization-result", record: facts } as T, responseId: "deadline-fixture", inputTokens: 100, outputTokens: 100 };
+          } },
+        });
+        runtime.start();
+        try {
+          const until = Date.now() + 5000;
+          while (Date.now() < until && !(await repository.listJobAttempts(queued[1]!.stageId)).some(job => job.id === queued[1]!.jobId && job.status === "succeeded")) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          assert.equal((await repository.listJobAttempts(queued[1]!.stageId)).find(job => job.id === queued[1]!.jobId)?.status, "succeeded");
+          assert.deepEqual(calls, [B], "fresh B must not revive expired A or spend B's deadline on A");
+          assert.deepEqual(await repository.manualAlexaVoc.listNormalizationInputSnapshots({ actorOrganizationId: organizationId, projectId, runId }), beforeInputs);
+          const saved = await repository.manualAlexaVoc.listAtCutoff({ organizationId, marketplace: "US", asins: [A, B], dataCutoffAt: cutoff });
+          assert.deepEqual(saved.map(record => record.asin), [B]);
+        } finally { await runtime.stop(); }
+        return;
+      }
+      // Explicit legacy shared-batch fixture: before ownership migration, all
+      // these inputs belonged to the same queued attempt. Keep recovery coverage
+      // for those already-persisted batches without changing production enqueue.
+      for (const sibling of queued.slice(1)) {
+        const sql = "INSERT INTO alexa_voc_normalization_input_jobs(snapshot_id, origin_job_id) VALUES (?, ?)";
+        if (pool) {
+          await pool.query(sql.replace("?", "$1").replace("?", "$2"), [sibling.snapshot.id, queued[0]!.jobId]);
+          await pool.query("DELETE FROM job_attempts WHERE id=$1", [sibling.jobId]);
+        } else {
+          const db = new DatabaseSync(path);
+          db.exec("PRAGMA foreign_keys=ON");
+          db.prepare(sql).run(sibling.snapshot.id, queued[0]!.jobId);
+          db.prepare("DELETE FROM job_attempts WHERE id=?").run(sibling.jobId);
+          db.close();
+        }
+      }
       if (scenario.includes("limit") || scenario.includes("final-attempt")) {
         if (pool)
           await pool.query(
@@ -336,8 +381,9 @@ for (const adapter of ["sqlite", "postgres"] as const) {
                     job.status === "failed" || job.status === "cancelled";
                   if (scenario.includes("exhausted") && job.retryable)
                     permitClaims = true;
-                  if (scenario === "new-input-pending-publication" && claims === 2) {
-                    assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 0 });
+                  if (scenario === "new-input-pending-publication" && publicationFailures >= 2) {
+                    assert.equal(calls[A], 1);
+                    assert.equal(calls[B], 1);
                     permitClaims = true;
                   }
                   return job;
@@ -632,7 +678,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       assert.ifError(failError);
       if (scenario === "new-input-pending-publication") {
         const jobs = await repository.listJobAttempts(queued[0]!.stageId);
-        assert.equal(jobs[0]!.reportPublicationMaxAttempts, null);
+        assert.equal(jobs[0]!.reportPublicationMaxAttempts, 3, "unrelated C input no longer prevents A/B publication-only recovery");
         assert.equal(jobs[0]!.status, "failed");
         assert.equal(jobs[1]!.status, "queued");
         assert.deepEqual(calls, { [A]: 1, [B]: 1, [C]: 0 });
@@ -756,15 +802,13 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       permitClaims = true;
       const deadline = Date.now() + 10000;
       while (Date.now() < deadline) {
-        const job = (await repository.listJobAttempts(queued[0]!.stageId)).at(
-          -1,
-        )!;
-        if (
-          job.status === "succeeded" ||
-          job.status === "cancelled" ||
-          (job.status === "failed" && !job.retryable)
-        )
-          break;
+        const jobs = await repository.listJobAttempts(queued[0]!.stageId);
+        const active = jobs.some(job => {
+          if (job.status === "queued" || job.status === "running") return true;
+          return job.status === "failed" && job.retryable && !jobs.some(newer =>
+            newer.retryCycleStartAttempt === job.retryCycleStartAttempt && newer.attemptNumber > job.attemptNumber);
+        });
+        if (!active) break;
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       await runtime.stop();
@@ -828,11 +872,10 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         -1,
       )!;
       if (scenario === "new-input-pending-publication") {
-        assert.equal(lastJob.attemptNumber, 3);
-        assert.equal(lastJob.logicalExecutionCycleId, firstClaim!.logicalExecutionCycleId);
-        assert.equal(lastJob.retryCycleStartAttempt, firstClaim!.retryCycleStartAttempt);
-        assert.equal(lastJob.maxAttempts - lastJob.attemptNumber,
-          firstClaim!.maxAttempts - firstClaim!.attemptNumber - 1);
+        const recovered = (await repository.listJobAttempts(queued[0]!.stageId)).find(job => job.id === firstClaim!.id)!;
+        assert.equal(recovered.status, "succeeded");
+        assert.equal(recovered.logicalExecutionCycleId, firstClaim!.logicalExecutionCycleId);
+        assert.equal(recovered.reportPublicationAttemptCount, 2, "owned publication recovery reuses the durable attempt without rerunning the model");
       }
       if (transientRetry) {
         assert.equal(lastJob.attemptNumber, 2);
@@ -931,7 +974,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         "publication-then-cancelled-audit",
       ].includes(scenario)
         ? 1
-        : scenario.startsWith("new-input-")
+        : scenario === "new-input-during-publication"
           ? 3
           : 2;
       if (pool)

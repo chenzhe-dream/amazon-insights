@@ -1231,7 +1231,7 @@ export const AlexaVocNormalizationStatusSchema = strictObject({
   fingerprint: Sha256Schema,
   status: z.enum(["pending", "success", "failure"]),
   revision: DecimalStringSchema.nullable(),
-  error: z.enum(["model-output", "schema", "persistence", "authorization"]).nullable(),
+  error: z.enum(["model-output", "schema", "persistence", "authorization", "timeout"]).nullable(),
 }).superRefine((value, context) => {
   if (value.status === "success" && value.revision === null) {
     context.addIssue({ code: "custom", path: ["revision"], message: "success requires a revision" });

@@ -12,6 +12,12 @@ import {
 const PROJECT_ID = "10000000-0000-4000-8000-000000000010";
 const RUN_ID = "10000000-0000-4000-8000-000000000011";
 
+test("normalization timeout remains a terminal failure after status discovery", async () => {
+  const result = await readAlexaVocNormalizationStatuses({ projectId: PROJECT_ID, runId: RUN_ID, asins: ["B099WTN2TR"], request: async () => Response.json({ records: [{ asin: "B099WTN2TR", fingerprint: "a".repeat(64), status: "failure", revision: null, error: "timeout" }] }) });
+  assert.equal(result.records[0].status, "failure");
+  assert.equal(result.records[0].error, "timeout");
+});
+
 test("hydrates normalization status for every scoped ASIN after a page remount", async () => {
   const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
   const response = await readAlexaVocNormalizationStatuses({

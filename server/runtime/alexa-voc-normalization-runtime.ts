@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_VOC_QUEUE_TIMEOUT_MS } from "../domain/voc/queue-deadline";
 import { resolve } from "node:path";
 
 import type { VocPositioningRuntimeConfig } from "../config";
@@ -33,6 +34,7 @@ import {
 } from "./worker-loop";
 
 export interface AlexaVocNormalizationRuntimeOptions {
+  queueTimeoutMs?: number;
   repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
   provider?: ModelProvider;
@@ -156,6 +158,7 @@ export async function createAlexaVocNormalizationRuntime(
           actorOrganizationId: subject.organizationId,
           projectId: subject.projectId,
           runId: job.runId,
+          jobAttemptId: job.id,
         });
       const terminals = await options.repository.manualAlexaVoc
         .listNormalizationTerminals({
@@ -237,6 +240,7 @@ export async function createAlexaVocNormalizationRuntime(
     repository: options.repository,
     ownerId: options.config.worker.ownerId,
     stage: "alexa-voc-normalization",
+    queueTimeoutMs: options.queueTimeoutMs ?? DEFAULT_VOC_QUEUE_TIMEOUT_MS,
     handler,
     leaseDurationMs: options.config.worker.leaseDurationMs,
     heartbeatIntervalMs: options.config.worker.heartbeatIntervalMs,
@@ -688,6 +692,7 @@ async function finalizeNormalizationJob(
       actorOrganizationId: subject.organizationId,
       projectId: subject.projectId,
       runId: job.runId,
+      jobAttemptId: job.id,
     });
     const terminals = await scoped.manualAlexaVoc.listNormalizationTerminals({
       actorOrganizationId: subject.organizationId,

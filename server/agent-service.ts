@@ -419,6 +419,7 @@ export async function createAgentService(
               : resolution.config.providerName);
           try {
             normalizationRuntime = await createAlexaVocNormalizationRuntime({
+              queueTimeoutMs,
               repository,
               config: resolution.config,
               provider,
@@ -464,6 +465,7 @@ export async function createAgentService(
             ...(options.workerLogger ? { logger: options.workerLogger } : {}),
           });
           productRuntime = await createProductDefinitionRuntime({
+            queueTimeoutMs,
             repository,
             config: resolution.config,
             provider,

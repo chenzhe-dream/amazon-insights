@@ -2,6 +2,7 @@ import {
   JobLeaseLostError,
   type AgentRepository,
   type JobAttemptRecord,
+  type VocQueueRepositoryCapability,
 } from "../db/repository";
 import { BudgetExceededError } from "./budget-policy";
 import type { RetryPolicy, WorkerErrorCategory } from "./retry-policy";
@@ -13,6 +14,7 @@ import {
   computeRetryDelayMs,
 } from "./retry-policy";
 import { createTrustedExecutionAbortReason } from "./execution-abort";
+import { isVocDeadlineStage } from "../domain/voc/queue-deadline";
 
 export type JobExecutionOutcome =
   | Readonly<{ status: "succeeded" }>
@@ -54,7 +56,7 @@ export interface WorkerLogger {
 }
 
 export interface JobAttemptWorkerLoopOptions {
-  readonly repository: AgentRepository;
+  readonly repository: AgentRepository & Partial<VocQueueRepositoryCapability>;
   readonly ownerId: string;
   readonly handler: JobHandler;
   readonly stage?: JobAttemptRecord["stage"];
@@ -93,6 +95,9 @@ export class JobAttemptWorkerLoop {
     );
     assertPositiveSafeInteger(options.pollIntervalMs, "pollIntervalMs");
     assertPositiveSafeInteger(options.stopTimeoutMs, "stopTimeoutMs");
+    if (options.queueTimeoutMs !== undefined && typeof options.repository.expireVocQueue !== "function") {
+      throw new TypeError("VOC deadline repository capability is required");
+    }
     if (options.heartbeatIntervalMs >= options.leaseDurationMs) {
       throw new TypeError("heartbeatIntervalMs must be shorter than the lease");
     }
@@ -242,6 +247,9 @@ export class JobAttemptWorkerLoop {
       );
       return true;
     }
+    // The independent sweeper and heartbeat handle suspended providers. Check
+    // again here so an outcome arriving at the deadline cannot win a late race.
+    await this.#expireVocWork(job);
     if (handlerError instanceof BudgetExceededError) {
       const failedAt = this.#clock.now();
       const settled = await this.#settleLease(() =>
@@ -270,8 +278,9 @@ export class JobAttemptWorkerLoop {
     }
     if (handlerError !== undefined) {
       const classified = classifyWorkerError(handlerError);
-      const retryCycleAttemptNumber =
-        job.attemptNumber - job.retryCycleStartAttempt + 1;
+      const retryCycleAttemptNumber = classified.retryable
+        ? await this.#retryCycleAttemptNumber(job)
+        : 1;
       const retryable =
         classified.retryable &&
         job.attemptNumber < job.maxAttempts &&
@@ -368,6 +377,21 @@ export class JobAttemptWorkerLoop {
     return true;
   }
 
+  async #retryCycleAttemptNumber(job: JobAttemptRecord): Promise<number> {
+    const attempts = await this.#options.repository.listJobAttempts(job.stageId);
+    const currentAttempt = attempts.find(({ id }) => id === job.id);
+    if (
+      currentAttempt?.retryCycleStartAttempt !== job.retryCycleStartAttempt
+    ) {
+      throw new Error("Claimed job is missing from its persisted retry cycle");
+    }
+    return attempts.filter(
+      (attempt) =>
+        attempt.retryCycleStartAttempt === job.retryCycleStartAttempt &&
+        attempt.attemptNumber <= job.attemptNumber,
+    ).length;
+  }
+
   async #settleLease(mutation: () => Promise<unknown>): Promise<boolean> {
     try {
       await mutation();
@@ -416,7 +440,9 @@ export class JobAttemptWorkerLoop {
   ): Promise<void> {
     while (!signal.aborted) {
       try {
-        await this.#clock.sleep(this.#options.heartbeatIntervalMs, signal);
+        await this.#clock.sleep(isVocDeadlineStage(job.stage) && this.#options.queueTimeoutMs !== undefined
+          ? Math.min(5000, this.#options.heartbeatIntervalMs)
+          : this.#options.heartbeatIntervalMs, signal);
       } catch (error) {
         if (signal.aborted && isAbortError(error)) return;
         onLeaseLost();
@@ -424,6 +450,7 @@ export class JobAttemptWorkerLoop {
       }
       if (signal.aborted) return;
       try {
+        await this.#expireVocWork(job);
         await this.#options.repository.renewJobLease({
           jobId: job.id,
           ownerId: this.#options.ownerId,
@@ -436,6 +463,12 @@ export class JobAttemptWorkerLoop {
         return;
       }
     }
+  }
+
+  async #expireVocWork(job: JobAttemptRecord): Promise<void> {
+    if (this.#options.queueTimeoutMs === undefined || !isVocDeadlineStage(job.stage)) return;
+    if (!this.#options.repository.expireVocQueue) throw new Error("VOC deadline repository capability is required");
+    await this.#options.repository.expireVocQueue({ runId: job.runId, checkedAt: this.#clock.now(), timeoutMs: this.#options.queueTimeoutMs, limit: 100 });
   }
 }
 

@@ -45,8 +45,14 @@ export function normalizationRecoveryQueries(job: NormalizationRecoveryJob) {
       sql: `SELECT ds.*, p.organization_id, p.id AS project_id
            FROM data_snapshots ds JOIN analysis_runs r ON r.id = ds.run_id
            JOIN projects p ON p.id = r.project_id
-          WHERE ds.run_id = ? AND ds.artifact_kind = 'alexa-voc-normalization-input'`,
-      values: [job.runId],
+          WHERE ds.run_id = ? AND ds.artifact_kind = 'alexa-voc-normalization-input'
+            AND EXISTS (
+              SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+              JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+              WHERE ownership.snapshot_id = ds.id AND origin.stage_id = ?
+                AND origin.attempt_number = ?
+            )`,
+      values: [job.runId, job.stageId, job.retryCycleStartAttempt],
     },
     {
       sql: `SELECT terminal.*, j.id AS terminal_job_id, j.stage_id AS terminal_job_stage_id,
@@ -78,8 +84,13 @@ export function normalizationRecoveryQueries(job: NormalizationRecoveryJob) {
            LEFT JOIN analysis_runs source_run ON source_run.id = source.run_id
            LEFT JOIN projects source_project ON source_project.id = source_run.project_id
            LEFT JOIN skill_versions skill ON skill.id = ar.skill_version_id
-          WHERE terminal.run_id = ?`,
-      values: [job.runId],
+          WHERE terminal.run_id = ? AND EXISTS (
+            SELECT 1 FROM alexa_voc_normalization_input_jobs ownership
+            JOIN job_attempts origin ON origin.id = ownership.origin_job_id
+            WHERE ownership.snapshot_id = terminal.snapshot_id AND origin.stage_id = ?
+              AND origin.attempt_number = ?
+          )`,
+      values: [job.runId, job.stageId, job.retryCycleStartAttempt],
     },
   ];
 }
