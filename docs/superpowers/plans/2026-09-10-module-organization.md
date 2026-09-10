@@ -41,5 +41,5 @@
 
 - [x] Document actual shell/shared modules and current feature entry points for projects/sync/VOC/keywords/listing/reports, including generated-data location and server boundary. Mark future moves explicitly as future work.
 - [x] Update the design status and baseline with the completed VOC release and implemented first batch.
-- [ ] Independent review checks exact preserved behavior and import boundaries. Resolve substantive findings before completion.
-- [ ] Record fresh validation and commit documentation; verify working tree has only preserved untracked test artifacts. Formal service must still report 5ba042f. No automatic second deployment.
+- [x] Independent review checks exact preserved behavior and import boundaries. Resolve substantive findings before completion.
+- [x] Record fresh validation and commit documentation; verify working tree has only preserved untracked test artifacts. Formal service must still report 5ba042f. No automatic second deployment.
