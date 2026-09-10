@@ -124,7 +124,7 @@ test("route classification is closed and method-exact", () => {
   });
   assert.deepEqual(classifyRoute("DELETE", "/v1/local-data/projects/project-1"), {
     kind: "session",
-    roles: ["admin", "member"],
+    roles: ["admin"],
   });
   assert.deepEqual(classifyRoute("GET", "/v1/local-data/sync-asins"), {
     kind: "session",

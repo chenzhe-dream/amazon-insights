@@ -1,5 +1,6 @@
+import { proxyAgentRequest } from "../../agent/[...path]/route";
+import { authorizeWebMutation } from "../../../lib/authenticated-web-mutation";
 import {
-  deleteAnalysisProject,
   fetchProject,
   updateAnalysisProject,
 } from "../../../lib/project-server";
@@ -31,11 +32,9 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(request: Request, context: RouteContext) {
+  const authorization = await authorizeWebMutation(request, { allowedRoles: ["admin"] });
+  if (!authorization.ok) return authorization.response;
   const { id } = await context.params;
-  const ok = await deleteAnalysisProject(id);
-  if (!ok) {
-    return Response.json({ error: "project not found" }, { status: 404 });
-  }
-  return Response.json({ ok: true });
+  return proxyAgentRequest(request, { params: Promise.resolve({ path: ["v1", "local-data", "projects", id] }) });
 }

@@ -52,6 +52,11 @@ const ANONYMOUS_FIXTURE_ROUTES: readonly Readonly<{
 export function classifyRoute(method: string, pathname: string): RouteAccess {
   const normalizedMethod = method.toUpperCase();
 
+  // Legacy project records are shared and have no trusted owner identity.
+  if (normalizedMethod === "DELETE" && /^\/v1\/local-data\/projects\/[^/]+$/.test(pathname)) {
+    return { kind: "session", roles: ADMIN_ROLES };
+  }
+
   if (normalizedMethod === "GET" && pathname === "/health") {
     return { kind: "public" };
   }

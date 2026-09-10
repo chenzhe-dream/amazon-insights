@@ -142,6 +142,8 @@ function persistAuthor(value: string) {
 
 type Props = {
   favorites?: AnalysisProjectFavorites;
+  canDeleteProjects?: boolean;
+  onProjectDeleted?: (id: string) => void;
   market: string;
   draftAsins: string[];
   currentProjectId: string | null;
@@ -163,6 +165,8 @@ type Props = {
 
 export function ProjectLibraryPage({
   favorites,
+  canDeleteProjects = false,
+  onProjectDeleted,
   market,
   draftAsins,
   currentProjectId,
@@ -185,6 +189,8 @@ export function ProjectLibraryPage({
   const [libraryView, setLibraryView] = useState<"favorites" | "history">("favorites");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -259,6 +265,12 @@ export function ProjectLibraryPage({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("projectDeleted") === "1") {
+        setNotice("已删除项目，团队历史和收藏列表已更新。");
+        url.searchParams.delete("projectDeleted");
+        window.history.replaceState(window.history.state, "", url);
+      }
       setCreatedBy(readAuthor());
       void refresh();
     });
@@ -400,21 +412,30 @@ export function ProjectLibraryPage({
   };
 
   const removeProject = async (id: string) => {
-    if (!window.confirm("确定删除这个项目？团队其他人也将无法再从收藏夹打开。")) return;
+    if (deletingId || (kind === "analysis" && !canDeleteProjects)) return;
+    if (!window.confirm("确定删除这个项目？这会从团队共享历史和收藏夹中移除项目，其他成员也将无法再打开。取消收藏请使用取消收藏按钮。")) return;
+    setDeletingId(id);
+    setNotice(null);
     setError(null);
     try {
       const response = await fetch(`/api/projects/${id}`, { method: "DELETE" });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "删除失败");
+      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : payload.error?.message ?? "删除失败");
       if (editingId === id) resetForm();
-      await refresh();
+      setProjects(previous => previous.filter(project => project.id !== id));
+      onProjectDeleted?.(id);
+      setNotice("已删除项目，团队历史和收藏列表已更新。");
+      void favorites?.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除失败");
+    } finally {
+      setDeletingId(null);
     }
   };
 
   return (
     <div className="project-library-page">
+      {notice ? <p role="status">{notice}</p> : null}
       <section className="card page-intro">
         <div>
           <span className="status-chip project-status-chip">团队共享</span>
@@ -670,9 +691,10 @@ export function ProjectLibraryPage({
                   aria-pressed={Boolean(favorites?.projectIds.includes(project.id))}
                   onClick={() => void favorites?.setFavorite(project.id, !favorites.projectIds.includes(project.id))}>
                   {favorites?.pending ? "保存收藏中…" : favorites?.projectIds.includes(project.id) ? "取消收藏" : "☆ 收藏项目"}
-                </button> : <button type="button" className="ghost-btn danger" onClick={() => removeProject(project.id)}>
-                  删除
-                </button>}
+                </button> : null}
+                {(kind !== "analysis" || (libraryView === "history" && canDeleteProjects)) ? <button type="button" className="ghost-btn danger" disabled={deletingId !== null} onClick={() => void removeProject(project.id)}>
+                  {deletingId === project.id ? "删除中…" : kind === "analysis" ? "删除项目" : "删除"}
+                </button> : null}
               </div>
             </article>
           ))}
