@@ -29,17 +29,17 @@
 
 **Interfaces:** Page consumes explicit exports equivalent to current helper signatures; `navigationEntries` is static and not mutated. RatingCell consumes `{rating:number; reviews:number|null}`, AmazonStarRating consumes `{rating:number; compact?:boolean}`. Modules have no runtime/provider/file side effects.
 
-- [ ] Record relevant app-tabs and rendering checks before extraction; use existing source and behavior to establish expected output.
-- [ ] Extract definitions and JSX verbatim, update imports and remove the obsolete per-page memo for static entries. Keep all stateful sidebar handlers and report/data plumbing in the page.
-- [ ] Cover tab grouping including standalone tabs, navigation uniqueness/validity, and rating clamp/compact/null-versus-zero review behavior. Do not add tests that merely assert file existence or copied implementation text.
-- [ ] Run focused tests, targeted ESLint for new files, full build and related page/VOC browser regressions; classify known failures against baseline.
-- [ ] Self-review diff and commit the scoped refactor locally. Record source line reduction and changed file responsibilities.
+- [x] Record relevant app-tabs and rendering checks before extraction; use existing source and behavior to establish expected output.
+- [x] Extract definitions and JSX verbatim, update imports and remove the obsolete per-page memo for static entries. Keep all stateful sidebar handlers and report/data plumbing in the page.
+- [x] Cover tab grouping including standalone tabs, navigation uniqueness/validity, and rating clamp/compact/null-versus-zero review behavior. Do not add tests that merely assert file existence or copied implementation text.
+- [x] Run focused tests, targeted ESLint for new files, full build and related page/VOC browser regressions; classify known failures against baseline.
+- [x] Self-review diff and commit the scoped refactor locally. Record source line reduction and changed file responsibilities.
 
 ### Task 2: Document module ownership and finish verification
 
 **Files:** `app/README.md`, the design note, and `docs/verification/2026-09-10-module-organization.md`.
 
-- [ ] Document actual shell/shared modules and current feature entry points for projects/sync/VOC/keywords/listing/reports, including generated-data location and server boundary. Mark future moves explicitly as future work.
-- [ ] Update the design status and baseline with the completed VOC release and implemented first batch.
+- [x] Document actual shell/shared modules and current feature entry points for projects/sync/VOC/keywords/listing/reports, including generated-data location and server boundary. Mark future moves explicitly as future work.
+- [x] Update the design status and baseline with the completed VOC release and implemented first batch.
 - [ ] Independent review checks exact preserved behavior and import boundaries. Resolve substantive findings before completion.
 - [ ] Record fresh validation and commit documentation; verify working tree has only preserved untracked test artifacts. Formal service must still report 5ba042f. No automatic second deployment.
