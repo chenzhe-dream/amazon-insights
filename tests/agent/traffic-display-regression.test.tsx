@@ -61,6 +61,7 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
   const page = await context.newPage();
   const state = { mode, snapshotStatus: 200, stageStatus: 200, run: runId, completed: false, jobVersion: 1, holdSnapshots: false, holdStages: false, snapshotReads: 0, stageReads: 0, jobReads: 0, taskWrites: 0, externalApis: 0, holdVoc: false, vocReads: 0, vocStatus: 200 };
   const pending: Array<() => Promise<void>> = [];
+  let recovered = false;
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const reply = (route: Route, payload: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(payload) });
@@ -81,7 +82,8 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
     if (path.endsWith("/traffic-snapshot")) {
       state.snapshotReads++;
       const status = state.snapshotStatus;
-      const respond = () => reply(route, status === 200 ? summary : {}, status);
+      const collection = { id: '10000000-0000-4000-8000-000000000098', schemaVersion: '1', source: 'sif', marketplace: 'US', period: '近30天', collectedAt: '2026-09-10T00:00:00.000Z', asins, records: fullByAsin };
+      const respond = () => reply(route, status === 200 ? { ...summary, ...(recovered ? { listingCollection: collection } : {}) } : {}, status);
       if (state.holdSnapshots) { pending.push(respond); return; }
       return respond();
     }
@@ -108,8 +110,18 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
   });
   async function open() { await page.goto(`${origin}/tests/agent/helpers/traffic-display-harness.html?appSearch=${encodeURIComponent(search())}`); await page.locator(".traffic-distribution-row").first().waitFor(); }
   async function close() { await context.close(); assert.deepEqual(errors, []); assert.equal(state.taskWrites, 0, "no task/post/replay requests"); assert.equal(state.externalApis, 0, "no provider requests"); }
-  return { page, state, pending, open, close };
+  return { page, state, pending, open, close, recover: () => { recovered = true; } };
 }
+
+test('same-batch recovery displays details despite old compact stage and exposes bounded repair control', async () => {
+  const f = await fixture('compact');
+  try {
+    f.recover(); await f.open();
+    await waitForText(f.page, '.traffic-distribution-grid', '合成相似商品');
+    assert.equal(await f.page.getByRole('button', { name: '重新补采流量明细', exact: true }).count(), 1);
+    assert.equal(await f.page.locator('.child-traffic-row').count(), 8);
+  } finally { await f.close(); }
+});
 async function waitForText(page: Page, selector: string, value: string) {
   await page.waitForFunction(({ selector, value }) => document.querySelector(selector)?.textContent?.includes(value), { selector, value }, { timeout: 15000 });
 }

@@ -4,6 +4,22 @@ import { sameTrafficDetailScope, mergeTrafficRecord, trafficStageFromReceipt, fo
 import { trafficDisplayFromSnapshot } from "../../app/sif-listing-traffic-data";
 import { buildTrafficAnalysisConclusion } from "../../app/traffic-analysis-conclusion";
 import { sifListingTrafficMeta } from "../../app/sif-listing-traffic-data";
+import { buildStageOutputView } from '../../app/lib/stage-output-view';
+
+test('same-batch collection atomically overrides summary and resists stale stage totals', () => {
+  const asin = 'B01E6CX34C';
+  const record = { totalScore: 900, naturalAd: [{ label: '自然流量', score: 600, ratio: 66.7 }, { label: '广告流量', score: 300, ratio: 33.3 }], adChannels: [{ label: 'SP(常规)', score: 300, ratio: 100 }], recommendationSources: [], children: [], updatedThrough: '2026-09-10' };
+  const snapshot = { marketplace: 'US', asins: [asin], collectedAt: '2026-09-09T00:00:00.000Z', traffic: { competitors: [{ asin, trafficVolume: 100, naturalVolume: 50, naturalShare: 50, advertisingVolume: 50, advertisingShare: 50, childCount: 10, monthlyTrend: [{ month: '2026-08', natural: 1, advertising: 2, total: 3 }] }] }, listingCollection: { id: '10000000-0000-4000-8000-000000000001', schemaVersion: '1', source: 'sif', period: '近30天', collectedAt: '2026-09-10T00:00:00.000Z', marketplace: 'US', asins: [asin], records: { [asin]: record } } };
+  const trafficData = trafficDisplayFromSnapshot(snapshot as never);
+  assert.equal(trafficData.overview[asin]?.totalScore, 900);
+  assert.equal(trafficData.overview[asin]?.childCount, 0);
+  assert.equal(trafficData.monthlyTrend[asin].points[0].total, 3);
+  for (const old of [{ total: 777, natural: 666, advertising: 111 }, { ...record, totalScore: 888, adChannels: [] }]) {
+    const result = buildStageOutputView({ traffic: { data: { listingByAsin: { [asin]: old }, monthlyByAsin: {} } } } as never, { trafficData } as never);
+    assert.equal(result.trafficData.overview[asin]?.totalScore, 900);
+    assert.deepEqual(result.trafficData.overview[asin]?.adChannels, record.adChannels);
+  }
+});
 
 const scope: TrafficDetailScope = {
   organizationId: "org", projectId: "project", runId: "run", jobId: "job",

@@ -93,6 +93,8 @@ test("collect-missing traffic job persists fake SIF data without generating app 
   const [snapshot] = snapshots;
   assert.ok(snapshot);
   assert.equal(snapshot.payload.input.competitors.length, ASINS.length);
+  assert.equal(snapshot.payload.listingCollection?.records[ASINS[0]]?.children[0]?.asin, ASINS[0]);
+  assert.equal(snapshot.payload.listingCollection?.records[ASINS[0]]?.adChannels.length, 2);
   assert.deepEqual(
     snapshot.sources.map((source) => ({
       id: source.id,
@@ -382,8 +384,12 @@ test("official B088 overview missing advertising projects only canonical consume
       overviewChecksum: overviewRequest.checksum,
     });
   }
-  assert.deepEqual(fingerprints[0], fingerprints[1]);
-  assert.deepEqual(fingerprints[0], fingerprints[2]);
+  // Recommendation labels and shares are now consumed listing details; their payload hash must change.
+  for (const index of [1, 2]) {
+    assert.equal(fingerprints[0].overviewChecksum, fingerprints[index].overviewChecksum);
+    assert.equal(fingerprints[0].sourceChecksum, fingerprints[index].sourceChecksum);
+    assert.notEqual(fingerprints[0].contentHash, fingerprints[index].contentHash);
+  }
   assert.notDeepEqual(fingerprints[0], fingerprints[3]);
   assert.notDeepEqual(fingerprints[0], fingerprints[4]);
 });

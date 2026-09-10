@@ -67,14 +67,45 @@ function deps(read: LocalDataBridgeDeps["readTrafficSnapshot"]): LocalDataBridge
   };
 }
 
-function appWith(read: LocalDataBridgeDeps["readTrafficSnapshot"]) {
+function appWith(read: LocalDataBridgeDeps["readTrafficSnapshot"], extra: Partial<LocalDataBridgeDeps> = {}, role: 'admin' | 'member' = 'member') {
   return buildAgentApp({
     env: { AGENT_SERVICE_PROXY_TOKEN: proxyToken, AGENT_SERVICE_TRUSTED_ORIGINS: origin, AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: undefined },
     authConfig,
-    authService: new FakeAuthService(principal()) as never,
-    localDataBridgeDeps: deps(read),
+    authService: new FakeAuthService({ ...principal(), role }) as never,
+    localDataBridgeDeps: { ...deps(read), ...extra },
   });
 }
+
+test('listing recovery POST is forbidden for a member before collection starts', async (t) => {
+  const app = appWith(async () => trafficSnapshot()); t.after(() => app.close());
+  const result = await app.inject({ method: 'POST', url: `/v1/runs/${runId}/traffic-details/refresh`, headers: headers(), payload: { requestId: '10000000-0000-4000-8000-000000000009' } });
+  assert.equal(result.statusCode, 403);
+});
+test('traffic read retains same-batch collection and rejects mismatched scope', async (t) => {
+  const collection = { id: '10000000-0000-4000-8000-000000000009', schemaVersion: '1', source: 'sif', marketplace: 'US', period: '近30天', collectedAt: '2026-09-10T00:00:00.000Z', asins: [asin], records: { [asin]: { totalScore: 500, naturalAd: [{ label: '自然流量', score: 500, ratio: 100 }, { label: '广告流量', score: 0, ratio: 0 }], adChannels: [], recommendationSources: [], children: [], updatedThrough: null } } };
+  const app = appWith(async () => ({ ...trafficSnapshot(), listingCollection: collection } as never)); t.after(() => app.close());
+  const result = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/traffic-snapshot`, headers: headers() });
+  assert.equal(result.statusCode, 200); assert.equal(result.json().listingCollection.records[asin].totalScore, 500);
+  const wrong = appWith(async () => ({ ...trafficSnapshot(), listingCollection: { ...collection, asins: ['B07WFC14VR'], records: { B07WFC14VR: collection.records[asin] } } } as never)); t.after(()=>wrong.close());
+  const rejected = await wrong.inject({method:'GET',url:`/v1/runs/${runId}/traffic-snapshot`,headers:headers()});
+  assert.notEqual(rejected.statusCode,200);
+});
+
+test('only an authenticated admin can request recovery and cannot override tenant scope', async t => {
+  const calls: unknown[] = [];
+  const requestId = '10000000-0000-4000-8000-000000000009';
+  const collection = { id:requestId, schemaVersion:'1' as const, source:'sif' as const, marketplace:'US' as const, period:'近30天' as const, collectedAt:'2026-09-10T00:00:00.000Z',asins:[asin],records:{[asin]:{totalScore:0,naturalAd:[{label:'自然流量',score:0,ratio:0},{label:'广告流量',score:0,ratio:0}],adChannels:[],recommendationSources:[],children:[],updatedThrough:null}} };
+  const app = appWith(async()=>trafficSnapshot(),{recoverTrafficDetails:async input=>{ calls.push(input); return collection; }},'admin'); t.after(()=>app.close());
+  const url = `/v1/runs/${runId}/traffic-details/refresh`;
+  assert.equal((await app.inject({method:'POST',url,headers:{origin,'x-agent-proxy-token':proxyToken},payload:{requestId}})).statusCode,401);
+  assert.equal((await app.inject({method:'POST',url,headers:headers(),payload:{requestId,organizationId:foreignOrganizationId}})).statusCode,400);
+  assert.equal((await app.inject({method:'POST',url:url+'?organizationId='+foreignOrganizationId,headers:headers(),payload:{requestId}})).statusCode,400);
+  assert.equal(calls.length,0);
+  const response=await app.inject({method:'POST',url,headers:headers(),payload:{requestId}});
+  assert.equal(response.statusCode,200);
+  assert.equal(response.json().id,requestId);
+  assert.deepEqual(calls,[{actorId:principal().userId,organizationId,runId,requestId}]);
+});
 
 test("same-organization traffic reads return only normalized view data", async (t) => {
   const app = appWith(async (request) => request.organizationId === organizationId && request.runId === runId ? trafficSnapshot() : null);

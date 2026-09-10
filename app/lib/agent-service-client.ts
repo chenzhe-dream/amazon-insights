@@ -21,6 +21,7 @@ import {
 type AgentServiceEnvironment = Readonly<Record<string, string | undefined>>;
 
 type AgentServiceRouteRequest =
+  | { method: 'POST'; path: `/v1/runs/${string}/traffic-details/refresh` }
   | { method: "GET"; path: "/v1/capabilities" }
   | { method: "GET"; path: "/v1/connectors" }
   | {
@@ -125,6 +126,9 @@ interface CreateAgentServiceClientOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+export function agentRequestTimeoutMs(contractPath: string, override?: number) {
+  return override ?? (contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
+}
 const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 
 const serviceConfigSchema = z.strictObject({
@@ -335,7 +339,6 @@ export function createAgentServiceClient(
 ): AgentServiceClient {
   const env = options.env ?? process.env;
   const fetchImplementation = options.fetchImplementation ?? fetch;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxResponseBytes =
     options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
@@ -379,7 +382,7 @@ export function createAgentServiceClient(
     headers.set("x-agent-proxy-token", config.proxyToken);
     headers.set("x-request-id", requestId);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), agentRequestTimeoutMs(contract.path, options.timeoutMs));
     let upstream: Response;
 
     try {

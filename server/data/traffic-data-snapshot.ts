@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
+import { TrafficListingCollectionSchema, type TrafficListingCollection } from '../../shared/traffic-listing-contract';
 
 import {
   AsinSchema,
@@ -66,6 +67,7 @@ export const TrafficSnapshotCandidateSchema = z.strictObject({
   sources: z.array(TrafficSnapshotSourceSchema).length(2),
   payload: z.strictObject({
     input: TrafficAnalysisInputSchema,
+    listingCollection: TrafficListingCollectionSchema.optional(),
   }),
   contentHash: Sha256Schema,
 });
@@ -107,6 +109,7 @@ export function buildTrafficSnapshotCandidate(input: {
   asins: readonly string[];
   trafficInput: TrafficAnalysisInput;
   sources?: readonly TrafficSnapshotSource[];
+  listingCollection?: TrafficListingCollection;
 }): TrafficSnapshotCandidate {
   const unsigned = {
     kind: TRAFFIC_SNAPSHOT_KIND,
@@ -130,7 +133,7 @@ export function buildTrafficSnapshotCandidate(input: {
         checksum: input.trafficInput.inputDigest,
       },
     ],
-    payload: { input: input.trafficInput },
+    payload: { input: input.trafficInput, ...(input.listingCollection ? { listingCollection: input.listingCollection } : {}) },
   };
   return TrafficSnapshotCandidateSchema.parse({
     ...unsigned,

@@ -1,4 +1,5 @@
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
+import { TrafficDetailRecoveryService } from './services/traffic-detail-recovery-service';
 
 import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
@@ -341,6 +342,7 @@ export async function createAgentService(
       authService,
       dingTalkService,
       localDataBridgeDeps: createDefaultLocalDataBridgeDeps(repository, {
+        trafficDetailRecovery: new TrafficDetailRecoveryService({ repository, connector: connectors.sif }),
         dynamicTrafficSnapshotAdapter,
         providerReadiness: syncProviderReadiness,
         bypassProviderReadiness: env.AGENT_VOC_LOCAL_FAKE === "1",

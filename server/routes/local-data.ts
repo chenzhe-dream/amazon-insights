@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { TrafficListingCollectionSchema } from '../../shared/traffic-listing-contract';
+import { TrafficDetailRecoveryError, type TrafficDetailRecoveryService } from '../services/traffic-detail-recovery-service';
 
 import {
   createAnalysisProject,
@@ -104,6 +106,7 @@ export type LocalDataBridgeDeps = {
     organizationId: string;
     runId: string;
   }): Promise<Omit<TrafficSnapshotReadResponse, "version" | "state"> | null>;
+  recoverTrafficDetails?: TrafficDetailRecoveryService['recover'];
   authorizeSyncScope?(
     principal: RequestPrincipal,
     input: { projectId?: string; runId?: string },
@@ -117,6 +120,7 @@ export function createDefaultLocalDataBridgeDeps(
     providerReadiness?: SyncProviderReadinessService | null;
     bypassProviderReadiness?: boolean;
     env?: Readonly<Record<string, string | undefined>>;
+    trafficDetailRecovery?: TrafficDetailRecoveryService;
   } = {},
 ): LocalDataBridgeDeps {
   const providerReadiness = repository
@@ -186,14 +190,18 @@ export function createDefaultLocalDataBridgeDeps(
         .filter((item) => item.sources.every((source) => "connectorId" in source && source.connectorId === "sif"))
         .at(-1);
       if (!snapshot) return null;
+      const recovery = await repository.trafficDetailRecoveries?.latest({ organizationId: input.organizationId, projectId: project.id, runId: run.id, marketplace: snapshot.marketplace, asins: snapshot.asins });
+      const listingCollection = recovery?.baseSnapshotId === snapshot.id ? recovery.collection : snapshot.payload.listingCollection;
       return {
         marketplace: snapshot.marketplace,
         asins: snapshot.asins,
         source: "sif",
         collectedAt: snapshot.sources.map((source) => source.capturedAt).sort().at(-1) ?? snapshot.createdAt,
         traffic: { competitors: snapshot.payload.input.competitors },
+        ...(listingCollection ? { listingCollection } : {}),
       };
     },
+    ...(options.trafficDetailRecovery ? { recoverTrafficDetails: options.trafficDetailRecovery.recover.bind(options.trafficDetailRecovery) } : {}),
     async authorizeSyncScope(principal, input) {
       if (principal.kind !== "user") return null;
       if (!input.projectId && !input.runId) {
@@ -580,6 +588,19 @@ export function registerLocalDataRoutes(
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
+    }
+  });
+  app.post('/v1/runs/:runId/traffic-details/refresh', async request => {
+    const { runId } = parseContract(TrafficSnapshotReadParamsSchema, request.params);
+    const principal = request.authPrincipal;
+    if (!principal || principal.kind !== 'user' || principal.role !== 'admin') throw new ContractRouteError(403, 'FORBIDDEN', 'Request is not authorized');
+    parseContract(z.strictObject({}), request.query);
+    const { requestId } = parseContract(z.strictObject({ requestId: z.uuidv4() }), request.body);
+    if (!deps.recoverTrafficDetails) throw new ContractRouteError(503, 'CONFIGURATION_ERROR', '流量明细补采暂不可用');
+    try { return TrafficListingCollectionSchema.parse(await deps.recoverTrafficDetails({ actorId: principal.userId, organizationId: principal.organizationId, runId, requestId })); }
+    catch (error) {
+      if (error instanceof TrafficDetailRecoveryError) throw new ContractRouteError(error.statusCode, error.statusCode === 404 ? 'NOT_FOUND' : error.statusCode === 409 ? 'CONFLICT' : 'INFRASTRUCTURE_ERROR', error.message);
+      throw new ContractRouteError(503, 'INFRASTRUCTURE_ERROR', '流量明细补采失败，原结果已保留');
     }
   });
 }

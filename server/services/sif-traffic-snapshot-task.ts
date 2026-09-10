@@ -19,6 +19,8 @@ import {
 } from "../domain/traffic/traffic-analysis-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 import { WorkerTaskError } from "../runtime/retry-policy";
+import { normalizeListingDetails, listingContentId } from './traffic-listing-collection';
+import { TrafficListingCollectionSchema, type TrafficListingRecord } from '../../shared/traffic-listing-contract';
 
 const OverviewDistributionSchema = z.object({
   score: z.number().finite().nonnegative(),
@@ -315,6 +317,7 @@ export class SifTrafficSnapshotTask {
     const listingEvidence: RequestEvidence[] = [];
     const monthlyEvidence: RequestEvidence[] = [];
     const records: CollectedTrafficRecord[] = [];
+    const listingRecords: Record<string, TrafficListingRecord> = {};
     try {
       for (const asin of subject.asins) {
         const overviewResult = await this.#execute(
@@ -337,7 +340,7 @@ export class SifTrafficSnapshotTask {
             country: subject.marketplace,
             timePieceType: "latelyDay",
             timePieceValue: "30",
-            pageSize: 20,
+            pageSize: 1000,
           },
           signal,
         );
@@ -379,6 +382,7 @@ export class SifTrafficSnapshotTask {
           structureResult.data,
           monthly,
         );
+        listingRecords[asin] = normalizeListingDetails(overviewResult.data, structureResult.data);
         listingEvidence.push(
           requestEvidence(
             asin,
@@ -403,6 +407,7 @@ export class SifTrafficSnapshotTask {
     });
     const sources = collectedSources(listingEvidence, monthlyEvidence);
     const createdAt = this.#now();
+    const candidateId = this.#createId();
     const created = await this.#repository.createTrafficDataSnapshotForRun({
       actorId: subject.actorId,
       actorOrganizationId: subject.organizationId,
@@ -411,12 +416,13 @@ export class SifTrafficSnapshotTask {
       expectedMarketplace: subject.marketplace,
       expectedAsins: subject.asins,
       expectedRunCutoffAt: subject.dataCutoffAt,
-      candidateId: this.#createId(),
+      candidateId,
       createdAt,
       candidate: buildTrafficSnapshotCandidate({
         asins: subject.asins,
         trafficInput,
         sources,
+        listingCollection: TrafficListingCollectionSchema.parse({ id: listingContentId({ records: listingRecords, capturedAt: listingEvidence.map(item => item.fetchedAt) }), schemaVersion: '1', source: 'sif', marketplace: subject.marketplace, period: '近30天', collectedAt: listingEvidence.map(item => item.fetchedAt).sort().at(-1), asins: [...subject.asins], records: listingRecords }),
       }),
     });
     const reopened = await this.#repository.findTrafficDataSnapshotById({

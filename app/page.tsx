@@ -64,6 +64,7 @@ import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
+import { TrafficDetailRecoveryControl } from './traffic-detail-recovery';
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
@@ -3772,6 +3773,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </section>
 
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="traffic" />
+        {authSession.user.role === 'admin' && !authSession.logoutPending && baseSyncRunId && trafficSnapshotState.kind === 'dynamic' && <TrafficDetailRecoveryControl key={trafficBindingKey} runId={baseSyncRunId} recovered={Boolean(trafficData?.authoritativeListingAsins?.length)} onRecovered={async () => trafficSnapshotOwner.current?.refresh()} />}
         <TrafficFetchStatusSection
           products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
           marketplace={market}

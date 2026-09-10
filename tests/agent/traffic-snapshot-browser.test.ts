@@ -3,6 +3,15 @@ import test from "node:test";
 
 import { createTrafficSnapshotOwner } from "../../app/lib/traffic-snapshot-browser";
 
+test('older same-binding poll cannot replace a newer traffic response', async () => {
+  let release: (value: any) => void = () => {};
+  let calls = 0;
+  const owner = createTrafficSnapshotOwner({ ...identity, runId, marketplace: 'US', asins, request: async () => ++calls === 1 ? new Promise(resolve => { release = resolve; }) : ({ ok: true, status: 200, json: async () => ({ ...dynamicPayload(), collectedAt: '2026-09-10T00:00:00.000Z' }) }) });
+  const old = owner.refresh(); await owner.refresh();
+  release({ ok: true, status: 200, json: async () => dynamicPayload() }); await old;
+  assert.equal((owner.current() as any).snapshot.collectedAt, '2026-09-10T00:00:00.000Z');
+});
+
 const runId = "10000000-0000-4000-8000-000000000003";
 const asins = ["B0C4XRN398"];
 const nextRunId = "10000000-0000-4000-8000-000000000004";

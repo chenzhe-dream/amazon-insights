@@ -31,7 +31,7 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   const imageRemarksOutput = availableData(snapshot, "image_remarks") as { remarksByAsin?: Record<string, unknown>; outcomesByAsin?: Record<string, unknown> } | null;
   const baseTraffic = fallbacks.trafficData;
   const detailAvailability = { ...baseTraffic.detailAvailability };
-  const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).map(([asin, value]) => {
+  const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).filter(([asin]) => !baseTraffic.authoritativeListingAsins?.includes(asin)).map(([asin, value]) => {
     const merged = mergeTrafficRecord(value, baseTraffic.overview[asin], baseTraffic.detailAvailability?.[asin]);
     detailAvailability[asin] = merged.availability;
     return [asin, merged.overview];
@@ -61,6 +61,7 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
     imageRemarksByAsin: { ...fallbacks.imageRemarksByAsin, ...(imageRemarksOutput?.remarksByAsin ?? {}) } as T["imageRemarksByAsin"],
     imageRemarkOutcomesByAsin: { ...fallbacks.imageRemarkOutcomesByAsin, ...(imageRemarksOutput?.outcomesByAsin ?? {}) } as T["imageRemarkOutcomesByAsin"],
     trafficData: {
+      ...(baseTraffic.authoritativeListingAsins ? { authoritativeListingAsins: baseTraffic.authoritativeListingAsins } : {}),
       overview: { ...baseTraffic.overview, ...stageTrafficOverview },
       monthlyTrend: { ...baseTraffic.monthlyTrend, ...stageTrafficMonthly },
       meta: baseTraffic.meta,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
 
 import {
@@ -1601,6 +1602,9 @@ export const TrafficSnapshotReadResponseSchema = strictObject({
   source: z.literal("sif"),
   collectedAt: DateTimeSchema,
   traffic: strictObject({ competitors: z.array(TrafficSnapshotReadCompetitorSchema).max(10) }),
+  listingCollection: TrafficListingCollectionSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (value.listingCollection && (value.listingCollection.marketplace !== value.marketplace || [...value.listingCollection.asins].sort().join(',') !== [...value.asins].sort().join(','))) ctx.addIssue({ code: 'custom', message: 'Traffic listing collection scope mismatch' });
 });
 export type TrafficSnapshotReadResponse = z.infer<typeof TrafficSnapshotReadResponseSchema>;
 
@@ -2063,9 +2067,11 @@ export const v1Contracts = [
     response: TrafficSnapshotReadResponseSchema,
     error: ApiErrorResponseSchema,
   },
+  { method: 'POST', path: '/v1/runs/:runId/traffic-details/refresh', params: TrafficSnapshotReadParamsSchema, request: z.strictObject({ requestId: EntityIdSchema }), response: TrafficListingCollectionSchema, error: ApiErrorResponseSchema },
 ] as const satisfies readonly ContractDefinition[];
 
 export type AgentServiceV1Path =
+  | `/v1/runs/${string}/traffic-details/refresh`
   | "/v1/capabilities"
   | "/v1/connectors"
   | `/v1/connectors/${string}/credential`

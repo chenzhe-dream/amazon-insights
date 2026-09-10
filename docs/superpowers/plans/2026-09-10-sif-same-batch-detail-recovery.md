@@ -23,7 +23,7 @@
 
 - [ ] 1. Add failing normalizer/collector tests: complete details retained; malformed response, incorrect ASIN, missing channel arrays and abort reject; no generated files or monthly calls.
 - [ ] 2. Implement shared strict listing collection schemas and normalization; add optional same-batch records to newly collected traffic snapshots.
-- [ ] 3. Add scoped append-only collection repository and migration 0028 for SQLite/PostgreSQL. Test authorized append/read, idempotency, cross-org/run rejection, unchanged historical snapshots.
+- [ ] 3. Add scoped append-only collection repository and migration 0028 for the formal PostgreSQL store. SQLite keeps existing snapshot compatibility and returns explicit unsupported recovery. Test authorized append/read, idempotency, cross-org/run rejection, unchanged historical snapshots.
 - [ ] 4. Add explicit recovery service and authenticated read integration. Test deadline/late-result behavior, last-good preservation, unknown run/foreign organization, and successful replay without extra Provider calls.
 - [ ] 5. Add browser/display regressions proving collection summary+details win atomically over old stage totals. Preserve old monthly trend and other modules. Add readable failure/retry state.
 - [ ] 6. Run scoped regression, independent review and production build. Resolve new regressions; distinguish known unrelated baseline failures.

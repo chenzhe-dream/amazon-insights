@@ -37,6 +37,7 @@ export function createTrafficSnapshotOwner(input: TrafficSnapshotBinding & {
 }) {
   let binding = input;
   let state: TrafficSnapshotClientState = { kind: "pending" };
+  let requestSequence = 0;
   const update = (next: TrafficSnapshotClientState) => {
     state = next;
     input.onState?.(state, trafficSnapshotBindingKey(binding));
@@ -49,10 +50,11 @@ export function createTrafficSnapshotOwner(input: TrafficSnapshotBinding & {
       return state;
     },
     async refresh() {
+      const sequence = ++requestSequence;
       const requestedBinding = binding;
       if (requestedBinding.logoutPending || !requestedBinding.runId || !requestedBinding.sessionIdentity || !requestedBinding.organizationId) return state;
       const response = await requestedBinding.request(`/v1/runs/${encodeURIComponent(requestedBinding.runId)}/traffic-snapshot`);
-      if (binding !== requestedBinding) return state;
+      if (binding !== requestedBinding || sequence !== requestSequence) return state;
       if (response.status === 404) {
         update({ kind: "legacy", label: "legacy" });
         return state;
@@ -62,7 +64,7 @@ export function createTrafficSnapshotOwner(input: TrafficSnapshotBinding & {
         return state;
       }
       const parsed = TrafficSnapshotReadResponseSchema.safeParse(await response.json());
-      if (binding !== requestedBinding) return state;
+      if (binding !== requestedBinding || sequence !== requestSequence) return state;
       if (
         !parsed.success ||
         parsed.data.marketplace !== requestedBinding.marketplace ||

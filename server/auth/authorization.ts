@@ -123,6 +123,7 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
   if (/^\/v1\/feedback\/admin(?:\/|$)/.test(pathname)) {
     return { kind: "session", roles: ADMIN_ROLES };
   }
+  if (normalizedMethod === 'POST' && /^\/v1\/runs\/[^/]+\/traffic-details\/refresh$/.test(pathname)) return { kind: 'session', roles: ADMIN_ROLES };
 
   return { kind: "session", roles: MEMBER_ROLES };
 }

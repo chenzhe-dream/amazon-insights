@@ -167,6 +167,7 @@ export const childTrafficSegmentMeta = [
 ];
 
 export type TrafficDisplayData = {
+  authoritativeListingAsins?: readonly string[];
   overview: Record<string, TrafficDisplayOverview | null>;
   monthlyTrend: Record<string, SifMonthlyTrafficSeries>;
   meta: { source: string; period: string; country: string; updatedThrough: string | null; status: "ready"; emptyMessage: string };
@@ -219,15 +220,22 @@ export function trafficDisplayFromSnapshot(
       })),
     };
   }
+  const collection = snapshot.listingCollection;
+  if (collection) for (const [asin, record] of Object.entries(collection.records)) {
+    const merged = mergeTrafficRecord(record);
+    overview[asin] = { ...record, childCount: record.children.length };
+    detailAvailability[asin] = merged.availability;
+  }
   return {
     overview,
     monthlyTrend,
     detailAvailability,
+    ...(collection ? { authoritativeListingAsins: collection.asins } : {}),
     meta: {
       source: "SIF PostgreSQL dynamic snapshot",
-      period: "当前 run 快照",
+      period: collection ? `近30天 · 明细采集于 ${collection.collectedAt.slice(0, 10)}` : "当前 run 快照",
       country: snapshot.marketplace,
-      updatedThrough: snapshot.collectedAt.slice(0, 10),
+      updatedThrough: (collection?.collectedAt ?? snapshot.collectedAt).slice(0, 10),
       status: "ready",
       emptyMessage: "SIF 当前 run 尚无可核验动态流量快照",
     },

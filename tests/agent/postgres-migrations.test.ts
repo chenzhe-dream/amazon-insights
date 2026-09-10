@@ -816,10 +816,11 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       { version: 25, name: "sync_stage_partial_outputs" },
       { version: 26, name: "dingtalk_authentication" },
       { version: 27, name: "allow_empty_voc_dimensions" },
+      { version: 28, name: "traffic_detail_recoveries" },
     ],
   );
   assert.ok(first.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
-  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 27);
+  assert.equal(new Set(first.map(({ checksum }) => checksum)).size, 28);
   assert.deepEqual(second, first);
   assert.deepEqual(
     tables.rows.map(({ table_name }) => table_name),
@@ -861,6 +862,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
       "sync_job_stage_outputs",
       "sync_job_submissions",
       "sync_jobs",
+      "traffic_detail_recoveries",
       "user_feedback",
       "user_feedback_attachments",
       "user_feedback_events",
@@ -871,7 +873,7 @@ test("PostgreSQL migrations migrate a fresh database once and are reentrant", as
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "27",
+    "28",
   );
   const columns = await pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -1019,7 +1021,7 @@ test("PostgreSQL 0027 upgrades legacy empty dimensions for cumulative publicatio
     await assert.rejects(insert(`invalid-${name}`, invalid), /invalid Alexa VOC snapshot record/);
   }
   const applied = await runPostgresMigrations(pool);
-  assert.equal(applied.at(-1)?.version, 27);
+  assert.equal(applied.at(-1)?.version, 28);
 });
 
 test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () => {
@@ -1048,7 +1050,7 @@ test("PostgreSQL 0021 supports fresh install and actual 0020 upgrade", async () 
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    27,
+    28,
   );
   assert.deepEqual(
     (
@@ -1140,7 +1142,7 @@ test("PostgreSQL upgrades an actual 0019 schema to strict 0020 provenance constr
     (await pool.query<{ version: number }>(
       "SELECT MAX(version) AS version FROM schema_migrations",
     )).rows[0]?.version,
-    27,
+    28,
   );
   const cutoff = "2026-08-31T08:00:00.000Z";
   const candidate = repositoryVocSnapshotFixture(cutoff);
@@ -1674,13 +1676,13 @@ test("concurrent PostgreSQL migration runners serialize on a fresh schema", asyn
     assert.deepEqual(migrations, results[0]);
     assert.deepEqual(
       migrations.map(({ version }) => version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
     );
   }
   assert.equal(
     (await pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations"))
       .rows[0]?.count,
-    "27",
+    "28",
   );
 });
 
@@ -1984,7 +1986,7 @@ test("PostgreSQL migration checksums tolerate only LF and CRLF source difference
   const legacyChecksum = createHash("sha256").update(legacySource).digest("hex");
   assert.deepEqual(
     applied.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
   );
   assert.equal(applied[9]?.checksum, legacyChecksum);
 

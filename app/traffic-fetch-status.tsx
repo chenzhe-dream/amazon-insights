@@ -29,8 +29,8 @@ type Props = {
 };
 
 function buildAsinTrafficStatus(asin: string, trafficData?: TrafficDisplayData) {
-  const overview = trafficData?.overview[asin] ?? sifListingTrafficOverview[asin];
-  const monthly = trafficData?.monthlyTrend[asin] ?? sifMonthlyTrafficTrend[asin];
+  const overview = trafficData ? trafficData.overview[asin] : sifListingTrafficOverview[asin];
+  const monthly = trafficData ? trafficData.monthlyTrend[asin] : sifMonthlyTrafficTrend[asin];
   const totalScore = overview?.totalScore ?? 0;
   const childCount = overview?.children.length ?? 0;
   const monthCount = monthly?.points?.length ?? 0;
@@ -119,7 +119,7 @@ export function TrafficFetchStatusSection({
           </h3>
           <p>
             本页只看 SIF Listing 流量结构 + 近6月趋势 · {trafficData?.meta.period ?? sifListingTrafficMeta.period} · 更新至{" "}
-            {trafficData?.meta.updatedThrough ?? sifListingTrafficMeta.updatedThrough ?? sifMonthlyTrafficMeta.updatedThrough}
+            {trafficData ? trafficData.meta.updatedThrough ?? '未提供' : sifListingTrafficMeta.updatedThrough ?? sifMonthlyTrafficMeta.updatedThrough}
           </p>
           {trafficOrigin === "dynamic" && <p>当前显示本次 run 的 PostgreSQL 动态流量快照。</p>}
           {trafficOrigin === "legacy" && <p>当前显示 <b>legacy</b> 流量缓存，动态快照仍在等待。</p>}

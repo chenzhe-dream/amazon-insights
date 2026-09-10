@@ -760,6 +760,7 @@ export type RuntimeAgentRepository = AgentRepository &
   AnalysisReportRepository &
   AdminUserPresenceRepositoryCapability &
   ManualAlexaVocRepositoryCapability & {
+    readonly trafficDetailRecoveries?: import('./traffic-detail-recovery-repository').TrafficDetailRecoveryRepository;
     readonly syncJobs: SyncJobRepository;
     readonly concurrencyControl?: ConcurrencyControlRepository;
   };
