@@ -16,9 +16,13 @@ import type { User } from "../../shared/agent-contracts";
 const requireForMarkup = createRequire(import.meta.url);
 const previousCssLoader = requireForMarkup.extensions[".css"];
 requireForMarkup.extensions[".css"] = module => { module.exports = {}; };
-let pageComponents: typeof import("../../app/page");
+let pageComponents: typeof import("../../app/page") & typeof import("../../app/features/voc/review-analysis-matrix") & typeof import("../../app/features/voc/voc-run-status-summary");
 try {
-  pageComponents = requireForMarkup("../../app/page.tsx");
+  pageComponents = {
+    ...requireForMarkup("../../app/page.tsx"),
+    ...requireForMarkup("../../app/features/voc/review-analysis-matrix.tsx"),
+    ...requireForMarkup("../../app/features/voc/voc-run-status-summary.tsx"),
+  };
 } finally {
   if (previousCssLoader) requireForMarkup.extensions[".css"] = previousCssLoader;
   else delete requireForMarkup.extensions[".css"];

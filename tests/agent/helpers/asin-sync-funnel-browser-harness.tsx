@@ -13,7 +13,7 @@ import { KeywordFetchStatusSection } from "../../../app/features/keywords/keywor
 import { KeywordDemandSection } from "../../../app/features/keywords/keyword-demand-section";
 import { ListingAplusSection } from "../../../app/features/listing/listing-aplus-section";
 import { TrafficFetchStatusSection } from "../../../app/features/traffic/traffic-fetch-status";
-import { TrafficAnalysisConclusionSection } from "../../../app/page";
+import { TrafficAnalysisConclusionSection } from "../../../app/features/traffic/traffic-analysis-conclusion-section";
 import { sifKeywordAnalysisData } from "../../../app/sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "../../../app/sif-keyword-enrichment-data";
 import { sorftimeReviewAnalysisData } from "../../../app/sorftime-review-analysis-data";

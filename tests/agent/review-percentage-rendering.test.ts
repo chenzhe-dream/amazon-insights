@@ -29,7 +29,7 @@ test("snapshot schema accepts new provenance and old rows, while preprocessing o
 });
 
 test("review bars use the fixed 0 to 100 percent scale and expose a Chinese explanation", () => {
-  const source = readFileSync("app/page.tsx", "utf8");
+  const source = readFileSync("app/features/voc/review-analysis-matrix.tsx", "utf8");
   assert.doesNotMatch(source, /row\.sharePct\s*\/\s*maxPct/);
   assert.match(source, /width:\s*`\$\{Math\.min\(100,\s*Math\.max\(0,\s*row\.sharePct\)\)\}%`/);
   assert.match(source, /title=\{reviewMetricExplanation\(row, analysis\.sampledReviews\)\}/);
