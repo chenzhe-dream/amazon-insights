@@ -79,6 +79,7 @@ export type LocalDataBridgeDeps = {
   createAnalysisProject(input: Record<string, unknown>): Promise<AnalysisProject>;
   updateAnalysisProject(id: string, patch: Record<string, unknown>): Promise<AnalysisProject | null>;
   deleteAnalysisProject(id: string): Promise<boolean>;
+  authorizeProjectDeletion?(principal: RequestPrincipal, id: string): Promise<boolean>;
   normalizeAsins(values: unknown): Promise<string[] | null>;
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobScope & { asins: string[]; marketplace: string }): Promise<StartAsinSyncResult>;
@@ -149,6 +150,11 @@ export function createDefaultLocalDataBridgeDeps(
     createAnalysisProject,
     updateAnalysisProject,
     deleteAnalysisProject,
+    async authorizeProjectDeletion(principal, id) {
+      if (principal.kind !== "user" || principal.role !== "admin" || !repository?.findLegacyProjectOwnerBinding) return false;
+      const binding = await repository.findLegacyProjectOwnerBinding(id);
+      return binding?.organizationId === principal.organizationId;
+    },
     normalizeAsins: async (values) => normalizeAsins(values),
     fetchAsinDataStatus,
     startAsinSyncJob: syncJobService
@@ -394,6 +400,11 @@ export function registerLocalDataRoutes(
 
   app.delete("/v1/local-data/projects/:id", async (request) => {
     const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
+    parseContract(z.strictObject({}), request.query);
+    parseContract(z.strictObject({}), request.body ?? {});
+    if (!request.authPrincipal || !(await deps.authorizeProjectDeletion?.(request.authPrincipal, id))) {
+      throw new ContractRouteError(403, "FORBIDDEN", "无法确认项目属于当前团队，暂不能删除；请联系管理员核对项目归属。");
+    }
     try {
       if (!(await deps.deleteAnalysisProject(id))) return missing("Project not found");
       return LocalDataDeleteProjectResponseSchema.parse({ ok: true });

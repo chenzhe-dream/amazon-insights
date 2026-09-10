@@ -13,7 +13,7 @@ before(async () => {
   origin = `http://127.0.0.1:${address.port}`; browser = await chromium.launch({ headless: true });
 });
 after(async () => { await browser?.close(); await server?.close(); });
-async function fixture(t: test.TestContext, kind = "analysis") {
+async function fixture(t: test.TestContext, kind = "analysis", admin = false, other = false) {
   const page = await browser.newPage(); t.after(() => page.close());
   page.setDefaultTimeout(10000);
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
@@ -33,6 +33,10 @@ async function fixture(t: test.TestContext, kind = "analysis") {
       state.favorite = method === "PUT";
       return reply({ projectId: id, favorited: state.favorite });
     }
+    if (path === `/api/projects/${id}` && method === "DELETE") {
+      if (state.fail) return reply({ error: { code: "FORBIDDEN", message: "删除失败，请重试" } }, 403);
+      state.projects = []; return reply({ ok: true });
+    }
     if (path.endsWith("/projects") && method === "GET") return reply({ projects: state.projects });
     if (path.endsWith("/projects") && method === "POST") {
       const saved = { ...project, kind, id: "10000000-0000-4000-8000-000000000002", name: "新的灯具分析" };
@@ -40,7 +44,7 @@ async function fixture(t: test.TestContext, kind = "analysis") {
     }
     return reply({}, 404);
   });
-  await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?kind=${kind}`);
+  await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?kind=${kind}&admin=${admin}&other=${other}`);
   await page.getByRole("button", { name: "☆ 收藏项目", exact: true }).first().waitFor();
   return { page, state };
 }
@@ -101,4 +105,39 @@ test("saving a new analysis creates history only and opens the history view", as
   assert.deepEqual(state.writes, ["POST /api/projects"]);
   await page.getByRole("button", { name: /^已收藏（/ }).click();
   await page.getByText("尚未收藏项目").waitFor();
+});
+
+test("admin history deletion requires confirmation, preserves failed state and clears current selection on success", async t => {
+  const { page, state } = await fixture(t, "analysis", true);
+  await page.getByRole("button", { name: "☆ 收藏项目", exact: true }).first().click();
+  await page.getByRole("button", { name: "取消收藏", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "删除项目", exact: true }).count(), 0);
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  const remove = page.getByRole("button", { name: "删除项目", exact: true });
+  page.once("dialog", dialog => dialog.dismiss());
+  await remove.click();
+  assert.equal(state.writes.some(value => value === `DELETE /api/projects/${id}`), false);
+  state.fail = true;
+  page.once("dialog", dialog => { assert.match(dialog.message(), /团队/); return dialog.accept(); });
+  await remove.click();
+  await page.getByText("删除失败，请重试", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 1);
+  assert.equal(state.favorite, true);
+  assert.equal(await page.getByLabel("当前项目").textContent(), id);
+  state.fail = false;
+  page.once("dialog", dialog => dialog.accept());
+  await remove.click();
+  await page.getByText("暂无历史项目", { exact: false }).waitFor();
+  assert.equal(await page.getByLabel("当前项目").textContent(), "无");
+  await page.getByText(/已删除项目/).waitFor();
+});
+
+test("deleting another history project keeps the current project selected", async t => {
+  const { page } = await fixture(t, "analysis", true, true);
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "删除项目", exact: true }).click();
+  await page.getByText(/已删除项目/).waitFor();
+  assert.equal(await page.getByLabel("当前项目").textContent(), "other-project");
+  assert.equal(await page.locator(".project-card").count(), 0);
 });

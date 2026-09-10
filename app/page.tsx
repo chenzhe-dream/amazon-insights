@@ -4062,6 +4062,31 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           kind="analysis"
           key={runtimeSessionKey}
           favorites={projectFavorites}
+          canDeleteProjects={authSession.user.role === "admin" && !authSession.logoutPending}
+          onProjectDeleted={id => {
+            setWorkspaces(previous => previous.filter(project => project.id !== id));
+            if (id !== currentProjectId) return;
+            setCurrentProjectId(null);
+            setCurrentProjectName(null);
+            setWorkspaceLabel("");
+            setActiveAsins([]);
+            replaceInputAsins([]);
+            syncSuppressedKey.current = activeAsins.join(",");
+            autoSyncStartedKey.current = null;
+            restoringVocRun.current = null;
+            setVocRun(null);
+            setSelectedReportIds({});
+            setSyncAsins(null);
+            setSyncRunContext(null);
+            setTerminalSyncJob(null);
+            setTerminalPointerRetained(false);
+            setStageOutputReceipt(null);
+            setRuntimeAnalysisData(null);
+            runtimeAnalysisRequest.current += 1;
+            // Leave the deleted workspace entirely so in-flight run observers cannot
+            // restore its pointers or recreate its project from the old ASIN input.
+            window.location.replace("/?tab=projects&projectDeleted=1");
+          }}
           market={market}
           draftAsins={inputs}
           currentProjectId={currentProjectId}

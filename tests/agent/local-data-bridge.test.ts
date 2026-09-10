@@ -333,8 +333,7 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
   assert.deepEqual(updated.json(), { project });
 
   const deleted = await app.inject({ method: "DELETE", url: "/v1/local-data/projects/project-1", headers: authenticatedHeaders() });
-  assert.equal(deleted.statusCode, 200);
-  assert.deepEqual(deleted.json(), { ok: true });
+  assert.equal(deleted.statusCode, 403);
 
   const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}`, headers: authenticatedHeaders() });
   assert.equal(readiness.statusCode, 200);
@@ -1137,8 +1136,8 @@ test("anonymous loopback cannot access local-data projects or sync deps", async 
       },
       payload: request.payload,
     });
-    assert.equal(response.statusCode, 401, `${request.method} ${request.url}`);
-    assert.equal(response.json().error.code, "AUTHENTICATION_REQUIRED");
+    assert.equal(response.statusCode, request.method === "DELETE" ? 403 : 401, `${request.method} ${request.url}`);
+    assert.equal(response.json().error.code, request.method === "DELETE" ? "FORBIDDEN" : "AUTHENTICATION_REQUIRED");
   }
 
   assert.equal(calls.count, 0);
@@ -1315,4 +1314,47 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.match(rawVocPage, /effectiveVocByAsin=\{manualVoc\.effectiveVocByAsin\}/);
   assert.match(rawVocPage, /onImported=\{manualVoc\.onImported\}/);
   assert.doesNotMatch(page, /fetch\(`\$\{localVocAgentUrl\}\/v1\/local-voc/);
+});
+
+test("shared project deletion rejects members before storage and permits admins", async t => {
+  for (const principal of [memberPrincipal(), adminPrincipal()]) {
+    const calls = { count: 0 };
+    const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+      authService: authService(principal), localDataBridgeDeps: { ...countingDeps(calls), authorizeProjectDeletion: async () => true } });
+    t.after(() => app.close());
+    const response = await app.inject({ method: "DELETE", url: "/v1/local-data/projects/project-1", headers: authenticatedHeaders() });
+    assert.equal(response.statusCode, principal.role === "admin" ? 200 : 403);
+    assert.equal(calls.count, principal.role === "admin" ? 1 : 0);
+  }
+});
+
+test("project deletion fails closed for foreign and unbound legacy records and rejects spoofed scope", async t => {
+  const principal = adminPrincipal();
+  for (const organizationId of [principal.organizationId, "foreign-org", null]) {
+    const binding = organizationId ? { organizationId } : null;
+    const deps = createDefaultLocalDataBridgeDeps({ findLegacyProjectOwnerBinding: async () => binding } as never);
+    assert.equal(await deps.authorizeProjectDeletion!(principal, project.id), organizationId === principal.organizationId);
+    const calls = { count: 0 };
+    const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(principal),
+      localDataBridgeDeps: { ...countingDeps(calls), authorizeProjectDeletion: deps.authorizeProjectDeletion } });
+    t.after(() => app.close());
+    for (const suffix of ["?role=admin&organizationId=forged", ""]) {
+      const response = await app.inject({ method: "DELETE", url: `/v1/local-data/projects/project-1${suffix}`, headers: { ...authenticatedHeaders(), "x-user-role": "admin" } });
+      assert.equal(response.statusCode, suffix ? 400 : organizationId === principal.organizationId ? 200 : 403);
+    }
+    assert.equal(calls.count, organizationId === principal.organizationId ? 1 : 0);
+  }
+});
+
+test("unauthenticated and spoofed member deletion never reaches storage", async t => {
+  for (const principal of [null, memberPrincipal()]) {
+    const calls = { count: 0 };
+    const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(principal),
+      localDataBridgeDeps: { ...countingDeps(calls), authorizeProjectDeletion: async () => true } });
+    t.after(() => app.close());
+    const response = await app.inject({ method: "DELETE", url: "/v1/local-data/projects/project-1?role=admin",
+      headers: { ...authenticatedHeaders(), "x-user-role": "admin", "content-type": "application/json" }, payload: { role: "admin" } });
+    assert.equal(response.statusCode, principal ? 403 : 401);
+    assert.equal(calls.count, 0);
+  }
 });
