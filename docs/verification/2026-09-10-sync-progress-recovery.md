@@ -32,3 +32,15 @@
 - 229个generated、项目、共享缓存、状态、配置和当前不可变数据artifact文件复制后逐一核对散列；另备份current-known-good指针。
 - 保留正式15个generated改动及test-results，不重启数据库，不直接SQL改状态，不取消真实任务。
 - 发布及一次实际失败项补采的结果在执行后追加；本节不把备份或测试当成已发布。
+
+## 正式发布及实际补采结果
+
+- 最终独立复审批准，无阻断P1/P2。代码提交 `6df8a4fd55ce53ddd52a288dbb3c6fbda747673f`，分支 `codex/sync-progress-recovery-20260910`。
+- 正式目录无冲突快进；`manage-formal-stack.ps1 -PublishCode` 正常通过门禁并退出0，未绕过idle、进程归属或健康检查。
+- 本机Web、局域网Web、Agent均HTTP200/status ok；Web/Agent代码提交一致，sourceHash `ab4106860aee126dfee7ef14962b015847ca54df3ac9ec8ff5e169dc5c851e47`。
+- 新代码artifact `e3f9f7dc39362943ca9c2b9d86528f48693f5575a4bf8e51d47ec3cb6f37ebbd`；原数据artifact `4706db3725bb3dcf420dee339446bf272d6d6a50166dfcffb70c94da5269a96d`仍为dataCurrent/baseArtifactId。
+- 发布后、补采前，228个受保护文件与备份逐字节一致（排除预期更新的stack状态）。
+- 使用正式西柚客户端和协调锁执行一次30秒内的失败项恢复，固定两ASIN范围并在请求/写入前检查idle及缓存散列，耗时23612ms。Dimunt取得7子体、QiMH取得1子体；Brightech原ready缓存散列不变。原RPC_ERROR已被真实有效响应替换，不能据此倒推先前错误原因。
+- 对两新父体执行一次最多30秒订单采集，耗时21635ms；原73个订单缓存文件散列全部不变。无整批重跑、无直接任务状态更新。
+- 按页面实际 `readXydcOrderDisplaySnapshot` + `summarizeXydcOrders` 读取：Dimunt父体B0HHN1ZM1W共7子体，Brightech父体B07HDTC939共4子体，QiMH共1子体；三组complete=true、fresh、reasonCode=null，12个子体各返回12个月（2025-09至2026-08）。完整响应不意味着每个月销量非零。
+- 最后活动任务总数0，原sync job仍completed且completed_at不变；除授权更新的两份失败变体缓存及预期stack状态外，原226个受保护文件散列不变。新订单缓存属于本次真实补采。
