@@ -432,15 +432,26 @@ export function applyPersistedStagePostcondition(
   const localStatus = commandSucceeded && !readiness.missingAsins.length
     ? "done"
     : (commandSucceeded ? aggregateAsinModuleStatuses(statuses) : "partial");
-  const reconciledStatus = readJob(jobId)
-    ? reconcileStageStatus(readJob(jobId), stageId).status
+  const currentJob = readJob(jobId);
+  const reconciledStatus = currentJob
+    ? reconcileStageStatus(currentJob, stageId).status
     : localStatus;
   const status = terminalStatus ?? reconciledStatus;
   const readyAsins = readiness.items.flatMap((item, index) => statuses[index] === "ready" ? [item.asin] : []);
   const gapItems = boundedDiagnosticGapItems(diagnostics, asins, readyAsins);
+  const cohortStatuses = currentJob?.asins?.map(asin => currentJob.asinProgress?.[asin]?.[stageId]?.status);
+  let cohortDetail;
+  if (cohortStatuses?.length) {
+    const ready = cohortStatuses.filter(value => value === "ready").length;
+    const empty = cohortStatuses.filter(value => value === "upstream-empty").length;
+    const failed = cohortStatuses.filter(value => ["connector-failed", "timeout"].includes(value)).length;
+    const pending = cohortStatuses.length - ready - empty - failed;
+    cohortDetail = `${ready}/${cohortStatuses.length} 个 ASIN 的 ${stageId} 已就绪 · 上游无结果 ${empty} · 失败 ${failed} · 待处理 ${pending}`;
+    if (unavailableReason) cohortDetail = `${unavailableReason} · ${cohortDetail}`;
+  }
   const stagePatch = {
     status,
-    detail: stageDetail ?? (readiness.missingAsins.length
+    detail: stageDetail ?? cohortDetail ?? (readiness.missingAsins.length
       ? (unavailableReason ?? `${readiness.missingAsins.length}/${asins.length} 个 ASIN 的 ${stageId} 未返回可用数据`)
       : (commandSucceeded ? undefined : `${stageId} 连接器未完成`)),
     completedAt,
@@ -450,7 +461,6 @@ export function applyPersistedStagePostcondition(
     isProjectableSyncStage(stageId) &&
     ["done", "partial", "failed"].includes(status)
   ) {
-    const currentJob = readJob(jobId);
     const projectionAsins = currentJob?.asins ?? asins;
     const processedAsins = new Set(asins);
     const projectionReadyAsins = [...new Set([
@@ -464,7 +474,9 @@ export function applyPersistedStagePostcondition(
     const projectionGapItems = [
       ...gapItems,
       ...boundedDiagnosticGapItems(
-        (currentJob?.diagnostics ?? []).filter(item => item.stage === stageId && !processedAsins.has(item.asin)),
+        (currentJob?.diagnostics ?? []).filter(item => item.stage === stageId &&
+          !processedAsins.has(item.asin) &&
+          ["connector-failed", "timeout"].includes(currentJob?.asinProgress?.[item.asin]?.[stageId]?.status)),
         projectionAsins,
         projectionReadyAsins,
       ),
