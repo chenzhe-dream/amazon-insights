@@ -39,5 +39,41 @@ Targeted ESLint passed for changed component, API, server files and tests. `git 
 - The excluded existing source-text test searches for `vocRunIdFromSearch(searchParams.toString())`; baseline `4bb38d9` already uses `vocRunIdFromSearch(appSearch)`. The complete local-data test file therefore still has this unrelated failure.
 - Full `tsc --noEmit --incremental false` fails with broad errors including sync publication types, repository interfaces, and worker globals. No full build success is claimed.
 - `app/page.tsx` ESLint reports 9 errors and 8 warnings; the unchanged baseline file produces the same totals. These concern existing hooks/ref usage, outside the added callback.
-- The main page's full-navigation cleanup was inspected; browser tests exercise the actual library component with a small current-project callback harness, not the complete production page lifecycle.
+- Initial browser coverage used the library component with a small current-project callback harness. The full production page lifecycle test below supersedes that initial limitation.
 - Existing dependencies were reused by a local node_modules junction. No dependency upgrades, formal service changes, deployment, push, real project deletion, or real database writes were performed.
+
+## Follow-up validation and formal read-only coverage
+
+Additional full production page test:
+
+```
+node node_modules/tsx/dist/cli.mjs --test tests/agent/project-delete-page.test.ts
+```
+
+Passed. The unchanged `AuthenticatedAmazonOpportunityApp` and its production delete callback/effects are mounted with only router/session adapters; this is not the small library callback harness. Starts on a real `/p/delete-lifecycle` document with `run`, `vocRun`, and `syncJob` parameters. Holds an actual old run request, seeds the real terminal sessionStorage format and existing author localStorage key, deletes the current project, and observes a second document at `/?tab=projects`. Releases old responses and waits through a polling interval. Asserts no old project/run/job reads after navigation, no POSTs or project recreation, empty history, preserved storage without resurrection, and no page errors. APIs are fixture-only. Chromium's local-network check is disabled only for this isolated synthetic-document test browser because it otherwise blocks Vite's loopback HMR transport.
+
+Read-only formal audit (2026-09-10, organization scope = the unique active configured primary administrator):
+
+```
+node node_modules/tsx/dist/cli.mjs scripts/audit-project-delete-bindings.ts <formal-stack.env path>
+```
+
+The script uses `BEGIN READ ONLY`, a 5-second statement timeout and `ROLLBACK`; prints aggregates only, never account IDs or credentials.
+
+| Relation across 26 analysis JSON files | Count |
+|---|---:|
+| Trusted owner binding in current organization | 0 |
+| Trusted owner binding in another organization | 0 |
+| No trusted owner binding | 26 |
+| Same ID in canonical projects | 23 |
+| Same project ID in analysis_runs | 23 |
+| Same project ID in sync_jobs | 23 |
+| Same project ID in project_creation_idempotency | 17 |
+| Relations to exactly the current organization | 23 |
+| Relations to another organization | 0 |
+| Multiple organization conflicts | 0 |
+| No related server ID | 3 |
+
+These ID matches are **not sufficient ownership evidence for legacy files**. `CreateProjectRequestSchema` accepts client-supplied `id`; `AnalysisRunService.createProject` uses `input.id ?? createId()` with authenticated organization context but no authorization of the corresponding legacy JSON. The page registers the legacy ID through this API. Subsequent run/sync authorization validates the canonical database project's organization, so these records inherit the same missing link and cannot prove original file ownership. Idempotency records are request deduplication, not legacy import authorization. The explicit legacy ownership binding table has no matching rows.
+
+Consequently the guarded candidate currently permits deletion of **0 of 26** formal historical projects. This is a release blocker for the requested restoration, not a completed user outcome. Coordinator should obtain explicit confirmation of legacy shared-project ownership, then separately review a narrowly scoped binding migration if authorized. Do not infer ownership from a sole organization, names, ASINs, free-text createdBy, or matching caller-supplied IDs. No formal bindings or other real data were changed by this work.
