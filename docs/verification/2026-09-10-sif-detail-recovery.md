@@ -23,4 +23,23 @@
 - Formal baseline d391c9f; active work 0.
 - Backup: shared runtime backups/sif-detail-recovery-20260910-095959 (118 verified file copies, 28 project JSON files, all 15 dirty generated app files, configuration, prior artifact, plus PostgreSQL custom-format dump).
 - PostgreSQL host listener process remains 51004; database container amazon-insights-postgres-cutover must not be restarted.
-- Real collection, deployed identity, UI acceptance and unchanged historical-data fingerprints are pending below.
+- Deployed web and agent source: f42ab3631c40ad436b6a115c32e26ce924383a05.
+- Source hash c9f68932ec97a472e8a62d376657b1af55a6f399a4075bcbbc08d0e9359f2575; web artifact 3eeb2165fe3374213d9d83f2ff47d344a4ccb6efea9aac439068b50df03c0e5d. Local and LAN health checks passed.
+
+## Real-data acceptance
+
+- Collection 8f507174-ec66-49c3-a0a4-b93d139b620a binds historical snapshot 9ccaaa61-80f1-4a03-b142-57ce41a82f55.
+- Collected at 2026-09-10T02:04:33.870Z. Six logical/physical requests, each one attempt, 3242 ms including readback and idempotent replay. Replay made no extra provider requests.
+- Provider structure total and returned rows agree: 11 / 2 / 6. pageSize=1000 returned every reported child for these three ASINs; no universal pagination guarantee is inferred.
+
+| ASIN | Listing total | Ad channels | Recommendation sources shown | Children |
+|---|---:|---:|---:|---:|
+| B01E6CX34C | 277123 | 4 | 6 | 11 |
+| B07Y4PJJR4 | 22753 | 2 | 5 | 2 |
+| B07WFC14VR | 187741 | 4 | 6 | 6 |
+
+- Actual default repository-backed read and strict response contract return this collection; frontend mapping marks all three detail groups complete, with the new same-batch totals. Cross-organization read returns null.
+- Formal anonymous GET and POST both return 401. Admin/member and strict scope injection behavior passed route tests.
+- Current run's six snapshots, ten stage outputs, original job, all 24 VOC heads and 24 VOC revisions retain their before/after fingerprints.
+- All 15 generated app files, 28 project/favorites JSON files and formal environment configuration retain exact hashes.
+- Live Chrome control could not attach; the existing in-app tab is logged out. No credentials changed or authentication bypassed. Actual page layout is covered by the headless regression suite; final visual acceptance in the user's authenticated Chrome requires refreshing the original page.
