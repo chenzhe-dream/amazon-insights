@@ -65,7 +65,7 @@ export const agentDefinitions = [
   },
   {
     id: "voc-positioning",
-    skill: { id: "amazon-voc-insight", version: "1.0.0" },
+    skill: { id: "amazon-voc-insight", version: "1.0.1" },
     mode: "structured-analysis",
     inputSchema: "AmazonVocInsightInput@1.0.0",
     outputSchema: "AmazonVocInsightOutput@1.0.0",
@@ -80,7 +80,7 @@ export const agentDefinitions = [
     id: "product-definition",
     skill: {
       id: "define-amazon-product-from-voc-keywords",
-      version: "1.0.0",
+      version: "1.1.0",
     },
     mode: "structured-analysis",
     inputSchema: "ProductDefinitionInput@1.0.0",

@@ -1,5 +1,4 @@
 import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
-import { sorftimeReviewAnalysisData } from "./sorftime-review-analysis-data";
 import { manualVocDimensions } from "./voc-display-schema";
 import {
   buildLegacyVocDevelopmentSummary,
@@ -30,7 +29,7 @@ function availableManualVoc(
 export function buildVocDevelopmentSummary(
   products: readonly ProductLite[],
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
-  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = sorftimeReviewAnalysisData,
+  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = {},
 ): VocDevelopmentDimensionSummary[] {
   return buildLegacyVocDevelopmentSummary({
     products,
@@ -45,7 +44,7 @@ export function buildVocDevelopmentSummary(
 export function hasVocDevelopmentData(
   products: readonly Readonly<{ asin: string }>[],
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
-  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = sorftimeReviewAnalysisData,
+  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = {},
 ) {
   return hasLegacyVocDevelopmentData(
     products,

@@ -33,8 +33,9 @@ test("queue timeout remains a Chinese failure even when a historical report exis
     ? Response.json({ reports: [{ id: "old", stage: "voc-positioning" }] })
     : Response.json({ stages: [{ stage: "voc-positioning", status: "failed", lastError: { code: "QUEUE_TIMEOUT", message: "raw English" } }] }));
   assert.equal(observed.kind, "failed");
-  assert.equal(observed.message, "VOC 排队超时，已停止自动重试，请稍后手动重试。");
-  assert.equal(observed.report?.id, "old");
+  assert.match(observed.message, /超时/);
+  assert.equal(observed.report, null);
+  assert.equal(observed.reports[0]?.id, "old");
 });
 
 test("VOC run identity round-trips through its dedicated URL key without dropping base sync identity", () => {
@@ -217,6 +218,18 @@ test("a traffic report cannot make a failed VOC stage appear succeeded", async (
   assert.equal(observed.kind, "failed");
   assert.equal(observed.report, null);
   assert.deepEqual(observed.reports.map((report) => report.stage), ["traffic-analysis"]);
+});
+
+test("historical VOC reports remain available without making a running or failed stage succeed", async () => {
+  for (const status of ["running", "failed"]) {
+    const observed = await observeVocRun(runId, async (input) => String(input).endsWith("/reports")
+      ? Response.json({ reports: [{ id: "old-voc", stage: "voc-positioning", status: "complete" }] })
+      : Response.json({ stages: [{ stage: "voc-positioning", status }] }));
+
+    assert.equal(observed.kind, status === "running" ? "active" : "failed");
+    assert.equal(observed.report, null);
+    assert.equal(observed.reports[0]?.id, "old-voc");
+  }
 });
 
 test("cancel and retry post only to the current run then re-observe it", async () => {

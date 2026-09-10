@@ -42,13 +42,14 @@ export function validateSnapshotSubjectInput(
     AsinSchema.parse(asin),
   );
   if (
-    expectedAsins.length < 3 ||
+    expectedAsins.length < (input.allowAsinSubset ? 1 : 3) ||
     expectedAsins.length > 10 ||
     new Set(expectedAsins).size !== expectedAsins.length
   ) {
     throw new TypeError("Invalid expected snapshot ASIN identity");
   }
   return {
+    ...(input.allowAsinSubset ? { allowAsinSubset: true } : {}),
     actorId: EntityIdSchema.parse(input.actorId),
     actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
     runId: EntityIdSchema.parse(input.runId),
@@ -78,6 +79,11 @@ export async function requireSnapshotSubject(
   );
   const trustedSubject = result.rows[0];
   const storedAsins = storedTextList(trustedSubject?.asins_json);
+  const fixed = await queries.query<{ asins_json: unknown }>(
+    "SELECT asins_json FROM data_snapshots WHERE run_id = $1 AND snapshot_kind = 'voc' AND payload_json->'evidenceSelection' IS NOT NULL ORDER BY created_at LIMIT 1", [input.runId]);
+  const fixedAsins = fixed.rows[0] ? storedTextList(fixed.rows[0].asins_json) : null;
+  const scopeMatches = fixedAsins ? isDeepStrictEqual(fixedAsins, input.expectedAsins)
+    : input.allowAsinSubset ? input.expectedAsins.every(asin => storedAsins?.includes(asin)) : isDeepStrictEqual(storedAsins, input.expectedAsins);
   const storedRunCutoffAt = storedDateTime(trustedSubject?.data_cutoff_at);
   if (
     !trustedSubject ||
@@ -88,7 +94,7 @@ export async function requireSnapshotSubject(
     trustedSubject.project_id !== input.expectedProjectId ||
     trustedSubject.marketplace !== input.expectedMarketplace ||
     storedAsins === null ||
-    !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
+    !scopeMatches ||
     storedRunCutoffAt === null ||
     storedRunCutoffAt !== input.expectedRunCutoffAt
   ) {
@@ -100,7 +106,7 @@ export async function requireSnapshotSubject(
     dataCutoffAt: storedRunCutoffAt,
     organizationId: trustedSubject.organization_id,
     marketplace: trustedSubject.marketplace,
-    asins: storedAsins,
+    asins: fixedAsins ?? (input.allowAsinSubset ? input.expectedAsins : storedAsins),
   };
 }
 

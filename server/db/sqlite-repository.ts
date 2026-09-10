@@ -3203,7 +3203,7 @@ export class SqliteAgentRepository
           validated.result.positioningProjection.identity.dataCutoffAt,
         ) ||
         subject.marketplace !== facts.snapshot.marketplace ||
-        !isDeepStrictEqual(parseStoredTextList(subject.asins_json), facts.snapshot.asins)
+        !(snapshot.payload.evidenceSelection ? facts.snapshot.asins.every(asin => parseStoredTextList(subject.asins_json)?.includes(asin)) : isDeepStrictEqual(parseStoredTextList(subject.asins_json), facts.snapshot.asins))
       ) {
         throw new AnalysisReportConflictError();
       }
@@ -3496,13 +3496,17 @@ export class SqliteAgentRepository
       if (!vocRow || !keywordRow) throw new AnalysisReportSubjectNotFoundError();
       const vocReport = mapAnalysisReport(vocRow) as AnalysisReport<VocPositioningReportOutput>;
       const keywordSnapshot = mapKeywordAnalysisSnapshot(keywordRow);
-      if (!isDeepStrictEqual(agentSnapshotIds, vocReport.snapshotIds) ||
+      const vocSnapshotRow = this.#database.prepare("SELECT * FROM data_snapshots WHERE id = ? AND run_id = ? AND snapshot_kind = 'voc'").get(vocReport.snapshotIds[0], validated.runId) as SqliteRow | undefined;
+      if (!vocSnapshotRow) throw new AnalysisReportSubjectNotFoundError();
+      const vocSnapshot = mapDataSnapshot(vocSnapshotRow);
+      if (!isDeepStrictEqual(vocSnapshot.asins, keywordSnapshot.asins) || !isDeepStrictEqual(agentSnapshotIds, vocReport.snapshotIds) ||
         keywordSnapshot.marketplace !== "US" ||
         subject.marketplace !== keywordSnapshot.marketplace ||
-        !isDeepStrictEqual(parseStoredTextList(subject.asins_json), keywordSnapshot.asins) ||
+        !(vocSnapshot.payload.evidenceSelection ? keywordSnapshot.asins.every(asin => parseStoredTextList(subject.asins_json)?.includes(asin)) : isDeepStrictEqual(parseStoredTextList(subject.asins_json), keywordSnapshot.asins)) ||
         !sameDateTimeInstant(String(subject.run_data_cutoff_at), keywordSnapshot.dataCutoffAt)
       ) throw new AnalysisReportConflictError();
       const productInput = buildProductDefinitionInput({
+        evidenceSelection: vocSnapshot.payload.evidenceSelection,
         marketplace: "US",
         asins: keywordSnapshot.asins,
         dataCutoffAt: keywordSnapshot.dataCutoffAt,
@@ -4536,6 +4540,10 @@ export class SqliteAgentRepository
       )
       .get(input.actorId, input.runId) as SqliteRow | undefined;
     const storedAsins = parseStoredTextList(trustedSubject?.asins_json);
+    const fixed = this.#database.prepare("SELECT asins_json FROM data_snapshots WHERE run_id = ? AND snapshot_kind = 'voc' AND json_extract(payload_json, '$.evidenceSelection') IS NOT NULL ORDER BY created_at LIMIT 1").get(input.runId) as SqliteRow | undefined;
+    const fixedAsins = fixed ? parseStoredTextList(fixed.asins_json) : null;
+    const scopeMatches = fixedAsins ? isDeepStrictEqual(fixedAsins, input.expectedAsins)
+      : input.allowAsinSubset ? input.expectedAsins.every(asin => storedAsins?.includes(asin)) : isDeepStrictEqual(storedAsins, input.expectedAsins);
     const storedRunCutoffAt = canonicalStoredDateTime(
       trustedSubject?.data_cutoff_at,
     );
@@ -4547,7 +4555,7 @@ export class SqliteAgentRepository
       trustedSubject.organization_id !== input.actorOrganizationId ||
       trustedSubject.project_id !== input.expectedProjectId ||
       trustedSubject.marketplace !== input.expectedMarketplace ||
-      !isDeepStrictEqual(storedAsins, input.expectedAsins) ||
+      !scopeMatches ||
       storedRunCutoffAt === null ||
       storedRunCutoffAt !== input.expectedRunCutoffAt
     ) {
@@ -8707,13 +8715,14 @@ function validateDataSnapshotSubjectInput(
 ): DataSnapshotSubjectInput {
   const expectedAsins = input.expectedAsins.map((asin) => AsinSchema.parse(asin));
   if (
-    expectedAsins.length < 3 ||
+    expectedAsins.length < (input.allowAsinSubset ? 1 : 3) ||
     expectedAsins.length > 10 ||
     new Set(expectedAsins).size !== expectedAsins.length
   ) {
     throw new TypeError("Invalid expected VOC snapshot ASIN identity");
   }
   return {
+    ...(input.allowAsinSubset ? { allowAsinSubset: true } : {}),
     actorId: EntityIdSchema.parse(input.actorId),
     actorOrganizationId: EntityIdSchema.parse(input.actorOrganizationId),
     runId: EntityIdSchema.parse(input.runId),

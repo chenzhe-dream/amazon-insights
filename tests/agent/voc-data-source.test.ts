@@ -153,6 +153,7 @@ function reader(input: Readonly<{
 
 function readInput() {
   return {
+    sourcePolicy: "manual-with-review-fallback",
     organizationId: ORGANIZATION_ID,
     marketplace: "US",
     asins: ASINS,

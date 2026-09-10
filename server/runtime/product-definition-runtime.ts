@@ -65,16 +65,23 @@ export async function createProductDefinitionRuntime(options: {
       const vocReport = [...vocReports].reverse().find(({ status }) => status === "complete" || status === "partial");
       const keywordSnapshot = keywordSnapshots.at(-1);
       if (!vocReport || !keywordSnapshot) throw unavailableDependencies();
+      const vocSnapshotId = vocReport.snapshotIds[0];
+      const vocSnapshot = vocSnapshotId ? await options.repository.findDataSnapshotById({
+        actorOrganizationId: project.organizationId,
+        snapshotId: vocSnapshotId,
+      }) : null;
+      if (!vocSnapshot || vocSnapshot.runId !== run.id) throw unavailableDependencies();
       return {
         request: {
           vocReportId: vocReport.id,
           keywordSnapshotId: keywordSnapshot.id,
           input: buildProductDefinitionInput({
             marketplace: "US",
-            asins: project.asins,
+            asins: keywordSnapshot.asins,
             dataCutoffAt: run.dataCutoffAt,
             vocReport,
             keywordSnapshot,
+            ...(vocSnapshot.payload.evidenceSelection ? { evidenceSelection: vocSnapshot.payload.evidenceSelection } : {}),
           }),
           model: options.config.model,
         },

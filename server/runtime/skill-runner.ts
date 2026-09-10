@@ -108,6 +108,7 @@ export interface NamedInputContract<I> {
 export interface NamedOutputContract<O> {
   name: string;
   schema: z.ZodType<O>;
+  responseSchema?: z.ZodType<unknown>;
   canonicalizeOutput?: (candidate: unknown) => unknown;
   repairGuidance?: (
     issues: readonly SafeValidationIssue[],
@@ -261,6 +262,7 @@ export interface PreparedSkillExecution<I, O> {
   readonly outputContract: Readonly<{
     name: string;
     schema: z.ZodType<O>;
+    responseSchema?: z.ZodType<unknown>;
     schemaDigest: string;
     canonicalizeOutput?: (candidate: unknown) => unknown;
     repairGuidance?: (
@@ -704,7 +706,7 @@ export class SkillRunner {
       | undefined;
     try {
       responseFormat = createStructuredResponseFormat(
-        request.outputContract.schema,
+        request.outputContract.responseSchema ?? request.outputContract.schema,
         request.outputContract.name,
       );
       if (request.outputContract.repairPatch) {
@@ -795,6 +797,9 @@ export class SkillRunner {
       outputContract: Object.freeze({
         name: request.outputContract.name,
         schema: request.outputContract.schema,
+        ...(request.outputContract.responseSchema
+          ? { responseSchema: request.outputContract.responseSchema }
+          : {}),
         schemaDigest: outputSchemaDigest,
         ...(request.outputContract.canonicalizeOutput
           ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
@@ -1258,7 +1263,7 @@ export class SkillRunner {
         JSON.parse(JSON.stringify(z.toJSONSchema(prepared.inputContract.schema))),
       );
       const currentResponseFormat = createStructuredResponseFormat(
-        prepared.outputContract.schema,
+        prepared.outputContract.responseSchema ?? prepared.outputContract.schema,
         prepared.outputContract.name,
       );
       const outputDigest = canonicalJsonSha256(

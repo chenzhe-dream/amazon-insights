@@ -74,6 +74,7 @@ function createService(
   target: Awaited<ReturnType<typeof seedRun>>,
   overrides: Partial<ConstructorParameters<typeof VocDataSnapshotService>[0]> = {},
 ) {
+  const fixtureReader = createRepositoryVocSourceReaderFixture();
   return new VocDataSnapshotService({
     repository,
     executionContext: {
@@ -82,7 +83,7 @@ function createService(
     },
     now: () => cutoff,
     createId: () => "50000000-0000-4000-8000-000000000001",
-    sourceReader: createRepositoryVocSourceReaderFixture(),
+    sourceReader: { read: input => fixtureReader.read({ ...input, sourcePolicy: "manual-with-review-fallback" }) },
     ...overrides,
   });
 }

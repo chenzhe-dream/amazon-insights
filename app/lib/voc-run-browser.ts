@@ -107,8 +107,10 @@ export async function observeVocRun(
     };
     const stage = run.stages?.find((item) => item.stage === "voc-positioning") ?? null;
     const reportHistory = reports.reports ?? [];
-    const report = reportHistory.find((item) => item.stage === "voc-positioning") ?? null;
     const status = typeof stage?.status === "string" ? stage.status : null;
+    const report = status === "succeeded"
+      ? reportHistory.find((item) => item.stage === "voc-positioning" && (item.status === "complete" || item.status === "partial")) ?? null
+      : null;
     const queueTimeout = status === "failed" && (stage?.lastError as { code?: string } | null)?.code === "QUEUE_TIMEOUT";
     const kind: VocRunObservation["kind"] = queueTimeout ? "failed" : report
       ? "succeeded"

@@ -182,3 +182,7 @@ Progress:
 2. 立项通过后用 `amazon-launch-checklist` 填确认清单
 
 Chat-only 交付时：按本 Skill 七段输出即可，不必改代码。
+
+## 固定来源选择
+
+输入含 evidenceSelection 时，其 selectedAsins 是本次分母，coverage 中的 manualDimensions 始终为主来源。仅 sourcePolicy 为 manual-with-review-fallback 时，评论可补足 reviewSupplementDimensions；conflictDimensions 表示与手工重叠、需要交叉验证的维度，不能覆盖手工结论。所有来源指标保留各自 source-record 分母，评论原始异议必须保留并列为待验证，不得把手工占比和评论占比相加或平均。sourceMode 为 review-fallback 时，结论明确标记“评论兜底版，待手工 VOC 验证”。关键词的 missing/empty/failed 不得包装成联合产品定义。

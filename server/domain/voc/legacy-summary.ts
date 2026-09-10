@@ -3,6 +3,7 @@ import {
   VOC_DIMENSIONS,
   canonicalTheme,
   isSkippedAlexaLine,
+  isAlexaDimensionHeader,
   parseAlexaThemeObservation,
   type VocDimension,
   type VocProductFamily,
@@ -97,9 +98,11 @@ export function hasLegacyVocDevelopmentData(
   alexaVocData: Readonly<Record<string, AlexaRecord>>,
   reviewAnalysisData: Readonly<Record<string, ReviewRecord>>,
 ) {
-  return products.some((product) => {
-    const alexa = alexaVocData[product.asin]?.captureStatus === "dialog";
-    const review = reviewAnalysisData[product.asin]?.status === "ready";
+  return products.length > 0 && products.every((product) => {
+    const record = alexaVocData[product.asin];
+    const alexa = record?.captureStatus === "dialog" && VOC_DIMENSIONS.some(key => record[key]?.some(line => line.trim() && !isSkippedAlexaLine(line) && !isAlexaDimensionHeader(line, key)));
+    const comments = reviewAnalysisData[product.asin];
+    const review = comments?.status === "ready" && comments.blocks?.some(block => block.rows.some(row => row.label.trim()));
     return alexa || review;
   });
 }
