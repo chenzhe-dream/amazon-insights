@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -28,7 +29,7 @@ test("repair result copy distinguishes a new resume from a deduplicated active w
 });
 
 test("the production page grants repair UI only through the primary-admin predicate", () => {
-  const source = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  const source = readWorkspaceSource();
   assert.match(source, /canResumeFailedStages:\s*isPrimaryAdministrator\(authSession\.user\)/);
 });
 

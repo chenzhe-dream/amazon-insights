@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "./helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -51,7 +52,7 @@ test("server-renders the authentication checking shell without protected navigat
 });
 
 test("removes redundant A+ and standalone VOC entry points while retaining manual VOC inputs", () => {
-  const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const pageSource = readWorkspaceSource();
 
   assert.doesNotMatch(pageSource, /overview-aplus/);
   assert.doesNotMatch(pageSource, /高级 A\+/);

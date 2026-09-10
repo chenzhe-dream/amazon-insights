@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -301,7 +302,7 @@ test("client Manual VOC paths hydrate through the scoped hook without tenant dat
     "app/features/voc/voc-display-schema.ts",
     "app/features/voc/manual-alexa-voc-store.ts",
     "app/features/voc/use-manual-alexa-voc.ts",
-  ].map(file => [file, readFileSync(file, "utf8")] as const);
+  ].map(file => [file, file === "app/page.tsx" ? readWorkspaceSource() : readFileSync(file, "utf8")] as const);
 
   for (const [file, source] of sources) {
     assert.doesNotMatch(source, /(?:from\s+|import\s*\()["'][^"']*rufus-voc-data["']/, file);

@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -68,7 +69,7 @@ test("complete ASIN output renders no gap notice", () => {
 });
 
 test("page renders late-stage gap cards and supplies every late-stage fallback", () => {
-  const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  const pageSource = readWorkspaceSource();
   const harnessSource = readFileSync(
     new URL("./helpers/asin-sync-funnel-browser-harness.tsx", import.meta.url),
     "utf8",

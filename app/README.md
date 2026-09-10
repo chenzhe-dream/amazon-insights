@@ -5,7 +5,7 @@
 ## 页面与模块边界
 
 ```text
-app/page.tsx                  主页面入口、工作区状态与业务编排
+app/page.tsx                  路由入口与认证边界
 app/p/[slug]/                 项目工作区路由
 app/admin/                    管理页面
 app/features/shell/           导航定义、分组、图标与导航文字展示
@@ -16,6 +16,9 @@ app/features/keywords/        关键词分类、需求分析、术语和采集�
 app/features/traffic/         流量结论、采集状态和详情补取
 app/features/listing/         商品图片、图片解读和A+展示
 app/features/product-reports/ 产品定义、立项建议、确认清单和导出
+app/features/workspace/       工作区控制逻辑与页签装配
+app/features/catalog/         商品展示合同与概览页签
+app/features/charts/          销售趋势图与通用时间轴格式
 app/components/               跨业务复用的评分、表格、步骤和堆叠条展示
 app/api/                      Web 侧接口与后端代理
 app/lib/                      现有浏览器客户端和页面辅助逻辑
@@ -37,7 +40,7 @@ app/lib/                      现有浏览器客户端和页面辅助逻辑
 | 产品报告与立项清单 | `features/product-reports/product-launch-analysis.ts`、`features/product-reports/launch-checklist-section.tsx`、`features/product-reports/launch-checklist-export.ts` | `server/domain/`、报告执行服务 |
 | 持久报告与历史结果 | `lib/saved-analysis-reports.ts`、各报告展示组件 | `server/db/` 中报告存储、`server/services/` 中执行与发布服务 |
 
-已完成导航/评分、项目管理/同步界面、VOC、关键词/流量、Listing和产品报告前端文件的目录归拢。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`。业务模块通过显式导入使用共享展示组件；共享客户端和服务端仍在原有位置。`page.tsx`仍持有页面编排、状态和部分内联展示，后续若继续拆分，应单独验证状态、副作用及业务边界，不能把目录归拢视为全部架构重构完成。
+业务页签已放入各自模块的 `*-tab.tsx` / `*-tabs.tsx`，由 `features/workspace/workspace-view.tsx` 按原页签条件装配。认证入口调用工作区 controller，再把数据和事件交给视图。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`。共享客户端、服务端与生成数据仍在原有位置。控制层内部仍在按会话、运行数据、历史恢复和同步职责继续拆分；薄入口并不代表内部架构已经全部完成。
 
 ## 数据、接口与服务端
 

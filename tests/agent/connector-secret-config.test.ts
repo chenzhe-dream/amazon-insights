@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -217,7 +218,7 @@ test("connector and page sources contain no Cursor configuration fallback or pro
     "app/seller-sprite-review-analysis.ts",
   ];
   const sources = sourcePaths
-    .map(sourcePath => fs.readFileSync(path.join(worktreeRoot, sourcePath), "utf8"))
+    .map(sourcePath => sourcePath === "app/page.tsx" ? readWorkspaceSource() : fs.readFileSync(path.join(worktreeRoot, sourcePath), "utf8"))
     .join("\n");
 
   assert.doesNotMatch(sources, /\.cursor[\\/]mcp\.json|Cursor Settings|Cursor\s*→\s*Settings|mcpSetup/i);

@@ -14,3 +14,15 @@ Extracted 45 declarations into 13 cohesive catalog/chart/project-navigation/VOC/
 - Test imports/read locations updated for extracted named components, without changing assertions.
 
 Subsequent stages and exact checkpoint commits are recorded below as they pass.
+
+Stage 1 committed as `a8fa234`, tag `checkpoint/page-decomposition-stage1-20260910`; independent review Ready.
+
+## Stage 2: presentation/controller boundary
+
+Route entry now 18 lines, workspace view 94 lines, with 16 tab/frame components in nine owning feature files. Controller temporarily retains orchestration for stage 3. 156 original pre-return statements remain identical and ordered; inlining extracted components and ten named UI handlers reproduces original JSX exactly. Dependency and independent lexical-binding checks cover controller return and every component Pick/destructure contract.
+
+Pre-commit checks caught an extraction bug (property names such as length/sort mistaken for free variables) and nineteen new immutability diagnostics from view callbacks writing passed refs. Both were fixed before checkpoint: lexical declarations are independently verified; ten mutation-bearing callbacks now stay in the controller with unchanged bodies, async behavior and captures. No lint suppression or assertion weakening was used.
+
+Final evidence: page dependency graph 24→24 diagnostics, additions zero; relevant lint 11→5 diagnostics, additions zero. Build and built render/data-exclusion checks passed (5/5). Focused source/render tests 31/32 with the same existing ready-empty failure. Auth/bridge source checks 15/15; FBA parsing/source guards10/10. Project/browser checks passed6/6 before callback extraction; final task creation/history4/4 and deleted-workspace race1/1 passed after it. Test source guards now read the actual split production composition via tests/helpers/workspace-source.mjs; browser mock resolution follows moved imports. Source-location assertions retained, with app-tabs import-path expectation updated.
+
+Reproduction/evidence: untracked `page-stage2-*`, `verify-page-stage2.mjs`, `verify-page-stage2-bindings.mjs`. No deployment or GitHub push. Existing screenshots/test artifacts retained.

@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -57,9 +58,9 @@ function task2OverviewHarnessPlugin(): Plugin {
       if (id === "next/link") return nextLinkModule;
       if (id === "next/image") return nextImageModule;
       if (id === "next/navigation") return nextNavigationModule;
-      if (importer?.replace(/\\\\/g, "/").endsWith("/app/page.tsx")) {
-        if (id === "./competitor-data") return overviewCatalogModule;
-        if (id === "./sorftime-sales-trend-data") return overviewTrendModule;
+      if (importer?.replaceAll("\\", "/").includes("/app/")) {
+        if (/(?:^|\/)competitor-data$/.test(id)) return overviewCatalogModule;
+        if (/(?:^|\/)sorftime-sales-trend-data$/.test(id)) return overviewTrendModule;
       }
       return null;
     },
@@ -341,7 +342,7 @@ test("a sync funnel session only starts one POST even after an equivalent rerend
 });
 
 test("the existing job poll fetches and renders ten scoped stage outputs without navigation or duplicate work", async () => {
-  const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
+  const pageSource = readWorkspaceSource();
   assert.match(
     pageSource,
     /<TrafficAnalysisConclusionSection products=\{products\} market=\{market\} trafficData=\{stageOutputView\.trafficData\} \/>/,

@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -93,7 +94,7 @@ test("a ready exact project A scope enables its list import and poll authority",
 });
 
 test("the page lists Manual VOC from the current project and passes only authoritative import scope", () => {
-  const page = readFileSync("app/page.tsx", "utf8");
+  const page = readWorkspaceSource();
   const hook = page.slice(page.indexOf("const manualVoc = useManualAlexaVoc"), page.indexOf("const manualVocByAsin"));
   const panelStart = page.indexOf("<AlexaVocImportPanel");
   const panel = page.slice(panelStart, page.indexOf("/>", panelStart) + 2);

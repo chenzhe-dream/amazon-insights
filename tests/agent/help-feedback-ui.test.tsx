@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -21,7 +22,7 @@ import type { FeedbackDraft, FeedbackImageDraft } from "../../app/help-feedback/
 import type { User } from "../../shared/agent-contracts";
 
 const root = process.cwd();
-const pageSource = readFileSync(`${root}/app/page.tsx`, "utf8");
+const pageSource = readWorkspaceSource();
 const imageInputSource = readFileSync(`${root}/app/help-feedback/feedback-image-input.tsx`, "utf8");
 const drawerSource = readFileSync(`${root}/app/help-feedback/help-feedback-drawer.tsx`, "utf8");
 const now = "2026-08-22T08:00:00.000Z";

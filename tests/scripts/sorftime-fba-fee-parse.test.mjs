@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -139,10 +140,7 @@ test("generated Sorftime FBA type retains optional legacy display fields consume
 });
 
 test("FBA table renders each ready record with its truthful source label", () => {
-  const source = fs.readFileSync(
-    path.resolve(import.meta.dirname, "../../app/page.tsx"),
-    "utf8",
-  );
+  const source = readWorkspaceSource();
   const fbaRow = source.slice(
     source.indexOf("<tr><th>FBA 费用"),
     source.indexOf("<tr><th>产品规格"),

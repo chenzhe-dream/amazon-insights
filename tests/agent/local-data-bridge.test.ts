@@ -1,3 +1,4 @@
+import { readWorkspaceSource } from "../helpers/workspace-source.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
@@ -1247,7 +1248,7 @@ test("expired, revoked, and disabled-user sessions fail before local-data deps",
 });
 
 test("analysis workspace and its sync funnel use the local Agent bridge", () => {
-  const page = readFileSync("app/page.tsx", "utf8");
+  const page = readWorkspaceSource();
   const workspace = page.slice(
     page.indexOf("const ensureAnalysisWorkspace"),
     page.indexOf("const runAnalysis"),
@@ -1265,7 +1266,7 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.doesNotMatch(syncReadiness, /\/api\/sync-asins/);
   assert.match(funnel, /\/v1\/local-data\/sync-asins/);
   assert.doesNotMatch(funnel, /\/api\/sync-asins/);
-  assert.match(page, /from "\.\/lib\/app-tabs"/);
+  assert.match(page, /from "\.\.\/\.\.\/lib\/app-tabs"/);
   assert.doesNotMatch(page, /\bsubmitVocRun\b/);
   assert.match(page, /vocRunIdFromSearch/);
   assert.doesNotMatch(page, /\bsearchWithVocRunId\b/);
