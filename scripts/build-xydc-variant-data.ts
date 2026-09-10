@@ -354,6 +354,7 @@ function hasRelationshipEvidence(family: XydcVariantFamily | undefined, now: Dat
 }
 
 async function persistFamilies(input: SyncXydcVariantInput, drafts: Map<string, XydcVariantFamily>) {
+  input.signal?.throwIfAborted();
   await Promise.all([...drafts.values()].map(async family => input.cache.write(input.country, XydcVariantFamilySchema.parse({
     ...family, ...statusFor(family), cacheState: family.cacheState,
   }))));
@@ -498,10 +499,14 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
         children: draft.children.map(child => !input.force && previousByChild.get(child.asin)?.infoStatus === "ready" ? previousByChild.get(child.asin)! : child),
       });
     } catch (error) {
+      input.signal?.throwIfAborted();
       const prior = cached[asin];
       if (prior?.status === "ready") drafts.set(asin, { ...prior, cacheState: "stale" });
       else drafts.set(asin, unavailableFamily(asin, input.country, input.now, reasonFor(error)));
     }
+    input.signal?.throwIfAborted();
+    // Discovery-only drafts must not replace existing usable details before enrichment settles.
+    if (!cached[asin]?.children.length) await input.cache.write(input.country, XydcVariantFamilySchema.parse(drafts.get(asin)));
   }
   const unresolved = [...new Set([...drafts.values()].flatMap(family => family.children.filter(child => child.infoStatus !== "ready").map(child => child.asin)))];
   for (const queuedBatch of chunk(unresolved, boundedBatchSize(input.batchSize ?? 20))) {
@@ -516,6 +521,7 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
       for (const [asin, family] of drafts) drafts.set(asin, withInformation(family, information, batch));
       await persistFamilies(input, drafts);
     } catch (error) {
+      input.signal?.throwIfAborted();
       restoreForcedReadyFallbacks(input, cached, drafts, batch);
       if (reasonFor(error) === "SCHEMA_INVALID") {
         markSchemaInvalidBatch(drafts, batch);
@@ -530,6 +536,30 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
 
 export function getProjectRoot() {
   return path.resolve(import.meta.dirname, "..");
+}
+
+export async function retryFailedXydcVariantFamilies(input: SyncXydcVariantInput, families: XydcVariantFamily[]) {
+  input.signal?.throwIfAborted();
+  const cached = await input.cache.readMany(input.country, input.asins);
+  const asins = [...new Set(input.asins)].filter(asin => {
+    const family = cached[asin];
+    return family?.country === input.country.trim().toUpperCase() && family.inputAsin === asin
+      && (family.status === "unavailable" && ["RPC_ERROR", "TIMEOUT"].includes(family.reasonCode ?? "")
+        || family.status === "partial" && family.reasonCode === "PARTIAL_CHILD_INFO"
+          && family.cacheState === "fresh" && family.children.some(child => child.infoStatus !== "ready"));
+  });
+  if (!asins.length) return families;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new XydcProviderError("TIMEOUT")), 30_000);
+  const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+  try {
+    await syncXydcVariantFamilies({ ...input, asins, force: false, signal });
+  } catch {
+    input.signal?.throwIfAborted();
+    // A single bounded pass may fail; retain the already checkpointed evidence.
+  } finally { clearTimeout(timer); }
+  const refreshed = await input.cache.readMany(input.country, input.asins);
+  return mergeFamilies(input.asins.flatMap(asin => refreshed[asin] ? [refreshed[asin]!] : []));
 }
 
 async function fixtureToolCall(
@@ -561,7 +591,7 @@ async function main() {
   const country = process.env.XYDC_COUNTRY ?? "US";
   const lifetime = await createXydcOrderJobLifetime(process.env, roots.runtimeRoot, asins, country);
   try {
-  const families = await syncXydcVariantFamilies({
+  const variantInput: SyncXydcVariantInput = {
     asins,
     country,
     signal: lifetime.signal,
@@ -572,7 +602,9 @@ async function main() {
     now: new Date(),
     cache: createXydcVariantCache(roots.dataRoot),
     ...(fixturePath ? { callTool: async ({ toolName, args }) => fixtureToolCall(fixturePath, toolName, args) } : {}),
-  });
+  };
+  const initialFamilies = await syncXydcVariantFamilies(variantInput);
+  const families = await retryFailedXydcVariantFamilies(variantInput, initialFamilies);
   let orderCount = 0;
   try {
     const orderSnapshots = await syncXydcOrderFamilies({

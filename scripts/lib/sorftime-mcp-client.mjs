@@ -45,6 +45,7 @@ export async function requestSorftimeMcp(
     operation,
     env,
     emitDiagnostics: options.emitDiagnostics,
+    optionalEnrichment: options.optionalEnrichment,
     allowCategorySiblingDispatch: options.allowCategorySiblingDispatch,
   };
   const logicalOperationKey = sorftimeLogicalOperationKey(method, params);
@@ -110,6 +111,7 @@ export async function callSorftimeTool(key, toolName, args, options = {}) {
     operation: toolName,
     env,
     emitDiagnostics: options.emitDiagnostics,
+    optionalEnrichment: options.optionalEnrichment,
     allowCategorySiblingDispatch: options.allowCategorySiblingDispatch,
   }, async () => normalizeSorftimeToolResult(toolName,
     await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args }, options),

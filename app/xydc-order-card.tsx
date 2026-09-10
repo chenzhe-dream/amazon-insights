@@ -15,7 +15,7 @@ const orderReasonLabels = {
   TIMEOUT: "西柚订单请求超时",
   CANCELLED: "西柚订单采集已取消",
   BUDGET_EXHAUSTED: "西柚订单采集超出时间预算",
-  RPC_ERROR: "西柚订单服务暂不可用",
+  RPC_ERROR: "订单请求失败（RPC_ERROR）",
   SCHEMA_INVALID: "西柚订单数据格式异常",
   NOT_FOUND: "西柚未返回该子体订单",
   PARTIAL_DATA: "部分订单数据不可用",
@@ -25,7 +25,7 @@ const variantReasonLabels = {
   NOT_CONFIGURED: "西柚数据源未配置",
   AUTH_FAILED: "西柚数据源认证失败",
   TIMEOUT: "西柚请求超时",
-  RPC_ERROR: "西柚服务暂不可用",
+  RPC_ERROR: "变体请求失败（RPC_ERROR）",
   SCHEMA_INVALID: "数据源返回格式异常",
   NOT_FOUND: "数据源未返回该商品变体",
   PARTIAL_CHILD_INFO: "部分子体详情暂未返回",
@@ -158,7 +158,7 @@ export function XydcOrderCard({
       {status === "pending" ? (
         <div className="xydc-order-pending" aria-label="订单数据待采集">
           <strong>尚未取得完整12个月订单数据</strong>
-          <span>已识别变体关系。月度订单返回后，将按全部子体汇总。</span>
+          <span>{group.children.length ? "已识别变体关系。月度订单返回后，将按全部子体汇总。" : "尚未取得变体关系，无法确定子体和订单采集范围。"}</span>
         </div>
       ) : null}
 

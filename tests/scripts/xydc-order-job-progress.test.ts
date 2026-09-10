@@ -95,6 +95,14 @@ test("isolated PostgreSQL authority and bounded sidecars follow fixed lease, run
     }
     await writeXydcOrderProgress(root, record(), authorize, signal);
     const read = () => readXydcOrderProgress(root, scope, families, authority);
+    for (const state of ["completed", "partial"] as const) {
+      const terminal = { ...record(), state, updatedAt: new Date(Date.now() - 120_000).toISOString(),
+        children: record().children.map(child => ({ ...child, state: "ready" as const, reasonCode: null })) };
+      await writeXydcOrderProgress(root, terminal, authorize, signal);
+      assert.equal((await read())?.activeJob, true);
+      assert.equal((await read())?.progress?.state, state, "completed child work needs no heartbeat while parent continues");
+    }
+    await writeXydcOrderProgress(root, record(), authorize, signal);
     assert.deepEqual((await read())?.progress && { ready: (await read())!.progress!.ready, cached: (await read())!.progress!.cached, total: (await read())!.progress!.total }, { ready: 2, cached: 1, total: 3 });
     for (const wrong of [{ organizationId: "other" }, { projectId: "other" }, { currentRunId: "old" }, { country: "CA" }, { asins: ["B000000099"] }]) {
       assert.equal(await readXydcOrderProgress(root, { ...scope, ...wrong }, families, authority), null);

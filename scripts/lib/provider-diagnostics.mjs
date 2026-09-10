@@ -47,7 +47,7 @@ export async function runWithProviderDiagnostics(input, operation) {
     if (error instanceof ProviderDiagnosticError) throw error;
     const diagnostic = classifyProviderFailure(error, input);
     if (!input.env?.AGENT_SYNC_JOB_ID) throw error;
-    tracker?.record(diagnostic);
+    if (!(input.optionalEnrichment === true && diagnostic.failureKind === "timeout")) tracker?.record(diagnostic);
     emitProviderDiagnostic(input, diagnostic);
     throw new ProviderDiagnosticError(diagnostic, { cause: error });
   }
@@ -126,7 +126,7 @@ export function classifyProviderFailure(error, input) {
   } else if (["UND_ERR_CONNECT_TIMEOUT", "ETIMEDOUT"].includes(code)) {
     failureKind = "timeout";
     causeCode = "CONNECT_TIMEOUT";
-  } else if (name === "AbortError" || code === "ABORT_ERR") {
+  } else if (name === "AbortError" || name === "TimeoutError" || code === "ABORT_ERR") {
     failureKind = "timeout";
     causeCode = "REQUEST_TIMEOUT";
   } else if (code === "ECONNREFUSED") {

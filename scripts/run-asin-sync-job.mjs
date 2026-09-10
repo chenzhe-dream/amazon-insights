@@ -1,3 +1,4 @@
+import { runSorftimeCommand } from "./lib/sorftime-stream.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -760,7 +761,7 @@ function createJobProviderController(jobId) {
     providerDegraded: tracker.snapshot(),
   });
   return Object.freeze({
-    run({ connector, stage, asins, label, command, args, env, allowScopedEvidenceFallback = false }) {
+    run({ connector, stage, asins, label, command, args, env, allowScopedEvidenceFallback = false, streamingScript }) {
       const dispatch = providerDispatchPlan({
         connectorDegraded: tracker.isDegraded(connector),
         allowScopedEvidenceFallback,
@@ -776,21 +777,25 @@ function createJobProviderController(jobId) {
           statusesByAsin: diagnosticStatusesByAsin(asins, skipped),
         };
       }
-      const result = tryRunProviderCommand(
-        label,
-        command,
-        args,
-        jobProviderEnvironment(jobId, stage, dispatch.env),
-      );
-      const invocationDiagnostics = diagnosticsForInvocation(result.diagnostics, { connector, stage, asins });
-      diagnostics.push(...invocationDiagnostics);
-      tracker.recordAll(invocationDiagnostics);
-      persist();
-      return {
-        ...result,
-        diagnostics: invocationDiagnostics,
-        statusesByAsin: diagnosticStatusesByAsin(asins, invocationDiagnostics),
+      const finish = result => {
+        const invocationDiagnostics = diagnosticsForInvocation(result.diagnostics, { connector, stage, asins });
+        diagnostics.push(...invocationDiagnostics);
+        tracker.recordAll(invocationDiagnostics);
+        persist();
+        return { ...result, diagnostics: invocationDiagnostics,
+          statusesByAsin: diagnosticStatusesByAsin(asins, invocationDiagnostics) };
       };
+      const commandEnv = jobProviderEnvironment(jobId, stage, dispatch.env);
+      if (streamingScript) {
+        const deadline = Number(commandEnv.SORFTIME_COLLECTION_DEADLINE);
+        return runSorftimeCommand({ args: [path.join(root, "scripts", streamingScript)], asins,
+          env: { ...process.env, ...commandEnv }, cwd: root,
+          timeoutMs: Math.max(1, deadline - Date.now()) + 5_000,
+          onProgress: value => patchSyncJob(jobId, { message: `Sorftime ${value.asin} · 已处理 ${value.completed}/${value.total} 个子体${value.state === "partial" ? " · 可选详情部分未取得" : ""}` }),
+          onHeartbeat: elapsed => patchSyncJob(jobId, { message: `Sorftime ${label} · 已用时 ${elapsed} 秒 · 采集预算内等待响应` }),
+        }).then(finish);
+      }
+      return finish(tryRunProviderCommand(label, command, args, commandEnv));
     },
   });
 }
@@ -1057,13 +1062,17 @@ async function main() {
       if (shouldRunSyncStage(job, "child_sales") && childAsins.length) {
         activateStage(jobId, "child_sales");
         patchSyncJob(jobId, { message: `Sorftime 变体评论结构 + 近30天子体销量 · ${mcpAsins.length} 个 ASIN` });
-        const variantResult = providers.run(
-          createSorftimeVariantInvocation(childAsins, marketplace),
-        );
-        const childSalesResult = providers.run({
+        const collectionDeadline = Date.now() + 180_000;
+        const variantInvocation = createSorftimeVariantInvocation(childAsins, marketplace);
+        const variantResult = await providers.run({ ...variantInvocation,
+          streamingScript: "build-sorftime-variant-data.mjs",
+          env: { ...variantInvocation.env, SORFTIME_COLLECTION_DEADLINE: String(Math.min(collectionDeadline, Date.now()+90_000)) },
+        });
+        const childSalesResult = await providers.run({
           connector: "sorftime", stage: "child_sales", asins: childAsins,
           label: "child-sales:sync", command: "npm", args: ["run", "child-sales:sync"],
-          env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+          streamingScript: "build-sorftime-child-sales.mjs",
+          env: { SORFTIME_ASINS: childAsins.join(","), SORFTIME_MARKETPLACE: marketplace, SORFTIME_COLLECTION_DEADLINE: String(collectionDeadline) },
           allowScopedEvidenceFallback: true,
         });
         const childDiagnostics = childSalesResult.succeeded

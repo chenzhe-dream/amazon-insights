@@ -124,7 +124,7 @@ test("keeps catalog placeholders, variant source timestamps, and Chinese variant
     ["NOT_CONFIGURED", "西柚数据源未配置"],
     ["AUTH_FAILED", "西柚数据源认证失败"],
     ["TIMEOUT", "西柚请求超时"],
-    ["RPC_ERROR", "西柚服务暂不可用"],
+    ["RPC_ERROR", "变体请求失败（RPC_ERROR）"],
     ["SCHEMA_INVALID", "数据源返回格式异常"],
     ["NOT_FOUND", "数据源未返回该商品变体"],
     ["PARTIAL_CHILD_INFO", "部分子体详情暂未返回"],

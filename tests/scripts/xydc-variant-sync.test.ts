@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   projectXydcVariationFamily,
   syncXydcVariantFamilies,
+  retryFailedXydcVariantFamilies,
 } from "../../scripts/build-xydc-variant-data";
 import {
   createXydcVariantCache,
@@ -24,6 +25,60 @@ import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 const inputAsin = "B0CHILD001";
 const parentAsin = "B0PARENT01";
 const now = new Date("2026-09-04T08:00:00.000Z");
+
+test("bounded recovery retries only a failed discovery and leaves ready children untouched", async () => {
+  const good = cachedRelationship(inputAsin);
+  const failedAsin = "B0FAILED01";
+  const failed: XydcVariantFamily = { ...good, inputAsin: failedAsin, parentAsin: failedAsin,
+    status: "unavailable", reasonCode: "RPC_ERROR", children: [] };
+  const fixture = cacheFixture({ [inputAsin]: good, [failedAsin]: failed });
+  const calls: string[] = [];
+  const result = await retryFailedXydcVariantFamilies({ asins: [inputAsin, failedAsin], country: "US", token: "fixture", now,
+    cache: fixture.cache, callTool: async ({ args }) => { calls.push(String(args.asin)); throw new Error("RPC_ERROR"); },
+  }, [good, failed]);
+  assert.deepEqual(calls, [failedAsin]);
+  assert.deepEqual(fixture.records[inputAsin], good);
+  assert.ok(result.some(family => family.status === "unavailable"));
+});
+
+test("cancellation during the final variation request is propagated without writing failure cache", async () => {
+  const fixture = cacheFixture();
+  const controller = new AbortController();
+  await assert.rejects(() => syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture", now,
+    cache: fixture.cache, signal: controller.signal,
+    callTool: async () => { controller.abort(new Error("cancelled")); throw controller.signal.reason; },
+  }), /cancelled/);
+  assert.equal(fixture.writes.length, 0);
+});
+
+test("discovered parents are checkpointed before a later request exhausts recovery", async () => {
+  const fixture = cacheFixture();
+  const controller = new AbortController();
+  await assert.rejects(() => syncXydcVariantFamilies({ asins: [inputAsin, "B0FAILED01"], country: "US", token: "fixture", now,
+    cache: fixture.cache, signal: controller.signal, callTool: async ({ args }) => {
+      if (args.asin === inputAsin) return variationResponse();
+      controller.abort(new Error("budget exhausted")); throw controller.signal.reason;
+    },
+  }), /budget exhausted/);
+  assert.equal(fixture.records[inputAsin]?.children.length, 2);
+  assert.equal(fixture.records["B0FAILED01"], undefined);
+});
+
+test("forced discovery cannot replace ready cache before details or a later parent cancels", async () => {
+  for (const laterParent of [false, true]) {
+    const prior = cachedRelationship(inputAsin);
+    const fixture = cacheFixture({ [inputAsin]: prior });
+    const controller = new AbortController();
+    await assert.rejects(() => syncXydcVariantFamilies({ asins: laterParent ? [inputAsin, "B0FAILED01"] : [inputAsin],
+      country: "US", token: "fixture", now, force: true, cache: fixture.cache, signal: controller.signal,
+      callTool: async ({ toolName, args }) => {
+        if (toolName === "get_asin_variations" && args.asin === inputAsin) return variationResponse();
+        controller.abort(new Error("cancelled")); throw controller.signal.reason;
+      },
+    }), /cancelled/);
+    assert.deepEqual(fixture.records[inputAsin], prior);
+  }
+});
 
 test("variant collection stops before a paid call when its job lifetime is cancelled", async () => {
   const controller = new AbortController();

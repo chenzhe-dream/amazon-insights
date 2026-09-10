@@ -8,6 +8,31 @@ import { createServer } from "vite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
+
+test("discovery failures remain visible beside completed child orders", () => {
+  const families: XydcVariantFamily[] = ["B000000001", "B000000002"].map(inputAsin => ({
+    inputAsin, parentAsin: inputAsin, country: "US", dimensions: [], children: [], sourceUpdatedAt: null,
+    fetchedAt: new Date().toISOString(), status: "unavailable", reasonCode: "RPC_ERROR", cacheState: "fresh",
+  }));
+  const products = ["B000000001", "B000000002", "B000000003"].map(asin => ({ asin, brand: "", title: asin, image: "" }));
+  const html = renderToStaticMarkup(createElement(XydcVariantSection, { products, families,
+    market: { label: "US", domain: "amazon.com" }, progress: { currentRunId: "run", jobId: "job", leaseGeneration: 1, activeJob: true,
+      progress: { state: "completed", ready: 4, cached: 0, total: 4, updatedAt: new Date(Date.now()-120_000).toISOString(), retryAt: null, safeReason: null } } }));
+  assert.match(html, /变体发现失败.*2/);
+  assert.match(html, /B000000001.*RPC_ERROR/);
+  assert.match(html, /已发现子体/);
+  assert.doesNotMatch(html, /已中断/);
+  assert.doesNotMatch(html, /已识别变体关系/);
+  assert.match(html, /尚未取得变体关系/);
+});
+
+test("products without any family cache remain visible in discovery coverage", () => {
+  const products = ["B000000001", "B000000002"].map(asin => ({ asin, brand: "", title: asin, image: "" }));
+  const html = renderToStaticMarkup(createElement(XydcVariantSection, { products, families: [], market: { label: "US", domain: "amazon.com" } }));
+  assert.match(html, /商品变体发现.*0.*2/);
+  assert.match(html, /尚未取得变体关系.*2/);
+});
 
 test("order progress shows actual two of three ready, including one cache reuse", () => {
   const props = { products: [], families: [], market: { label: "US", domain: "amazon.com" },

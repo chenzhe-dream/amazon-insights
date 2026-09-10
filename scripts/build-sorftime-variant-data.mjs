@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createSorftimeBudget } from "./lib/sorftime-request-budget.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   isForceRefresh,
@@ -79,8 +81,8 @@ function parseVariationRows(raw) {
     .filter(Boolean);
 }
 
-async function fetchAllVariations(key, asin, marketplace) {
-  const first = await callSorftimeTool(key, "product_variations", {
+async function fetchAllVariations(key, asin, marketplace, call = callSorftimeTool, onPartial = () => {}) {
+  const first = await call(key, "product_variations", {
     asin,
     amz_site: marketplace,
     page: 1,
@@ -90,21 +92,23 @@ async function fetchAllVariations(key, asin, marketplace) {
   const pageSize = 20;
   const pages = Math.max(1, Math.ceil((total || items.length) / pageSize));
   for (let page = 2; page <= pages; page += 1) {
-    const next = await callSorftimeTool(key, "product_variations", {
+    try {
+    const next = await call(key, "product_variations", {
       asin,
       amz_site: marketplace,
       page,
     });
     items.push(...parseVariationRows(next));
     await sleep(200);
+    } catch { onPartial(); break; }
   }
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
   return [...map.values()];
 }
 
-async function fetchListingDetail(key, asin, marketplace) {
-  const raw = await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace });
+async function fetchListingDetail(key, asin, marketplace, call = callSorftimeTool) {
+  const raw = await call(key, "product_detail", { asin, amz_site: marketplace });
   const detail = raw?.data ?? raw;
   const images = parseImageList(detail?.main_image);
   return {
@@ -162,15 +166,20 @@ function largestRemainderAllocate(weights, total) {
   return result;
 }
 
-async function syncParentVariants(key, catalogAsin, marketplace, fetchedAt) {
+export async function syncParentVariants(key, catalogAsin, marketplace, fetchedAt, options = {}) {
+  const budget = createSorftimeBudget(options);
+  const call = budget(false);
+  const optionalCall = budget(true);
+  const progress = options.onProgress ?? (() => {});
+  let partial = false;
   const salesMonth = fetchedAt.slice(0, 7);
-  const listing = await fetchListingDetail(key, catalogAsin, marketplace);
+  const listing = await fetchListingDetail(key, catalogAsin, marketplace, call);
   const parentAsin = listing.parentAsin || catalogAsin;
-  const variations = await fetchAllVariations(key, parentAsin, marketplace);
+  const variations = await fetchAllVariations(key, parentAsin, marketplace, call, () => { partial = true; });
 
   let reviewSamples = [];
   try {
-    const reviewsRaw = await callSorftimeTool(key, "product_reviews", {
+    const reviewsRaw = await optionalCall(key, "product_reviews", {
       asin: catalogAsin,
       amz_site: marketplace,
       review_type: "Both",
@@ -178,6 +187,7 @@ async function syncParentVariants(key, catalogAsin, marketplace, fetchedAt) {
     reviewSamples = reviewsRaw?.data ?? reviewsRaw ?? [];
   } catch {
     reviewSamples = [];
+    partial = true;
   }
   const sampleCounts = countReviewSamplesByVariant(reviewSamples);
   const sampledTotal = [...sampleCounts.values()].reduce((sum, value) => sum + value, 0);
@@ -185,15 +195,16 @@ async function syncParentVariants(key, catalogAsin, marketplace, fetchedAt) {
 
   const enriched = [];
   for (const variation of variations) {
-    process.stdout.write(".");
+    progress({ asin: catalogAsin, completed: enriched.length, total: variations.length, state: "collecting" });
     let launch = null;
     let image = null;
     try {
-      const childDetail = await fetchListingDetail(key, variation.asin, marketplace);
+      const childDetail = variation.asin === catalogAsin ? listing : await fetchListingDetail(key, variation.asin, marketplace, optionalCall);
       launch = childDetail.launch;
       image = childDetail.image;
     } catch {
       // launch/image optional
+      partial = true;
     }
 
     const sampleCount = sampleCounts.get(variation.matchKey) ?? 0;
@@ -209,22 +220,60 @@ async function syncParentVariants(key, catalogAsin, marketplace, fetchedAt) {
       launch,
       image,
     });
-    await sleep(220);
   }
+
+  progress({ asin: catalogAsin, completed: enriched.length, total: variations.length, state: partial ? "partial" : "completed" });
 
   return withReviewShares(enriched, { sampledTotal, reviewTotal }).sort(
     (a, b) => (b.reviewShare ?? -1) - (a.reviewShare ?? -1) || (b.reviews ?? -1) - (a.reviews ?? -1)
   );
 }
 
-async function main() {
-  const key = readSorftimeKey();
+export async function syncSorftimeVariants({ outputPath = outPath, asins: selectedAsins, key: suppliedKey, callTool } = {}) {
+  const key = suppliedKey ?? readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
-  const asins =
+  const asins = selectedAsins ??
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const existing = readCachedDataExport(outPath, "sorftimeVariantData");
+  const existing = readCachedDataExport(outputPath, "sorftimeVariantData");
   const records = { ...existing };
+  const outcomes = { ...readCachedDataExport(outputPath, "sorftimeVariantMeta").outcomes };
+  const deadline = Math.min(Number(process.env.SORFTIME_COLLECTION_DEADLINE) || Infinity, Date.now() + 90_000);
+
+  function writeRecords() {
+  const body = `// Generated by scripts/build-sorftime-variant-data.mjs — do not edit manually
+export type SorftimeVariant = {
+  asin: string;
+  attribute: string;
+  reviewSamples: number | null;
+  reviews: number | null;
+  reviewShare: number | null;
+  childSales: number | null;
+  salesMonth: string | null;
+  launch: string | null;
+  image: string | null;
+};
+
+export const sorftimeVariantMeta = ${JSON.stringify(
+    {
+      source:
+        "Sorftime MCP · product_variations + product_reviews(variant_attribute) + product_detail",
+      updatedAt: fetchedAt,
+      outcomes,
+      marketplace,
+      syncCommand: "npm run variant:sync",
+      note:
+        "评论占比=近一年评论样本中该颜色出现次数/样本总数；评论数为按样本占比估算的父体 review_count。Sorftime 样本上限约100条，样本少时同色可能占比相同。",
+    },
+    null,
+    2
+  )} as const;
+
+export const sorftimeVariantData: Record<string, SorftimeVariant[]> = ${JSON.stringify(records, null, 2)};
+`;
+
+  fs.writeFileSync(outputPath, body, "utf8");
+  }
 
   if (!key && !Object.values(existing).some(list => Array.isArray(list) && list.length)) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -252,11 +301,17 @@ async function main() {
       continue;
     }
 
-    process.stdout.write(`[variant] ${parentAsin}`);
+    console.log(`[variant] ${parentAsin}`);
     try {
-      records[parentAsin] = await syncParentVariants(key, parentAsin, marketplace, fetchedAt);
+      records[parentAsin] = await syncParentVariants(key, parentAsin, marketplace, fetchedAt, { deadline, callTool,
+        onProgress: progress => {
+          outcomes[parentAsin] = { state: progress.state, fetchedAt };
+          console.log(`@@sorftime-progress@@${JSON.stringify(progress)}`);
+        },
+      });
       console.log(` ${records[parentAsin].length} children`);
     } catch (error) {
+      outcomes[parentAsin] = { state: "partial", reasonCode: error?.name === "TimeoutError" || error?.diagnostic?.failureKind === "timeout" ? "REQUEST_TIMEOUT" : "CONNECTOR_FAILED", fetchedAt };
       if (Array.isArray(cached) && cached.length) {
         console.log(` error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[parentAsin] = cached;
@@ -265,45 +320,15 @@ async function main() {
         console.log(` error: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    await sleep(400);
+    writeRecords();
   }
 
-  const body = `// Generated by scripts/build-sorftime-variant-data.mjs — do not edit manually
-export type SorftimeVariant = {
-  asin: string;
-  attribute: string;
-  reviewSamples: number | null;
-  reviews: number | null;
-  reviewShare: number | null;
-  childSales: number | null;
-  salesMonth: string | null;
-  launch: string | null;
-  image: string | null;
-};
-
-export const sorftimeVariantMeta = ${JSON.stringify(
-    {
-      source:
-        "Sorftime MCP · product_variations + product_reviews(variant_attribute) + product_detail",
-      updatedAt: fetchedAt,
-      marketplace,
-      syncCommand: "npm run variant:sync",
-      note:
-        "评论占比=近一年评论样本中该颜色出现次数/样本总数；评论数为按样本占比估算的父体 review_count。Sorftime 样本上限约100条，样本少时同色可能占比相同。",
-    },
-    null,
-    2
-  )} as const;
-
-export const sorftimeVariantData: Record<string, SorftimeVariant[]> = ${JSON.stringify(records, null, 2)};
-`;
-
-  fs.writeFileSync(outPath, body, "utf8");
-  const ready = Object.values(records).filter(list => Array.isArray(list) && list.length).length;
+  writeRecords();
+  const ready = asins.filter(asin => Array.isArray(records[asin]) && records[asin].length).length;
   console.log(`[done] ${ready}/${asins.length} parents → app/sorftime-variant-data.ts`);
 }
 
-main().catch(error => {
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) syncSorftimeVariants().catch(error => {
   console.error(`[error] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

@@ -167,7 +167,8 @@ export async function readXydcOrderProgress(
   if (job.runState === "cancelled") state = "cancelled";
   else if (job.state === "failed") state = "failed";
   else if (!(job.state === "completed" && ["completed", "partial"].includes(state))
-    && (!activeJob || job.workerId !== record.workerId || now.getTime() - Date.parse(record.updatedAt) > 45_000)) state = "interrupted";
+    && (!activeJob || job.workerId !== record.workerId
+      || (!isXydcOrderProgressTerminal(state) && now.getTime() - Date.parse(record.updatedAt) > 45_000))) state = "interrupted";
   view.progress = { state, ready: record.children.filter(child => child.state === "ready" || child.state === "cached").length,
     cached: record.children.filter(child => child.state === "cached").length, total: record.children.length,
     updatedAt: record.updatedAt, retryAt: state === "rate-wait" ? record.retryAt : null, safeReason: record.safeReason };

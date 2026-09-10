@@ -18,7 +18,7 @@ export function XydcOrderProgress({ value }: { value: XydcOrderProgressView | nu
   const state = running && now - Date.parse(progress.updatedAt) > 45_000 ? "interrupted" : progress.state;
   const remaining = state === "rate-wait" && progress.retryAt ? Math.max(0, Math.ceil((Date.parse(progress.retryAt) - now) / 1_000)) : null;
   return <div className="xydc-order-progress" role="status">
-    <div><span>已就绪 {progress.ready}/{progress.total}（缓存复用 {progress.cached}）</span><span>{labels[state]}
+    <div><span>已发现子体：已就绪 {progress.ready}/{progress.total}（缓存复用 {progress.cached}）</span><span>{labels[state]}
       {remaining !== null ? remaining > 0 ? ` · ${remaining}秒` : " · 等待下一次实际状态" : ""}</span></div>
     <progress aria-label="订单数据响应就绪" value={progress.ready} max={progress.total} />
   </div>;

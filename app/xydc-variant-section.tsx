@@ -168,6 +168,12 @@ function XydcVariantSectionBody({
   onOpen?: (model: XydcOrderCardModel, trigger: HTMLButtonElement) => void;
 }) {
   const window = models[0]?.window ?? getXydcOrderWindow(new Date());
+  const requested = new Set(props.products.map(product => product.asin));
+  const scopedFamilies = props.families.filter(family => requested.has(family.inputAsin));
+  const discovered = new Set(scopedFamilies.filter(family => family.children.length > 0 && family.cacheState === "fresh" && family.status !== "unavailable").map(family => family.inputAsin));
+  const failedDiscovery = scopedFamilies.filter(family => family.status === "unavailable" && !family.children.length);
+  const failedInputs = [...new Map(failedDiscovery.map(family => [family.inputAsin, family])).values()];
+  const missing = [...requested].filter(asin => !discovered.has(asin) && !failedInputs.some(family => family.inputAsin === asin));
   return (
     <section className="card variant-section xydc-variant-section">
       <div className="section-head xydc-order-section-head">
@@ -179,6 +185,13 @@ function XydcVariantSectionBody({
       </div>
       <p className="xydc-order-scope-note">按当前变体关系汇总全部子体；总量、份额与排序使用同一12个月窗口。</p>
       <XydcOrderProgress value={props.progress ?? null} />
+      {requested.size > discovered.size && <p className="xydc-order-scope-note">商品变体发现 {discovered.size}/{requested.size}
+        {missing.length > 0 && <span> · 尚未取得变体关系 {missing.length} 个商品（{missing.join("、")}），整组数据尚不完整。</span>}
+      </p>}
+      {failedInputs.length > 0 && <p className="xydc-order-scope-note" role="status">
+        变体发现失败 {failedInputs.length} 个商品，未计入子体进度；整组数据尚不完整。
+        {failedInputs.map(family => <span key={family.inputAsin}> {family.inputAsin}（{family.reasonCode ?? "原因未提供"}）</span>)}
+      </p>}
       {models.length === 0 ? <p className="xydc-order-section-empty">暂无已授权范围内的西柚变体缓存。</p> : (
         <div className="xydc-order-grid">
           {models.map(model => <XydcOrderCard
