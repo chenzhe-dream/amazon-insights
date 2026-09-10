@@ -6,7 +6,7 @@ import {
   failedStageRepairMessage,
   hasResumableFailedStages,
   type SyncJob,
-} from "../../app/asin-sync-funnel";
+} from "../../app/features/sync/asin-sync-funnel";
 
 test("repair availability requires a gap terminal with an unfinished automatic stage", () => {
   const terminal = job("completed-with-gaps", "partial");

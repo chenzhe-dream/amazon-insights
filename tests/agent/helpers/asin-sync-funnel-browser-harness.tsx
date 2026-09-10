@@ -1,13 +1,13 @@
 import { createElement, Fragment, Profiler, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob } from "../../../app/asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob } from "../../../app/features/sync/asin-sync-funnel";
 import { useResumedSyncScope } from "../../../app/lib/resumed-sync-scope";
 import { publicationArtifactNotice } from "../../../app/lib/publication-artifact-notice";
 import { buildStageOutputView } from "../../../app/lib/stage-output-view";
 import { createTerminalSyncOwner } from "../../../app/lib/sync-terminal-owner";
-import { StageOutputGapCard } from "../../../app/stage-output-gap-card";
-import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../../app/stage-output-gap-notice";
+import { StageOutputGapCard } from "../../../app/features/sync/stage-output-gap-card";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../../app/features/sync/stage-output-gap-notice";
 import { CategoryNodeTrendSection } from "../../../app/category-node-trend-section";
 import { KeywordFetchStatusSection } from "../../../app/keyword-fetch-status";
 import { KeywordDemandSection } from "../../../app/keyword-demand-section";

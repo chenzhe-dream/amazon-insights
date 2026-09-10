@@ -1256,7 +1256,7 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
     page.indexOf("const startSyncIfNeeded"),
     page.indexOf("const ensureAnalysisWorkspace"),
   );
-  const funnel = readFileSync("app/asin-sync-funnel.tsx", "utf8");
+  const funnel = readFileSync("app/features/sync/asin-sync-funnel.tsx", "utf8");
 
   assert.match(page, /localAgentFetch/);
   assert.match(workspace, /\/v1\/local-data\/projects/);

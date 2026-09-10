@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../app/stage-output-gap-notice";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "../../app/features/sync/stage-output-gap-notice";
 
 test("only a non-done stage projection exposes a notice reason", () => {
   assert.equal(stageOutputGapReasonCode(undefined), null);

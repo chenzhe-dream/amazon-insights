@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ReactElement, ReactNode } from "react";
 
-import { BatchAsinInput } from "../../app/batch-asin-input";
+import { BatchAsinInput } from "../../app/features/sync/batch-asin-input";
 import { parseBatchAsinInput } from "../../app/lib/asin-batch-input";
 
 test("parses mixed delimiters, uppercases, preserves order, and reports duplicates", () => {

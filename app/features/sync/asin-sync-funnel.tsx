@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
-import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
-import { createStageOutputOwner, type StageOutputSnapshot } from "./lib/stage-output-browser";
-import { presentSyncProgress, type SyncJob } from "./lib/sync-progress-presentation";
-import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "./lib/sync-terminal-convergence";
-import { LocalDataSyncResumeResponseSchema } from "../shared/agent-contracts";
+import { localAgentErrorMessage, localAgentFetch } from "../../lib/local-agent-browser";
+import { createSyncStartGate, isSyncJobScopeMatch } from "../../lib/asin-sync-session";
+import { createStageOutputOwner, type StageOutputSnapshot } from "../../lib/stage-output-browser";
+import { presentSyncProgress, type SyncJob } from "../../lib/sync-progress-presentation";
+import { publicationIsSettled, syncObservationKey, terminalSyncIsQuiescent } from "../../lib/sync-terminal-convergence";
+import { LocalDataSyncResumeResponseSchema } from "../../../shared/agent-contracts";
 import {
   calculateAutoModuleReadiness,
   collectAsinModuleGaps,
@@ -17,10 +17,10 @@ import {
   parseUnavailableProviderCapabilities,
   type AsinDataStatusItem,
   type UnavailableProviderCapabilities,
-} from "./lib/sync-job-display";
+} from "../../lib/sync-job-display";
 
-export type { SyncJob } from "./lib/sync-progress-presentation";
-export type { StageOutputSnapshot } from "./lib/stage-output-browser";
+export type { SyncJob } from "../../lib/sync-progress-presentation";
+export type { StageOutputSnapshot } from "../../lib/stage-output-browser";
 
 const STAGE_COLORS: Record<string, string> = {
   queue: "#8b97a6",

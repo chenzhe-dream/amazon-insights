@@ -1,4 +1,4 @@
-import type { StageOutputSnapshot } from "./lib/stage-output-browser";
+import type { StageOutputSnapshot } from "../../lib/stage-output-browser";
 
 const stageOutputLabels: Record<string, string> = {
   keywords: "关键词", reviews: "评论", sales_trend: "历史趋势", fba: "FBA 费用",

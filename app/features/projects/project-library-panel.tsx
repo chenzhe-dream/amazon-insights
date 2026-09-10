@@ -9,7 +9,7 @@ import {
   amazonMajorCategoryChip,
   amazonMajorCategoryLabel,
   normalizeAmazonMajorCategory,
-} from "./amazon-major-categories";
+} from "../../amazon-major-categories";
 
 export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "checklist";
 
@@ -30,7 +30,7 @@ export type AnalysisProject = {
 
 const AUTHOR_KEY = "amz-lens-project-author";
 
-export { AMAZON_MAJOR_CATEGORIES, AMAZON_MAJOR_CATEGORY_IDS } from "./amazon-major-categories";
+export { AMAZON_MAJOR_CATEGORIES, AMAZON_MAJOR_CATEGORY_IDS } from "../../amazon-major-categories";
 
 const KIND_UI: Record<
   ProjectKind,

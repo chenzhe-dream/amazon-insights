@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-funnel";
+import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./features/sync/asin-sync-funnel";
 import { sifKeywordAnalysisData, sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { amazonMediaSrc } from "./lib/amazon-image";

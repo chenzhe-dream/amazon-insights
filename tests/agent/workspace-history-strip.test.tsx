@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AnalysisProject } from "../../app/project-library-panel";
+import type { AnalysisProject } from "../../app/features/projects/project-library-panel";
 import { projectWorkspacePath } from "../../app/lib/workspace-url";
 import {
   selectWorkspaceSections,
   WorkspaceHistoryStrip,
-} from "../../app/workspace-history-strip";
+} from "../../app/features/projects/workspace-history-strip";
 
 function project(index: number): AnalysisProject {
   const day = String(index + 1).padStart(2, "0");

@@ -1,6 +1,6 @@
 "use client";
 
-import type { BatchAsinParseResult } from "./lib/asin-batch-input";
+import type { BatchAsinParseResult } from "../../lib/asin-batch-input";
 
 export function BatchAsinInput({
   raw,

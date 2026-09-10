@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema } from "../shared/analysis-project-favorite-contracts";
-import { localAgentFetch, localAgentErrorMessage } from "./lib/local-agent-browser";
+import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema } from "../../../shared/analysis-project-favorite-contracts";
+import { localAgentFetch, localAgentErrorMessage } from "../../lib/local-agent-browser";
 
 type State = { scope: string | null; projectIds: string[]; ready: boolean; loading: boolean; pending: boolean; error: string | null };
 const empty = (scope: string | null): State => ({ scope, projectIds: [], ready: false, loading: false, pending: false, error: null });

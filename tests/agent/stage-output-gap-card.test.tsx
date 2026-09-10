@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { StageOutputSnapshot } from "../../app/lib/stage-output-browser";
-import { StageOutputGapCard } from "../../app/stage-output-gap-card";
+import { StageOutputGapCard } from "../../app/features/sync/stage-output-gap-card";
 
 test("missing output renders the bounded-retry gap", () => {
   const snapshot: StageOutputSnapshot = Object.freeze({

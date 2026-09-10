@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ProjectLibraryPage } from "../../../app/project-library-panel";
-import { useAnalysisProjectFavorites } from "../../../app/use-analysis-project-favorites";
-import { AnalysisProjectFavoriteButton } from "../../../app/analysis-project-favorite-button";
+import { ProjectLibraryPage } from "../../../app/features/projects/project-library-panel";
+import { useAnalysisProjectFavorites } from "../../../app/features/projects/use-analysis-project-favorites";
+import { AnalysisProjectFavoriteButton } from "../../../app/features/projects/analysis-project-favorite-button";
 import "../../../app/globals.css";
 import "../../../app/warm-theme.css";
 const id = "10000000-0000-4000-8000-000000000001";

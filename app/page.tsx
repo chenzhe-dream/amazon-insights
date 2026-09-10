@@ -59,9 +59,9 @@ import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { SegmentStackBar } from "./segment-stack-bar";
 import { AlexaVocImportPanel } from "./alexa-voc-import-panel";
 import { useManualAlexaVoc } from "./use-manual-alexa-voc";
-import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./asin-sync-funnel";
+import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSyncFunnel, type StageOutputSnapshot, type SyncCompletionDisposition, type SyncJob, type SyncResumeBundle } from "./features/sync/asin-sync-funnel";
 import { createIncompleteSyncRepair } from "./lib/sync-incomplete-repair-browser";
-import { BatchAsinInput } from "./batch-asin-input";
+import { BatchAsinInput } from "./features/sync/batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
 import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
@@ -71,9 +71,9 @@ import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { listingImageRemarks } from "./listing-image-remarks";
-import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
-import { useAnalysisProjectFavorites } from "./use-analysis-project-favorites";
-import { AnalysisProjectFavoriteButton } from "./analysis-project-favorite-button";
+import { ProjectLibraryPage, type AnalysisProject } from "./features/projects/project-library-panel";
+import { useAnalysisProjectFavorites } from "./features/projects/use-analysis-project-favorites";
+import { AnalysisProjectFavoriteButton } from "./features/projects/analysis-project-favorite-button";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
@@ -96,8 +96,9 @@ import {
   type VocRunObservation,
 } from "./lib/voc-run-browser";
 import { projectWorkspacePath, workspaceHref } from "./lib/workspace-url";
-import { WorkspaceHistoryStrip } from "./workspace-history-strip";
-import { clearSyncJobFromSearch, isSyncJobScopeMatch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
+import { WorkspaceHistoryStrip } from "./features/projects/workspace-history-strip";
+import { readHistoricalSyncPointer } from "./features/projects/historical-sync-pointer";
+import { clearSyncJobFromSearch, searchWithSyncJobId, syncJobIdFromSearch } from "./lib/asin-sync-session";
 import { parseBatchAsinInput } from "./lib/asin-batch-input";
 import { createTrafficSnapshotOwner, trafficSnapshotBindingKey, type TrafficSnapshotClientState } from "./lib/traffic-snapshot-browser";
 import { trafficStageFromReceipt, formatTrafficScore, formatTrafficPercent, trafficChildCountLabel, trafficDetailMessage, type TrafficFieldState, type TrafficStageReceipt } from "./lib/traffic-detail-view";
@@ -110,8 +111,8 @@ import { useVocReviewOutput } from "./lib/use-voc-review-output";
 import { scopedReviewRecords, reviewEmptyMessage, reviewEvidenceText, reviewMissingMessage } from "./lib/voc-review-display";
 import { createRuntimeAnalysisScopeGuard, readAndCommitRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
 import { useXydcOrderProgress } from "./lib/use-xydc-order-progress";
-import { StageOutputGapCard } from "./stage-output-gap-card";
-import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
+import { StageOutputGapCard } from "./features/sync/stage-output-gap-card";
+import { StageOutputGapNotice, stageOutputGapReasonCode } from "./features/sync/stage-output-gap-notice";
 import { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
@@ -131,54 +132,6 @@ const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面
 type RuntimeAnalysisRefreshResult =
   | Readonly<{ ok: true; snapshot: RuntimeAnalysisDataSnapshot }>
   | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
-
-type HistoricalSyncPointer = Readonly<{
-  projectId: string;
-  runId: string;
-  jobId: string;
-}>;
-
-async function readHistoricalSyncPointer(project: AnalysisProject): Promise<HistoricalSyncPointer | null> {
-  try {
-    const projectResponse = await localAgentFetch(`/v1/projects/${encodeURIComponent(project.id)}`);
-    const projectPayload = await projectResponse.json() as {
-      project?: { id?: unknown; currentRunId?: unknown };
-    };
-    const runId = projectPayload.project?.currentRunId;
-    if (!projectResponse.ok || projectPayload.project?.id !== project.id || typeof runId !== "string" || !runId) {
-      return null;
-    }
-
-    const runResponse = await localAgentFetch(`/v1/runs/${encodeURIComponent(runId)}`);
-    const runPayload = await runResponse.json() as {
-      run?: { id?: unknown; projectId?: unknown; idempotencyKey?: unknown };
-    };
-    const jobId = runPayload.run?.idempotencyKey;
-    if (
-      !runResponse.ok ||
-      runPayload.run?.id !== runId ||
-      runPayload.run?.projectId !== project.id ||
-      typeof jobId !== "string" ||
-      !jobId
-    ) return null;
-
-    const jobResponse = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
-    const job = await jobResponse.json() as SyncJob;
-    if (
-      !jobResponse.ok ||
-      job.jobId !== jobId ||
-      job.scope?.runId !== runId ||
-      !isSyncJobScopeMatch(
-      { asins: job.asins ?? [], marketplace: job.marketplace ?? "", scope: job.scope },
-      { asins: project.asins, marketplace: project.marketplace || "US", projectId: project.id, runId },
-      )
-    ) return null;
-
-    return { projectId: project.id, runId, jobId };
-  } catch {
-    return null;
-  }
-}
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
