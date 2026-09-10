@@ -10,3 +10,5 @@ Acceptance: app/page.tsx is a route/authentication entry; presentation lives in 
 4. Make page a thin auth/route entry, update callers and source-location checks without weakening assertions, run final focused suite/build/import/type comparisons and independent review. Record known baseline failures separately.
 
 Every batch starts from a committed checkpoint; repair or revert only that batch if it introduces regressions. Never reset unrelated files, delete runtime data or publish unverified refactors. A failed broad preexisting assertion is not permission to suppress it. Browser suites run sequentially because default Vite caches conflict.
+
+Completed stages 1–4: standalone components, all inline tabs/frame, cohesive controller hooks/actions and final verification. Route entry18lines; workspace view94lines; composition controller310lines; 22 leaf modules, largest231lines. The accepted dependency adjustment adds only independently proven stable React setters/ref objects, preserving existing dependency order and runtime effect behavior. Final checkpoint and all evidence are recorded in docs/verification/2026-09-10-page-decomposition.md.

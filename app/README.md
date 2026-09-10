@@ -40,7 +40,25 @@ app/lib/                      现有浏览器客户端和页面辅助逻辑
 | 产品报告与立项清单 | `features/product-reports/product-launch-analysis.ts`、`features/product-reports/launch-checklist-section.tsx`、`features/product-reports/launch-checklist-export.ts` | `server/domain/`、报告执行服务 |
 | 持久报告与历史结果 | `lib/saved-analysis-reports.ts`、各报告展示组件 | `server/db/` 中报告存储、`server/services/` 中执行与发布服务 |
 
-业务页签已放入各自模块的 `*-tab.tsx` / `*-tabs.tsx`，由 `features/workspace/workspace-view.tsx` 按原页签条件装配。认证入口调用工作区 controller，再把数据和事件交给视图。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`。共享客户端、服务端与生成数据仍在原有位置。控制层内部仍在按会话、运行数据、历史恢复和同步职责继续拆分；薄入口并不代表内部架构已经全部完成。
+业务页签放在各自模块的 `*-tab.tsx` / `*-tabs.tsx`，由 `features/workspace/workspace-view.tsx` 按页签条件装配。认证入口调用约310行的工作区协调入口，再把数据和事件交给视图。项目历史读取入口为 `features/projects/historical-sync-pointer.ts`。共享客户端、服务端与生成数据保持原有路径。
+
+## 工作区控制层
+
+`features/workspace/use-workspace-controller.ts` 负责按顺序装配各阶段，不承载页签JSX。以下文件均位于 `features/workspace/`：
+
+| 职责 | 入口 |
+| --- | --- |
+| URL、输入与项目身份 | `workspace-location.ts`、`workspace-input.ts`、`project-state.ts` |
+| 运行数据作用域与刷新 | `workspace-runtime.ts` |
+| 同步、终态与阶段输出 | `sync-session-state.ts`、`sync-start.ts`、`terminal-sync.ts`、`stage-output.ts` |
+| 历史恢复与项目切换 | `workspace-resume.ts`、`project-hydration.ts`、`project-application.ts` |
+| 流量快照和展示数据模型 | `traffic-snapshot.ts`、`workspace-source-model.ts` |
+| VOC运行与已保存报告 | `workspace-voc-run.ts`、`workspace-voc-sources.ts` |
+| 侧栏导航 | `workspace-flyout.ts`、`workspace-navigation-model.ts` |
+| 分析启动与项目保存 | `workspace-analysis-actions.ts`、`project-save-actions.ts` |
+| 视图操作产生的状态修改 | `workspace-ui-actions.ts` |
+
+同一职责可能导出多个阶段函数，协调入口保持其调用顺序，以保留作用域激活、终态校验和清理的执行时机。视图调用事件函数，不直接修改传入ref。副作用依赖中补入的稳定setter/ref有验证记录，不要替换成整个输入对象或ref.current。
 
 ## 数据、接口与服务端
 
