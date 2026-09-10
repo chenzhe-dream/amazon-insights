@@ -7,6 +7,7 @@ import {
   type LegacyVocDimensionSummary,
   type LegacyVocProduct,
   type LegacyVocThemeAggregate,
+  type LegacyVocSummaryInput,
 } from "../server/domain/voc/legacy-summary";
 import type { VocDimension } from "../server/domain/voc/theme-normalization";
 
@@ -29,11 +30,12 @@ function availableManualVoc(
 export function buildVocDevelopmentSummary(
   products: readonly ProductLite[],
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
+  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = sorftimeReviewAnalysisData,
 ): VocDevelopmentDimensionSummary[] {
   return buildLegacyVocDevelopmentSummary({
     products,
     alexaVocData: availableManualVoc(manualVocByAsin),
-    reviewAnalysisData: sorftimeReviewAnalysisData,
+    reviewAnalysisData,
     dimensionLabels: manualVocDimensions,
     alexaSourceLabel: "VOC 核心主题",
     reviewSourceLabel: "Sorftime 评论分析",
@@ -43,11 +45,12 @@ export function buildVocDevelopmentSummary(
 export function hasVocDevelopmentData(
   products: readonly Readonly<{ asin: string }>[],
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>,
+  reviewAnalysisData: LegacyVocSummaryInput["reviewAnalysisData"] = sorftimeReviewAnalysisData,
 ) {
   return hasLegacyVocDevelopmentData(
     products,
     availableManualVoc(manualVocByAsin),
-    sorftimeReviewAnalysisData,
+    reviewAnalysisData,
   );
 }
 

@@ -104,6 +104,8 @@ import { useResumedSyncScope } from "./lib/resumed-sync-scope";
 import { resolveAlexaVocPageScope } from "./lib/alexa-voc-page-scope";
 import { browserSessionStorage, createTerminalSyncOwner } from "./lib/sync-terminal-owner";
 import { buildStageOutputView } from "./lib/stage-output-view";
+import { useVocReviewOutput } from "./lib/use-voc-review-output";
+import { scopedReviewRecords, reviewEmptyMessage, reviewEvidenceText, reviewMissingMessage } from "./lib/voc-review-display";
 import { createRuntimeAnalysisScopeGuard, readAndCommitRuntimeAnalysisData, type RuntimeAnalysisDataSnapshot } from "./lib/runtime-analysis-data";
 import { useXydcOrderProgress } from "./lib/use-xydc-order-progress";
 import { StageOutputGapCard } from "./stage-output-gap-card";
@@ -567,6 +569,7 @@ export function ReviewAnalysisMatrixSection({
   pendingSteps,
   products,
   market,
+  missingMessages,
 }: {
   title: string;
   description: string;
@@ -577,8 +580,9 @@ export function ReviewAnalysisMatrixSection({
   pendingSteps: React.ReactNode;
   products: Product[];
   market: MarketCode;
+  missingMessages?: Record<string, string>;
 }) {
-  const hasReady = products.some(product => data[product.asin]?.status === "ready");
+  const hasProducts = products.length > 0;
 
   return (
     <section className="card ss-review-matrix-card">
@@ -589,7 +593,7 @@ export function ReviewAnalysisMatrixSection({
         </div>
         <SourceBadge>{badge}</SourceBadge>
       </div>
-      {!hasReady ? (
+      {!hasProducts ? (
         <div className="pending-box ss-review-pending">
           <strong>待同步评论分析数据</strong>
           <span>{dataMeta.mcpNote ?? configMeta.emptyMessage}</span>
@@ -604,6 +608,7 @@ export function ReviewAnalysisMatrixSection({
                 {products.map((product, index) => (
                   <th key={product.asin}>
                     <ProductHeader product={product} index={index} market={market} />
+                    <small>{reviewEvidenceText(data[product.asin])}</small>
                   </th>
                 ))}
               </tr>
@@ -624,7 +629,7 @@ export function ReviewAnalysisMatrixSection({
                     if (analysis?.status !== "ready") {
                       return (
                         <td key={product.asin} className="bullet-cell ss-review-cell ss-review-cell-pending">
-                          {analysis?.statusMessage ?? configMeta.emptyMessage}
+                          {analysis ? reviewEmptyMessage(analysis) : missingMessages?.[product.asin] ?? reviewEmptyMessage(undefined)}
                         </td>
                       );
                     }
@@ -654,7 +659,7 @@ export function ReviewAnalysisMatrixSection({
                           </ul>
                         ) : (
                           <span className="ss-review-empty">
-                            {analysis.statusMessage ?? "暂无匹配主题"}
+                            {reviewEmptyMessage(analysis)}
                           </span>
                         )}
                       </td>
@@ -673,16 +678,18 @@ export function ReviewAnalysisMatrixSection({
   );
 }
 
-function VocSevenDimensionInsightSection({ products, manualVocByAsin }: {
+function VocSevenDimensionInsightSection({ products, manualVocByAsin, reviewAnalysisData }: {
   products: Product[];
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
+  reviewAnalysisData: typeof sorftimeReviewAnalysisData;
 }) {
   const summaries = useMemo(
     () => buildVocDevelopmentSummary(
       products.map(product => ({ asin: product.asin, brand: product.brand, productFamily: product.productFamily })),
       manualVocByAsin,
+      reviewAnalysisData,
     ),
-    [manualVocByAsin, products]
+    [manualVocByAsin, products, reviewAnalysisData]
   );
   const summaryMap = useMemo(() => new Map(summaries.map(item => [item.key, item])), [summaries]);
 
@@ -695,9 +702,9 @@ function VocSevenDimensionInsightSection({ products, manualVocByAsin }: {
             融合 VOC 核心主题 + 智能评论分析 · 各维度内主题占比归一化至 100%
           </p>
         </div>
-        <SourceBadge>{products.length} 竞品 · 双源融合</SourceBadge>
+        <SourceBadge>{products.length} 竞品 · 按已有来源汇总</SourceBadge>
       </div>
-      {!hasVocDevelopmentData(products, manualVocByAsin) ? (
+      {!hasVocDevelopmentData(products, manualVocByAsin, reviewAnalysisData) ? (
         <div className="pending-box">待 VOC 核心主题或智能评论分析就绪后，自动生成七维综合分析。</div>
       ) : (
         <>
@@ -1934,8 +1941,14 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setStageOutputReceipt({ scopeKey: stageOutputOwnerToken.scopeKey, ownerToken: stageOutputOwnerToken, snapshot });
   }, [stageOutputOwnerToken]);
   const currentStageReceipt = stageOutputReceipt?.ownerToken === stageOutputOwnerToken ? stageOutputReceipt : null;
+  const reviewScope = useMemo(() => !authSession.logoutPending && resumedProjectId && stageOutputRunId && stageOutputJobId ? {
+    organizationId: authSession.user.organizationId, projectId: resumedProjectId,
+    runId: stageOutputRunId, jobId: stageOutputJobId, marketplace: market, asins: activeAsins,
+  } : null, [authSession.logoutPending, authSession.user.organizationId, resumedProjectId, stageOutputRunId, stageOutputJobId, market, activeAsins]);
+  // VOC has no funnel. Only read here while that tab owns the review view.
+  const pageReviewOutput = useVocReviewOutput(stageOutputScopeKey, reviewScope, activeTab === "voc");
   const stageOutputSnapshot = useMemo<StageOutputSnapshot>(() => !authSession.logoutPending && currentStageReceipt
-    ? currentStageReceipt.snapshot : {}, [authSession.logoutPending, currentStageReceipt]);
+    ? { ...currentStageReceipt.snapshot, ...(activeTab === "voc" ? { reviews: pageReviewOutput.reviews } : {}) } : pageReviewOutput, [authSession.logoutPending, currentStageReceipt, pageReviewOutput, activeTab]);
   const visibleTrafficStage = trafficStageFromReceipt(currentStageReceipt, {
     scopeKey: stageOutputScopeKey, projectId: resumedProjectId, runId: stageOutputRunId, jobId: stageOutputJobId,
     enabled: !authSession.logoutPending,
@@ -2032,9 +2045,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       keywordEnrichmentByKeyword: runtimeAnalysisData
         ? runtimeAnalysisData.keywords.enrichmentByKeyword as typeof sifKeywordEnrichmentData
         : sifKeywordEnrichmentData,
-      reviewAnalysisByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.reviews.analysisByAsin as typeof sorftimeReviewAnalysisData
-        : sorftimeReviewAnalysisData,
+      // Global generated review files carry no project/run/job ownership.
+      reviewAnalysisByAsin: {} as typeof sorftimeReviewAnalysisData,
       ratingByAsin: runtimeAnalysisData
         ? runtimeAnalysisData.reviews.ratingByAsin as typeof sorftimeRatingData
         : sorftimeRatingData,
@@ -2071,10 +2083,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData],
   );
   const {
-    keywordAnalysisByAsin, keywordEnrichmentByKeyword, reviewAnalysisByAsin, ratingByAsin,
+    keywordAnalysisByAsin, keywordEnrichmentByKeyword, ratingByAsin,
     salesTrendByAsin, fbaFeeByAsin, listingContentByAsin, categoryTrendByNode,
     childSalesByAsin, priceStrategyByAsin, imageRemarksByAsin, imageRemarkOutcomesByAsin,
   } = stageOutputView;
+  const reviewAnalysisByAsin = useMemo(() => scopedReviewRecords(stageOutputView.reviewAnalysisByAsin, activeAsins, market), [stageOutputView.reviewAnalysisByAsin, activeAsins, market]);
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
   const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
@@ -3448,10 +3461,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         ) : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
-          description={`下方为独立 Sorftime 数据源，不继承上方 Alexa VOC；Sorftime MCP · Customers Say 主题 + 近一年评论样本 · 六维同屏对齐 · 格式：【分类】+ 提及占比 · 更新：${sorftimeReviewDataMeta.updatedAt}`}
+          description="Sorftime MCP · 按实际返回的 Customers Say 主题及评论样本展示 · 六维同屏对齐 · 格式：【分类】+ 提及占比；各 ASIN 的样本数和采集时间见表头。"
           badge="Sorftime MCP"
           data={reviewAnalysisByAsin}
-          dataMeta={sorftimeReviewDataMeta}
+          missingMessages={Object.fromEntries(activeAsins.map(asin => [asin, reviewMissingMessage(stageOutputSnapshot.reviews, asin)]))}
+          dataMeta={{ ...sorftimeReviewDataMeta, updatedAt: stageOutputSnapshot.reviews && "updatedAt" in stageOutputSnapshot.reviews ? stageOutputSnapshot.reviews.updatedAt : "当前项目结果尚未读取" }}
           configMeta={sorftimeReviewAnalysisMeta}
           pendingSteps={
             <>
@@ -3462,7 +3476,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           products={products}
           market={market}
         />
-        <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} />
+        <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} reviewAnalysisData={reviewAnalysisByAsin} />
         <section className="card launch-block" data-voc-run={vocRun?.runId ?? undefined}>
             <VocRunStatusSummary observation={vocRun} />
             {vocRun?.kind === "active" ? (
