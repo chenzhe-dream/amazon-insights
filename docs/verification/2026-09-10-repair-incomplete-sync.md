@@ -26,3 +26,11 @@ Independent review found and drove fixes for a missing traffic import, Xiyou sub
 Repository-wide TypeScript and page lint are not clean. A same-file ESLint comparison against git HEAD found 9 prior errors versus 8 after this change, with the same six pre-existing ref-render errors. The old local-data bridge source assertion searches a VOC recovery string absent in both HEAD and the working file; its unrelated failure was not hidden or weakened.
 
 Verification used temporary files, test databases, fake providers and browser harnesses. No full authenticated production-page repair E2E or live-provider repair was run for this change. Formal runtime/data were not modified or deployed during implementation. The existing untracked test-results directory was preserved.
+
+## Formal release after explicit user request
+
+- Published source `1551ed06305d18922bbc4835ec1d73f90bb9c2e9` with the normal `manage-formal-stack.ps1 -PublishCode` path; manager exited 0. Formal checkout fast-forwarded from 6df8a4f, preserving its 15 generated data-file modifications.
+- Backup: `C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/repair-incomplete-20260910T111645`. PostgreSQL custom dump: 4420540 bytes, validated 44 TABLE DATA entries. 312 files copied and hash checked, including current artifact and data artifact, configuration, projects and shared caches.
+- After release, all 310 protected files remained byte-identical (excluding expected stack-state and current-release pointer updates). No production re-collection was triggered.
+- Web localhost, Web LAN `192.168.1.109:31900`, and Agent `31901` returned HTTP 200 / status ok with matching source commit and hash `5dd9321423fee46ff4999dfc3910cd1d5ef64d31d01d1d821eae6cab8e65368f`.
+- Code artifact: `8d9e25f815060ed0c6d16b583c99dd658e4aef680730a2b8ae685b640a8be8ea`. Pre/post activity checks both returned 0. User can now perform live testing; this release does not include the separate OpenSpec VOC evidence-gate implementation.
