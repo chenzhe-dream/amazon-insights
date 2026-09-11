@@ -113,3 +113,13 @@ test("registration settles after disable and returning to same owner",async t=>{
  await page.route("**/api/agent/**",async route=>{const req=route.request();if(req.url().includes("voc-automation")){if(req.method()==="POST" && ++posts===1)await gate;return route.fulfill({json:automation("failed")}).catch(()=>{});}return route.fulfill({json:inventory()});});
  await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByText("正在登记分析范围…",{exact:true}).waitFor();await page.getByRole("button",{name:"Logout"}).click();release();await page.waitForTimeout(100);await page.getByRole("button",{name:"Resume"}).click();await page.getByTestId("automation-status").filter({hasText:"分析失败"}).waitFor();await page.waitForTimeout(1200);assert.equal(await page.getByRole("button",{name:"重试手工 VOC 分析"}).isEnabled(),true);assert.equal(await page.getByText("正在登记分析范围…",{exact:true}).count(),0);
 });
+
+for (const fallback of [false, true]) test(`HTTP browser without randomUUID submits ${fallback ? 'fallback' : 'manual retry'}`,async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());let writes=0;const errors:string[]=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.addInitScript(()=>Object.defineProperty(Crypto.prototype,'randomUUID',{value:undefined,configurable:true}));
+ await page.route("**/api/agent/**",async route=>{const req=route.request();if(req.url().includes("voc-automation")){if(req.method()==="POST" && req.postDataJSON().retryKey){writes++;assert.match(req.postDataJSON().retryKey,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);}return route.fulfill({json:automation("failed")});}if(req.method()==="POST"){writes++;return route.fulfill({status:503,json:{error:{message:'fixture unavailable'}}});}return route.fulfill({json:fallback?inventory():manualInventory()});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);
+ await page.getByRole("button",{name:fallback?"使用评论兜底分析":"重试手工 VOC 分析",exact:true}).click();
+ await page.waitForTimeout(500);assert.deepEqual(errors,[]);assert.equal(writes,1);
+});

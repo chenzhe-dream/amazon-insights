@@ -8,6 +8,15 @@ import type { ProductLaunchRuntimeSources, LaunchProductInput } from "./product-
 import { ProductDefinitionSection, type SavedProductDefinitionReport } from "./product-definition-section";
 import { readVocAutomation, registerVocAutomation, readEvidenceInventory, readEvidenceRun, submitEvidenceRun, type EvidenceFetch } from "./lib/voc-evidence-browser";
 
+// getRandomValues also works on the LAN HTTP deployment, unlike randomUUID.
+function requestUuid() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
 type Props = { projectId: string | null; baseSyncRunId: string | null; sessionKey: string; organizationId: string; marketplace: string; asins: string[]; initialSelectedAsins?: string[]; products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; initialRunId: string | null; initialHistoryRunId?: string | null; refreshToken: string; enabled: boolean; onRunStarted?: (runId: string, selectedAsins: string[], previousRunId: string | null) => void; fetchImpl?: EvidenceFetch };
 type Observation = Awaited<ReturnType<typeof readEvidenceRun>>;
 export function VocEvidenceDefinition(props: Props) {
@@ -73,8 +82,8 @@ export function VocEvidenceDefinition(props: Props) {
   const register = useCallback(async (retry = false) => {
     if (!enabled || registration.current) return;
     const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
-    if (retry && !retryKeys.current.has(owner)) retryKeys.current.set(owner, crypto.randomUUID());
     try {
+      if (retry && !retryKeys.current.has(owner)) retryKeys.current.set(owner, requestUuid());
       const value = await registerVocAutomation(props.projectId!, {baseSyncRunId:props.baseSyncRunId!, selectedAsins:selectedKey.split(","), ...(retryKeys.current.has(owner) ? {retryKey:retryKeys.current.get(owner)!} : {})}, controller.signal, props.fetchImpl);
       if (controller.signal.aborted || liveOwner.current !== owner) return;
       acceptAutomation(value, retry || retryKeys.current.has(owner)); retryKeys.current.delete(owner); setAutomationRefresh(value => value + 1);
@@ -150,8 +159,8 @@ export function VocEvidenceDefinition(props: Props) {
     if (!enabled || submitting.current) return;
     const controller = new AbortController(); submitting.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"fallback"}); setError(null);
     const key = `${owner}:${manifest.fingerprint}`;
-    if (!requestKeys.current.has(key)) requestKeys.current.set(key, crypto.randomUUID());
     try {
+      if (!requestKeys.current.has(key)) requestKeys.current.set(key, requestUuid());
       const result = await submitEvidenceRun(props.projectId!, { baseSyncRunId: props.baseSyncRunId!, selectedAsins: selected, sourcePolicy: manifest.sourcePolicy, expectedInputFingerprint: manifest.fingerprint }, requestKeys.current.get(key)!, controller.signal, props.fetchImpl);
       if (controller.signal.aborted || liveOwner.current !== owner) return;
       if (result.run.projectId !== props.projectId || result.stages.some(stage => stage.runId !== result.run.id)) throw new Error("分析提交范围不匹配");
