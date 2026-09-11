@@ -90,6 +90,7 @@ function executionStatus(state: ProductDefinitionExecutionState | undefined) {
 function executionLabel(status: string) {
   if (["running", "active", "queued"].includes(status)) return "当前执行中";
   if (status === "failed") return "当前执行失败";
+  if (status === "waiting-voc-report") return "等待 VOC 分析完成";
   if (status === "waiting-input") return "当前等待输入";
   if (status === "input-ready") return "输入已就绪，等待分析结果";
   return "等待已保存的新品定义报告";

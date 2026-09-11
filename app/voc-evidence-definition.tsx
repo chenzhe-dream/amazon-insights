@@ -191,12 +191,13 @@ export function VocEvidenceDefinition(props: Props) {
   const reviewCount = source?.coverage.filter(row => row.primary === "review").length ?? 0;
   const keywordLabels = { ready: "关键词已就绪", empty: "当前范围无有效关键词", failed: "关键词请求失败", missing: "关键词未获取" };
   const sourceLabel = source ? `${executedScopeMatches ? "本次固定输入｜" : "可用输入·尚未启用评论兜底｜"}本次覆盖${manualCount + reviewCount}/${source.selectedAsins.length}：手工 VOC ${manualCount} 个，评论兜底 ${reviewCount} 个｜${keywordLabels[source.keywords.state]}｜${source.sourceMode === "review-fallback" ? "评论兜底版·待手工 VOC 验证" : "手工 VOC 版"}` : "等待可信输入";
+  const analyzing = ["queued", "voc-running", "definition-running"].includes(automation?.state ?? "");
   return <div data-testid="voc-evidence-definition">
     <section className="voc-evidence-panel">
       <header><div><span className="voc-eyebrow">VOC · 新品定义</span><h3>分析来源与范围</h3></div><span className="voc-scope-count">已选 {selected.length} 个 ASIN</span></header>
       <div className="voc-asin-grid">{props.asins.map(asin => <label key={asin} className={selected.includes(asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(asin)} onChange={() => setSelected(values => values.includes(asin) ? values.filter(value => value !== asin) : [...values, asin])} /><strong>{asin}</strong><small>{inventory?.manual.coverage.find(row => row.asin === asin)?.primary === "manual" ? "手工 VOC 已就绪" : "等待手工 VOC"}</small></label>)}</div>
       <div className="voc-automation-status" data-testid="automation-status" data-state={automation?.state ?? "registering"}>
-        <strong>{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : "尚未登记自动分析"}</strong>
+        <strong className="voc-status-heading">{(busyOwner === owner || analyzing) && <span className="voc-status-spinner" aria-hidden="true" />}{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : "尚未登记自动分析"}</strong>
         <p>{automation?.message ?? "所选范围将交由后台持续检查，输入齐全后自动分析。"}</p>
         {automation ? <small>最后更新：{new Date(automation.updatedAt).toLocaleTimeString("zh-CN")}{automation.startedAt ? ` · 已耗时 ${Math.max(0, Math.floor(((automation.state === "succeeded" || automation.state === "failed" ? Date.parse(automation.updatedAt) : clock) - Date.parse(automation.startedAt)) / 1000))} 秒` : ""}</small> : null}
       </div>
@@ -214,7 +215,7 @@ export function VocEvidenceDefinition(props: Props) {
       {observation?.reports.some(item => item.stage === "voc-positioning") && source?.keywords.state !== "ready" ? <p>VOC 报告已保存；{source ? keywordLabels[source.keywords.state] : "关键词未获取"}，暂停联合判断。</p> : null}
       {observation?.reports.filter(item => item.stage === "voc-positioning").slice(0, 1).map(item => <details key={item.id}><summary>查看已保存的 VOC 分析（版本 {item.version}）</summary><SavedVocSummary result={item.result} /></details>)}
     </section>
-    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner || automation?.state === "failed" ? "failed" : stage?.status ?? ( automation?.state === "voc-running" || automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
+    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner || automation?.state === "failed" ? "failed" : automation?.state === "voc-running" ? "waiting-voc-report" : stage?.status ?? ( automation?.state === "voc-running" || automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
   </div>;
 }
 
