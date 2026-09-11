@@ -1,4 +1,4 @@
-import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema } from "./voc-evidence-contracts";
+import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
 import { z } from "zod";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
@@ -1816,6 +1816,14 @@ export const v1Contracts = [
     params: ProjectIdParamsSchema,
     request: CreateRunRequestSchema,
     response: CreateRunResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/projects/:projectId/voc-inputs",
+    params: ProjectIdParamsSchema,
+    request: VocEvidenceInventoryQuerySchema,
+    response: VocEvidenceInventorySchema,
     error: ApiErrorResponseSchema,
   },
   {

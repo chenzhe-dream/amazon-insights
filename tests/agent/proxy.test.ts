@@ -18,6 +18,38 @@ import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 const internalUrl = "http://10.0.0.8:3100";
 const proxyToken = "super-secret-proxy-token";
 
+test("VOC inventory passes the production proxy with scoped query and session", async () => {
+  const projectId = "10000000-0000-4000-8000-000000000001";
+  const runId = "10000000-0000-4000-8000-000000000002";
+  const manifest = {
+    schemaVersion: "voc-evidence/v1", organizationId: projectId, projectId,
+    baseSyncRunId: runId, marketplace: "US", selectedAsins: ["B08Z36X6B4"],
+    sourcePolicy: "manual-only", fingerprint: "a".repeat(64), sourceMode: "manual",
+    coverage: [{ asin: "B08Z36X6B4", primary: "missing", manualDimensions: [],
+      reviewDimensions: [], missingDimensions: ["attention"], manual: null, review: null,
+      reviewSupplementDimensions: [], conflictDimensions: [] }],
+    keywords: { state: "missing", source: null },
+  };
+  const inventory = { manual: manifest, fallback: { ...manifest, sourcePolicy: "manual-with-review-fallback" } };
+  let calls = 0;
+  const client: AgentServiceClient = async request => {
+    calls++;
+    assert.equal(request.path, `/v1/projects/${projectId}/voc-inputs?baseSyncRunId=${runId}&asins=B08Z36X6B4`);
+    assert.equal(new Headers(request.headers).get("cookie"), "session=test-session");
+    return { status: 200, headers: new Headers({ "content-type": "application/json" }), body: inventory };
+  };
+  const response = await callProxy({ path: ["v1", "projects", projectId, "voc-inputs"],
+    search: `?baseSyncRunId=${runId}&asins=B08Z36X6B4`, client, headers: { cookie: "session=test-session" } });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+  assert.deepEqual(await response.json(), inventory);
+  for (const search of [`?baseSyncRunId=invalid&asins=B08Z36X6B4`, `?baseSyncRunId=${runId}&asins=invalid`]) {
+    const invalid = await callProxy({ path: ["v1", "projects", projectId, "voc-inputs"], search, client });
+    assert.equal(invalid.status, 400);
+  }
+  assert.equal(calls, 1);
+});
+
 const capabilityResponse = {
   schemaVersion: "1.0.0",
   capabilities: {

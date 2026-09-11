@@ -3,6 +3,10 @@ const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const asin = z.string().regex(/^[A-Z0-9]{10}$/);
 const asins = z.array(asin).min(1).max(10).refine(items => new Set(items).size === items.length);
+export const VocEvidenceInventoryQuerySchema = z.strictObject({
+  baseSyncRunId: id,
+  asins: z.string().refine(value => asins.safeParse(value.split(",")).success),
+});
 export const VocSourcePolicySchema = z.enum(["manual-only", "manual-with-review-fallback"]);
 export const VocEvidenceSelectionRequestSchema = z.strictObject({
   baseSyncRunId: id,
