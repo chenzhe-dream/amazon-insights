@@ -48,6 +48,14 @@ const ProductDefinitionModelInputSchema = ProductDefinitionInputSchema.extend({
 export const ProductDefinitionModelOutputSchema = z.strictObject({
   ...ProductDefinitionOutputShapeSchema.shape,
   evidenceSelection: z.null(),
+  evidenceMatrix: ProductDefinitionOutputShapeSchema.shape.evidenceMatrix.max(10),
+  configurationLayers: ProductDefinitionOutputShapeSchema.shape.configurationLayers.extend({
+    mustHave: ProductDefinitionOutputShapeSchema.shape.configurationLayers.shape.mustHave.max(5),
+    differentiation: ProductDefinitionOutputShapeSchema.shape.configurationLayers.shape.differentiation.max(3),
+    optional: ProductDefinitionOutputShapeSchema.shape.configurationLayers.shape.optional.max(3),
+    notInV1: ProductDefinitionOutputShapeSchema.shape.configurationLayers.shape.notInV1.max(3),
+    p0Avoid: ProductDefinitionOutputShapeSchema.shape.configurationLayers.shape.p0Avoid.max(5),
+  }),
   finalDefinition: ProductDefinitionOutputShapeSchema.shape.finalDefinition.max(16),
   keywordLanding: ProductDefinitionOutputShapeSchema.shape.keywordLanding.max(10),
   priorities: ProductDefinitionOutputShapeSchema.shape.priorities.max(10),
