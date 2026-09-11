@@ -117,6 +117,8 @@ export interface NamedOutputContract<O> {
 }
 
 export interface NamedOutputRepairPatchContract {
+  /** Trusted guidance supplies all context for a bounded field-only repair. */
+  selfContained?: boolean;
   name: string;
   schema: z.ZodType<unknown>;
   canHandle(
@@ -962,7 +964,7 @@ export class SkillRunner {
         model: request.model.name,
         instructions: repairAttempted
           ? createFormatRepairInstruction(
-              instructions,
+              activePatch?.selfContained ? "Repair only the explicitly authorized fields. Return the patch schema; never regenerate the report." : instructions,
               formatRepairIssues,
               this.#resolveRepairGuidance(
                 activePatch
@@ -975,14 +977,14 @@ export class SkillRunner {
               ),
             )
           : instructions,
-        input: parsedInput.data,
+        input: activePatch?.selfContained ? {} : parsedInput.data,
         outputSchema: activeOutputSchema,
         ...(!activePatch && request.outputContract.canonicalizeOutput
           ? { canonicalizeOutput: request.outputContract.canonicalizeOutput }
           : {}),
         responseFormat: activeResponseFormat,
-        maxOutputTokens: request.model.maxOutputTokens,
-        timeoutMs: request.model.timeoutMs,
+        maxOutputTokens: activePatch?.selfContained ? Math.min(request.model.maxOutputTokens, 1024) : request.model.maxOutputTokens,
+        timeoutMs: activePatch?.selfContained ? Math.min(request.model.timeoutMs, 60_000) : request.model.timeoutMs,
         signal: request.signal,
         governorScope: {
           organizationId: parsedExecutionContext.data.organizationId,

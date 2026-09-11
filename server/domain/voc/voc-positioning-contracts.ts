@@ -215,7 +215,7 @@ export const VocPositioningOutputShapeSchema = z.strictObject({
         "requires-validation",
         "not-assessed",
       ]),
-      strategy: z.enum(["retain", "redesign", "differentiate", "avoid", "validate"]),
+      strategy: z.enum(["retain", "redesign", "differentiate", "avoid", "validate"]).describe("Must match stance: supported-by-voc allows retain/redesign/avoid; requires-validation allows differentiate/validate; not-assessed allows validate only. price-tier always requires validate."),
       priority: PrioritySchema,
       themeRefs: z.array(ThemeReferenceSchema).min(1),
       evidenceIds: z.array(Sha256Schema).min(1),
