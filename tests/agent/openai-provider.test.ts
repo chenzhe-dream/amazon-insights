@@ -857,3 +857,9 @@ test(
     assert.equal(typeof result.value.summary, "string");
   },
 );
+
+test("native schema mode sends the schema once and still validates output",async()=>{
+ let body: {messages:unknown[];response_format:{json_schema:{schema:unknown}}};
+ const provider=new OpenAIProvider({transport:'relay-chat-json',schemaPromptMode:'native',client:{chat:{completions:{create:async(b:unknown)=>{body=b as typeof body;return completedChat();}}}} as never});
+ const r=await provider.generateStructured(request());assert.equal(r.value.summary,'structured result');assert.equal(body!.messages.length,2);assert.deepEqual(body!.response_format.json_schema.schema,request().responseFormat.format.schema);
+});

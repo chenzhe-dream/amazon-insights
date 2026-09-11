@@ -16,6 +16,7 @@ import {
 } from "./model-provider";
 
 export interface OpenAIProviderOptions {
+  schemaPromptMode?: "native" | "duplicated";
   apiKey?: string;
   organizationId?: string;
   jobId?: string;
@@ -398,6 +399,7 @@ function createRelayJsonSchemaInstruction(
 }
 
 export class OpenAIProvider implements ModelProvider {
+  private readonly schemaPromptMode: "native" | "duplicated";
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
   private readonly organizationId: string | undefined;
@@ -405,6 +407,7 @@ export class OpenAIProvider implements ModelProvider {
   private readonly resourceGovernor: ResourceGovernor | undefined;
 
   constructor(options: OpenAIProviderOptions) {
+    this.schemaPromptMode = options.schemaPromptMode ?? "duplicated";
     this.transport = options.transport ?? "responses-strict";
     this.organizationId = options.organizationId;
     this.jobId = options.jobId;
@@ -447,12 +450,10 @@ export class OpenAIProvider implements ModelProvider {
             model: request.model,
             messages: [
               { role: "system", content: request.instructions },
-              {
-                role: "system",
-                content: createRelayJsonSchemaInstruction(
-                  request.responseFormat.format,
-                ),
-              },
+              ...(this.schemaPromptMode === "native" ? [] : [{
+                role: "system" as const,
+                content: createRelayJsonSchemaInstruction(request.responseFormat.format),
+              }]),
               { role: "user", content: input },
             ],
             response_format: {

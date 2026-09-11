@@ -61,6 +61,7 @@ export async function createVocPositioningRuntime(
       new OpenAIProvider(providerOptions));
   const provider = options.provider ??
     providerFactory({
+      schemaPromptMode: "native",
       apiKey: options.config.apiKey,
       transport: options.config.transport,
       baseUrl: options.config.baseUrl,
