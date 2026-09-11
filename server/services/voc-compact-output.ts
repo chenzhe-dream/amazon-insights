@@ -1,11 +1,24 @@
 import { z } from "zod";
-import { AmazonVocInsightOutputSchema } from "../domain/voc/amazon-voc-insight-contracts";
+import { AmazonVocInsightOutputSchema, AmazonVocInsightShapeSchema } from "../domain/voc/amazon-voc-insight-contracts";
 import { VocPositioningOutputShapeSchema } from "../domain/voc/voc-positioning-contracts";
 import type { VocDeterministicPreprocessingResult } from "../domain/voc/preprocess-voc-snapshot";
 
+const insightShape = AmazonVocInsightShapeSchema.shape;
+// Bound the narrative, not the evidence or protected-theme coverage.
+const conciseInsight = AmazonVocInsightShapeSchema.safeExtend({
+ summary: insightShape.summary.max(400),
+ sevenDimensions: insightShape.sevenDimensions.element.safeExtend({
+  rows: insightShape.sevenDimensions.element.shape.rows.max(3),
+ }).array().length(7),
+ negativePriorities: insightShape.negativePriorities.max(3),
+ unmetOpportunities: insightShape.unmetOpportunities.max(3),
+ productDirections: insightShape.productDirections.max(3),
+ scoredOpportunities: insightShape.scoredOpportunities.max(3),
+}).describe("Concise first report: select the three most important findings per section, keep each narrative field to one short sentence. All seven dimensions and three product directions are required. Do not omit protected themes from positioningProjection.");
 const shape = VocPositioningOutputShapeSchema.shape;
 const referenced = shape.checklists.shape.mustKeep.element.omit({ evidenceIds: true });
 export const compactVocResponseSchema = AmazonVocInsightOutputSchema.extend({
+ insight: conciseInsight,
  positioningProjection: VocPositioningOutputShapeSchema.omit({identity:true,coverage:true}).extend({
   coreConclusion:shape.coreConclusion.omit({evidenceIds:true}),
   positioning:shape.positioning.element.omit({evidenceIds:true}).array().length(10),
@@ -22,7 +35,7 @@ export function hydrateVocOutput(candidate:unknown,facts:VocDeterministicPreproc
  if(!parsed.success)return candidate;
  const value=parsed.data,p=value.positioningProjection;
  const themes=new Map(facts.dimensions.flatMap(d=>d.themes.map(theme=>[JSON.stringify([d.key,theme.key]),theme] as const)));
- const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new z.ZodError([{code:"custom",path:["positioningProjection","themeRefs"],message:`Unknown VOC theme reference: ${ref.dimension}/${ref.themeKey}. Use only dimension/key pairs from the input facts.`}]);return theme;};
+ const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new z.ZodError([{code:"custom",path:["positioningProjection","themeRefs"],message:"voc-forged-theme-reference"}]);return theme;};
  const references=<T extends {themeRefs:{dimension:string;themeKey:string}[]}>(row:T)=>({...row,evidenceIds:[...new Set(row.themeRefs.flatMap(ref=>find(ref).evidenceIds))]});
  return {...value,positioningProjection:{...p,
   identity:{snapshotId:facts.snapshot.id,contentHash:facts.snapshot.contentHash,factsDigest:facts.factsDigest,dataCutoffAt:facts.snapshot.dataCutoffAt},

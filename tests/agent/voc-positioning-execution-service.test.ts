@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { compactVocResponseSchema } from "../../server/services/voc-compact-output";
 import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -2533,4 +2535,12 @@ test("real relay adapter repairs unknown compact references without infrastructu
  const names:string[]=[];
  const provider=new OpenAIProvider({transport:'relay-chat-json',deferOutputValidation:true,client:{chat:{completions:{create:async(body:{response_format:{json_schema:{name:string}}})=>{names.push(body.response_format.json_schema.name);return {id:`real-adapter-${names.length}`,choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(names.length===1?compact:valid)}}],usage:{prompt_tokens:500,completion_tokens:250,total_tokens:750}};}}}} as never});
  const service=await serviceHarness(repository,provider);const result=await service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));assert.equal(result.report.status,'complete');assert.deepEqual(names,['AmazonVocInsightOutput_1_0_0','AmazonVocInsightOutput_1_0_0']);
+});
+
+test("compact response bounds narrative sections while preserving all positioning dimensions", () => {
+ const shape = compactVocResponseSchema.shape.insight.shape;
+ assert.equal(shape.productDirections.safeParse([]).success, false);
+ const schema = JSON.stringify(z.toJSONSchema(compactVocResponseSchema));
+ assert.match(schema, /"maxItems":3/);
+ assert.equal(JSON.parse(schema).properties.positioningProjection.properties.positioning.minItems, 10);
 });
