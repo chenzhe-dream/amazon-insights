@@ -1,4 +1,7 @@
+import "../../../app/voc-evidence-definition.css";
 import "../../../app/globals.css";
+import "../../../app/warm-theme.css";
+import "../../../app/comparison-layout.css";
 import {useState} from "react";
 import {createRoot} from "react-dom/client";
 import {LocalVocDefinition} from "../../../app/local-voc-definition";

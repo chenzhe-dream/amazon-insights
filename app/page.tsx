@@ -52,6 +52,7 @@ import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
 import { LocalVocDefinition } from "./local-voc-definition";
+import "./voc-evidence-definition.css";
 import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
@@ -3711,6 +3712,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "definition" && <div className="page-content compare-page">
         <LocalVocDefinition
           key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
+          initialRunId={new URLSearchParams(appSearch).get("vocRun") ?? new URLSearchParams(appSearch).get("vocHistory")}
           projectId={currentProjectId} baseSyncRunId={baseSyncRunId} onImported={manualVoc.onImported}
           products={products} sources={productLaunchSources}
           initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}

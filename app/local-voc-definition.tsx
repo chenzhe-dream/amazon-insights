@@ -5,6 +5,8 @@ import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { readAlexaVocNormalizationStatuses, pollAlexaVocNormalizationOnce } from "./lib/alexa-voc-normalization-status-client";
 import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
 import { hasVocDevelopmentData } from "./voc-development-summary";
+import { ProductDefinitionSection } from "./product-definition-section";
+import { readEvidenceRun } from "./lib/voc-evidence-browser";
 import { LocalProductDefinitionSection } from "./local-product-definition-section";
 import type { LaunchProductInput, ProductLaunchRuntimeSources } from "./product-launch-analysis";
 
@@ -15,13 +17,14 @@ export function selectLocalVocSources(products: LaunchProductInput[], sources: P
   return {manualVocByAsin, reviewAnalysisByAsin, keywordDemand: buildKeywordDemandAnalysis(products, sources.keywordSources ?? {analysisByAsin:{},enrichmentByKeyword:{}})};
 }
 
-export function LocalVocDefinition({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, onImported}: {
-  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
+export function LocalVocDefinition({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, onImported, initialRunId}: {
+  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialRunId?: string | null; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
 }) {
   const [selected, setSelected] = useState(() => initialSelectedAsins ?? products.map(p => p.asin));
   const [reviewFallback, setReviewFallback] = useState(false);
   const selectedProducts = useMemo(() => products.filter(p => selected.includes(p.asin)), [products, selected]);
   const scoped = useMemo(() => selectLocalVocSources(selectedProducts, sources, reviewFallback), [selectedProducts, sources, reviewFallback]);
+  const [refresh, setRefresh] = useState(0);
   const [normalization, setNormalization] = useState<{checked:boolean; blocked:string[]; error:string | null; scope?:string}>({checked:!projectId,blocked:[],error:null});
   useEffect(() => {
     if (!enabled || !projectId || !baseSyncRunId) return;
@@ -54,17 +57,37 @@ export function LocalVocDefinition({products, sources, enabled, initialSelectedA
     };
     void poll();
     return () => {controller.abort(); clearTimeout(timer);};
-  }, [enabled, projectId, baseSyncRunId, selected, onImported]);
-  const ready = enabled && (!projectId || (normalization.scope === selected.join(",") && normalization.checked && !normalization.blocked.some(asin => selected.includes(asin)) && !normalization.error)) && hasVocDevelopmentData(selectedProducts, scoped.manualVocByAsin, scoped.reviewAnalysisByAsin);
-  return <>
-    <section className="card launch-block">
-      <div className="launch-section-head"><h2>分析来源与范围</h2><span className="status-chip">本地规则分析</span></div>
-      <div className="launch-meta-row">{products.map(p => <label key={p.asin}><input type="checkbox" checked={selected.includes(p.asin)} onChange={event => setSelected(previous => event.target.checked ? [...previous,p.asin] : previous.filter(asin => asin !== p.asin))} /> {p.asin} · {hasVocDevelopmentData([p],sources.manualVocByAsin) ? "手工 VOC 已就绪" : "待输入或规范化"}</label>)}</div>
-      <p role="status">{normalization.error ?? (ready ? "输入已就绪，本地规则结果已生成；修改已保存的 VOC 后自动更新。" : "等待手工 VOC 保存完成；所选商品就绪后自动生成结果。")}</p>
-      <p>仅分析已选 {selectedProducts.length} 个 ASIN。关键词覆盖 {scoped.keywordDemand?.meta.readyCount ?? 0}/{selectedProducts.length}，缺失部分标记为待验证。</p>
-      <label><input type="checkbox" checked={reviewFallback} onChange={event => setReviewFallback(event.target.checked)} /> 对缺少手工 VOC 的商品使用 Sorftime 评论兜底</label>
-      <p>格式无法本地解析时仍可使用模型规范化；规则报告不调用模型。机会判断供需求评估，成本、利润、专利、合规和供应链仍需核验。</p>
+  }, [enabled, projectId, baseSyncRunId, selected, onImported, refresh]);
+  const ready = enabled && (!projectId || !baseSyncRunId || (normalization.scope === selected.join(",") && normalization.checked && !normalization.blocked.some(asin => selected.includes(asin)) && !normalization.error)) && hasVocDevelopmentData(selectedProducts, scoped.manualVocByAsin, scoped.reviewAnalysisByAsin);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<Awaited<ReturnType<typeof readEvidenceRun>> | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!historyOpen || !enabled || !projectId || !initialRunId) return;
+    const controller = new AbortController();
+    void readEvidenceRun(projectId, initialRunId, controller.signal).then(result => {
+      if (!controller.signal.aborted) {setHistory(result); setHistoryError(null);}
+    }).catch(() => {if (!controller.signal.aborted) setHistoryError("历史报告暂时无法读取，请稍后重试。");});
+    return () => controller.abort();
+  }, [historyOpen, enabled, projectId, initialRunId, refresh]);
+  const missing = selectedProducts.filter(p => !hasVocDevelopmentData([p],scoped.manualVocByAsin,scoped.reviewAnalysisByAsin)).map(p=>p.asin);
+  const checking = Boolean(enabled && projectId && baseSyncRunId && (normalization.scope !== selected.join(",") || !normalization.checked));
+  const pending = normalization.blocked.filter(asin=>selected.includes(asin));
+  const message = !enabled ? "正在载入当前工作区。" : !selectedProducts.length ? "请选择至少一个 ASIN。" : normalization.error && baseSyncRunId ? normalization.error : ready ? "本地规则结果已生成；保存新的手工 VOC 后自动更新。" : missing.length ? `等待手工 VOC：${missing.join("、")}。保存完成后自动分析。` : checking ? "正在核实已保存的 VOC 状态，请稍候。" : `正在等待 ${pending.join("、")} 的 VOC 规范化或保存完成。`;
+  const heading = ready ? "分析已完成" : normalization.error && baseSyncRunId ? "输入状态读取异常" : missing.length ? "等待手工 VOC" : "正在核实输入";
+  const sourceLabel = `仅分析所选 ${selectedProducts.length} 个 ASIN · 关键词覆盖 ${scoped.keywordDemand?.meta.readyCount ?? 0}/${selectedProducts.length} · 本地规则分析`;
+  return <div data-testid="voc-evidence-definition">
+    <section className="voc-evidence-panel">
+      <header><div><span className="voc-eyebrow">VOC · 新品定义</span><h3>分析来源与范围</h3></div><span className="voc-scope-count">已选 {selectedProducts.length} 个 ASIN</span></header>
+      <div className="voc-asin-grid">{products.map(p => <label key={p.asin} className={selected.includes(p.asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(p.asin)} onChange={event => setSelected(previous => event.target.checked ? [...previous,p.asin] : previous.filter(asin => asin !== p.asin))} /><strong>{p.asin}</strong><small>{baseSyncRunId && pending.includes(p.asin) ? "VOC 规范化或保存中" : hasVocDevelopmentData([p],sources.manualVocByAsin) ? "手工 VOC 已就绪" : "等待手工 VOC"}</small></label>)}</div>
+      <div className="voc-automation-status" data-testid="automation-status" data-state={ready ? "succeeded" : normalization.error ? "failed" : "waiting-voc"} role="status">
+        <strong className="voc-status-heading">{!ready && !missing.length && !normalization.error && enabled && <span className="voc-status-spinner" aria-hidden="true" />}{heading}</strong>
+        <p>{message}</p><small>{sourceLabel}</small>
+      </div>
+      <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p>{sourceLabel}</p>{selectedProducts.map(p=><p key={p.asin}>{p.asin}：{hasVocDevelopmentData([p],scoped.manualVocByAsin) ? "手工 VOC" : scoped.reviewAnalysisByAsin?.[p.asin] ? "Sorftime 评论兜底" : "等待输入"}</p>)}<p>只使用所选商品的数据；缺失关键词信息保留为待验证。</p></details>
+      <div className="voc-actions"><button onClick={()=>setRefresh(value=>value+1)}>重新检查输入</button><button disabled={!reviewFallback && !Object.keys(sources.reviewFallbackCandidates ?? {}).length} onClick={()=>setReviewFallback(value=>!value)}>{reviewFallback ? "恢复仅手工 VOC 分析" : "使用评论兜底分析"}</button></div>
+      {initialRunId && <details className="voc-coverage" onToggle={event=>setHistoryOpen(event.currentTarget.open)}><summary>查看已保存的 VOC 分析</summary>{historyError ? <p role="alert">{historyError}</p> : !history ? <p>正在读取历史报告…</p> : history.reports.filter(report=>report.stage === "voc-positioning").map(report=><div key={report.id}><p>历史版本 {report.version}（不代表本次规则结果）</p><p>{String((report.result.insight as {summary?:unknown} | undefined)?.summary ?? "该报告暂无摘要。")}</p></div>)}</details>}
     </section>
-    {ready && <LocalProductDefinitionSection products={selectedProducts} sources={scoped} />}
-  </>;
+    {ready ? <LocalProductDefinitionSection products={selectedProducts} sources={scoped} /> : <ProductDefinitionSection products={selectedProducts} sources={scoped} current={false} executionState="waiting-input" sourceLabel={message} />}
+  </div>;
 }

@@ -53,3 +53,13 @@ test("review fallback is opt-in and never mixes reviews into an ASIN with manual
  assert.deepEqual(selectLocalVocSources(products,sources,false).reviewAnalysisByAsin,{});
  assert.deepEqual(Object.keys(selectLocalVocSources(products,sources,true).reviewAnalysisByAsin!).sort(),products.slice(1).map(p=>p.asin).sort());
 });
+
+
+test("original cards and report frame remain visible while waiting", () => {
+ const html=renderToStaticMarkup(createElement(LocalVocDefinition,{products,sources:{manualVocByAsin:{},keywordDemand:null},enabled:true}));
+ assert.match(html,/voc-evidence-panel/);assert.match(html,/voc-asin-grid/);assert.match(html,/voc-automation-status/);assert.match(html,/新品定义/);assert.match(html,/查看输入覆盖与来源/);
+});
+test("saved manual VOC renders when a project URL has no base run parameter", () => {
+ const html=renderToStaticMarkup(createElement(LocalVocDefinition,{products,sources:{manualVocByAsin:manual,keywordDemand:null},enabled:true,projectId:"project",baseSyncRunId:null}));
+ assert.match(html,/本地规则结果已生成/);assert.doesNotMatch(html,/等待手工 VOC 保存/);
+});
