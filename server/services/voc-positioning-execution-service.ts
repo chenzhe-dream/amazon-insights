@@ -1,3 +1,4 @@
+import { compactVocResponseSchema, hydrateVocOutput } from "./voc-compact-output";
 import { vocStrategyRepair } from "./voc-strategy-repair";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -160,6 +161,9 @@ export class VocPositioningExecutionService {
     }
 
     const input = buildVocPositioningInput(facts);
+    // The dimensions already carry every evidence ID and metric. Keep the
+    // duplicate index in trusted validation facts, not in the model prompt.
+    const modelInput = { schemaVersion: input.schemaVersion, kind: input.kind, snapshot: input.snapshot, factsDigest: input.factsDigest, coverage: input.coverage, dimensions: input.dimensions, ...(input.evidenceSelection ? { evidenceSelection: input.evidenceSelection } : {}) };
     let audited;
     try {
       audited = await this.#auditedRunner.run({
@@ -169,7 +173,7 @@ export class VocPositioningExecutionService {
         },
         inputContract: {
           name: VocPositioningAgentDefinition.inputSchema,
-          schema: AmazonVocInsightInputSchema,
+          schema: AmazonVocInsightInputSchema.omit({ evidenceIndex: true }),
           allowedFields: [
             "schemaVersion",
             "kind",
@@ -178,17 +182,17 @@ export class VocPositioningExecutionService {
             "evidenceSelection",
             "coverage",
             "dimensions",
-            "evidenceIndex",
           ],
         },
         outputContract: {
           name: VocPositioningAgentDefinition.outputSchema,
           schema: createAmazonVocInsightOutputSchema(input),
+          responseSchema: compactVocResponseSchema,
           repairPatch: vocStrategyRepair,
           canonicalizeOutput: (candidate) =>
             canonicalizeAmazonVocInsightOutput(candidate, facts),
         },
-        input,
+        input: modelInput,
         snapshotIds: [snapshot.id],
         model: request.model,
         ...(request.signal ? { signal: request.signal } : {}),
@@ -280,7 +284,7 @@ function canonicalizeAmazonVocInsightOutput(
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return candidate;
   }
-  const value = candidate as Record<string, unknown>;
+  const value = hydrateVocOutput(candidate, facts) as Record<string, unknown>;
   return {
     ...value,
     positioningProjection: canonicalizeVocPositioningOutput(

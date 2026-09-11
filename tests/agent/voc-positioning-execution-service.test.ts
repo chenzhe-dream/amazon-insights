@@ -754,7 +754,6 @@ for (const [label, asins] of [
       "factsDigest",
       "coverage",
       "dimensions",
-      "evidenceIndex",
     ]);
     assert.equal(JSON.stringify(sent).includes(subject.actorId), false);
     assert.equal(JSON.stringify(sent).includes(subject.organizationId), false);
@@ -2502,4 +2501,16 @@ for (const unauthorized of [false, true]) test(`strategy repair patches preserve
  const execution=service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:{...modelConfig(),estimatedInputTokens:32000}},executionContext(subject));
  if(unauthorized) await assert.rejects(execution);else {const result=await execution;assert.equal(result.report.status,'complete');assert.deepEqual((result.report.result as {insight:unknown}).insight,valid.insight);}
  assert.equal(provider.requests.length,2);assert.equal(provider.requests[1]!.responseFormat.format.name,'AmazonVocStrategyRepair_1_0_0');assert.deepEqual(provider.requests[1]!.input,{});assert.ok(provider.requests[1]!.instructions.length<6000);assert.ok(provider.requests[1]!.timeoutMs<=60000);
+});
+
+test("compact VOC output restores snapshot facts without changing model judgments",async t=>{
+ const temporary=temporaryDatabase();const repository=openSqliteAgentRepository({path:temporary.path,busyTimeoutMs:5000,nowProvider:()=>new Date("2026-08-16T00:00:03.000Z")});t.after(()=>{repository.close();rmSync(temporary.directory,{recursive:true,force:true});});
+ const subject=await seedExecution(repository,SCOOTER_ASINS);const valid=validAmazonVocInsightOutput(subject.facts);
+ const compact=JSON.parse(JSON.stringify(valid));const p=compact.positioningProjection;delete p.identity;delete p.coverage;
+ for(const j of p.themeJudgments){delete j.metrics;delete j.evidenceIds;delete j.label;delete j.priority;}
+ for(const row of [p.coreConclusion,...p.positioning,...p.actions,...p.nextValidations,...Object.values(p.checklists).flat()])delete (row as {evidenceIds?:unknown}).evidenceIds;
+ assert.ok(JSON.stringify(compact).length < JSON.stringify(valid).length * 0.75);
+ const provider=new FakeVocProvider(compact);const service=await serviceHarness(repository,provider);
+ const result=await service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));assert.equal(result.report.status,'complete');assert.equal(provider.requests.length,1);assert.equal('evidenceIndex' in (provider.requests[0]!.input as object),false);assert.deepEqual((result.report.result as {insight:unknown}).insight,valid.insight);
+ const stored=(result.report.result as {positioningProjection:typeof valid.positioningProjection}).positioningProjection;assert.deepEqual(stored.identity,valid.positioningProjection.identity);assert.deepEqual(stored.themeJudgments,valid.positioningProjection.themeJudgments);
 });
