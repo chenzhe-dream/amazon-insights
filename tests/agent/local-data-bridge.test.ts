@@ -1346,7 +1346,7 @@ test("project deletion fails closed for foreign and unbound legacy records and r
   const principal = adminPrincipal();
   for (const organizationId of [principal.organizationId, "foreign-org", null]) {
     const binding = organizationId ? { organizationId } : null;
-    const deps = createDefaultLocalDataBridgeDeps({ findLegacyProjectOwnerBinding: async () => binding } as never);
+    const deps = createDefaultLocalDataBridgeDeps({ findProjectById: async () => null, findLegacyProjectOwnerBinding: async () => binding } as never);
     assert.equal(await deps.authorizeProjectDeletion!(principal, project.id), organizationId === principal.organizationId);
     const calls = { count: 0 };
     const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(principal),
@@ -1358,6 +1358,46 @@ test("project deletion fails closed for foreign and unbound legacy records and r
     }
     assert.equal(calls.count, organizationId === principal.organizationId ? 1 : 0);
   }
+});
+
+test("project deletion uses canonical team ownership before legacy bindings", async t => {
+  const principal = adminPrincipal();
+  for (const scenario of [
+    { team: principal.organizationId, legacy: null, allowed: true },
+    { team: principal.organizationId, legacy: "foreign-org", allowed: true },
+    { team: "foreign-org", legacy: principal.organizationId, allowed: false },
+    { team: "foreign-org", legacy: null, allowed: false },
+  ]) {
+    let legacyReads = 0;
+    const deps = createDefaultLocalDataBridgeDeps({
+      findProjectById: async (id: string) => {
+        assert.equal(id, project.id);
+        return { id, organizationId: scenario.team };
+      },
+      findLegacyProjectOwnerBinding: async () => {
+        legacyReads += 1;
+        return scenario.legacy ? { organizationId: scenario.legacy } : null;
+      },
+    } as never);
+    const calls = { count: 0 };
+    const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(principal),
+      localDataBridgeDeps: { ...countingDeps(calls), authorizeProjectDeletion: deps.authorizeProjectDeletion } });
+    t.after(() => app.close());
+    const response = await app.inject({ method: "DELETE", url: `/v1/local-data/projects/${project.id}`, headers: authenticatedHeaders() });
+    assert.equal(response.statusCode, scenario.allowed ? 200 : 403);
+    assert.equal(calls.count, scenario.allowed ? 1 : 0);
+    assert.equal(legacyReads, 0, "canonical project ownership must be authoritative");
+    assert.equal(await deps.authorizeProjectDeletion!(memberPrincipal(), project.id), false);
+  }
+});
+
+test("canonical project deletion does not require the legacy binding repository", async () => {
+  const principal = adminPrincipal();
+  const deps = createDefaultLocalDataBridgeDeps({
+    findProjectById: async () => ({ id: project.id, organizationId: principal.organizationId }),
+  } as never);
+  assert.equal(await deps.authorizeProjectDeletion!(principal, project.id), true);
+  assert.equal(await createDefaultLocalDataBridgeDeps().authorizeProjectDeletion!(principal, project.id), false);
 });
 
 test("unauthenticated and spoofed member deletion never reaches storage", async t => {

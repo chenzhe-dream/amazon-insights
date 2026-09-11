@@ -153,8 +153,10 @@ export function createDefaultLocalDataBridgeDeps(
     updateAnalysisProject,
     deleteAnalysisProject,
     async authorizeProjectDeletion(principal, id) {
-      if (principal.kind !== "user" || principal.role !== "admin" || !repository?.findLegacyProjectOwnerBinding) return false;
-      const binding = await repository.findLegacyProjectOwnerBinding(id);
+      if (principal.kind !== "user" || principal.role !== "admin" || !repository) return false;
+      const project = await repository.findProjectById(id);
+      if (project) return project.organizationId === principal.organizationId;
+      const binding = await repository.findLegacyProjectOwnerBinding?.(id);
       return binding?.organizationId === principal.organizationId;
     },
     normalizeAsins: async (values) => normalizeAsins(values),
