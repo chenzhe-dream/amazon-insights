@@ -6,6 +6,7 @@ import type { RuntimeAgentRepository } from "../db/repository";
 import { buildProductDefinitionInput } from "../domain/product/product-definition-contracts";
 import { ProductDefinitionExecutionService } from "../services/product-definition-execution-service";
 import { createProductDefinitionJobHandler } from "../services/product-definition-worker-handler";
+import { agentDefinitions } from "../skills/agent-definitions";
 import { SkillRegistry } from "../skills/registry";
 import { AuditedSkillRunner } from "./agent-run-service";
 import { ModelBudgetCoordinator, StaticModelBudgetLimitProvider } from "./model-budget-coordinator";
@@ -83,7 +84,7 @@ export async function createProductDefinitionRuntime(options: {
             keywordSnapshot,
             ...(vocSnapshot.payload.evidenceSelection ? { evidenceSelection: vocSnapshot.payload.evidenceSelection } : {}),
           }),
-          model: options.config.model,
+          model: productDefinitionModelConfig(options.config.model),
         },
         context: {
           actorId: actor.id,
@@ -108,4 +109,9 @@ export async function createProductDefinitionRuntime(options: {
 
 function unavailableDependencies() {
   return new WorkerTaskError("data-quality", "Product definition dependencies are unavailable");
+}
+
+export function productDefinitionModelConfig<T extends { timeoutMs: number }>(model: T): T {
+  const limits = agentDefinitions.find(agent => agent.id === "product-definition")!.budget;
+  return { ...model, timeoutMs: Math.min(model.timeoutMs, limits.timeoutMs) };
 }

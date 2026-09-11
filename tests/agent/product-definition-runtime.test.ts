@@ -1,3 +1,4 @@
+import { productDefinitionModelConfig } from "../../server/runtime/product-definition-runtime";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -437,3 +438,10 @@ function dependencyPaths(error: Record<string, unknown> | null | undefined) {
       : [],
   );
 }
+
+test("product stage bounds shared VOC timeout without changing token budgets", () => {
+ const config={name:"fixture",timeoutMs:300000,maxOutputTokens:4000,estimatedInputTokens:32000,inputCostPerMillionMicros:1,outputCostPerMillionMicros:1};
+ assert.deepEqual(productDefinitionModelConfig(config),{...config,timeoutMs:120000});
+ assert.deepEqual(productDefinitionModelConfig({...config,timeoutMs:5000}),{...config,timeoutMs:5000});
+ assert.equal(config.timeoutMs,300000);
+});
