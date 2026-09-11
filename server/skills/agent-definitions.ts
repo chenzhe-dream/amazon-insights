@@ -70,7 +70,7 @@ export const agentDefinitions = [
     inputSchema: "AmazonVocInsightInput@1.0.0",
     outputSchema: "AmazonVocInsightOutput@1.0.0",
     budget: {
-      maxInputTokens: 24_000,
+      maxInputTokens: 32_000,
       maxOutputTokens: 8_000,
       timeoutMs: 300_000,
     },

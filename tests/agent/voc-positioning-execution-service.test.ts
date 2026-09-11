@@ -2499,7 +2499,7 @@ for (const unauthorized of [false, true]) test(`strategy repair patches preserve
  const patch={schemaVersion:'1.0.0',kind:'voc-strategy-repair',changes:[{index:unauthorized?(index+1)%10:index,strategy:valid.positioningProjection.positioning[index]!.strategy}]};
  const provider=new FakeVocProvider(valid,async(_request,attempt)=>({value:attempt===1?invalid:patch,responseId:`patch-${attempt}`,inputTokens:500,outputTokens:250}));
  const service=await serviceHarness(repository,provider);
- const execution=service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));
+ const execution=service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:{...modelConfig(),estimatedInputTokens:32000}},executionContext(subject));
  if(unauthorized) await assert.rejects(execution);else {const result=await execution;assert.equal(result.report.status,'complete');assert.deepEqual((result.report.result as {insight:unknown}).insight,valid.insight);}
  assert.equal(provider.requests.length,2);assert.equal(provider.requests[1]!.responseFormat.format.name,'AmazonVocStrategyRepair_1_0_0');assert.deepEqual(provider.requests[1]!.input,{});assert.ok(provider.requests[1]!.instructions.length<6000);assert.ok(provider.requests[1]!.timeoutMs<=60000);
 });
