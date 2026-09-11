@@ -54,8 +54,10 @@ export function VocEvidenceDefinition(props: Props) {
     // backend baseline. Preserve explicit fallback selection, but allow a newly
     // created manual run to replace an older manual run after input edits.
     const existing = runRef.current.owner === owner ? runRef.current.id : null;
-    const initialEvidence = observedRunRef.current?.owner === owner && observedRunRef.current.value.run.id === existing ? observedRunRef.current.value.evidenceSelection : undefined;
-    if (!force && firstObservation && existing && existing !== value.runId && !initialEvidence) return;
+    const initialObservation = observedRunRef.current?.owner === owner && observedRunRef.current.value.run.id === existing ? observedRunRef.current.value : undefined;
+    const initialEvidence = initialObservation?.evidenceSelection;
+    // A loaded legacy run may have no manifest; only an unloaded run must wait.
+    if (!force && firstObservation && existing && existing !== value.runId && !initialObservation) return;
     const preserveExplicitRun = !force && firstObservation && !!existing && existing !== value.runId && initialEvidence?.sourcePolicy === "manual-with-review-fallback";
     const changed = firstObservation || lastAutomationRun.current?.id !== value.runId;
     lastAutomationRun.current = {owner,id:value.runId};

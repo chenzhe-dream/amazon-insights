@@ -93,3 +93,10 @@ test("new automation run replaces old manual URL after its source is known",asyn
  await page.route("**/api/agent/**",async route=>{const url=route.request().url();return route.fulfill({json:url.includes("voc-automation")?automation("voc-running",newId):url.includes("voc-inputs")?manualInventory():url.endsWith("reports")?{reports:[]}:state(url.includes(oldId)?oldId:newId)});});
  await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html?vocRun=${oldId}`);await page.waitForURL(new RegExp(`vocRun=${newId}`),{timeout:5000});
 });
+
+test("legacy URL run without evidence manifest can advance to new automation run",async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());const oldId="10000000-0000-4000-8000-000000000008",newId="10000000-0000-4000-8000-000000000009";
+ const state=(id:string)=>({run:{id,projectId,mode:"existing-data",status:id===oldId?"failed":"running",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[]});
+ await page.route("**/api/agent/**",async route=>{const url=route.request().url();return route.fulfill({json:url.includes("voc-automation")?automation("voc-running",newId):url.includes("voc-inputs")?manualInventory():url.endsWith("reports")?{reports:[]}:state(url.includes(oldId)?oldId:newId)});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html?vocRun=${oldId}`);await page.waitForURL(new RegExp(`vocRun=${newId}`),{timeout:5000});
+});
