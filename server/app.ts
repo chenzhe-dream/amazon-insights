@@ -427,7 +427,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     userPresenceAccess,
   );
   registerFeedbackRoute(app, options.repository ?? null, env);
-  const vocAutomationService = options.vocAutomationService ?? (options.repository?.vocAutomations ? new VocAutomationService({repository:options.repository}) : null);
+  const vocAutomationService = options.vocAutomationService ?? (options.repository?.vocAutomations ? new VocAutomationService({repository:options.repository, disabled: true}) : null);
   registerVocAutomationRoutes(app,vocAutomationService);
   registerManualAlexaVocRoutes(
     app,

@@ -322,7 +322,7 @@ export async function createAgentService(
             intervalMs: sellerSpriteQuotaRefreshConfig.intervalMs,
           })
         : null;
-    const vocAutomationService = new VocAutomationService({repository});
+    const vocAutomationService = new VocAutomationService({repository, disabled: true});
     const app = buildAgentApp({
       vocAutomationService,
       env,

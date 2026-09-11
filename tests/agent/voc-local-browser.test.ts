@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { before, after, test } from "node:test";
+import { chromium, type Browser } from "playwright";
+import { createServer, type ViteDevServer } from "vite";
+import react from "@vitejs/plugin-react";
+let server: ViteDevServer, browser: Browser, origin: string;
+before(async()=>{
+ server=await createServer({configFile:false,cacheDir:".runtime/local-voc-vite",plugins:[react()],optimizeDeps:{entries:["tests/agent/helpers/voc-local-browser-harness.html"]},server:{host:"127.0.0.1",port:0}}); await server.listen();
+ const addr=server.httpServer!.address(); assert.ok(addr && typeof addr!=="string"); origin=`http://127.0.0.1:${addr.port}`;
+ browser=await chromium.launch({headless:true,executablePath:existsSync(chromium.executablePath())?chromium.executablePath():"C:/Program Files/Google/Chrome/Application/chrome.exe"});
+});
+after(async()=>{await browser?.close();await server?.close();});
+test("saved manual VOC automatically renders locally, pending normalization blocks stale input, no model POST",async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());let pending=true;const writes:string[]=[];const errors:string[]=[];
+ page.on("request",request=>{if(request.method()!=="GET")writes.push(request.url());});
+ page.on("pageerror",error=>errors.push(error.message));
+ await page.route("**/api/alexa-voc/pending?**",route=>route.fulfill({json:{records:pending?[{asin:"B08Z36X6B4",fingerprint:"a".repeat(64),status:"pending",revision:null,error:null}]:[]}}));
+ await page.goto(`${origin}/tests/agent/helpers/voc-local-browser-harness.html`);
+ await page.getByRole("status").filter({hasText:"等待手工 VOC"}).waitFor();
+ await page.getByText("Save fixture",{exact:true}).click();
+ assert.equal(await page.getByRole("heading",{name:"新品定义",exact:true}).count(),0);
+ pending=false;
+ await page.getByRole("heading",{name:"新品定义",exact:true}).waitFor({timeout:10000});
+ await page.getByRole("checkbox").first().uncheck();
+ assert.equal(await page.getByRole("checkbox").first().isChecked(),false);
+ await page.getByRole("status").filter({hasText:"本地规则结果已生成"}).waitFor({timeout:10000});
+ await page.getByText("Logout",{exact:true}).click();
+ assert.equal(await page.getByRole("heading",{name:"新品定义",exact:true}).count(),0);
+ assert.deepEqual(writes,[]);assert.deepEqual(errors,[]);
+});

@@ -37,6 +37,9 @@ export type LaunchProductInput = {
 export type ProductLaunchRuntimeSources = Readonly<{
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
   keywordDemand: KeywordDemandAnalysis | null;
+  keywordSources?: import("./keyword-demand-analysis").KeywordDemandSources;
+  reviewFallbackCandidates?: Parameters<typeof buildVocDevelopmentSummary>[2];
+  reviewAnalysisByAsin?: Parameters<typeof buildVocDevelopmentSummary>[2];
 }>;
 
 export type LaunchVerdict = "approve" | "conditional" | "hold";
@@ -2119,10 +2122,10 @@ export function buildProductLaunchAnalysis(
     asin: product.asin,
     brand: product.brand,
     productFamily: product.productFamily ?? family,
-  })), sources.manualVocByAsin);
+  })), sources.manualVocByAsin, sources.reviewAnalysisByAsin);
   const summary: SummaryMap = new Map(summaries.map(item => [item.key, item]));
   const market = buildMarketContext(productList);
-  const hasData = hasVocDevelopmentData(productList, sources.manualVocByAsin);
+  const hasData = hasVocDevelopmentData(productList, sources.manualVocByAsin, sources.reviewAnalysisByAsin);
   const opportunities = buildOpportunities(summary, market, family);
   const crossAnalyses = buildCrossAnalyses(summary, market);
   const supplyRows = buildSupplyRows(family);
@@ -2294,5 +2297,5 @@ export function hasProductLaunchAnalysis(
   products: readonly LaunchProductInput[],
   sources: ProductLaunchRuntimeSources,
 ) {
-  return hasVocDevelopmentData(products, sources.manualVocByAsin);
+  return hasVocDevelopmentData(products, sources.manualVocByAsin, sources.reviewAnalysisByAsin);
 }

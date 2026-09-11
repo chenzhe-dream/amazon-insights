@@ -51,7 +51,7 @@ import { sorftimeRatingData } from "./sorftime-rating-data";
 import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
-import { VocEvidenceDefinition } from "./voc-evidence-definition";
+import { LocalVocDefinition } from "./local-voc-definition";
 import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
 import { KeywordDemandSection } from "./keyword-demand-section";
@@ -2135,6 +2135,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
     manualVocByAsin,
+    keywordSources: { analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword },
+    reviewFallbackCandidates: reviewAnalysisByAsin,
     keywordDemand: buildKeywordDemandAnalysis(
       products.map(product => ({
         asin: product.asin,
@@ -2149,7 +2151,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         enrichmentByKeyword: keywordEnrichmentByKeyword,
       },
     ),
-  }), [keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products]);
+  }), [keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products, reviewAnalysisByAsin]);
   const trafficOverviewByAsin = stageOutputView.trafficData.overview;
   const trafficMonthlyTrendByAsin = stageOutputView.trafficData.monthlyTrend;
   const trafficMeta = stageOutputView.trafficData.meta;
@@ -3707,20 +3709,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
-        <VocEvidenceDefinition
+        <LocalVocDefinition
           key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
-          projectId={currentProjectId} baseSyncRunId={baseSyncRunId}
-          sessionKey={runtimeSessionKey} organizationId={authSession.user.organizationId}
-          marketplace={market} asins={activeAsins} products={products} sources={productLaunchSources}
-          initialRunId={vocRunIdFromSearch(appSearch)} initialHistoryRunId={new URLSearchParams(appSearch).get("vocHistory")} initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")} refreshToken={JSON.stringify(manualVocByAsin)}
-          enabled={!authSession.logoutPending && workspaceReady}
-          onRunStarted={(runId, selectedAsins, previousRunId) => {
-            const params = new URLSearchParams(window.location.search);
-            params.set("vocRun", runId);
-            if (previousRunId) params.set("vocHistory", previousRunId);
-            params.set("vocAsins", selectedAsins.join(","));
-            replaceAppUrl(params, window.location.pathname);
-          }}
+          projectId={currentProjectId} baseSyncRunId={baseSyncRunId} onImported={manualVoc.onImported}
+          products={products} sources={productLaunchSources}
+          initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}
+          enabled={!authSession.logoutPending && workspaceReady && market === "US"}
         />
       </div>}
 

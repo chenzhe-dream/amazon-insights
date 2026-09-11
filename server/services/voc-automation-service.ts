@@ -7,7 +7,7 @@ import { AnalysisRunService, AnalysisLifecycleError } from './analysis-run-servi
 
 type Scope = { organizationId: string; projectId: string; actorId: string };
 type Lifecycle = Pick<AnalysisRunService, 'getVocInputs' | 'getRun' | 'createRun'>;
-type Options = { repository: RuntimeAgentRepository; now?: () => string; lifecycleFactory?: (repository: RuntimeAgentRepository, scope: Scope) => Lifecycle; onError?: (error: unknown) => void };
+type Options = { disabled?: boolean; repository: RuntimeAgentRepository; now?: () => string; lifecycleFactory?: (repository: RuntimeAgentRepository, scope: Scope) => Lifecycle; onError?: (error: unknown) => void };
 const active = (run: GetRunResponse) => [run.run.status, ...run.stages.map(s => s.status)].some(status => status === 'running' || status === 'queued');
 const sameAsins = (a: readonly string[], b: readonly string[]) => [...a].sort().join(',') === [...b].sort().join(',');
 
@@ -30,6 +30,7 @@ export class VocAutomationService {
   }
  }
  async register(scope: Scope, request: VocAutomationRequest): Promise<VocAutomationStatus> {
+  if (this.options.disabled) throw new AnalysisLifecycleError(409, "当前使用本地规则分析，无需创建模型分析任务");
   const input = VocAutomationRequestSchema.parse(request);
   await this.options.repository.transaction(async raw => {
    const repository = raw as RuntimeAgentRepository;
@@ -58,6 +59,7 @@ export class VocAutomationService {
   return this.status(this.options.repository,record,scope);
  }
  async afterImport(scope: Scope, baseSyncRunId: string): Promise<void> {
+  if (this.options.disabled) return;
   await this.options.repository.transaction(async raw => {
    const repository = raw as RuntimeAgentRepository;
    await this.authorize(repository,scope,baseSyncRunId);
@@ -136,6 +138,7 @@ export class VocAutomationService {
   await repository.vocAutomations.save(record);return this.status(repository,record);
  }
  async tick(): Promise<void> {
+  if (this.options.disabled) return;
   if (this.pending) return this.pending;
   this.pending = (async()=>{
    for (const candidate of await this.options.repository.vocAutomations.list()) {
@@ -151,6 +154,6 @@ export class VocAutomationService {
   })();
   try {await this.pending;} finally {this.pending=null;}
  }
- start() { if(this.timer)return;void this.tick().catch(error=>this.options.onError?.(error));this.timer=setInterval(()=>{void this.tick().catch(error=>this.options.onError?.(error));},2000);this.timer.unref?.(); }
+ start() { if(this.options.disabled || this.timer)return;void this.tick().catch(error=>this.options.onError?.(error));this.timer=setInterval(()=>{void this.tick().catch(error=>this.options.onError?.(error));},2000);this.timer.unref?.(); }
  async stop() {if(this.timer)clearInterval(this.timer);this.timer=null;await this.pending;}
 }
