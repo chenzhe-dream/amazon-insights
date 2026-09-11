@@ -80,12 +80,15 @@ import type { ManualAlexaVocRepositoryCapability } from "./db/repository";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
 import { createAlexaVocNormalizationInputCipher } from "./security/alexa-voc-normalization-input-cipher";
 import { ManualAlexaVocService } from "./services/manual-alexa-voc-service";
+import { VocAutomationService } from "./services/voc-automation-service";
+import { registerVocAutomationRoutes } from "./routes/voc-automation";
 import type { AlexaVocNormalizationExecutionIdentity } from "./domain/voc/alexa-voc-normalization-contracts";
 
 type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   env?: Readonly<Record<string, string | undefined>>;
   storageAvailable?: boolean; openaiAvailable?: boolean; openaiCapability?: OpenAiRuntimeCapability;
   repository?: RuntimeAgentRepository;
+  vocAutomationService?: VocAutomationService;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
@@ -424,6 +427,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     userPresenceAccess,
   );
   registerFeedbackRoute(app, options.repository ?? null, env);
+  const vocAutomationService = options.vocAutomationService ?? (options.repository?.vocAutomations ? new VocAutomationService({repository:options.repository}) : null);
+  registerVocAutomationRoutes(app,vocAutomationService);
   registerManualAlexaVocRoutes(
     app,
     options.manualAlexaVocService === undefined
@@ -433,6 +438,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
           options.normalizationExecutionIdentity ?? null,
         )
       : options.manualAlexaVocService,
+    vocAutomationService ? input => vocAutomationService.afterImport(input,input.runId) : undefined,
   );
 
   app.get("/health", async () => ({

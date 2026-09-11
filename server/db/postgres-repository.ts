@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PostgresVocAutomationStore } from './postgres/voc-automation-store';
 
 import { Pool, type PoolConfig } from "pg";
 
@@ -62,6 +63,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly #keywordSnapshots: PostgresKeywordAnalysisSnapshotStore;
   readonly #reports: PostgresAnalysisReportStore;
   readonly manualAlexaVoc: PostgresManualAlexaVocStore;
+  readonly vocAutomations: PostgresVocAutomationStore;
   readonly syncJobs: PostgresSyncJobStore;
   readonly concurrencyControl: PostgresConcurrencyControlStore;
   readonly adminUserPresence: PostgresAdminUserPresenceStore;
@@ -69,6 +71,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
+    this.vocAutomations = new PostgresVocAutomationStore(this.#queries);
     const productDependencyReconciler =
       new PostgresProductDependencyReconciler(this.#queries);
     this.#core = new PostgresCoreStore(this.#queries);

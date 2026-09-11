@@ -112,6 +112,7 @@ function mapServiceError(error: unknown): never {
 export function registerManualAlexaVocRoutes(
   app: FastifyInstance,
   service: ManualAlexaVocService | null,
+  afterImport?: (input: { organizationId: string; actorId: string; projectId: string; runId: string }) => Promise<void>,
 ) {
   app.post("/v1/manual-alexa-voc/import", async (request, reply) => {
     const parsed = ManualAlexaVocImportRequestSchema.safeParse(request.body);
@@ -135,6 +136,11 @@ export function registerManualAlexaVocRoutes(
         : response.record?.revision === "1"
           ? 201
           : 200;
+      if (afterImport) {
+        const actor = principal(request);
+        await afterImport({organizationId:actor.organizationId,actorId:actor.userId,projectId:parsed.data.projectId,runId:parsed.data.runId})
+          .catch(() => app.log.warn({projectId:parsed.data.projectId}, "VOC saved; automation registration needs recovery"));
+      }
       return reply.status(status).send(response);
     } catch (error) {
       mapServiceError(error);

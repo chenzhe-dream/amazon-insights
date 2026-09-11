@@ -1,5 +1,6 @@
 import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
 import { z } from "zod";
+import { VocAutomationRequestSchema, VocAutomationStatusSchema } from "./voc-automation-contracts";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
 
@@ -1825,6 +1826,14 @@ export const v1Contracts = [
     request: VocEvidenceInventoryQuerySchema,
     response: VocEvidenceInventorySchema,
     error: ApiErrorResponseSchema,
+  },
+  {
+    method: "POST", path: "/v1/projects/:projectId/voc-automation", params: ProjectIdParamsSchema,
+    request: VocAutomationRequestSchema, response: VocAutomationStatusSchema, error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET", path: "/v1/projects/:projectId/voc-automation", params: ProjectIdParamsSchema,
+    response: VocAutomationStatusSchema, error: ApiErrorResponseSchema,
   },
   {
     method: "GET",

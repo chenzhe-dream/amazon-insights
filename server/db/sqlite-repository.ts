@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { SqliteVocAutomationStore } from './sqlite/voc-automation-store';
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
@@ -573,6 +574,7 @@ export class SqliteAgentRepository
   readonly #path: string;
   readonly #nowProvider: () => Date;
   readonly #transactionContext = new AsyncLocalStorage<SqliteTransactionContext>();
+  readonly vocAutomations: SqliteVocAutomationStore;
   readonly manualAlexaVoc: ManualAlexaVocRepository;
   readonly adminUserPresence: AdminUserPresenceRepository;
 
@@ -588,6 +590,11 @@ export class SqliteAgentRepository
       enableWriteAheadLogging(this.#database, options.busyTimeoutMs);
       this.#database.exec("PRAGMA synchronous = NORMAL");
       runMigrations(this.#database);
+      this.vocAutomations = new SqliteVocAutomationStore({
+        database: this.#database,
+        serialize: (operation) => this.#serialize(operation),
+        requireTransaction: () => { this.#manualAlexaVocTransactionContext(); },
+      });
       this.adminUserPresence = new SqliteAdminUserPresenceStore({
         database: this.#database,
         serialize: (operation) => this.#serialize(operation),

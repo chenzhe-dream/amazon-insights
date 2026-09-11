@@ -1,4 +1,5 @@
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
+import { VocAutomationService } from "./services/voc-automation-service";
 import { TrafficDetailRecoveryService } from './services/traffic-detail-recovery-service';
 
 import { buildAgentApp, createConcurrencyAdminService } from "./app";
@@ -321,7 +322,9 @@ export async function createAgentService(
             intervalMs: sellerSpriteQuotaRefreshConfig.intervalMs,
           })
         : null;
+    const vocAutomationService = new VocAutomationService({repository});
     const app = buildAgentApp({
+      vocAutomationService,
       env,
       logger: options.logger,
       storageAvailable: true,
@@ -479,6 +482,7 @@ export async function createAgentService(
           vocRuntime.start();
           trafficRuntime.start();
           productRuntime.start();
+          vocAutomationService.start();
           openaiCapability.available = true;
           openaiCapability.reason = null;
         } catch {
@@ -505,6 +509,7 @@ export async function createAgentService(
         stopped = true;
         stopPromise = stopAgentServiceResources({
           runtimes: [
+            vocAutomationService,
             vocQueueRuntime,
             syncJobDispatcher,
             manualAlexaVocPublicationRuntime,

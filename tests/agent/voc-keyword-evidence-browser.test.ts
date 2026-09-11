@@ -18,124 +18,21 @@ function inventory() {
  const manual={schemaVersion:"voc-evidence/v1",organizationId,projectId,baseSyncRunId,marketplace:"US",selectedAsins:[asin],sourcePolicy:"manual-only",fingerprint:"a".repeat(64),sourceMode:"manual",coverage:[{asin,primary:"missing",manualDimensions:[],reviewDimensions:[],missingDimensions:["attention","positives","negatives","unmet","audiences","scenarios","motives"],manual:null,review:null}],keywords:{state:"missing",source:null}};
  return {manual,fallback:{...manual,sourcePolicy:"manual-with-review-fallback",fingerprint:"b".repeat(64),sourceMode:"review-fallback",coverage:[{...manual.coverage[0],primary:"review",reviewDimensions:["positives"],review:{id:"fixture",version:"1",contentHash:"c".repeat(64),capturedAt:now}}]}};
 }
-function manualInventory(fingerprint = "d".repeat(64)) {
- const value=inventory();
- value.manual.fingerprint=fingerprint;
- value.manual.keywords.state="ready";
- Object.assign(value.manual.coverage[0], {primary:"manual", missingDimensions:[], manual:{id:"manual-fixture",version:"1",contentHash:fingerprint,capturedAt:now}});
- return value;
-}
-
-test("manual VOC auto starts once, resumes after reload and starts changed input once",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());let changed=false;const keys:string[]=[];
- const runId="10000000-0000-4000-8000-000000000009";
- let executed=manualInventory().manual;
- const state=()=>({run:{id:executed.fingerprint === "e".repeat(64) ? "10000000-0000-4000-8000-000000000010" : runId,projectId,mode:"existing-data",status:"succeeded",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[],evidenceSelection:executed});
- await page.route("**/*",async route=>{
-  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST") {const body=req.postDataJSON();keys.push(body.idempotencyKey);assert.equal(body.evidenceSelection.sourcePolicy,"manual-only");executed=manualInventory(changed?"e".repeat(64):undefined).manual;return route.fulfill({json:state()});}
-  return route.fulfill({json:req.url().includes("voc-inputs")?manualInventory(changed?"e".repeat(64):undefined):req.url().endsWith("reports")?{reports:[]}:state()});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);
- await page.waitForURL(/vocRun=/,{timeout:5000});assert.equal(keys.length,1);
- await page.reload();await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor();await page.waitForTimeout(200);assert.equal(keys.length,1);
- // Losing the run URL still submits the same durable backend idempotency key.
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.waitForURL(/vocRun=/);assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
- changed=true;await page.getByRole("button",{name:"Edit manual"}).click();
- await page.waitForFunction(()=>document.querySelector('[data-testid="evidence-source"]')?.textContent?.includes("本次固定输入"));
- await page.waitForTimeout(350);assert.equal(keys.length,3);assert.notEqual(keys[2],keys[0]);
- await page.getByRole("button",{name:"Edit manual"}).click();await page.waitForTimeout(250);assert.equal(keys.length,3);
-});
-
-test("manual automatic submission failure does not loop and explicit retry keeps its key",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());const keys:string[]=[];
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST"){keys.push(req.postDataJSON().idempotencyKey);return route.fulfill({status:503,json:{error:{code:"SERVICE_UNAVAILABLE",message:"fixture retry later"}}});}
-  return route.fulfill({json:manualInventory()});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByRole("alert").waitFor({timeout:5000});await page.waitForTimeout(300);assert.equal(keys.length,1);
- await page.getByRole("button",{name:"重试手工 VOC 分析"}).click();await page.waitForTimeout(300);assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
-});
-
-test("incomplete manual coverage never auto selects review fallback",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());let posts=0;
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.method()==="POST")posts++;return route.fulfill({json:inventory()});});
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByTestId("evidence-source").filter({hasText:"可用输入"}).waitFor();await page.waitForTimeout(300);assert.equal(posts,0);
-});
-
-test("updated manual input waits for the current analysis to finish",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());let changed=false, active=true, posts=0;
- const runId="10000000-0000-4000-8000-000000000009";
- let executed=manualInventory().manual;
- const state=()=>({run:{id:runId,projectId,mode:"existing-data",status:active?"running":"succeeded",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[{id:runId,runId,stage:"product-definition",status:active?"running":"succeeded",progress:active?10:100,attemptCount:1,startedAt:now,completedAt:active?null:now,lastError:null,createdAt:now,updatedAt:now}],evidenceSelection:executed});
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST"){posts++;executed=manualInventory(changed?"e".repeat(64):undefined).manual;return route.fulfill({json:state()});}
-  return route.fulfill({json:req.url().includes("voc-inputs")?manualInventory(changed?"e".repeat(64):undefined):req.url().endsWith("reports")?{reports:[]}:state()});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.waitForURL(/vocRun=/);await page.getByText("正在分析；输入更新后将自动重新分析。",{exact:true}).waitFor();
- changed=true;await page.getByRole("button",{name:"Edit manual"}).click();await page.waitForTimeout(1200);assert.equal(posts,1);
- active=false;await page.waitForTimeout(1500);assert.equal(posts,2);
-});
-
-test("returning to manual scope recovers an interrupted automatic POST with the same key",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());const keys:string[]=[];
- let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});t.after(()=>release());
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST"){keys.push(req.postDataJSON().idempotencyKey);if(keys.length===1)await gate;return route.fulfill({status:503,json:{error:{code:"SERVICE_UNAVAILABLE",message:"fixture unavailable"}}}).catch(()=>{});}
-  return route.fulfill({json:manualInventory()});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByText("正在提交分析…",{exact:true}).waitFor();
- await page.getByRole("checkbox").uncheck();await page.getByRole("checkbox").check();
- await page.getByRole("alert").waitFor({timeout:5000});assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);release();
-});
-
-test("same-run retry resumes failed reads and partial stage failures expose explicit retry",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());const keys:string[]=[];let readFails=true;
- const runId="10000000-0000-4000-8000-000000000009";
- const state={run:{id:runId,projectId,mode:"existing-data",status:"partial",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[{id:runId,runId,stage:"product-definition",status:"failed",progress:0,attemptCount:1,startedAt:now,completedAt:now,lastError:null,createdAt:now,updatedAt:now}],evidenceSelection:manualInventory().manual};
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST"){keys.push(req.postDataJSON().idempotencyKey);return route.fulfill({json:state});}
-  if(req.url().includes("voc-inputs"))return route.fulfill({json:manualInventory()});
-  if(req.url().endsWith("reports"))return route.fulfill({json:{reports:[]}});
-  if(readFails){readFails=false;return route.fulfill({status:503,json:{error:{code:"SERVICE_UNAVAILABLE",message:"fixture read failed"}}});}
-  return route.fulfill({json:state});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByRole("alert").waitFor({timeout:5000});
- await page.getByRole("button",{name:"重试读取分析状态"}).click();
- await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor({timeout:5000});assert.equal(keys.length,1);
- await page.getByRole("button",{name:"重试手工 VOC 分析"}).click();await page.waitForTimeout(300);assert.equal(keys.length,2);assert.notEqual(keys[1],keys[0]);
-});
-
-test("failed polling of a running manual analysis can resume reads without a POST",async t=>{
- const page=await browser.newPage();t.after(()=>page.close());let reads=0,posts=0;
- const runId="10000000-0000-4000-8000-000000000009";
- const state=(active:boolean)=>({run:{id:runId,projectId,mode:"existing-data",status:active?"running":"succeeded",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[{id:runId,runId,stage:"product-definition",status:active?"running":"succeeded",progress:active?10:100,attemptCount:1,startedAt:now,completedAt:active?null:now,lastError:null,createdAt:now,updatedAt:now}],evidenceSelection:manualInventory().manual});
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
-  if(req.method()==="POST"){posts++;return route.fulfill({json:state(true)});}
-  if(req.url().includes("voc-inputs"))return route.fulfill({json:manualInventory()});
-  if(req.url().endsWith("reports"))return route.fulfill({json:{reports:[]}});
-  reads++;if(reads===2)return route.fulfill({status:503,json:{error:{code:"SERVICE_UNAVAILABLE",message:"fixture poll failed"}}});
-  return route.fulfill({json:state(reads===1)});
- });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByRole("alert").waitFor({timeout:6000});
- await page.getByRole("button",{name:"重试读取分析状态"}).click();await page.waitForTimeout(400);assert.ok(reads>=3);assert.equal(posts,1);assert.equal(await page.getByRole("alert").count(),0);
-});
-
 test("production panel only reads until explicit fallback, double click creates once and logout clears",async t=>{
  const page=await browser.newPage();t.after(()=>page.close()); let posts=0, gets=0;
  await page.route("**/*",async route=>{
   const req=route.request(); if(!req.url().startsWith(origin)) return route.abort();
-  if(!req.url().includes("/api/agent/"))return route.continue();
+  if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});
   if(req.method()==="POST") { posts++; const body=req.postDataJSON();assert.equal(body.evidenceSelection.sourcePolicy,"manual-with-review-fallback"); await new Promise(r=>setTimeout(r,100));return route.fulfill({status:409,json:{error:{code:"CONFLICT",message:"fixture input changed"}}}); }
   gets++;return route.fulfill({json:inventory()});
  });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.locator(".voc-coverage summary").click();
  const button=page.getByRole("button",{name:"使用评论兜底分析"});await button.waitFor();await page.getByTestId("evidence-source").filter({hasText:"尚未启用评论兜底"}).waitFor();
  assert.equal(posts,0);assert.ok(gets>0);
- assert.match(await page.getByTestId("evidence-source").innerText(),/尚未启用评论兜底/);
- await page.reload(); await button.waitFor();await page.waitForTimeout(200);assert.equal(posts,0);
+ assert.match((await page.getByTestId("evidence-source").textContent() ?? ""),/尚未启用评论兜底/);
+ await page.reload();await page.locator(".voc-coverage summary").click(); await button.waitFor();await page.waitForTimeout(200);assert.equal(posts,0);
  await button.evaluate((element:HTMLButtonElement)=>{element.click();element.click();});await page.getByRole("alert").waitFor();assert.equal(posts,1);
- await page.getByRole("button",{name:"Logout",exact:true}).click();assert.match(await page.getByTestId("evidence-source").innerText(),/等待可信输入/);
+ await page.getByRole("button",{name:"Logout",exact:true}).click();assert.match((await page.getByTestId("evidence-source").textContent() ?? ""),/等待可信输入/);
 });
 
 test("fixed fallback source survives missing keywords and refresh; a new click after success uses a new key",async t=>{
@@ -144,14 +41,14 @@ test("fixed fallback source survives missing keywords and refresh; a new click a
  const run={id:runId,projectId,mode:"existing-data",status:"waiting-input",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now};
  const state={run,stages:[],evidenceSelection:inventory().fallback};
  await page.route("**/*",async route=>{
-  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
+  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});
   if(req.method()==="POST"){keys.push(req.postDataJSON().idempotencyKey);return route.fulfill({json:state});}
   reads++; return route.fulfill({json:req.url().includes("voc-inputs")?inventory():req.url().endsWith("reports")?{reports:[]}:state});
  });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.locator(".voc-coverage summary").click();
  const start=page.getByRole("button",{name:"使用评论兜底分析"});await start.click();
- await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor();assert.match(await page.getByTestId("evidence-source").innerText(),/评论兜底版.*待手工 VOC 验证/);
- await page.reload();await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor();assert.equal(keys.length,1);
+ await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor();assert.match((await page.getByTestId("evidence-source").textContent() ?? ""),/评论兜底版.*待手工 VOC 验证/);
+ await page.reload();await page.locator(".voc-coverage summary").click();await page.getByTestId("evidence-source").filter({hasText:"本次固定输入"}).waitFor();assert.equal(keys.length,1);
  await start.click();await page.waitForTimeout(150);assert.equal(keys.length,2);assert.notEqual(keys[0],keys[1]);assert.ok(reads>1);
 });
 
@@ -163,7 +60,7 @@ test("real saved output becomes history on edit and disappears on logout",async 
  const run={id:runId,projectId,mode:"existing-data",status:"succeeded",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now};
  const report={schemaVersion:"1.0.0",id:reportId,runId,agentRunId:reportId,version:1,stage:"product-definition",status:"complete",skill:{id:"define-amazon-product-from-voc-keywords",version:"1.0.0",contentHash:"d".repeat(64)},snapshotIds:[reportId],model:{model:"fixture",provider:"fixture"},dataCutoffAt:now,evidence:[{id:"voc-1",type:"theme",sourceId:"fixture",capturedAt:now}],result:{...persistedResult,evidenceSelection:readyInventory().fallback,identity:{...persistedResult.identity,inputFingerprint:readyInventory().fallback.fingerprint}},createdAt:now};
  await page.route("**/*",async route=>{
-  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
+  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});
   if(req.method()==="POST")posts++;
   const inputs=readyInventory();if(changed)inputs.fallback.fingerprint="f".repeat(64);
   return route.fulfill({json:req.url().includes("voc-inputs")?inputs:req.url().endsWith("reports")?{reports:[report]}:{run,stages:[stage],evidenceSelection:readyInventory().fallback}});
@@ -179,28 +76,28 @@ test("real saved output becomes history on edit and disappears on logout",async 
 test("an old inventory response after logout cannot restore another scope", async t=>{
  const page=await browser.newPage();t.after(()=>page.close());let release!:()=>void,entered!:()=>void;
  const gate=new Promise<void>(resolve=>{release=resolve;}), requested=new Promise<void>(resolve=>{entered=resolve;});
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();assert.equal(req.method(),"GET");entered();await gate;await route.fulfill({json:inventory()}).catch(()=>{});});
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await requested;
+ await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});assert.equal(req.method(),"GET");entered();await gate;await route.fulfill({json:inventory()}).catch(()=>{});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.locator(".voc-coverage summary").click();await requested;
  await page.getByRole("button",{name:"Logout",exact:true}).click();release();await page.waitForTimeout(150);
- assert.equal(await page.getByTestId("evidence-source").innerText(),"等待可信输入");assert.equal(await page.getByRole("button",{name:"使用评论兜底分析"}).isDisabled(),true);
+ assert.equal((await page.getByTestId("evidence-source").textContent() ?? ""),"等待可信输入");assert.equal(await page.getByRole("button",{name:"使用评论兜底分析"}).isDisabled(),true);
 });
 
 test("a late POST after scope deselection cannot attach a run", async t=>{
  const page=await browser.newPage();t.after(()=>page.close());let release!:()=>void,entered!:()=>void,posts=0;
  const gate=new Promise<void>(resolve=>{release=resolve;}),requested=new Promise<void>(resolve=>{entered=resolve;});
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
+ await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});
   if(req.method()!=="POST")return route.fulfill({json:inventory()});posts++;entered();await gate;
   await route.fulfill({json:{run:{id:"10000000-0000-4000-8000-000000000009",projectId,mode:"existing-data",status:"queued",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[]}}).catch(()=>{});
  });
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByRole("button",{name:"使用评论兜底分析"}).click();await requested;
- await page.getByRole("checkbox").uncheck();release();await page.waitForTimeout(150);assert.equal(posts,1);assert.equal(new URL(page.url()).searchParams.get("vocRun"),null);assert.equal(await page.getByTestId("evidence-source").innerText(),"等待可信输入");
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.locator(".voc-coverage summary").click();await page.getByRole("button",{name:"使用评论兜底分析"}).click();await requested;
+ await page.getByRole("checkbox").uncheck();release();await page.waitForTimeout(150);assert.equal(posts,1);assert.equal(new URL(page.url()).searchParams.get("vocRun"),null);assert.equal((await page.getByTestId("evidence-source").textContent() ?? ""),"等待可信输入");
 });
 
 for(const action of ["Switch project","Switch session"]) test(`late input from old ${action} is ignored`,async t=>{
  const page=await browser.newPage();t.after(()=>page.close());let release!:()=>void, entered!:()=>void,reads=0;
  const gate=new Promise<void>(resolve=>{release=resolve;}),requested=new Promise<void>(resolve=>{entered=resolve;});
- await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();assert.equal(req.method(),"GET");reads++;if(reads===1){entered();await gate;await route.fulfill({json:inventory()}).catch(()=>{});}else await route.fulfill({status:403,json:{error:{message:"Fixture scope denied"}}});});
- await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await requested;await page.getByRole("button",{name:action,exact:true}).click();release();await page.getByRole("alert").waitFor();assert.equal(await page.getByTestId("evidence-source").innerText(),"等待可信输入");
+ await page.route("**/*",async route=>{const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});assert.equal(req.method(),"GET");reads++;if(reads===1){entered();await gate;await route.fulfill({json:inventory()}).catch(()=>{});}else await route.fulfill({status:403,json:{error:{message:"Fixture scope denied"}}});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.locator(".voc-coverage summary").click();await requested;await page.getByRole("button",{name:action,exact:true}).click();release();await page.getByRole("alert").waitFor();assert.equal((await page.getByTestId("evidence-source").textContent() ?? ""),"等待可信输入");
 });
 
 
@@ -215,7 +112,7 @@ test("failed replacement preserves saved history across reload without creating 
  const failedId="10000000-0000-4000-8000-000000000007";
  const failedState={run:{...run,id:failedId,status:"failed"},stages:[{...stage,runId:failedId,status:"failed"}],evidenceSelection:readyInventory().fallback};
  await page.route("**/*",async route=>{
-  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
+  const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();if(req.url().includes("voc-automation"))return route.fulfill({json:{projectId,baseSyncRunId,selectedAsins:[asin],state:"waiting-voc",runId:null,message:"等待 VOC",updatedAt:now,startedAt:null}});
   if(req.method()==="POST"){posts++;return route.fulfill({json:failedState});}
   if(req.url().includes("voc-inputs"))return route.fulfill({json:readyInventory()});
   const failed=req.url().includes(failedId);
@@ -233,6 +130,6 @@ test("failed replacement preserves saved history across reload without creating 
  assert.equal(new URL(page.url()).searchParams.get("vocRun"),failedId);
  assert.equal(new URL(page.url()).searchParams.get("vocHistory"),runId);
  await page.getByText("PERSISTED_RESULT_MARKER",{exact:true}).waitFor();
- await page.reload();await historyNotice.waitFor();await page.getByText("PERSISTED_RESULT_MARKER",{exact:true}).waitFor();
+ await page.reload();await page.locator(".voc-coverage summary").click();await historyNotice.waitFor();await page.getByText("PERSISTED_RESULT_MARKER",{exact:true}).waitFor();
  assert.equal(posts,1);
 });
