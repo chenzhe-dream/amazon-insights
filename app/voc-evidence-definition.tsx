@@ -22,7 +22,7 @@ export function VocEvidenceDefinition(props: Props) {
   const [observationState, setObservation] = useState<{ owner: string; value: Observation } | null>(null);
   const [history, setHistory] = useState<{ owner: string; report: Observation["reports"][number] } | null>(null);
   const [errorState, setError] = useState<{ owner: string; phase: "inventory" | "read" | "submit" | "automation-read" | "register"; message: string } | null>(null);
-  const [busyOwner, setBusy] = useState<string | null>(null);
+  const [busyRequest, setBusy] = useState<{owner:string; controller:AbortController; expiresAt:number; kind:"register"|"fallback"} | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [observationRefresh, setObservationRefresh] = useState(0);
   const submitting = useRef<AbortController | null>(null);
@@ -32,6 +32,7 @@ export function VocEvidenceDefinition(props: Props) {
   const registered = !!automation;
   const [automationRefresh, setAutomationRefresh] = useState(0);
   const [clock, setClock] = useState(() => Date.now());
+  const busyOwner = busyRequest && !busyRequest.controller.signal.aborted && clock < busyRequest.expiresAt ? busyRequest.owner : null;
   const observedRunRef = useRef(observationState);
   const callbackRef = useRef(onRunStarted);
   const runRef = useRef(runState);
@@ -71,14 +72,15 @@ export function VocEvidenceDefinition(props: Props) {
   }, [owner, props.projectId, props.baseSyncRunId, selectedKey]);
   const register = useCallback(async (retry = false) => {
     if (!enabled || registration.current) return;
-    const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy(owner); setError(null);
+    const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
     if (retry && !retryKeys.current.has(owner)) retryKeys.current.set(owner, crypto.randomUUID());
     try {
       const value = await registerVocAutomation(props.projectId!, {baseSyncRunId:props.baseSyncRunId!, selectedAsins:selectedKey.split(","), ...(retryKeys.current.has(owner) ? {retryKey:retryKeys.current.get(owner)!} : {})}, controller.signal, props.fetchImpl);
       if (controller.signal.aborted || liveOwner.current !== owner) return;
       acceptAutomation(value, retry || retryKeys.current.has(owner)); retryKeys.current.delete(owner); setAutomationRefresh(value => value + 1);
     } catch(error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({owner,phase:"register",message:error instanceof Error ? error.message : "登记自动分析失败"}); }
-    finally { if (registration.current === controller) registration.current = null; if (liveOwner.current === owner) setBusy(null); }
+    finally { if (registration.current === controller) registration.current = null; // Completion belongs to this request, even if the UI left and returned to its owner.
+      setBusy(current => current?.controller === controller ? null : current); }
   }, [enabled, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, selectedKey, acceptAutomation]);
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +95,12 @@ export function VocEvidenceDefinition(props: Props) {
         const generation = automationGeneration.current;
         const value = await readVocAutomation(props.projectId!, controller.signal, props.fetchImpl);
         if (controller.signal.aborted || liveOwner.current !== owner) return;
-        if (generation === automationGeneration.current && !registration.current) acceptAutomation(value);
+        if (generation === automationGeneration.current && !registration.current) {
+          acceptAutomation(value);
+          // A confirmed read also heals residual UI state after navigation, but
+          // must never hide a registration or fallback write still in flight.
+          if (!submitting.current) setBusy(current => current?.owner === owner ? null : current);
+        }
         timer = setTimeout(poll, 1000);
       } catch(error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({owner,phase:"automation-read",message:error instanceof Error ? error.message : "读取自动分析状态失败"}); }
     };
@@ -141,7 +148,7 @@ export function VocEvidenceDefinition(props: Props) {
   }, [enabled, owner, props.initialHistoryRunId, props.projectId, props.fetchImpl, runId]);
   const start = useCallback(async (manifest: VocEvidenceManifest) => {
     if (!enabled || submitting.current) return;
-    const controller = new AbortController(); submitting.current = controller; setBusy(owner); setError(null);
+    const controller = new AbortController(); submitting.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"fallback"}); setError(null);
     const key = `${owner}:${manifest.fingerprint}`;
     if (!requestKeys.current.has(key)) requestKeys.current.set(key, crypto.randomUUID());
     try {
@@ -151,7 +158,8 @@ export function VocEvidenceDefinition(props: Props) {
       setObservation(null); setRun({ owner, id: result.run.id }); setObservationRefresh(value => value + 1); onRunStarted?.(result.run.id, selected, runId); requestKeys.current.delete(key);
     } catch (error) {
       if (!controller.signal.aborted && liveOwner.current === owner) { setError({ owner, phase: "submit", message: error instanceof Error ? error.message : "分析提交失败" }); setRefresh(value => value + 1); }
-    } finally { if (submitting.current === controller) submitting.current = null; if (liveOwner.current === owner) setBusy(null); }
+    } finally { if (submitting.current === controller) submitting.current = null; // Completion belongs to this request, even if the UI left and returned to its owner.
+      setBusy(current => current?.controller === controller ? null : current); }
   }, [enabled, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, onRunStarted, selected, runId]);
   const manualReady = !!inventory && inventory.manual.coverage.length === selected.length &&
     inventory.manual.coverage.every(row => row.primary === "manual" && !!row.manual);
@@ -179,7 +187,7 @@ export function VocEvidenceDefinition(props: Props) {
       <header><div><span className="voc-eyebrow">VOC · 新品定义</span><h3>分析来源与范围</h3></div><span className="voc-scope-count">已选 {selected.length} 个 ASIN</span></header>
       <div className="voc-asin-grid">{props.asins.map(asin => <label key={asin} className={selected.includes(asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(asin)} onChange={() => setSelected(values => values.includes(asin) ? values.filter(value => value !== asin) : [...values, asin])} /><strong>{asin}</strong><small>{inventory?.manual.coverage.find(row => row.asin === asin)?.primary === "manual" ? "手工 VOC 已就绪" : "等待手工 VOC"}</small></label>)}</div>
       <div className="voc-automation-status" data-testid="automation-status" data-state={automation?.state ?? "registering"}>
-        <strong>{busyOwner === owner ? "正在登记分析范围…" : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : "尚未登记自动分析"}</strong>
+        <strong>{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : "尚未登记自动分析"}</strong>
         <p>{automation?.message ?? "所选范围将交由后台持续检查，输入齐全后自动分析。"}</p>
         {automation ? <small>最后更新：{new Date(automation.updatedAt).toLocaleTimeString("zh-CN")}{automation.startedAt ? ` · 已耗时 ${Math.max(0, Math.floor(((automation.state === "succeeded" || automation.state === "failed" ? Date.parse(automation.updatedAt) : clock) - Date.parse(automation.startedAt)) / 1000))} 秒` : ""}</small> : null}
       </div>
@@ -192,12 +200,12 @@ export function VocEvidenceDefinition(props: Props) {
       <button disabled={!inventory?.fallback.coverage.some(row => row.review) || busyOwner === owner || activeRun || ["queued","voc-running","definition-running"].includes(automation?.state ?? "")} onClick={() => inventory && void start(inventory.fallback)}>{failedFallback ? "重试评论兜底分析" : "使用评论兜底分析"}</button>
       </div>
       {errorState?.owner === owner ? <p role="alert">{errorState.message}</p> : null}
-      {observation?.stages.filter(item => item.status === "failed").map(item => <p role="alert" key={item.id}>{item.stage === "voc-positioning" ? "VOC 分析" : item.stage === "product-definition" ? "新品定义" : item.stage}失败：{item.lastError ? (typeof item.lastError === "string" ? item.lastError : JSON.stringify(item.lastError)) : "请重试分析"}</p>)}
+      {observation?.stages.filter(item => item.status === "failed").map(item => <p role="alert" key={item.id}>{item.stage === "voc-positioning" ? "VOC 分析" : item.stage === "product-definition" ? "新品定义" : item.stage}失败：{item.lastError?.message ?? "请重试分析"}</p>)}
       {report && !current ? <p>输入已变化或旧报告缺少来源版本：历史报告待更新。</p> : null}
       {observation?.reports.some(item => item.stage === "voc-positioning") && source?.keywords.state !== "ready" ? <p>VOC 报告已保存；{source ? keywordLabels[source.keywords.state] : "关键词未获取"}，暂停联合判断。</p> : null}
       {observation?.reports.filter(item => item.stage === "voc-positioning").slice(0, 1).map(item => <details key={item.id}><summary>查看已保存的 VOC 分析（版本 {item.version}）</summary><SavedVocSummary result={item.result} /></details>)}
     </section>
-    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner ? "failed" : stage?.status ?? (automation?.state === "failed" ? "failed" : automation?.state === "voc-running" || automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
+    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner || automation?.state === "failed" ? "failed" : stage?.status ?? ( automation?.state === "voc-running" || automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
   </div>;
 }
 

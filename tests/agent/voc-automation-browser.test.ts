@@ -100,3 +100,16 @@ test("legacy URL run without evidence manifest can advance to new automation run
  await page.route("**/api/agent/**",async route=>{const url=route.request().url();return route.fulfill({json:url.includes("voc-automation")?automation("voc-running",newId):url.includes("voc-inputs")?manualInventory():url.endsWith("reports")?{reports:[]}:state(url.includes(oldId)?oldId:newId)});});
  await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html?vocRun=${oldId}`);await page.waitForURL(new RegExp(`vocRun=${newId}`),{timeout:5000});
 });
+
+test("failed automation overrides waiting definition and shows only readable stage error",async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());const runId="10000000-0000-4000-8000-000000000009";
+ const stage=(name:string,status:string)=>({id:runId,runId,stage:name,status,progress:0,attemptCount:1,startedAt:now,completedAt:now,lastError:status==="failed"?{code:"AGENT_SERVICE_UNAVAILABLE",message:"分析服务暂不可用",requestId:"fixture-request",retryable:true}:null,createdAt:now,updatedAt:now});
+ const run={run:{id:runId,projectId,mode:"existing-data",status:"failed",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[stage("voc-positioning","failed"),stage("product-definition","waiting-input")],evidenceSelection:manualInventory().manual};
+ await page.route("**/api/agent/**",async route=>{const url=route.request().url();return route.fulfill({json:url.includes("voc-automation")?automation("failed",runId):url.includes("voc-inputs")?manualInventory():url.endsWith("reports")?{reports:[]}:run});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByRole("alert").filter({hasText:"分析服务暂不可用"}).waitFor();assert.ok(await page.getByText("当前执行失败",{exact:true}).count()>0);assert.equal(await page.getByRole("alert").first().textContent(),"VOC 分析失败：分析服务暂不可用");assert.equal(await page.getByRole("button",{name:"重试手工 VOC 分析"}).isEnabled(),true);
+});
+test("registration settles after disable and returning to same owner",async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);t.after(()=>release());let posts=0;
+ await page.route("**/api/agent/**",async route=>{const req=route.request();if(req.url().includes("voc-automation")){if(req.method()==="POST" && ++posts===1)await gate;return route.fulfill({json:automation("failed")}).catch(()=>{});}return route.fulfill({json:inventory()});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html`);await page.getByText("正在登记分析范围…",{exact:true}).waitFor();await page.getByRole("button",{name:"Logout"}).click();release();await page.waitForTimeout(100);await page.getByRole("button",{name:"Resume"}).click();await page.getByTestId("automation-status").filter({hasText:"分析失败"}).waitFor();await page.waitForTimeout(1200);assert.equal(await page.getByRole("button",{name:"重试手工 VOC 分析"}).isEnabled(),true);assert.equal(await page.getByText("正在登记分析范围…",{exact:true}).count(),0);
+});
