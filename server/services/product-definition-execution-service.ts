@@ -48,6 +48,9 @@ const ProductDefinitionModelInputSchema = ProductDefinitionInputSchema.extend({
 export const ProductDefinitionModelOutputSchema = z.strictObject({
   ...ProductDefinitionOutputShapeSchema.shape,
   evidenceSelection: z.null(),
+  finalDefinition: ProductDefinitionOutputShapeSchema.shape.finalDefinition.max(16),
+  keywordLanding: ProductDefinitionOutputShapeSchema.shape.keywordLanding.max(10),
+  priorities: ProductDefinitionOutputShapeSchema.shape.priorities.max(10),
   identity: z.strictObject({
     ...ProductDefinitionOutputShapeSchema.shape.identity.shape,
     inputFingerprint: z.null(),
@@ -56,7 +59,7 @@ export const ProductDefinitionModelOutputSchema = z.strictObject({
     ...ProductDefinitionOutputShapeSchema.shape.opportunity.shape,
     pendingReason: z.string().trim().min(1).max(2_000).nullable(),
   }),
-}).superRefine(validateProductDefinitionOutputStructure);
+}).superRefine(validateProductDefinitionOutputStructure).describe("Concise product definition: one row per final-definition dimension, focus on up to ten keyword groups and priorities. Use short actionable sentences, preserve evidence links and all required risk checks.");
 
 type ProductDefinitionRepository = AnalysisReportRepository &
   KeywordAnalysisSnapshotRepository & DataSnapshotRepository;

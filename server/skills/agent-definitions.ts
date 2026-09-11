@@ -88,7 +88,7 @@ export const agentDefinitions = [
     budget: {
       maxInputTokens: 32_000,
       maxOutputTokens: 10_000,
-      timeoutMs: 120_000,
+      timeoutMs: 300_000,
     },
     dependencies: [
       { kind: "agent", id: "voc-positioning" },
