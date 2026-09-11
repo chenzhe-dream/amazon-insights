@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { AmazonVocInsightOutputSchema } from "../domain/voc/amazon-voc-insight-contracts";
 import { VocPositioningOutputShapeSchema } from "../domain/voc/voc-positioning-contracts";
 import type { VocDeterministicPreprocessingResult } from "../domain/voc/preprocess-voc-snapshot";
@@ -21,7 +22,7 @@ export function hydrateVocOutput(candidate:unknown,facts:VocDeterministicPreproc
  if(!parsed.success)return candidate;
  const value=parsed.data,p=value.positioningProjection;
  const themes=new Map(facts.dimensions.flatMap(d=>d.themes.map(theme=>[JSON.stringify([d.key,theme.key]),theme] as const)));
- const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new Error("Unknown VOC theme reference");return theme;};
+ const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new z.ZodError([{code:"custom",path:["positioningProjection","themeRefs"],message:`Unknown VOC theme reference: ${ref.dimension}/${ref.themeKey}. Use only dimension/key pairs from the input facts.`}]);return theme;};
  const references=<T extends {themeRefs:{dimension:string;themeKey:string}[]}>(row:T)=>({...row,evidenceIds:[...new Set(row.themeRefs.flatMap(ref=>find(ref).evidenceIds))]});
  return {...value,positioningProjection:{...p,
   identity:{snapshotId:facts.snapshot.id,contentHash:facts.snapshot.contentHash,factsDigest:facts.factsDigest,dataCutoffAt:facts.snapshot.dataCutoffAt},

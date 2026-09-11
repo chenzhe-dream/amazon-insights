@@ -16,6 +16,8 @@ import {
 } from "./model-provider";
 
 export interface OpenAIProviderOptions {
+  /** Only for runners that validate and repair before publishing. */
+  deferOutputValidation?: boolean;
   schemaPromptMode?: "native" | "duplicated";
   apiKey?: string;
   organizationId?: string;
@@ -352,6 +354,7 @@ function parseStructuredOutput<T>(
   outputText: string,
   request: StructuredGenerationRequest<T>,
   usage: ModelProviderUsage,
+  deferOutputValidation = false,
 ) {
   let outputValue: unknown;
   try {
@@ -366,6 +369,7 @@ function parseStructuredOutput<T>(
       },
     );
   }
+  if (deferOutputValidation) return { value: outputValue as T, ...usage };
   const normalized = request.canonicalizeOutput
     ? request.canonicalizeOutput(outputValue)
     : outputValue;
@@ -399,6 +403,7 @@ function createRelayJsonSchemaInstruction(
 }
 
 export class OpenAIProvider implements ModelProvider {
+  private readonly deferOutputValidation: boolean;
   private readonly schemaPromptMode: "native" | "duplicated";
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
@@ -407,6 +412,7 @@ export class OpenAIProvider implements ModelProvider {
   private readonly resourceGovernor: ResourceGovernor | undefined;
 
   constructor(options: OpenAIProviderOptions) {
+    this.deferOutputValidation = options.deferOutputValidation ?? false;
     this.schemaPromptMode = options.schemaPromptMode ?? "duplicated";
     this.transport = options.transport ?? "responses-strict";
     this.organizationId = options.organizationId;
@@ -472,7 +478,7 @@ export class OpenAIProvider implements ModelProvider {
         ));
         const usage = validatedChatUsage(completion);
         const outputText = extractCompletedChatOutputText(completion, usage);
-        return parseStructuredOutput(outputText, request, usage);
+        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation);
       }
       const response = await this.runGovernedModelAttempt(request, () =>
         this.client.responses.create(
@@ -514,7 +520,7 @@ export class OpenAIProvider implements ModelProvider {
         );
       }
       const outputText = extractCompletedOutputText(response.output, usage);
-      return parseStructuredOutput(outputText, request, usage);
+      return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation);
     } catch (error) {
       throw classifyOpenAIError(error);
     }

@@ -1,3 +1,4 @@
+import { OpenAIProvider } from "../../server/runtime/openai-provider";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -2513,4 +2514,23 @@ test("compact VOC output restores snapshot facts without changing model judgment
  const provider=new FakeVocProvider(compact);const service=await serviceHarness(repository,provider);
  const result=await service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));assert.equal(result.report.status,'complete');assert.equal(provider.requests.length,1);assert.equal('evidenceIndex' in (provider.requests[0]!.input as object),false);assert.deepEqual((result.report.result as {insight:unknown}).insight,valid.insight);
  const stored=(result.report.result as {positioningProjection:typeof valid.positioningProjection}).positioningProjection;assert.deepEqual(stored.identity,valid.positioningProjection.identity);assert.deepEqual(stored.themeJudgments,valid.positioningProjection.themeJudgments);
+});
+
+test("real relay adapter allows the runner to apply bounded strategy repair",async t=>{
+ const temporary=temporaryDatabase();const repository=openSqliteAgentRepository({path:temporary.path,busyTimeoutMs:5000,nowProvider:()=>new Date("2026-08-16T00:00:03.000Z")});t.after(()=>{repository.close();rmSync(temporary.directory,{recursive:true,force:true});});
+ const subject=await seedExecution(repository,SCOOTER_ASINS);const valid=validAmazonVocInsightOutput(subject.facts);const invalid=structuredClone(valid);invalid.positioningProjection.positioning[0]!.strategy='differentiate';
+ const names:string[]=[];
+ const provider=new OpenAIProvider({transport:'relay-chat-json',deferOutputValidation:true,client:{chat:{completions:{create:async(body:{response_format:{json_schema:{name:string}}})=>{names.push(body.response_format.json_schema.name);return {id:`real-adapter-${names.length}`,choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(names.length===1?invalid:{schemaVersion:'1.0.0',kind:'voc-strategy-repair',changes:[{index:0,strategy:valid.positioningProjection.positioning[0]!.strategy}]})}}],usage:{prompt_tokens:500,completion_tokens:250,total_tokens:750}};}}}} as never});
+ const service=await serviceHarness(repository,provider);const result=await service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));assert.equal(result.report.status,'complete');assert.deepEqual(names,['AmazonVocInsightOutput_1_0_0','AmazonVocStrategyRepair_1_0_0']);
+});
+
+test("real relay adapter repairs unknown compact references without infrastructure failure",async t=>{
+ const temporary=temporaryDatabase();const repository=openSqliteAgentRepository({path:temporary.path,busyTimeoutMs:5000,nowProvider:()=>new Date("2026-08-16T00:00:03.000Z")});t.after(()=>{repository.close();rmSync(temporary.directory,{recursive:true,force:true});});
+ const subject=await seedExecution(repository,SCOOTER_ASINS);const valid=validAmazonVocInsightOutput(subject.facts);const invalid=structuredClone(valid);const compact=JSON.parse(JSON.stringify(invalid));const p=compact.positioningProjection;delete p.identity;delete p.coverage;
+ for(const j of p.themeJudgments){delete j.metrics;delete j.evidenceIds;delete j.label;delete j.priority;}
+ for(const row of [p.coreConclusion,...p.positioning,...p.actions,...p.nextValidations,...Object.values(p.checklists).flat()])delete (row as {evidenceIds?:unknown}).evidenceIds;
+ p.coreConclusion.themeRefs[0].themeKey='nonexistent-reference';
+ const names:string[]=[];
+ const provider=new OpenAIProvider({transport:'relay-chat-json',deferOutputValidation:true,client:{chat:{completions:{create:async(body:{response_format:{json_schema:{name:string}}})=>{names.push(body.response_format.json_schema.name);return {id:`real-adapter-${names.length}`,choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(names.length===1?compact:valid)}}],usage:{prompt_tokens:500,completion_tokens:250,total_tokens:750}};}}}} as never});
+ const service=await serviceHarness(repository,provider);const result=await service.execute({snapshotId:subject.snapshotId,facts:subject.facts,model:modelConfig()},executionContext(subject));assert.equal(result.report.status,'complete');assert.deepEqual(names,['AmazonVocInsightOutput_1_0_0','AmazonVocInsightOutput_1_0_0']);
 });

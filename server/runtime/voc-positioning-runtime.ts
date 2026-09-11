@@ -62,6 +62,7 @@ export async function createVocPositioningRuntime(
   const provider = options.provider ??
     providerFactory({
       schemaPromptMode: "native",
+      deferOutputValidation: true,
       apiKey: options.config.apiKey,
       transport: options.config.transport,
       baseUrl: options.config.baseUrl,

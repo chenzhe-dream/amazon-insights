@@ -1146,15 +1146,22 @@ export class SkillRunner {
         }
         outputResult = request.outputContract.schema.safeParse(normalized);
       } catch (error) {
-        attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
-        if (activePatch) {
-          throw new SkillRuntimeError(
-            "MODEL_OUTPUT_ERROR",
-            "Model repair patch was invalid or exceeded its authority",
-            { cause: error },
-          );
+        if (!activePatch && error instanceof z.ZodError) {
+          // Canonicalizers may validate references before the full output schema.
+          // Keep these failures in the same bounded repair and usage audit path.
+          normalized = generated.value;
+          outputResult = { success: false, error };
+        } else {
+          attempts.push(auditAttempt(requestIdentity, "settled", "model-output"));
+          if (activePatch) {
+            throw new SkillRuntimeError(
+              "MODEL_OUTPUT_ERROR",
+              "Model repair patch was invalid or exceeded its authority",
+              { cause: error },
+            );
+          }
+          throw error;
         }
-        throw error;
       }
       if (outputResult.success) {
         attempts.push(auditAttempt(requestIdentity, "settled", null));
