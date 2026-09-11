@@ -123,3 +123,14 @@ for (const fallback of [false, true]) test(`HTTP browser without randomUUID subm
  await page.getByRole("button",{name:fallback?"使用评论兜底分析":"重试手工 VOC 分析",exact:true}).click();
  await page.waitForTimeout(500);assert.deepEqual(errors,[]);assert.equal(writes,1);
 });
+
+test("retry failed definition reuses successful VOC and the same run",async t=>{
+ const page=await browser.newPage();t.after(()=>page.close());const runId="10000000-0000-4000-8000-000000000009";let posts=0,retries=0;
+ const stage=(name:string,status:string)=>({id:runId,runId,stage:name,status,progress:0,attemptCount:1,startedAt:now,completedAt:now,lastError:null,createdAt:now,updatedAt:now});
+ const run={run:{id:runId,projectId,mode:"existing-data",status:"failed",createdBy:organizationId,dataCutoffAt:now,createdAt:now,updatedAt:now},stages:[stage("voc-positioning","succeeded"),stage("product-definition","failed")],evidenceSelection:manualInventory().manual};
+ await page.route("**/api/agent/**",async route=>{const req=route.request(),url=req.url();if(req.method()==="POST"&&url.endsWith("/product-definition/retry")){retries++;run.stages[1].status="queued";return route.fulfill({json:{}});}if(url.includes("voc-automation")){if(req.method()==="POST")posts++;return route.fulfill({json:automation(retries?"definition-running":"failed",runId)});}return route.fulfill({json:url.includes("voc-inputs")?manualInventory():url.endsWith("reports")?{reports:[]}:run});});
+ await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html?vocRun=${runId}`);
+ await page.getByRole("button",{name:"重试新品定义（复用 VOC）",exact:true}).click({timeout:5000});
+ await page.getByTestId("automation-status").filter({hasText:"新品定义生成中"}).waitFor({timeout:5000});
+ assert.equal(retries,1);assert.equal(posts,1);assert.equal(new URL(page.url()).searchParams.get("vocRun"),runId);
+});

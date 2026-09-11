@@ -1,5 +1,6 @@
 "use client";
 import "./voc-evidence-definition.css";
+import { retryVocStage } from "./lib/voc-run-browser";
 import type { VocAutomationStatus } from "../shared/voc-automation-contracts";
 import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -83,6 +84,15 @@ export function VocEvidenceDefinition(props: Props) {
     if (!enabled || registration.current) return;
     const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
     try {
+      const observed = observedRunRef.current?.owner === owner ? observedRunRef.current.value : null;
+      if (retry && observed && observed.run.id === runRef.current.id &&
+          observed.stages.some(stage => stage.stage === "voc-positioning" && stage.status === "succeeded") &&
+          observed.stages.some(stage => stage.stage === "product-definition" && stage.status === "failed")) {
+        await retryVocStage(observed.run.id, "product-definition", props.fetchImpl);
+        if (controller.signal.aborted || liveOwner.current !== owner) return;
+        setObservationRefresh(value => value + 1); setAutomationRefresh(value => value + 1);
+        return;
+      }
       if (retry && !retryKeys.current.has(owner)) retryKeys.current.set(owner, requestUuid());
       const value = await registerVocAutomation(props.projectId!, {baseSyncRunId:props.baseSyncRunId!, selectedAsins:selectedKey.split(","), ...(retryKeys.current.has(owner) ? {retryKey:retryKeys.current.get(owner)!} : {})}, controller.signal, props.fetchImpl);
       if (controller.signal.aborted || liveOwner.current !== owner) return;
@@ -205,7 +215,7 @@ export function VocEvidenceDefinition(props: Props) {
       {!enabled ? <p>请在已同步的美国站项目中选择至少一个 ASIN。</p> : null}
       <div className="voc-actions">
       {errorState?.owner === owner && (errorState.phase === "read" || errorState.phase === "automation-read") ? <button onClick={() => { setError(null); setObservationRefresh(value => value + 1); setAutomationRefresh(value => value + 1); }}>重试读取分析状态</button> :
-        automation?.state === "failed" ? <button disabled={busyOwner === owner} onClick={() => void register(true)}>重试手工 VOC 分析</button> : errorState?.owner === owner && errorState.phase === "register" ? <button disabled={busyOwner === owner} onClick={() => void register()}>重试登记自动分析</button> : null}
+        automation?.state === "failed" ? <button disabled={busyOwner === owner} onClick={() => void register(true)}>{observation?.stages.some(stage => stage.stage === "voc-positioning" && stage.status === "succeeded") && observation?.stages.some(stage => stage.stage === "product-definition" && stage.status === "failed") ? "重试新品定义（复用 VOC）" : "重试手工 VOC 分析"}</button> : errorState?.owner === owner && errorState.phase === "register" ? <button disabled={busyOwner === owner} onClick={() => void register()}>重试登记自动分析</button> : null}
       {errorState?.owner === owner && errorState.phase === "inventory" ? <button onClick={() => {setError(null);setRefresh(value=>value+1);}}>重试读取输入</button> : null}
       <button disabled={!inventory?.fallback.coverage.some(row => row.review) || busyOwner === owner || activeRun || ["queued","voc-running","definition-running"].includes(automation?.state ?? "")} onClick={() => inventory && void start(inventory.fallback)}>{failedFallback ? "重试评论兜底分析" : "使用评论兜底分析"}</button>
       </div>
