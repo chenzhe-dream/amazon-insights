@@ -1,6 +1,6 @@
 "use client";
 import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { VocEvidenceInventory, VocEvidenceManifest } from "../shared/voc-evidence-contracts";
 import type { ProductLaunchRuntimeSources, LaunchProductInput } from "./product-launch-analysis";
 import { ProductDefinitionSection, type SavedProductDefinitionReport } from "./product-definition-section";
@@ -9,20 +9,24 @@ import { readEvidenceInventory, readEvidenceRun, submitEvidenceRun, type Evidenc
 type Props = { projectId: string | null; baseSyncRunId: string | null; sessionKey: string; organizationId: string; marketplace: string; asins: string[]; initialSelectedAsins?: string[]; products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; initialRunId: string | null; initialHistoryRunId?: string | null; refreshToken: string; enabled: boolean; onRunStarted?: (runId: string, selectedAsins: string[], previousRunId: string | null) => void; fetchImpl?: EvidenceFetch };
 type Observation = Awaited<ReturnType<typeof readEvidenceRun>>;
 export function VocEvidenceDefinition(props: Props) {
+  const { onRunStarted } = props;
   const [selected, setSelected] = useState(props.initialSelectedAsins?.filter(asin => props.asins.includes(asin)) ?? props.asins);
   const selectedKey = [...selected].sort().join(",");
-  const owner = `${props.sessionKey}:${props.projectId}:${props.baseSyncRunId}:${props.marketplace}:${selectedKey}:${props.enabled}`;
+  const owner = `${props.organizationId}:${props.sessionKey}:${props.projectId}:${props.baseSyncRunId}:${props.marketplace}:${selectedKey}:${props.enabled}`;
   const liveOwner = useRef(owner);
   useLayoutEffect(() => { liveOwner.current = owner; }, [owner]);
   const [inventoryState, setInventory] = useState<{ owner: string; value: VocEvidenceInventory } | null>(null);
   const [runState, setRun] = useState<{ owner: string; id: string | null }>({ owner, id: props.initialRunId });
   const [observationState, setObservation] = useState<{ owner: string; value: Observation } | null>(null);
   const [history, setHistory] = useState<{ owner: string; report: Observation["reports"][number] } | null>(null);
-  const [errorState, setError] = useState<{ owner: string; message: string } | null>(null);
+  const [errorState, setError] = useState<{ owner: string; phase: "inventory" | "read" | "submit"; message: string } | null>(null);
   const [busyOwner, setBusy] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [observationRefresh, setObservationRefresh] = useState(0);
   const submitting = useRef<AbortController | null>(null);
   const requestKeys = useRef(new Map<string, string>());
+  const automaticAttempts = useRef(new Set<string>());
+  useLayoutEffect(() => { automaticAttempts.current.clear(); }, [owner]);
   const inventoryOwner = `${owner}:${props.refreshToken}:${refresh}`;
   const inventory = inventoryState?.owner === inventoryOwner ? inventoryState.value : null;
   const observation = observationState?.owner === owner ? observationState.value : null;
@@ -36,7 +40,7 @@ export function VocEvidenceDefinition(props: Props) {
         if (controller.signal.aborted || liveOwner.current !== owner) return;
         if ([value.manual, value.fallback].some(manifest => manifest.organizationId !== props.organizationId || manifest.projectId !== props.projectId || manifest.baseSyncRunId !== props.baseSyncRunId || [...manifest.selectedAsins].sort().join(",") !== selectedKey)) throw new Error("输入清单范围不匹配");
         setInventory({ owner: inventoryOwner, value });
-      }).catch(error => { if (!controller.signal.aborted && liveOwner.current === owner) { setInventory(null); setError({ owner, message: error instanceof Error ? error.message : "读取输入失败" }); } });
+      }).catch(error => { if (!controller.signal.aborted && liveOwner.current === owner) { setInventory(null); setError({ owner, phase: "inventory", message: error instanceof Error ? error.message : "读取输入失败" }); } });
     return () => controller.abort();
   }, [owner, inventoryOwner, enabled, props.projectId, props.baseSyncRunId, props.organizationId, props.fetchImpl, selectedKey]); // selected is represented by selectedKey
   useEffect(() => {
@@ -53,10 +57,10 @@ export function VocEvidenceDefinition(props: Props) {
         const saved = value.reports.find(report => report.stage === "product-definition");
         if (saved) setHistory({ owner, report: saved });
         if (value.stages.some(stage => (stage.stage === "voc-positioning" || stage.stage === "product-definition") && (stage.status === "queued" || stage.status === "running"))) timer = setTimeout(poll, 1000);
-      } catch (error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({ owner, message: error instanceof Error ? error.message : "读取报告失败" }); }
+      } catch (error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({ owner, phase: "read", message: error instanceof Error ? error.message : "读取报告失败" }); }
     };
     void poll(); return () => { controller.abort(); if (timer) clearTimeout(timer); };
-  }, [owner, enabled, runId, props.projectId, props.fetchImpl]);
+  }, [owner, enabled, runId, observationRefresh, props.projectId, props.fetchImpl]);
   useEffect(() => {
     if (!enabled || !props.initialHistoryRunId || props.initialHistoryRunId === runId) return;
     const controller = new AbortController();
@@ -66,20 +70,35 @@ export function VocEvidenceDefinition(props: Props) {
     }).catch(() => {});
     return () => controller.abort();
   }, [enabled, owner, props.initialHistoryRunId, props.projectId, props.fetchImpl, runId]);
-  const start = async (manifest: VocEvidenceManifest) => {
+  const start = useCallback(async (manifest: VocEvidenceManifest, automatic = false) => {
     if (!enabled || submitting.current) return;
     const controller = new AbortController(); submitting.current = controller; setBusy(owner); setError(null);
     const key = `${owner}:${manifest.fingerprint}`;
-    if (!requestKeys.current.has(key)) requestKeys.current.set(key, crypto.randomUUID());
+    if (!requestKeys.current.has(key)) requestKeys.current.set(key, automatic ? `manual-voc-auto-v1:${manifest.fingerprint}` : crypto.randomUUID());
     try {
       const result = await submitEvidenceRun(props.projectId!, { baseSyncRunId: props.baseSyncRunId!, selectedAsins: selected, sourcePolicy: manifest.sourcePolicy, expectedInputFingerprint: manifest.fingerprint }, requestKeys.current.get(key)!, controller.signal, props.fetchImpl);
       if (controller.signal.aborted || liveOwner.current !== owner) return;
       if (result.run.projectId !== props.projectId || result.stages.some(stage => stage.runId !== result.run.id)) throw new Error("分析提交范围不匹配");
-      setObservation(null); setRun({ owner, id: result.run.id }); props.onRunStarted?.(result.run.id, selected, runId); requestKeys.current.delete(key);
+      setObservation(null); setRun({ owner, id: result.run.id }); setObservationRefresh(value => value + 1); onRunStarted?.(result.run.id, selected, runId); requestKeys.current.delete(key);
     } catch (error) {
-      if (!controller.signal.aborted && liveOwner.current === owner) { setError({ owner, message: error instanceof Error ? error.message : "分析提交失败" }); setRefresh(value => value + 1); }
+      if (!controller.signal.aborted && liveOwner.current === owner) { setError({ owner, phase: "submit", message: error instanceof Error ? error.message : "分析提交失败" }); setRefresh(value => value + 1); }
     } finally { if (submitting.current === controller) submitting.current = null; if (liveOwner.current === owner) setBusy(null); }
-  };
+  }, [enabled, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, onRunStarted, selected, runId]);
+  const manualReady = !!inventory && inventory.manual.coverage.length === selected.length &&
+    inventory.manual.coverage.every(row => row.primary === "manual" && !!row.manual);
+  const activeRun = !!observation && (['queued', 'running'].includes(observation.run.status) ||
+    observation.stages.some(stage => ['queued', 'running'].includes(stage.status)));
+  const failedAnalysis = observation?.run.status === "failed" || observation?.stages.some(stage =>
+    (stage.stage === "voc-positioning" || stage.stage === "product-definition") && stage.status === "failed");
+  useEffect(() => {
+    if (!enabled || !manualReady || !inventory || submitting.current || activeRun || (runId && !observation)) return;
+    const manifest = inventory.manual;
+    if (observation?.evidenceSelection?.fingerprint === manifest.fingerprint) return;
+    const attempt = `${owner}:${manifest.fingerprint}`;
+    if (automaticAttempts.current.has(attempt)) return;
+    automaticAttempts.current.add(attempt);
+    void start(manifest, true);
+  }, [enabled, manualReady, inventory, activeRun, runId, observation, owner, start]);
   const report = observation?.reports.find(item => item.stage === "product-definition") ?? (history?.owner === owner ? history.report : null);
   const parsedResult = ProductDefinitionOutputSchema.safeParse(report?.result);
   const result = parsedResult.success ? parsedResult.data : undefined;
@@ -101,7 +120,9 @@ export function VocEvidenceDefinition(props: Props) {
       <p data-testid="evidence-source">{sourceLabel}</p>
       {inventory?.fallback.coverage.map(row => <p key={row.asin}>{row.asin}：{row.primary === "manual" ? "手工主来源" : row.primary === "review" ? "可用评论兜底" : "缺少 VOC"}；缺失维度 {row.missingDimensions.length || "无"}</p>)}
       {!enabled ? <p>请在已同步的美国站项目中选择至少一个 ASIN。</p> : null}
-      <button disabled={!inventory?.manual.coverage.some(row => row.primary === "manual") || busyOwner === owner} onClick={() => inventory && void start(inventory.manual)}>{report ? "更新手工 VOC 分析" : "开始手工 VOC 分析"}</button>{" "}
+      <p>{manualReady ? (activeRun ? "正在分析；输入更新后将自动重新分析。" : "手工 VOC 已就绪，将自动分析；相同输入复用已有任务。") : "等待所选 ASIN 的手工 VOC 输入完成，完成后自动分析。"}</p>
+      {errorState?.owner === owner && errorState.phase === "read" ? <button onClick={() => { setError(null); setObservationRefresh(value => value + 1); }}>重试读取分析状态</button> :
+        (errorState?.owner === owner || failedAnalysis) && manualReady ? <button disabled={busyOwner === owner || activeRun} onClick={() => inventory && void start(inventory.manual, errorState?.owner === owner)}>重试手工 VOC 分析</button> : null}
       <button disabled={!inventory?.fallback.coverage.some(row => row.review) || busyOwner === owner} onClick={() => inventory && void start(inventory.fallback)}>使用评论兜底分析</button>
       {busyOwner === owner ? <p>正在提交分析…</p> : null}
       {errorState?.owner === owner ? <p role="alert">{errorState.message}</p> : null}
@@ -109,7 +130,7 @@ export function VocEvidenceDefinition(props: Props) {
       {observation?.reports.some(item => item.stage === "voc-positioning") && source?.keywords.state !== "ready" ? <p>VOC 报告已保存；{source ? keywordLabels[source.keywords.state] : "关键词未获取"}，暂停联合判断。</p> : null}
       {observation?.reports.filter(item => item.stage === "voc-positioning").slice(0, 1).map(item => <details key={item.id}><summary>查看已保存的 VOC 分析（版本 {item.version}）</summary><SavedVocSummary result={item.result} /></details>)}
     </section>
-    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner ? "failed" : stage?.status ?? "waiting-input"} />
+    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner ? "failed" : busyOwner === owner ? "queued" : stage?.status ?? (manualReady ? "input-ready" : "waiting-input")} />
   </div>;
 }
 
