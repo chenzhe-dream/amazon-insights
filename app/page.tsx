@@ -3719,7 +3719,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             params.set("vocRun", runId);
             if (previousRunId) params.set("vocHistory", previousRunId);
             params.set("vocAsins", selectedAsins.join(","));
-            replaceAppUrl(params);
+            replaceAppUrl(params, window.location.pathname);
           }}
         />
       </div>}
