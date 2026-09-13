@@ -1,0 +1,27 @@
+'use client';
+import {useState} from 'react';
+import type {MarketKeywordFacts} from '../shared/market-keyword-public-contracts';
+import type {MarketKeywordRevisionRequest} from '../shared/market-keyword-revision-contracts';
+export const keywordDimensions=['W1','W2','W3','W4'] as const;
+export const keywordDimensionNames={W1:'产品',W2:'人群',W3:'场景',W4:'功能属性'};
+export function MarketKeywordEditor({facts,draft,onChange,disabled}:{facts:MarketKeywordFacts;draft:MarketKeywordRevisionRequest;onChange:(next:MarketKeywordRevisionRequest)=>void;disabled:boolean}){
+ const [page,setPage]=useState(0),[filter,setFilter]=useState('');
+ const members=facts.members.filter(m=>m.keyword.toLowerCase().includes(filter.toLowerCase())),pages=Math.max(1,Math.ceil(members.length/20));
+ const currentPage=Math.min(page,pages-1),shown=members.slice(currentPage*20,currentPage*20+20);
+ function removeLabel(d:typeof keywordDimensions[number],id:string){onChange({...draft,labels:{...draft.labels,[d]:draft.labels[d].filter(l=>l.labelId!==id)},assignments:draft.assignments.map(a=>({...a,[d]:a[d].filter(v=>v!==id)}))});}
+ return <fieldset className="market-keyword-editor" disabled={disabled}><legend>人工分类与需求簇</legend>
+  <p className="market-research-note">每词每维度最多选择 3 项；未选择表示待分类。模型建议需人工判断，不会自动覆盖这里的选择。删除标签或需求簇会清除草稿中相应归属，保存后才形成新版本。</p>
+  <details><summary>编辑分类目录与需求簇</summary><div className="market-keyword-catalogs">
+   {keywordDimensions.map(d=><section key={d}><h4>{d} {keywordDimensionNames[d]}</h4>{draft.labels[d].map((l,i)=><div className="market-keyword-catalog-row" key={l.labelId}>
+    <input aria-label={`${d} 标签 ${i+1} 名称`} value={l.label} maxLength={240} onChange={e=>onChange({...draft,labels:{...draft.labels,[d]:draft.labels[d].map(v=>v.labelId===l.labelId?{...v,label:e.target.value}:v)}})}/>
+    <input aria-label={`${d} 标签 ${i+1} 判断依据`} value={l.definition} maxLength={4000} onChange={e=>onChange({...draft,labels:{...draft.labels,[d]:draft.labels[d].map(v=>v.labelId===l.labelId?{...v,definition:e.target.value}:v)}})}/>
+    <button type="button" className="ghost-btn" onClick={()=>removeLabel(d,l.labelId)}>删除</button></div>)}
+    <button type="button" className="ghost-btn" disabled={draft.labels[d].length>=48} onClick={()=>onChange({...draft,labels:{...draft.labels,[d]:[...draft.labels[d],{labelId:crypto.randomUUID(),label:'',definition:''}]}})}>添加{keywordDimensionNames[d]}标签</button></section>)}
+   <section><h4>需求簇</h4>{draft.clusters.map((c,i)=><div key={c.clusterId} className="market-keyword-catalog-row"><input aria-label={`需求簇 ${i+1} 名称`} maxLength={240} value={c.label} onChange={e=>onChange({...draft,clusters:draft.clusters.map(v=>v.clusterId===c.clusterId?{...v,label:e.target.value}:v)})}/><input aria-label={`需求簇 ${i+1} 判断依据`} value={c.definition} maxLength={4000} onChange={e=>onChange({...draft,clusters:draft.clusters.map(v=>v.clusterId===c.clusterId?{...v,definition:e.target.value}:v)})}/><button type="button" className="ghost-btn" onClick={()=>onChange({...draft,clusters:draft.clusters.filter(v=>v.clusterId!==c.clusterId),assignments:draft.assignments.map(a=>a.clusterId===c.clusterId?{...a,clusterId:null}:a)})}>删除</button></div>)}<button type="button" className="ghost-btn" disabled={draft.clusters.length>=2000} onClick={()=>onChange({...draft,clusters:[...draft.clusters,{clusterId:crypto.randomUUID(),label:'',definition:''}]})}>添加需求簇</button></section>
+  </div></details>
+  <div className="market-theme-actions"><label>查找待分类关键词 <input value={filter} onChange={e=>{setFilter(e.target.value);setPage(0);}}/></label><span>显示 {members.length} / 全池 {facts.members.length} 个词；保存始终覆盖全部词。</span></div>
+  <div className="market-overview-distribution-table"><table><thead><tr><th>关键词</th>{keywordDimensions.map(d=><th key={d}>{d} {keywordDimensionNames[d]}</th>)}<th>需求簇</th></tr></thead><tbody>{shown.map(m=>{const assignment=draft.assignments.find(a=>a.keywordId===m.keywordId)!;return <tr key={m.keywordId}><th>{m.keyword}</th>{keywordDimensions.map(d=><td key={d}><select multiple size={3} aria-label={`${m.keyword} ${d} ${keywordDimensionNames[d]}`} value={assignment[d]} onChange={e=>{const selected=Array.from(e.target.selectedOptions).map(o=>o.value);if(selected.length<=3)onChange({...draft,assignments:draft.assignments.map(a=>a.keywordId===m.keywordId?{...a,[d]:selected}:a)});}}>{draft.labels[d].map(l=><option key={l.labelId} value={l.labelId}>{l.label||'未命名标签'}</option>)}</select><button type="button" className="ghost-btn" onClick={()=>onChange({...draft,assignments:draft.assignments.map(a=>a.keywordId===m.keywordId?{...a,[d]:[]}:a)})}>清空</button></td>)}<td><select aria-label={`${m.keyword} 需求簇`} value={assignment.clusterId??''} onChange={e=>onChange({...draft,assignments:draft.assignments.map(a=>a.keywordId===m.keywordId?{...a,clusterId:e.target.value||null}:a)})}><option value="">未分组</option>{draft.clusters.map(c=><option key={c.clusterId} value={c.clusterId}>{c.label||'未命名需求簇'}</option>)}</select></td></tr>;})}</tbody></table></div>
+  <div className="market-theme-actions"><button type="button" className="ghost-btn" disabled={currentPage===0} onClick={()=>setPage(p=>p-1)}>上一页分类</button><span>{currentPage+1} / {pages}</span><button type="button" className="ghost-btn" disabled={currentPage+1>=pages} onClick={()=>setPage(p=>p+1)}>下一页分类</button></div>
+  <label>修订备注<textarea maxLength={8000} value={draft.note} onChange={e=>onChange({...draft,note:e.target.value})}/></label>
+ </fieldset>;
+}

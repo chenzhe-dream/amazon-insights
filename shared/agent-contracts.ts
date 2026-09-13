@@ -1,3 +1,12 @@
+import {MarketShapeExplanationRunResponseSchema} from './market-shape-explanation-public-contracts';
+import {MarketShapeStartRequestSchema,MarketShapeRevisionRequestSchema} from './market-shape-price-contracts';
+import {MarketShapeRunResponseSchema,MarketShapeRevisionResponseSchema,MarketShapeRevisionIdSchema} from './market-shape-public-contracts';
+import { MarketResearchScopeSchema, MarketResearchJobResponseSchema, MarketResearchListResponseSchema } from "./market-research-contracts";
+import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from './market-theme-detail-contracts';
+import { MarketThemeEvidenceQuerySchema, MarketThemeEvidenceResponseSchema } from './market-theme-evidence-contracts';
+import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema} from './market-overview-report-contracts';
+import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema, MarketThemeStartRequestSchema, MarketThemeRunResponseSchema,
+  MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from './market-module-contracts';
 import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
 import { z } from "zod";
 import { VocAutomationRequestSchema, VocAutomationStatusSchema } from "./voc-automation-contracts";
@@ -1629,6 +1638,27 @@ export type ContractDefinition = Readonly<{
 }>;
 
 export const v1Contracts = [
+  {method:'POST',path:'/v1/market-analysis/studies/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeStartRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/runs/:id/shape-price/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeRevisionRequestSchema,response:MarketShapeRevisionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketShapeRevisionIdSchema}).strict(),response:MarketShapeRevisionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/shape-explanation',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeExplanationRunResponseSchema,error:ApiErrorResponseSchema},
+
+  { method: "POST", path: "/v1/market-research/jobs", request: MarketResearchScopeSchema, response: MarketResearchJobResponseSchema, error: ApiErrorResponseSchema },
+  { method: "GET", path: "/v1/market-research/jobs", response: MarketResearchListResponseSchema, error: ApiErrorResponseSchema },
+  { method: "GET", path: "/v1/market-research/jobs/:id", params: z.object({id:z.string().uuid()}).strict(), response: MarketResearchJobResponseSchema, error: ApiErrorResponseSchema },
+  { method: "POST", path: "/v1/market-research/jobs/:id/retry", params: z.object({id:z.string().uuid()}).strict(), request: z.object({}).strict(), response: MarketResearchJobResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/studies', request: MarketStudyRequestSchema, response: MarketStudyResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/studies/:id', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketStudyResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/studies/:id/customer-themes', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketThemeStartRequestSchema, response: MarketThemeRunResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/studies/:id/overview', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketOverviewStartRequestSchema, response: MarketOverviewRunResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id/overview', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketOverviewRunResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/overview', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), response: MarketOverviewDetailsResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketThemeRunResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/details', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeDetailQuerySchema, response: MarketThemeDetailResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/evidence', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeEvidenceQuerySchema, response: MarketThemeEvidenceResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/runs/:id/retry', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketModuleRetryRequestSchema, response: MarketModuleRetryResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/runs/:id/cancel', params: z.object({ id: MarketModuleIdSchema }).strict(), request: z.object({}).strict(), response: MarketModuleCancelResponseSchema, error: ApiErrorResponseSchema },
   {
     method: "GET",
     path: "/health",
@@ -2164,7 +2194,7 @@ const compiledContracts = v1Contracts.map((contract) => {
     : projectableSyncStagePathPattern;
   const pattern = escapedPath
     .replace(
-      /:(?:projectId|runId|reportId|feedbackId|attachmentId)/g,
+      /:(?:projectId|runId|reportId|feedbackId|attachmentId|attemptId)/g,
       uuidV4PathPattern,
     )
     .replace(":connectorId", "(?:sif|sorftime|sellerSprite)")

@@ -47,6 +47,8 @@ import type { SkillManifest } from "../skills/manifest";
 import type { SkillRegistry } from "../skills/registry";
 import type { StructuredResponseFormat } from "./structured-response-format";
 import { trustedExecutionAbortKind } from "./execution-abort";
+import { MarketExecutionSubjectSchema, MarketModelExecutionAuthoritySchema, type MarketExecutionSubject, type MarketModelExecutionAuthority } from "../../shared/market-execution-subject";
+import type { MarketModelBudgetCoordinator, ReserveMarketModelRequestInput } from "./market-model-budget-coordinator";
 
 const FORBIDDEN_SECRET_KEY =
   /(?:api.?key|authorization|cookie|credential|password|passwd|secret|session|token)/i;
@@ -109,6 +111,7 @@ export interface NamedOutputContract<O> {
   name: string;
   schema: z.ZodType<O>;
   responseSchema?: z.ZodType<unknown>;
+  schemaDefinitions?: Readonly<Record<string, z.ZodType>>;
   canonicalizeOutput?: (candidate: unknown) => unknown;
   repairGuidance?: (
     issues: readonly SafeValidationIssue[],
@@ -265,6 +268,7 @@ export interface PreparedSkillExecution<I, O> {
     name: string;
     schema: z.ZodType<O>;
     responseSchema?: z.ZodType<unknown>;
+    schemaDefinitions?: Readonly<Record<string, z.ZodType>>;
     schemaDigest: string;
     canonicalizeOutput?: (candidate: unknown) => unknown;
     repairGuidance?: (
@@ -314,10 +318,13 @@ interface SkillRunnerDependencies {
   provider: ModelProvider;
   providerName: string;
   budgetCoordinator: SkillModelBudgetCoordinator;
+  marketBudgetCoordinator?: Pick<MarketModelBudgetCoordinator, 'reserve' | 'dispatch' | 'release' | 'settle'>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   logger?: (summary: Readonly<SkillRunLogSummary>) => void;
   validationLogger?: ModelValidationLogger;
+  /** Server-owned admission for the complete physical payload, including format repair. */
+  validateGenerationRequest?: (request: Readonly<StructuredGenerationRequest<unknown>>) => void;
 }
 
 function normalizeKey(value: string) {
@@ -710,6 +717,7 @@ export class SkillRunner {
       responseFormat = createStructuredResponseFormat(
         request.outputContract.responseSchema ?? request.outputContract.schema,
         request.outputContract.name,
+        request.outputContract.schemaDefinitions,
       );
       if (request.outputContract.repairPatch) {
         const patchResponseFormat = createStructuredResponseFormat(
@@ -799,6 +807,9 @@ export class SkillRunner {
       outputContract: Object.freeze({
         name: request.outputContract.name,
         schema: request.outputContract.schema,
+        ...(request.outputContract.schemaDefinitions
+          ? { schemaDefinitions: Object.freeze({ ...request.outputContract.schemaDefinitions }) }
+          : {}),
         ...(request.outputContract.responseSchema
           ? { responseSchema: request.outputContract.responseSchema }
           : {}),
@@ -822,8 +833,8 @@ export class SkillRunner {
 
   async runPrepared<I, O>(
     prepared: PreparedSkillExecution<I, O>,
-    executionContext: SkillExecutionContext,
-    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+    executionContext: SkillExecutionContext | MarketExecutionSubject,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority | MarketModelExecutionAuthority>,
   ): Promise<SkillExecutionResult<O>> {
     if (!this.preparedExecutions.has(prepared)) {
       throw new SkillRuntimeError(
@@ -831,7 +842,7 @@ export class SkillRunner {
         "Prepared Skill execution does not belong to this runner",
       );
     }
-    const parsedExecutionContext = SkillExecutionContextSchema.safeParse(
+    const parsedExecutionContext = z.union([SkillExecutionContextSchema, MarketExecutionSubjectSchema]).safeParse(
       executionContext,
     );
     if (!parsedExecutionContext.success) {
@@ -841,6 +852,23 @@ export class SkillRunner {
         { cause: parsedExecutionContext.error },
       );
     }
+    const context = parsedExecutionContext.data;
+    let marketAuthority: MarketModelExecutionAuthority | null = null;
+    if ('kind' in context) {
+      const parsedAuthority = MarketModelExecutionAuthoritySchema.safeParse(executionAuthority);
+      const coordinator = this.dependencies.marketBudgetCoordinator;
+      if (!parsedAuthority.success || !coordinator ||
+          ['reserve', 'dispatch', 'release', 'settle'].some(method => typeof coordinator[method as keyof typeof coordinator] !== 'function') ||
+          Object.entries(context).some(([key, value]) => parsedAuthority.data[key as keyof MarketExecutionSubject] !== value)) {
+        throw new SkillRuntimeError('CONFIGURATION_ERROR', 'Native market execution authority or budget adapter is invalid');
+      }
+      marketAuthority = parsedAuthority.data;
+      executionAuthority = marketAuthority;
+    } else if (executionAuthority && 'kind' in executionAuthority) {
+      throw new SkillRuntimeError('CONFIGURATION_ERROR', 'Market authority cannot authorize a project execution');
+    }
+    // These are neutral request-accounting keys, not fabricated legacy DB rows.
+    const executionIds = 'kind' in context ? { runId: context.moduleRunId, jobAttemptId: context.attemptId } : context;
     throwIfExecutionAborted(prepared.signal);
     if (prepared.providerName !== this.dependencies.providerName) {
       throw new SkillRuntimeError(
@@ -893,11 +921,11 @@ export class SkillRunner {
       const activeOutputContractName = activePatch?.name ?? request.outputContract.name;
       const activeOutputSchemaDigest = activePatch?.schemaDigest ?? prepared.outputContract.schemaDigest;
       const idempotencyKey = createModelRequestIdempotencyKey({
-        runId: parsedExecutionContext.data.runId,
+        runId: executionIds.runId,
         agentRunId:
           executionAuthority?.agentRunId ??
-          parsedExecutionContext.data.jobAttemptId,
-        jobAttemptId: parsedExecutionContext.data.jobAttemptId,
+          executionIds.jobAttemptId,
+        jobAttemptId: executionIds.jobAttemptId,
         ordinal: requestIdentity.ordinal,
       });
       let requestFingerprint: string;
@@ -924,42 +952,6 @@ export class SkillRunner {
           { cause: error },
         );
       }
-      const reservation = await this.reserveModelRequest({
-        idempotencyKey,
-        requestFingerprint,
-        runId: parsedExecutionContext.data.runId,
-        projectId: parsedExecutionContext.data.projectId,
-        projected,
-        jobAttemptId: parsedExecutionContext.data.jobAttemptId,
-        request: requestIdentity,
-        executionAuthority,
-      });
-      if (request.signal?.aborted) {
-        if (reservation.state === "reserved") {
-          await this.releaseModelRequest(reservation.id, executionAuthority);
-        }
-        throw executionAbortError(request.signal);
-      }
-      try {
-        this.assertPreparedContractIdentity(prepared);
-      } catch (error) {
-        if (reservation.state === "reserved") {
-          await this.releaseModelRequest(reservation.id, executionAuthority);
-        }
-        throw error;
-      }
-      const dispatch = await this.dispatchModelRequest(
-        reservation.id,
-        executionAuthority,
-      );
-      if (!dispatch.transitioned) {
-        throw new SkillRuntimeError(
-          "PROVIDER_ERROR",
-          "Model request was not authorized for dispatch",
-        );
-      }
-
-      attemptCount += 1;
       const generationRequest: StructuredGenerationRequest<unknown> = {
         model: request.model.name,
         instructions: repairAttempted
@@ -987,14 +979,52 @@ export class SkillRunner {
         timeoutMs: activePatch?.selfContained ? Math.min(request.model.timeoutMs, 60_000) : request.model.timeoutMs,
         signal: request.signal,
         governorScope: {
-          organizationId: parsedExecutionContext.data.organizationId,
-          jobId: parsedExecutionContext.data.jobAttemptId,
+          organizationId: context.organizationId,
+          jobId: executionIds.jobAttemptId,
           attemptKind: governorAttemptKind(requestIdentity.kind),
         },
       };
+      this.dependencies.validateGenerationRequest?.(generationRequest);
+
+      const reservation = await this.reserveModelRequest('kind' in context ? {
+        idempotencyKey, requestFingerprint, projected, request: requestIdentity, authority: marketAuthority!,
+      } : {
+        idempotencyKey, requestFingerprint, runId: context.runId, projectId: context.projectId,
+        projected, jobAttemptId: context.jobAttemptId, request: requestIdentity,
+        executionAuthority: executionAuthority as Readonly<ModelBudgetExecutionAuthority> | undefined,
+      });
+      if (request.signal?.aborted) {
+        if (reservation.state === "reserved") {
+          await this.releaseModelRequest(reservation.id, executionAuthority);
+        }
+        throw executionAbortError(request.signal);
+      }
+      try {
+        this.assertPreparedContractIdentity(prepared);
+      } catch (error) {
+        if (reservation.state === "reserved") {
+          await this.releaseModelRequest(reservation.id, executionAuthority);
+        }
+        throw error;
+      }
+      const dispatch = await this.dispatchModelRequest(
+        reservation.id,
+        executionAuthority,
+      );
+      if (!dispatch.transitioned) {
+        throw new SkillRuntimeError(
+          "PROVIDER_ERROR",
+          "Model request was not authorized for dispatch",
+        );
+      }
+
+      attemptCount += 1;
+
 
       try {
-        generated = await this.generateWithTimeout(generationRequest);
+        generated = await this.generateWithTimeout(generationRequest, marketAuthority
+          ? async (usage) => { await this.settleModelUsage(reservation.id, usage, request.model.pricing, marketAuthority); }
+          : undefined);
       } catch (error) {
         if (error instanceof ModelProviderError && error.usage) {
           latestResponseId = error.usage.responseId;
@@ -1124,7 +1154,7 @@ export class SkillRunner {
 
       this.assertPreparedContractIdentity(prepared);
 
-      let outputResult: z.ZodSafeParseResult<O>;
+      let outputResult: z.ZodSafeParseSuccess<O> | z.ZodSafeParseError<unknown>;
       let normalized: unknown;
       try {
         assertSafeTree(generated.value, "output");
@@ -1274,6 +1304,7 @@ export class SkillRunner {
       const currentResponseFormat = createStructuredResponseFormat(
         prepared.outputContract.responseSchema ?? prepared.outputContract.schema,
         prepared.outputContract.name,
+        prepared.outputContract.schemaDefinitions,
       );
       const outputDigest = canonicalJsonSha256(
         currentResponseFormat.format.schema,
@@ -1300,9 +1331,11 @@ export class SkillRunner {
     }
   }
 
-  private async reserveModelRequest(input: ReserveModelRequestInput) {
+  private async reserveModelRequest(input: ReserveModelRequestInput | ReserveMarketModelRequestInput) {
     try {
-      return await this.dependencies.budgetCoordinator.reserve(input);
+      return 'authority' in input
+        ? await this.dependencies.marketBudgetCoordinator!.reserve(input)
+        : await this.dependencies.budgetCoordinator.reserve(input);
     } catch (error) {
       if (error instanceof BudgetExceededError) throw error;
       throw budgetCoordinationError(error);
@@ -1311,9 +1344,12 @@ export class SkillRunner {
 
   private async dispatchModelRequest(
     reservationId: string,
-    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority | MarketModelExecutionAuthority>,
   ) {
     try {
+      if (executionAuthority && 'kind' in executionAuthority) {
+        return await this.dependencies.marketBudgetCoordinator!.dispatch(reservationId, executionAuthority);
+      }
       return await this.dependencies.budgetCoordinator.dispatch(
         reservationId,
         executionAuthority,
@@ -1325,9 +1361,12 @@ export class SkillRunner {
 
   private async releaseModelRequest(
     reservationId: string,
-    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority | MarketModelExecutionAuthority>,
   ) {
     try {
+      if (executionAuthority && 'kind' in executionAuthority) {
+        return await this.dependencies.marketBudgetCoordinator!.release(reservationId, executionAuthority);
+      }
       return await this.dependencies.budgetCoordinator.release(
         reservationId,
         executionAuthority,
@@ -1342,11 +1381,13 @@ export class SkillRunner {
     reservationId: string,
     usage: ModelProviderUsage,
     pricing: ModelExecutionConfig["pricing"],
-    executionAuthority?: Readonly<ModelBudgetExecutionAuthority>,
+    executionAuthority?: Readonly<ModelBudgetExecutionAuthority | MarketModelExecutionAuthority>,
   ) {
     const actual = modelBudgetAmountFromUsage(usage, pricing);
     try {
-      await this.dependencies.budgetCoordinator.settle(
+      if (executionAuthority && 'kind' in executionAuthority) {
+        await this.dependencies.marketBudgetCoordinator!.settle(reservationId, actual, usage.responseId, executionAuthority);
+      } else await this.dependencies.budgetCoordinator.settle(
         reservationId,
         actual,
         usage.responseId,
@@ -1366,6 +1407,7 @@ export class SkillRunner {
 
   private async generateWithTimeout<T>(
     request: StructuredGenerationRequest<T>,
+    settleLateUsage?: (usage: ModelProviderUsage) => Promise<void>,
   ) {
     if (request.signal?.aborted) {
       throw new ModelProviderError("aborted", "Model request was aborted");
@@ -1397,14 +1439,30 @@ export class SkillRunner {
     });
 
     try {
-      return await Promise.race([
-        this.dependencies.provider.generateStructured({
-          ...request,
-          signal: controller.signal,
-        }),
-        timeout,
-        aborted,
-      ]);
+      const operation = this.dependencies.provider.generateStructured({ ...request, signal: controller.signal });
+      if (!settleLateUsage) return await Promise.race([operation, timeout, aborted]);
+      const observed = operation.then(
+        value => ({ kind: "response" as const, value }),
+        error => ({ kind: "error" as const, error: error as unknown }),
+      );
+      let outcome: Awaited<typeof observed>;
+      try {
+        outcome = await Promise.race([observed, timeout, aborted]);
+      } catch (error) {
+        // Native reservations retain their original authority for accounting only.
+        // This continuation cannot validate/publish output or start another request.
+        void observed.then(async late => {
+          const usage = late.kind === "response" ? late.value
+            : late.error instanceof ModelProviderError ? late.error.usage : undefined;
+          if (usage) await settleLateUsage({ responseId: usage.responseId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+        }).catch(() => {
+          // Keep the durable projected charge if accounting is unavailable; never
+          // replace it with zero or overwrite the already returned terminal result.
+        });
+        throw error;
+      }
+      if (outcome.kind === "error") throw outcome.error;
+      return outcome.value;
     } finally {
       if (timer) clearTimeout(timer);
       request.signal?.removeEventListener("abort", onExternalAbort);

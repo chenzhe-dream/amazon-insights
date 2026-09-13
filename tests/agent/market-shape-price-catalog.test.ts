@@ -1,0 +1,98 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { collectMarketProductPool } from '../../server/services/market-product-pool-collector';
+import { createMarketInputSnapshot } from '../../server/domain/market-research/snapshot';
+import { canonicalJsonSha256 as digest } from '../../server/runtime/model-request-accounting';
+import { createMarketShapeRevision, buildMarketShapePriceCatalog } from '../../server/domain/market-research/shape-price-catalog';
+const scope = { organizationId: 'org-a', researchId: 'a9000000-0000-4000-8000-000000000001', marketplace: 'US' as const, nodeIdPath: '1:2:3', fromMonth: '2026-07', toMonth: '2026-08', currency: 'USD' as const };
+const cutoff = '2026-09-12T00:00:00.000Z', asins = ['B000000001', 'B000000002', 'B000000003'];
+const labels = [{ labelId: 'desk', label: '台灯', definition: '人工确认的桌面灯' }, { labelId: 'shelf', label: '层架灯', definition: '人工确认的层架灯' }];
+const rows = () => asins.map((asin, i) => ({ asin, title: 'Synthetic lamp', brand: 'Fixture', price: i ? 15 : 5, totalUnits: i === 0 ? 100 : i === 1 ? 10 : 0, totalRevenue: 0, ranking: i + 1, rating: 4, ratings: 20, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-10' }));
+async function observation(month: string, patch: (p: any) => void = () => { }, selectedAsins?: string[]) {
+    const payload: any = { code: 'OK', marketplace: 'US', nodeIdPath: scope.nodeIdPath, month, currency: 'USD', data: rows() };
+    patch(payload);
+    const result = await collectMarketProductPool({ scope, month, poolSize: selectedAsins?.length ?? 100, newProductMonths: 6, ...(selectedAsins ? { selectedAsins } : {}), jobId: 'synthetic', connector: { id: 'sellerSprite', probe: async () => { throw Error('unused'); }, execute: async () => ({ data: payload, source: { connectorId: 'sellerSprite', operation: 'market_product_concentration', fetchedAt: cutoff, attemptCount: 1 } }) }, now: () => new Date(cutoff) });
+    assert.ok(result.evidence);
+    const source = result.evidence, sourceRef = 'market-source:' + digest(source);
+    const snapshot = createMarketInputSnapshot({ scope, kind: 'products', sourceVersion: 'market-source-handlers/v1', ruleVersion: 'source-normalization/v1', collectedAt: cutoff, expectedRecordIds: selectedAsins ?? result.products.map(p => p.asin), records: result.products.map(product => ({ id: product.asin, scope, data: { collection: 'product-month', month, product, sourceRef } })) });
+    return { month, snapshot, sourceRef, source };
+}
+const revision = (reference: Awaited<ReturnType<typeof observation>>, patch: Record<string, unknown> = {}) => createMarketShapeRevision({ scope, basisSnapshotId: reference.snapshot.snapshotId, selectedAsins: asins, taxonomyVersion: 'synthetic/v1', labels, assignments: [{ asin: asins[0], labelId: 'desk' }, { asin: asins[1], labelId: 'desk' }], authorId: 'synthetic-author', createdAt: cutoff, parentRevisionId: null, ...patch });
+const sources = (...observations: Awaited<ReturnType<typeof observation>>[]) => Object.fromEntries(observations.map(o => [o.sourceRef, o.source]));
+test('source-bound fixed reference prices recompute weighted history and retain the unclassified zero group', async () => {
+    const reference = await observation('2026-08'), history = await observation('2026-07', p => p.data.forEach((r: any) => r.price = 999));
+    const r = revision(reference);
+    const result = await buildMarketShapePriceCatalog({ reference, history: [history], sources: sources(reference, history), revision: r, bands: [{ id: 'low', minInclusive: 0, maxExclusive: 10 }, { id: 'high', minInclusive: 10, maxExclusive: null }], dataCutoffAt: cutoff });
+    assert.equal(result.priceBasis, 'reference-observation');
+    assert.equal(result.historicalPriceStatus, 'not-collected');
+    assert.equal(result.analysis.totals.totalUnits, 220);
+    const desk = result.analysis.shapes.find(s => s.shape === 'desk')!;
+    assert.equal(desk.totals.monthlyUnitsPerLink, 55);
+    assert.equal(desk.bands[0].salesShareWithinShape.value, 200 / 220);
+    assert.equal(result.analysis.shapes.find(s => s.shape === null)!.totals.totalUnits, 0);
+    assert.equal(result.analysis.coverage.status, 'complete');
+    assert.deepEqual(result.monthly.map(m => m.analysis.scope.eligibleAsins), [asins, asins]);
+    assert.deepEqual(result.products.map(p => p.referencePrice.rawValue), [5, 15, 15]);
+    assert.ok(result.products.every(p => p.referencePrice.fetchedAt === cutoff));
+    const before = digest(result), updated = revision(reference, { parentRevisionId: r.revisionId, assignments: [{ asin: asins[0], labelId: 'shelf' }, { asin: asins[1], labelId: null }] });
+    const next = await buildMarketShapePriceCatalog({ reference, history: [history], sources: sources(reference, history), revision: updated, bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff });
+    assert.notEqual(next.catalogId, result.catalogId);
+    assert.equal(next.analysis.shapes.find(s => s.shape === 'shelf')!.totals.totalUnits, 200);
+    assert.equal(digest(result), before);
+});
+test('one row month echo does not validate peers; missing periods retain raw observations but exclude incomparable members', async () => {
+    const reference = await observation('2026-08'), history = await observation('2026-07', p => { delete p.month; p.data[0].month = '202607'; });
+    const result = await buildMarketShapePriceCatalog({ reference, history: [history], sources: sources(reference, history), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff });
+    assert.deepEqual(result.analysis.scope.eligibleAsins, [asins[0]]);
+    assert.ok(result.products[1].observations.some(o => o.rawUnits === 10 && o.units === null && o.issues.includes('period-unconfirmed')));
+    assert.deepEqual(result.monthly.map(m => m.analysis.scope.eligibleAsins), [[asins[0]], [asins[0]]]);
+    assert.equal(result.analysis.coverage.status, 'partial');
+});
+test('row-specific currency is not borrowed by other products and zero does not become missing', async () => {
+    const reference = await observation('2026-08', p => { delete p.currency; p.data[0].currency = 'USD'; p.data[0].price = 0; }), history = await observation('2026-07');
+    const result = await buildMarketShapePriceCatalog({ reference, history: [history], sources: sources(reference, history), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff });
+    assert.deepEqual(result.analysis.scope.eligibleAsins, [asins[0]]);
+    assert.equal(result.products[0].referencePrice.value, 0);
+    assert.equal(result.products[1].referencePrice.value, null);
+    assert.equal(result.products[1].referencePrice.rawValue, 15);
+});
+test('catalog rejects forged numeric projection, foreign selections and duplicate months', async () => {
+    const reference = await observation('2026-08'), history = await observation('2026-07');
+    const input = { reference, history: [history], sources: sources(reference, history), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff };
+    const s = reference.snapshot, records = structuredClone(s.records) as any;
+    records[0].data.product.units = 999999;
+    const forged = createMarketInputSnapshot({ scope: s.scope, kind: s.kind, sourceVersion: s.sourceVersion, ruleVersion: s.ruleVersion, collectedAt: s.collectedAt, expectedRecordIds: s.expectedRecordIds, records });
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, reference: { ...reference, snapshot: forged }, revision: revision({ ...reference, snapshot: forged }) }));
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, history: [history, history] }));
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, revision: revision(reference, { selectedAsins: [asins[0], 'B000000099'], assignments: [] }) }));
+    assert.throws(() => revision(reference, { assignments: [{ asin: asins[0], labelId: 'guessed' }] }));
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, revision: { ...input.revision, authorId: 'forged' } }));
+});
+test('absent history and an empty fixed-member response never produce zero or changing comparison pools', async () => {
+    const reference = await observation('2026-08'), empty = await observation('2026-07', p => { p.data = []; }, asins);
+    const input = { reference, history: [], sources: sources(reference), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff };
+    const absent = await buildMarketShapePriceCatalog(input);
+    assert.equal(absent.analysis.totals.totalUnits, null);
+    assert.deepEqual(absent.analysis.scope.eligibleAsins, []);
+    assert.ok(absent.products.every(p => p.observations[0].issues.includes('not-collected')));
+    const blank = await buildMarketShapePriceCatalog({ ...input, history: [empty], sources: sources(reference, empty) });
+    assert.equal(blank.analysis.coverage.status, 'none');
+    assert.equal(blank.analysis.totals.totalUnits, null);
+    assert.ok(blank.products.every(p => p.observations[0].rawUnits === null && p.observations[0].issues.includes('member-missing')));
+    assert.ok(blank.monthly.every(m => m.analysis.totals.totalUnits === null));
+    const missing = await observation('2026-07', p => { p.data = p.data.slice(0, 1); }, asins);
+    const partial = await buildMarketShapePriceCatalog({ ...input, history: [missing], sources: sources(reference, missing) });
+    assert.deepEqual(partial.monthly.map(m => m.analysis.scope.eligibleAsins), [[asins[0]], [asins[0]]]);
+    assert.equal(partial.analysis.totals.totalUnits, 200);
+});
+test('source units and cutoff cannot be reinterpreted by editing provenance metadata', async () => {
+    const reference = await observation('2026-08'), history = await observation('2026-07');
+    const input = { reference, history: [history], sources: sources(reference, history), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff };
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, dataCutoffAt: '2026-09-11T00:00:00.000Z' }));
+    const forged = structuredClone(reference.source) as any;
+    forged.units.price = { status: 'known', unit: 'currency', currency: 'EUR', rawUnit: 'price' };
+    const sourceRef = 'market-source:' + digest(forged), s = reference.snapshot;
+    const snapshot = createMarketInputSnapshot({ scope: s.scope, kind: s.kind, sourceVersion: s.sourceVersion, ruleVersion: s.ruleVersion, collectedAt: s.collectedAt, expectedRecordIds: s.expectedRecordIds, records: s.records.map(r => ({ ...r, data: { ...(r.data as object), sourceRef } })) });
+    const fake = { ...reference, sourceRef, snapshot };
+    await assert.rejects(buildMarketShapePriceCatalog({ ...input, reference: fake, revision: revision(fake), sources: { ...input.sources, [sourceRef]: forged } }));
+});

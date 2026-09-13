@@ -1,0 +1,14 @@
+{
+  "id": "market-explain-overview",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketOverviewExplanationInput@1.0.0",
+  "outputSchema": "MarketOverviewExplanationOutput@1.0.0",
+  "fixtures": [
+    "market-explain-overview-synthetic-v1"
+  ],
+  "contentHash": "951931ed3705e815630bcb5f554a6821cde581d29d7c995eccd61989da284a44"
+}

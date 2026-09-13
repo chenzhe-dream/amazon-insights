@@ -225,7 +225,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
           `UPDATE model_budget_reservations
               SET state = 'dispatched', lease_expires_at = NULL,
                   dispatched_at = $1, updated_at = $1
-            WHERE id = $2 AND state = 'reserved' AND lease_expires_at > $3
+            WHERE id = $2 AND subject_kind = 'project-analysis' AND state = 'reserved' AND lease_expires_at > $3
             RETURNING *`,
           [input.transitionedAt, input.reservationId, freshNow],
         );
@@ -236,7 +236,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
           `UPDATE model_budget_reservations
               SET state = 'released', lease_expires_at = NULL,
                   released_at = $1, updated_at = $1
-            WHERE id = $2 AND state = 'reserved' AND lease_expires_at <= $3
+            WHERE id = $2 AND subject_kind = 'project-analysis' AND state = 'reserved' AND lease_expires_at <= $3
             RETURNING *`,
           [input.transitionedAt, input.reservationId, freshNow],
         );
@@ -264,7 +264,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
           `UPDATE model_budget_reservations
               SET state = 'released', lease_expires_at = NULL,
                   released_at = $1, updated_at = $1
-            WHERE id = $2 AND state = 'reserved'
+            WHERE id = $2 AND subject_kind = 'project-analysis' AND state = 'reserved'
             RETURNING *`,
           [input.transitionedAt, input.reservationId],
         );
@@ -304,7 +304,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
                   actual_output_tokens = $2, actual_cost_micros = $3,
                   response_id = $4, lease_expires_at = NULL,
                   settled_at = $5, updated_at = $5
-            WHERE id = $6 AND state IN ('reserved', 'dispatched')
+            WHERE id = $6 AND subject_kind = 'project-analysis' AND state IN ('reserved', 'dispatched')
             RETURNING *`,
           [
             input.actual.inputTokens,
@@ -414,8 +414,11 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
     await this.#queries.query(
       `UPDATE model_budget_reservations
           SET state = 'released', lease_expires_at = NULL,
-              released_at = $1, updated_at = $1
-        WHERE state = 'reserved' AND lease_expires_at <= $1`,
+              released_at = CASE WHEN subject_kind='market-module-run' THEN clock_timestamp() ELSE $1 END,
+              updated_at = CASE WHEN subject_kind='market-module-run' THEN clock_timestamp() ELSE $1 END
+        WHERE state = 'reserved' AND
+          ((subject_kind='project-analysis' AND lease_expires_at <= $1)
+           OR (subject_kind='market-module-run' AND lease_expires_at <= clock_timestamp()))`,
       [asOf],
     );
   }
@@ -440,7 +443,7 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
 
   async #findReservationRow(id: string) {
     const result = await this.#queries.query<BudgetRow>(
-      "SELECT * FROM model_budget_reservations WHERE id = $1",
+      "SELECT * FROM model_budget_reservations WHERE id = $1 AND subject_kind = 'project-analysis'",
       [id],
     );
     return result.rows[0] ?? null;

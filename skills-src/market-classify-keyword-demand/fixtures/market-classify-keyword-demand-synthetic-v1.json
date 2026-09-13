@@ -1,0 +1,127 @@
+{
+  "purpose": "Synthetic protocol example; not live provider or held-out model quality evidence.",
+  "input": {
+    "schemaVersion": "1.0.0",
+    "batchId": "11111111-1111-4111-8111-111111111111",
+    "inputDigest": "4547eaee37e082a5c38f6f672784bab57113b3769baf8513ff7aa6de57e3824f",
+    "scopeDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "scope": {
+      "researchId": "22222222-2222-4222-8222-222222222222",
+      "marketplace": "US",
+      "nodeIdPath": "1:2",
+      "fromMonth": "2026-07",
+      "toMonth": "2026-08",
+      "currency": "USD"
+    },
+    "contentSnapshotId": "market-input:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "selectionRevision": "synthetic/v1",
+    "batchKey": "synthetic/1",
+    "dataCutoffAt": "2026-09-01T00:00:00.000Z",
+    "sourceRefs": [
+      "source"
+    ],
+    "task": "market-keyword-semantics",
+    "dictionaryVersion": "synthetic/v1",
+    "categoryContext": "灯具",
+    "dimensionLabels": {
+      "W1": [
+        {
+          "labelId": "lamp",
+          "label": "灯",
+          "definition": "照明灯具"
+        }
+      ],
+      "W2": [],
+      "W3": [
+        {
+          "labelId": "bedroom",
+          "label": "卧室",
+          "definition": "卧室使用场景"
+        }
+      ],
+      "W4": []
+    },
+    "clusterCatalog": [
+      {
+        "clusterId": "bedroom-lamp",
+        "label": "卧室灯",
+        "definition": "卧室照明需求"
+      }
+    ],
+    "keywords": [
+      {
+        "keywordId": "k1",
+        "text": {
+          "refId": "k1-keyword",
+          "sourceRef": "source",
+          "recordId": "k1",
+          "field": "keyword",
+          "text": "lamp for bedroom"
+        }
+      }
+    ]
+  },
+  "output": {
+    "schemaVersion": "1.0.0",
+    "task": "market-keyword-semantics",
+    "batchId": "11111111-1111-4111-8111-111111111111",
+    "inputDigest": "4547eaee37e082a5c38f6f672784bab57113b3769baf8513ff7aa6de57e3824f",
+    "keywords": [
+      {
+        "keywordId": "k1",
+        "W1": {
+          "status": "supported",
+          "labelIds": [
+            "lamp"
+          ],
+          "evidence": [
+            {
+              "refId": "k1-keyword",
+              "start": 0,
+              "end": 4,
+              "quote": "lamp"
+            }
+          ]
+        },
+        "W2": {
+          "status": "unknown",
+          "reason": "insufficient-evidence",
+          "evidence": []
+        },
+        "W3": {
+          "status": "supported",
+          "labelIds": [
+            "bedroom"
+          ],
+          "evidence": [
+            {
+              "refId": "k1-keyword",
+              "start": 9,
+              "end": 16,
+              "quote": "bedroom"
+            }
+          ]
+        },
+        "W4": {
+          "status": "unknown",
+          "reason": "insufficient-evidence",
+          "evidence": []
+        },
+        "cluster": {
+          "status": "existing",
+          "clusterId": "bedroom-lamp",
+          "evidence": [
+            {
+              "refId": "k1-keyword",
+              "start": 0,
+              "end": 16,
+              "quote": "lamp for bedroom"
+            }
+          ]
+        }
+      }
+    ],
+    "proposals": [],
+    "synonymRelations": []
+  }
+}

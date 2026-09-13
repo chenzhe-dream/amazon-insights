@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdir} from 'node:fs/promises';
+import {chromium} from 'playwright';
+import {createServer} from 'vite';
+import react from '@vitejs/plugin-react';
+import {overviewRun,overviewRunId,overviewEntry,overviewDistributionDetails,overviewScope} from './helpers/market-overview-page-fixture';
+test('overview page restores fixed reports, shares selection and isolates late history responses',{timeout:60000},async t=>{
+  const server=await createServer({configFile:false,cacheDir:'test-results/overview-page-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+  const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});const origin=server.resolvedUrls!.local[0].replace(/\/$/,'');
+  const page=await browser.newPage({viewport:{width:1400,height:1000}});page.setDefaultTimeout(7000);let slow=false,release:(()=>void)|undefined,allowStarts=false,failRunOnce=true,failReads=false;let current=overviewRun(false);const studies=new Map<string,Record<string,unknown>>();
+  const writes:Array<{path:string;key:string;body:any}>=[],errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  let mark!:()=>void;const requested=new Promise<void>(r=>{mark=r;});
+  await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();
+    if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body style="margin:20px"><div id="root"></div><script type="module" src="/tests/agent/helpers/market-overview-browser-harness.tsx"></script></body></html>`)});
+    if(!url.pathname.startsWith('/api/'))return route.continue();
+    if(req.method()==='POST'){const key=req.headers()['idempotency-key'],body=req.postDataJSON();writes.push({path:url.pathname,key,body});
+      if(!allowStarts)return route.fulfill({status:503,json:{error:{message:'synthetic temporary failure'}}});
+      if(url.pathname.endsWith('/studies')){studies.set(key,body);return route.fulfill({json:{study:{id:key,scope:{...overviewScope,...body,researchId:key},createdAt:'2026-09-12T00:00:00.000Z'}}});}
+      if(url.pathname.endsWith('/cancel')){current.run.status='cancelled';current.run.steps.forEach(s=>{s.status='cancelled';s.current=false;s.canRetry=false;});current.run.currentReport=null;current.run.history.forEach(e=>{e.current=false;});return route.fulfill({json:{moduleRunId:overviewRunId,cancelled:true}});}
+      if(failRunOnce){failRunOnce=false;return route.fulfill({status:503,json:{error:{message:'synthetic run unavailable'}}});}
+      const study=url.pathname.split('/').at(-2)!;current=overviewRun(true);Object.assign(current.run.scope,studies.get(study),{researchId:study});
+      for(const entry of [...current.run.history,current.run.currentReport!,current.run.latestSavedReport!])entry.report.scope={...current.run.scope};return route.fulfill({json:current});
+    }
+    if(url.pathname.endsWith('/market-research/jobs'))return route.fulfill({json:{jobs:[]}});
+    if(url.pathname.includes('/reports/')){const old=url.pathname.includes(overviewEntry(true).attemptId);if(old&&slow){mark();await new Promise<void>(r=>{release=r;});}const result=overviewDistributionDetails(old);result.entry.report.scope={...current.run.scope};return route.fulfill({json:result});}
+    if(url.pathname.endsWith(`/runs/${overviewRunId}/overview`))return route.fulfill(failReads?{status:503,json:{error:{message:'synthetic read unavailable'}}}:{json:current});
+    return route.fulfill({status:404,json:{}});
+  });
+  await page.goto(`${origin}/?overviewRun=${overviewRunId}`);
+  await page.getByRole('heading',{name:'总览分析与报告',exact:true}).waitFor();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(writes.length,0);
+  await page.getByRole('heading',{name:'分布与需求来源',exact:true}).waitFor();await page.getByText('2026-08 · 价格分布',{exact:false}).click();
+  const price=page.getByRole('region',{name:'2026-08 价格分布明细'});await price.getByText('0-15',{exact:true}).waitFor();assert.equal(await price.getByText('50%',{exact:true}).count(),4);assert.equal(await price.getByText('未知',{exact:true}).count(),2);
+  await page.getByText('2026-08 · 需求趋势',{exact:false}).click();await page.getByText('来源本次未返回需求数据，未生成趋势或填零。',{exact:true}).waitFor();
+  await mkdir('test-results/market-overview-page',{recursive:true});await price.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-overview-page/distribution-desktop.png'});
+  await page.setViewportSize({width:390,height:844});await price.scrollIntoViewIfNeeded();assert.ok(await price.evaluate(el=>el.scrollWidth>el.clientWidth));await page.screenshot({path:'test-results/market-overview-page/distribution-mobile.png'});await page.setViewportSize({width:1400,height:1000});
+  assert.equal(await page.getByLabel('类目节点或路径').inputValue(),overviewScope.nodeIdPath);
+  await page.getByRole('button',{name:'类目买家评论见解',exact:true}).click();assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),overviewScope.nodeIdPath);assert.equal(writes.length,0);
+  await page.getByRole('button',{name:'市场总览',exact:true}).click();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();
+  slow=true;await page.getByLabel('总览报告版本').selectOption(overviewEntry(true).attemptId);await requested;await page.getByLabel('总览报告版本').selectOption('latest');slow=false;release?.();
+  await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(await page.getByRole('region',{name:'已保存总览报告'}).getByText('17',{exact:true}).count(),0);
+  await page.reload();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(writes.length,0);
+  await page.getByLabel('类目节点或路径').fill('999:888');await page.getByText('查询条件已改变').waitFor();assert.equal(writes.length,0);
+  await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByText('synthetic temporary failure').waitFor();assert.equal(writes.length,1);assert.equal(errors.length,0,errors.join('\n'));
+  await mkdir('test-results/market-overview-page',{recursive:true});await page.screenshot({path:'test-results/market-overview-page/report-and-selection.png',fullPage:true});
+  allowStarts=true;await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByText('synthetic run unavailable').waitFor();
+  await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();assert.equal(writes.length,5);
+  assert.equal(new Set(writes.filter(w=>w.path.endsWith('/studies')).map(w=>w.key)).size,1);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,1);
+  assert.equal(writes[0].body.nodeIdPath,'999:888');assert.equal(writes[0].body.fromMonth,'2026-07');assert.equal(writes[0].body.toMonth,'2026-08');
+  failReads=true;await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();await page.getByText('状态读取失败：',{exact:false}).waitFor();assert.equal(await page.getByRole('button',{name:'取消总览分析',exact:true}).isDisabled(),true);
+  failReads=false;await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();
+  await page.getByRole('button',{name:'取消总览分析',exact:true}).click();await page.getByRole('heading',{name:'分析已取消',exact:true}).waitFor();assert.equal(writes.length,6);assert.equal(errors.length,0,errors.join('\n'));
+  failReads=true;await page.reload();await page.getByText('未能读取任务，请刷新状态或检查任务编号。',{exact:true}).waitFor();assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);assert.equal(writes.length,6);
+});

@@ -44,6 +44,8 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // Worktrees may share installed dependencies; cache only in this checkout.
+    cacheDir: ".vinext/vite-cache",
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

@@ -1,3 +1,19 @@
+import { MarketResearchService, MarketResearchWorker } from "./services/market-research-service";
+import { MarketModuleService } from './services/market-module-service';
+import { collectMarketOverview } from "./services/market-overview-collector";
+import { createMarketModelRuntime, type MarketModelRuntime } from './runtime/market-model-runtime';
+import { MarketModuleStepWorker } from './runtime/market-module-step-worker';
+import { createMarketSourceStepHandlers } from './runtime/market-source-step-handlers';
+import {createMarketShapeSelectionStep} from './runtime/market-shape-selection-step';
+import {MARKET_SHAPE_FLOW_VERSION} from './domain/market-research/shape-price-flow';
+import {MARKET_KEYWORD_FLOW_VERSION} from './domain/market-research/keyword-flow';
+import {createMarketKeywordPoolStep} from './runtime/market-keyword-pool-step';
+import {createMarketOverviewCatalogStep} from './runtime/market-overview-catalog-step';
+import {MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION} from './domain/market-research/overview-flow';
+import {createMarketOverviewWindowsStep} from './runtime/market-overview-windows-step';
+import {createMarketOverviewReportStep} from './runtime/market-overview-report-step';
+import { PostgresMarketModuleExecutionStore } from './db/postgres/market-module-execution-store';
+import type { OpenAIProviderOptions } from './runtime/openai-provider';
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import { VocAutomationService } from "./services/voc-automation-service";
 import { TrafficDetailRecoveryService } from './services/traffic-detail-recovery-service';
@@ -56,6 +72,7 @@ import {
 } from "./runtime/alexa-voc-normalization-runtime";
 import { ConnectorProbeService } from "./services/connector-probe-service";
 import { ConnectorCredentialService } from "./services/connector-credential-service";
+import { createScopedConnectorCredentialResolver } from "./services/scoped-connector-credential-resolver";
 import { SyncProviderReadinessService } from "./services/sync-provider-readiness-service";
 import { createConnectorCredentialCipher } from "./security/connector-credential-cipher";
 import { createManualAlexaVocCipher } from "./security/manual-alexa-voc-cipher";
@@ -74,6 +91,7 @@ import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-rete
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
 export interface CreateAgentServiceOptions {
+  marketModelClient?: OpenAIProviderOptions['client'];
   env?: AgentEnvironment;
   repository?: RuntimeAgentRepository;
   provider?: ModelProvider;
@@ -249,14 +267,11 @@ export async function createAgentService(
         ? { fetchImpl: options.connectorFetchImpl }
         : {}),
       ...(resourceGovernor ? { resourceGovernor } : {}),
-      ...(executionCredentialService
-        ? {
-            resolveCredential: async (connectorId, scope) =>
-              (await connectorCredentialServiceResolver(
-                scope?.organizationId ?? executionOrganizationId!,
-              ).resolve(connectorId)).secret,
-          }
-        : {}),
+      resolveCredential: createScopedConnectorCredentialResolver({
+        env,
+        executionOrganizationId,
+        serviceForOrganization: connectorCredentialServiceResolver,
+      }),
     });
     const authLimiter = new BoundedLoginRateLimiter({
       ...authConfig.loginLimiter,
@@ -323,7 +338,46 @@ export async function createAgentService(
           })
         : null;
     const vocAutomationService = new VocAutomationService({repository, disabled: true});
+    const marketResearchService = repository.marketResearch ? new MarketResearchService({
+      repository: repository.marketResearch,
+      findUser: id => repository.findUserById(id),
+      now: options.clock,
+    }) : null;
+    const marketResearchWorker = repository.marketResearch ? new MarketResearchWorker({
+      repository: repository.marketResearch,
+      collect: input => collectMarketOverview({ ...input, connector: connectors.sellerSprite, now: options.clock }),
+      now: options.clock,
+      onError: () => app.log.warn({ component: "market-research" }, "Market research worker iteration failed"),
+    }) : null;
+    let marketModelRuntime: MarketModelRuntime | null = null;
+    let marketModelUnavailable = false;
+    if (repository.marketExecutionContext && resolution.status === 'configured') {
+      try {
+        if (env.AGENT_VOC_LOCAL_FAKE === '1' && !options.marketModelClient) throw new Error('Local fixture mode requires a synthetic market client');
+        marketModelRuntime = await createMarketModelRuntime(repository.marketExecutionContext, resolution.config, {
+          skillsRoot: options.skillsRoot, client: options.marketModelClient, connectors,
+          worker: { onEvent: event => app.log.info({ component: 'market-model', ...event }, 'Market model queue iteration') },
+          stepWorker: { onEvent: event => app.log.info({ component: 'market-step', ...event }, 'Market step queue iteration') },
+        });
+      } catch { marketModelUnavailable = true; }
+    }
+    // Source collection remains usable when model configuration/skills are unavailable.
+    // Exactly one native collection consumer is started, either here or in the combined runtime.
+    const marketCollectionWorker = repository.marketExecutionContext && !marketModelRuntime ? new MarketModuleStepWorker({
+      steps: new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
+      moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords']},flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION],'prepare-members':[MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_SHAPE_FLOW_VERSION],report:[MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION]},
+      handlers: {...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),'prepare-members':input=>(input.claim.step.input as {phase?:unknown})?.phase==='select-shape-members'?createMarketShapeSelectionStep(repository.marketExecutionContext!)(input):createMarketOverviewWindowsStep(repository.marketExecutionContext!,null)(input),report:createMarketOverviewReportStep(repository.marketExecutionContext),'prepare-keyword-pool':createMarketKeywordPoolStep(repository.marketExecutionContext)},
+      onEvent: event => app.log.info({ component: 'market-source', ...event }, 'Market source queue iteration'),
+    }) : null;
     const app = buildAgentApp({
+      marketResearchService,
+      marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
+        modelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.configurationVersion, promptVersion: marketModelRuntime.promptVersion } : null,
+        keywordModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordDiscoveryConfigurationVersion,promptVersion:marketModelRuntime.keywordDiscoveryPromptVersion} : null,
+        keywordReconciliationModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordReconciliationConfigurationVersion,promptVersion:marketModelRuntime.keywordReconciliationPromptVersion} : null,
+        keywordExplicitModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordExplicitConfigurationVersion,promptVersion:marketModelRuntime.keywordExplicitPromptVersion} : null,
+        shapeModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.shapeExplanationConfigurationVersion,promptVersion:marketModelRuntime.shapeExplanationPromptVersion} : null,
+        now: options.clock }) : null,
       vocAutomationService,
       env,
       logger: options.logger,
@@ -352,6 +406,7 @@ export async function createAgentService(
         env,
       }),
     });
+    if (marketModelUnavailable) app.log.warn({ component: 'market-model', status: 'unavailable' }, 'Market model runtime could not initialize');
     let vocRuntime: VocPositioningRuntime | null = null;
     const queueTimeoutMs = loadVocQueueTimeoutMs(env);
     const vocQueueRuntime = new VocQueueDeadlineRuntime({
@@ -381,6 +436,9 @@ export async function createAgentService(
           throw error;
         }
         manualAlexaVocPublicationRuntime?.start();
+        marketResearchWorker?.start();
+        marketModelRuntime?.start();
+        marketCollectionWorker?.start();
         vocQueueRuntime.start();
         manualAlexaVocRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
@@ -509,6 +567,9 @@ export async function createAgentService(
         stopped = true;
         stopPromise = stopAgentServiceResources({
           runtimes: [
+            marketResearchWorker,
+            marketModelRuntime,
+            marketCollectionWorker,
             vocAutomationService,
             vocQueueRuntime,
             syncJobDispatcher,

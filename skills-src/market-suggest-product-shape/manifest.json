@@ -1,0 +1,14 @@
+{
+  "id": "market-suggest-product-shape",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketShapeSuggestionInput@1.0.0",
+  "outputSchema": "MarketShapeSuggestionOutput@1.0.0",
+  "fixtures": [
+    "market-suggest-product-shape-synthetic-v1"
+  ],
+  "contentHash": "5d7f2723916ac9bc9eea2a68abc341ae9212155dcf5d7348d0a7bb7c284c6253"
+}

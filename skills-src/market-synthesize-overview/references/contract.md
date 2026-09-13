@@ -1,0 +1,1 @@
+Table columns; zero-based indexes. Known metrics/units; absent deps=null. Output:p=[{k:t|m|f,v:text|metricIndex|factIndex}],f=factIndexes,g=gapIndexes. No foreign refs/numeric prose. Limitations cover gaps; gaps cannot prove opportunity. Caps12000/4000 tokens;60s request,250s batch,600s stage.

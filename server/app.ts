@@ -20,6 +20,10 @@ import {
 } from "./routes/connectors";
 import { registerConcurrencyAdminRoutes } from "./routes/concurrency-admin";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
+import { registerMarketResearchRoutes } from "./routes/market-research";
+import { registerMarketModuleRoutes } from './routes/market-modules';
+import type { MarketModuleService } from './services/market-module-service';
+import type { MarketResearchService } from "./services/market-research-service";
 import { registerLegacyProjectOwnershipRoutes } from "./routes/legacy-project-ownership";
 import { registerLocalVocRoute } from "./routes/local-voc";
 import {
@@ -89,6 +93,8 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   storageAvailable?: boolean; openaiAvailable?: boolean; openaiCapability?: OpenAiRuntimeCapability;
   repository?: RuntimeAgentRepository;
   vocAutomationService?: VocAutomationService;
+  marketResearchService?: MarketResearchService | null;
+  marketModuleService?: MarketModuleService | null;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
@@ -502,6 +508,8 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }
       : null;
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
+  registerMarketResearchRoutes(app, options.marketResearchService ?? null);
+  registerMarketModuleRoutes(app, options.marketModuleService ?? null);
   registerLegacyProjectOwnershipRoutes(
     app,
     options.repository ?? null,

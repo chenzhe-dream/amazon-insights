@@ -78,7 +78,9 @@ import { AnalysisProjectFavoriteButton } from "./analysis-project-favorite-butto
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
-import { tabFromParam, type TabId } from "./lib/app-tabs";
+import { buildAppTabHref as buildTabHref, tabFromParam, type TabId } from "./lib/app-tabs";
+import { MarketResearchSection } from "./market-research-section";
+import "./market-research.css";
 import {
   buildSavedAnalysisReportView,
   readSavedAnalysisReport,
@@ -262,7 +264,7 @@ const markets = {
   DE: { label: "德国站", short: "DE", option: "Amazon.de｜德国站", domain: "www.amazon.de" },
 } as const;
 type MarketCode = keyof typeof markets;
-type NavGroupId = "overview-group" | "voc-group" | "keywords-group" | "projects-group";
+type NavGroupId = "market-group" | "overview-group" | "voc-group" | "keywords-group" | "projects-group";
 
 const savedReportStageLabels = {
   "traffic-analysis": "流量分析",
@@ -309,6 +311,7 @@ function isProjectsFamilyTab(tabId: TabId) {
 }
 
 function groupIdForTab(tabId: TabId): NavGroupId | null {
+  if (tabId === "market-overview") return "market-group";
   if (isOverviewFamilyTab(tabId)) return "overview-group";
   if (isVocFamilyTab(tabId)) return "voc-group";
   if (isKeywordFamilyTab(tabId)) return "keywords-group";
@@ -334,6 +337,8 @@ type NavTheme =
   | "bookmark";
 
 const navThemeByDim: Record<string, NavTheme> = {
+  "market-group": "insight",
+  "market-overview": "insight",
   "overview-group": "overview",
   overview: "params",
   "overview-images": "gallery",
@@ -510,15 +515,6 @@ function replaceAppUrl(params: URLSearchParams, basePath = "/") {
   const query = params.toString();
   const url = query ? `${basePath}?${query}` : basePath;
   window.history.replaceState(window.history.state, "", url);
-}
-
-function buildTabHref(tabId: TabId, current: URLSearchParams | { toString(): string }, basePath = "/") {
-  const params = new URLSearchParams(current.toString());
-  if (tabId === "overview") params.delete("tab");
-  else params.set("tab", tabId);
-  params.delete("sub");
-  const query = params.toString();
-  return query ? `${basePath}?${query}` : basePath;
 }
 
 function buildProjectLoadHref(
@@ -2506,6 +2502,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const nav: NavEntry[] = useMemo(
     () => [
       {
+        id: "market-group",
+        label: "市场调研",
+        sub: "类目规模 · 销售 · 新品",
+        children: [{ id: "market-overview", label: "市场总览", sub: "类目采集 · 基础指标" }],
+      },
+      {
         id: "overview-group",
         label: "竞品概览",
         sub: "参数 · 主辅图 · 变体",
@@ -3052,8 +3054,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       </nav>
       <div className="sidebar-bottom">
         <HelpFeedbackDrawer user={authSession.user} />
-        <div className="sync-status"><i/>数据源状态正常</div>
-        <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>
+        {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status"><i/>数据源状态正常</div>}
+        {activeTab === "market-overview" ? <p>美国站 · 类目调研</p> : <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>}
       </div>
     </aside>
 
@@ -3092,12 +3094,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     <section className="workspace">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{products[0]?.subRankCategory && products[0].subRankCategory !== "等待同步" ? products[0].subRankCategory : "竞品分析"} · Amazon {markets[market].short}</p>
+          <p className="eyebrow">{activeTab === "market-overview" ? "市场调研 · Amazon US" : `${products[0]?.subRankCategory && products[0].subRankCategory !== "等待同步" ? products[0].subRankCategory : "竞品分析"} · Amazon ${markets[market].short}`}</p>
           <h1>{pageTitle}</h1>
         </div>
         <div className="top-actions">
           <AuthIdentityControl session={authSession} />
-          {activeTab === "keywords" ? (
+          {activeTab === "market-overview" ? null : activeTab === "keywords" ? (
             <>
               <button
                 type="button"
@@ -3153,7 +3155,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </div>
       </header>
       <ConcurrencyAdminPanel user={authSession.user} />
-      <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>
+      {activeTab !== "market-overview" && <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>}
 
       {activeLeaf.parent ? (
         <div className="voc-tertiary-bar" data-nav-dim={activeTab} aria-label={`${activeLeaf.parent} 当前位置`}>
@@ -3184,6 +3186,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </div>
       ) : null}
 
+
+      {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} /></div>}
 
       {activeTab === "overview" && <div className="page-content compare-page">
         <section className="card asin-builder">

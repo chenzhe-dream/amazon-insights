@@ -32,6 +32,10 @@ import {
 import { SkillRegistry } from "../../server/skills/registry";
 import { createTrustedExecutionAbortReason } from "../../server/runtime/execution-abort";
 import { createStructuredResponseFormat } from "../../server/runtime/structured-response-format";
+import { randomUUID } from "node:crypto";
+import type { MarketExecutionSubject, MarketModelExecutionAuthority } from "../../shared/market-execution-subject";
+import type { ReserveMarketModelRequestInput } from "../../server/runtime/market-model-budget-coordinator";
+import type { MarketBudgetReservationRecord } from "../../server/db/market-model-budget-repository";
 
 const inputSchema = z
   .object({
@@ -75,6 +79,107 @@ const serverExecutionContext: SkillExecutionContext = {
   projectId: "22222222-2222-4222-8222-222222222222",
   jobAttemptId: "33333333-3333-4333-8333-333333333333",
 };
+
+function nativeMarketFixture() {
+  const subject: MarketExecutionSubject = { kind: 'market-module-run', organizationId: randomUUID(), studyId: randomUUID(),
+    moduleRunId: randomUUID(), stepId: randomUUID(), attemptId: randomUUID(), leaseOwnerId: randomUUID(), leaseGeneration: 1,
+    dataCutoffAt: '2026-09-12T10:00:00.000Z' };
+  const authority: MarketModelExecutionAuthority = { ...subject, agentRunId: randomUUID(), claimToken: randomUUID() };
+  const calls: Array<{ operation: string; input: unknown }> = [];
+  const timestamp = '2026-09-12T10:00:00.000Z';
+  const reservation: MarketBudgetReservationRecord = { id: randomUUID(), kind: 'market-module-run', organizationId: subject.organizationId,
+    studyId: subject.studyId, moduleRunId: subject.moduleRunId, stepId: subject.stepId, attemptId: subject.attemptId, agentRunId: authority.agentRunId,
+    idempotencyKey: 'fixture', requestFingerprint: 'a'.repeat(64), utcDay: '2026-09-12', state: 'reserved', projected: { inputTokens: 200, outputTokens: 100, costMicros: 1 },
+    actual: null, leaseExpiresAt: timestamp, createdAt: timestamp, updatedAt: timestamp, dispatchedAt: null, settledAt: null, releasedAt: null };
+  const marketBudgetCoordinator = {
+    async reserve(input: ReserveMarketModelRequestInput) { calls.push({ operation: 'reserve', input }); return reservation; },
+    async dispatch(id: string, auth: Readonly<MarketModelExecutionAuthority>) { calls.push({ operation: 'dispatch', input: { id, authority: auth } }); return { reservation, transitioned: true }; },
+    async release(id: string, auth: Readonly<MarketModelExecutionAuthority>) { calls.push({ operation: 'release', input: { id, authority: auth } }); return { reservation, transitioned: true }; },
+    async settle(id: string, actual: ModelBudgetAmount, responseId: string | undefined, auth: Readonly<MarketModelExecutionAuthority>) {
+      calls.push({ operation: 'settle', input: { id, actual, responseId, authority: auth } }); return { reservation, transitioned: true };
+    },
+  };
+  return { subject, authority, calls, marketBudgetCoordinator };
+}
+
+test('the same skill execution loop routes native market identities through governed market budget methods', async () => {
+  const f = nativeMarketFixture(); const provider = new FakeProvider(); const oldBudget = new FakeBudgetCoordinator();
+  const registry = await SkillRegistry.open(path.resolve('skills-src'));
+  const runner = new SkillRunner({ registry, provider, providerName: 'fake', budgetCoordinator: oldBudget, marketBudgetCoordinator: f.marketBudgetCoordinator });
+  const prepared = await runner.prepare(executionRequest());
+  assert.equal((await runner.runPrepared(prepared, f.subject, f.authority)).value.summary, 'evidence-based result');
+  assert.deepEqual(f.calls.map(c => c.operation), ['reserve', 'dispatch', 'settle']);
+  assert.equal(oldBudget.reserveCount, 0);
+  assert.equal(provider.requests[0].governorScope?.organizationId, f.subject.organizationId);
+  assert.equal(provider.requests[0].governorScope?.jobId, f.subject.attemptId);
+  const admitted = f.calls[0].input as ReserveMarketModelRequestInput;
+  assert.deepEqual(admitted.authority, f.authority);
+  assert.equal(JSON.stringify(f.calls).includes('projectId'), false);
+  assert.equal(JSON.stringify(f.calls).includes('jobAttemptId'), false);
+});
+
+test('market execution cannot run without its native authority, adapter, or an exact subject match', async () => {
+  for (const variant of ['missing-authority', 'wrong-attempt', 'wrong-study', 'missing-adapter', 'legacy-context']) {
+    const f = nativeMarketFixture(); const provider = new FakeProvider(); const oldBudget = new FakeBudgetCoordinator();
+    const registry = await SkillRegistry.open(path.resolve('skills-src'));
+    const runner = new SkillRunner({ registry, provider, providerName: 'fake', budgetCoordinator: oldBudget,
+      ...(variant === 'missing-adapter' ? {} : { marketBudgetCoordinator: f.marketBudgetCoordinator }) });
+    const prepared = await runner.prepare(executionRequest());
+    const authority = variant === 'missing-authority' ? undefined : variant === 'wrong-attempt' ? { ...f.authority, attemptId: randomUUID() } :
+      variant === 'wrong-study' ? { ...f.authority, studyId: randomUUID() } : f.authority;
+    await assert.rejects(() => runner.runPrepared(prepared, variant === 'legacy-context' ? serverExecutionContext : f.subject, authority));
+    assert.equal(provider.requests.length, 0); assert.equal(oldBudget.reserveCount, 0); assert.deepEqual(f.calls, []);
+  }
+});
+
+test('market transient retries and one format repair retain authority and account each physical request', async () => {
+  const f = nativeMarketFixture(); const oldBudget = new FakeBudgetCoordinator();
+  const provider = new FakeProvider(async (_request, attempt) => {
+    if (attempt === 1) throw new ModelProviderError('transient', 'synthetic unavailable');
+    return { value: attempt === 2 ? { invalid: true } : { summary: 'repaired' }, responseId: `response-${attempt}`, inputTokens: 80, outputTokens: 20 };
+  });
+  const registry = await SkillRegistry.open(path.resolve('skills-src'));
+  const runner = new SkillRunner({ registry, provider, providerName: 'fake', budgetCoordinator: oldBudget,
+    marketBudgetCoordinator: f.marketBudgetCoordinator, sleep: async () => {} });
+  const result = await runner.runPrepared(await runner.prepare(executionRequest()), f.subject, f.authority);
+  assert.equal(result.value.summary, 'repaired'); assert.equal(result.record.attemptCount, 3);
+  const reservations = f.calls.filter(c => c.operation === 'reserve').map(c => c.input as ReserveMarketModelRequestInput);
+  assert.deepEqual(reservations.map(c => c.request.kind), ['initial', 'transient-retry', 'format-repair']);
+  assert.equal(new Set(reservations.map(c => c.idempotencyKey)).size, 3);
+  assert.equal(f.calls.filter(c => c.operation === 'dispatch').length, 3);
+  assert.equal(f.calls.filter(c => c.operation === 'settle').length, 2);
+  assert.ok(reservations.every(c => c.authority.agentRunId === f.authority.agentRunId));
+  assert.equal(oldBudget.reserveCount, 0);
+});
+
+test('native late completion settles only reported usage once without rewriting the returned cancellation audit', async () => {
+  const registry = await SkillRegistry.open(path.resolve('skills-src'));
+  for (const variant of ['success', 'error-with-usage', 'error-without-usage', 'settlement-failure']) {
+    const f = nativeMarketFixture(), controller = new AbortController();
+    let resolve!: (value: StructuredGenerationResult<unknown>) => void, reject!: (reason: unknown) => void, entered!: () => void;
+    const started = new Promise<void>(r => { entered = r; });
+    const pending = new Promise<StructuredGenerationResult<unknown>>((a, b) => { resolve = a; reject = b; });
+    const provider = new FakeProvider(async () => { entered(); return await pending; });
+    const originalSettle = f.marketBudgetCoordinator.settle;
+    if (variant === 'settlement-failure') f.marketBudgetCoordinator.settle = async (...args) => { await originalSettle(...args); throw new Error('Synthetic accounting outage'); };
+    const runner = new SkillRunner({ registry, provider, providerName: 'fake', budgetCoordinator: new FakeBudgetCoordinator(), marketBudgetCoordinator: f.marketBudgetCoordinator });
+    const prepared = await runner.prepare({ ...executionRequest(), signal: controller.signal });
+    const execution = runner.runPrepared(prepared, f.subject, f.authority); await started;
+    controller.abort(createTrustedExecutionAbortReason('run-cancelled'));
+    let terminal: unknown;
+    await assert.rejects(execution, error => { terminal = error; return error instanceof SkillRuntimeError && error.code === 'CANCELLED'; });
+    const audit = getSkillRunFailureAudit(terminal), originalAudit = JSON.stringify(audit);
+    const usage = { responseId: 'late-response', inputTokens: 80, outputTokens: 20 };
+    if (variant === 'error-with-usage') reject(new ModelProviderError('invalid_output', 'Late parse failure', { usage }));
+    else if (variant === 'error-without-usage') reject(new ModelProviderError('permanent', 'No usage known'));
+    else resolve({ ...usage, value: { summary: 'late output must not publish' } });
+    await new Promise(r => setImmediate(r));
+    const settlements = f.calls.filter(c => c.operation === 'settle');
+    assert.equal(settlements.length, variant === 'error-without-usage' ? 0 : 1); assert.equal(provider.requests.length, 1);
+    if (settlements.length) assert.deepEqual((settlements[0].input as { authority: unknown }).authority, f.authority);
+    assert.equal(JSON.stringify(getSkillRunFailureAudit(terminal)), originalAudit);
+  }
+});
 
 class FakeBudgetCoordinator implements SkillModelBudgetCoordinator {
   readonly reservations = new Map<string, ModelBudgetReservationRecord>();
@@ -1241,6 +1346,49 @@ test("provenance aggregates usage and returns a deeply immutable persistence rec
   assert.throws(() => {
     (result.record.snapshotIds as string[]).push("mutated");
   }, TypeError);
+});
+
+test("request admission rejects initial and repair payloads before reserving or dispatching them", async () => {
+  const registry = await SkillRegistry.open(path.resolve("skills-src"));
+  for (const rejectInitial of [true, false]) {
+    const budget = new FakeBudgetCoordinator();
+    const provider = new FakeProvider(async () => ({ value: {}, responseId: "invalid-first", inputTokens: 80, outputTokens: 20 }));
+    const seen: string[] = [];
+    const runner = new SkillRunner({ registry, provider, providerName: "fake", budgetCoordinator: budget, sleep: async () => {},
+      validateGenerationRequest: (request) => {
+        seen.push(request.instructions);
+        if (rejectInitial || request.instructions.includes("FORMAT REPAIR:")) throw new SkillRuntimeError("CONFIGURATION_ERROR", "Request exceeds input admission limit");
+      },
+    });
+    await assert.rejects(() => runner.run(executionRequest(), serverExecutionContext), (error: unknown) => {
+      assert.ok(error instanceof SkillRuntimeError);
+      assert.equal(error.code, "CONFIGURATION_ERROR");
+      const audit = getSkillRunFailureAudit(error);
+      assert.equal(audit?.attempts.length, rejectInitial ? 0 : 1);
+      return true;
+    });
+    assert.equal(seen.length, rejectInitial ? 1 : 2);
+    assert.equal(budget.reserveCount, rejectInitial ? 0 : 1);
+    assert.equal(provider.requests.length, rejectInitial ? 0 : 1);
+    assert.equal(budget.settleCount, rejectInitial ? 0 : 1);
+  }
+});
+
+test("prepared shared definitions survive caller mutation and reach the provider with the audited digest", async () => {
+  const registry = await SkillRegistry.open(path.resolve("skills-src"));
+  const provider = new FakeProvider();
+  const runner = new SkillRunner({ registry, provider, providerName: "fake", budgetCoordinator: new FakeBudgetCoordinator(), sleep: async () => {} });
+  const definitions = { Summary: outputSchema.shape.summary };
+  const request = executionRequest();
+  request.outputContract.schemaDefinitions = definitions;
+  const prepared = await runner.prepare(request);
+  definitions.Summary = z.string().min(999);
+  await runner.runPrepared(prepared, serverExecutionContext);
+  assert.ok(Object.isFrozen(prepared.outputContract.schemaDefinitions));
+  assert.equal(provider.requests.length, 1);
+  assert.deepEqual(provider.requests[0].responseFormat, prepared.responseFormat);
+  assert.equal(prepared.outputContract.schemaDigest, canonicalJsonSha256(prepared.responseFormat.format.schema));
+  assert.match(JSON.stringify(provider.requests[0].responseFormat.format.schema), /#\/definitions\/Summary/);
 });
 
 test("prepared execution is immutable and is dispatched without a second Skill load", async () => {

@@ -179,7 +179,7 @@ function request(
   overrides: Partial<SkillExecutionRequest<Input, Output>> = {},
 ): SkillExecutionRequest<Input, Output> {
   return {
-    skill: { id: "define-amazon-voc-positioning", version: "1.0.0" },
+    skill: { id: "define-amazon-voc-positioning", version: "1.0.2" },
     inputContract: {
       name: "VocPositioningInput@1.0.0",
       schema: inputSchema,
@@ -209,10 +209,11 @@ function request(
 }
 
 function context(
-  subject: { runId: string; projectId: string; jobAttemptId: string },
+  subject: { organizationId: string; runId: string; projectId: string; jobAttemptId: string },
   jobAttemptId: string = subject.jobAttemptId,
 ): SkillExecutionContext {
   return {
+    organizationId: subject.organizationId,
     runId: subject.runId as SkillExecutionContext["runId"],
     projectId: subject.projectId as SkillExecutionContext["projectId"],
     jobAttemptId: jobAttemptId as SkillExecutionContext["jobAttemptId"],

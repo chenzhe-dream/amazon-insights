@@ -1,4 +1,4 @@
-import { zodTextFormat } from "openai/helpers/zod";
+import { zodResponseFormat, zodTextFormat } from "openai/helpers/zod";
 import type { z } from "zod";
 
 import { canonicalJsonSha256 } from "./model-request-accounting";
@@ -18,8 +18,19 @@ export interface StructuredResponseFormat {
 export function createStructuredResponseFormat<T>(
   schema: z.ZodType<T>,
   contractName: string,
+  schemaDefinitions?: Readonly<Record<string, z.ZodType>>,
 ): StructuredResponseFormat {
-  const generated = zodTextFormat(schema, formatName(contractName));
+  // The installed SDK exposes shared definitions on the chat helper only.
+  // Extract its strict JSON schema into our transport-neutral format; parsing
+  // still uses the original Zod contract in SkillRunner.
+  const generated = schemaDefinitions
+    ? {
+        type: "json_schema" as const,
+        ...zodResponseFormat(schema, formatName(contractName), {
+          schemaDefinitions: { ...schemaDefinitions },
+        }).json_schema,
+      }
+    : zodTextFormat(schema, formatName(contractName));
   if (
     generated.type !== "json_schema" ||
     generated.strict !== true ||

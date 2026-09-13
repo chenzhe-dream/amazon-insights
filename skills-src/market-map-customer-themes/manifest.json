@@ -1,0 +1,14 @@
+{
+  "id": "market-map-customer-themes",
+  "version": "1.1.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketCustomerThemeMappingInput@1.1.0",
+  "outputSchema": "MarketCustomerThemeMappingOutput@1.0.0",
+  "fixtures": [
+    "market-map-customer-themes-synthetic-v1"
+  ],
+  "contentHash": "efd0ad17c7b0216d70c4bea3a555e59e923819c5a543d2fe2f2a95f16d5083bc"
+}

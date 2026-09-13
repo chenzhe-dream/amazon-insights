@@ -746,7 +746,6 @@ export interface AgentRepository extends AuthenticationRepository {
 export interface ManualAlexaVocRepositoryCapability {
   readonly manualAlexaVoc: ManualAlexaVocRepository;
 }
-
 export type RuntimeAgentRepository = AgentRepository &
   VocQueueRepositoryCapability &
   UserFeedbackRepository &
@@ -760,6 +759,9 @@ export type RuntimeAgentRepository = AgentRepository &
   AnalysisReportRepository &
   AdminUserPresenceRepositoryCapability &
   ManualAlexaVocRepositoryCapability & {
+    readonly marketResearch?: import('./market-research-repository').MarketResearchRepository;
+    /** Native market transactions are available only on the PostgreSQL runtime. */
+    readonly marketExecutionContext?: import('./postgres/query-context').PostgresQueryContext;
     readonly vocAutomations: import('./voc-automation-repository').VocAutomationRepository;
     readonly trafficDetailRecoveries?: import('./traffic-detail-recovery-repository').TrafficDetailRecoveryRepository;
     readonly syncJobs: SyncJobRepository;

@@ -1,0 +1,14 @@
+{
+  "id": "market-classify-keyword-demand",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketKeywordSemanticsInput@1.0.0",
+  "outputSchema": "MarketKeywordSemanticsOutput@1.0.0",
+  "fixtures": [
+    "market-classify-keyword-demand-synthetic-v1"
+  ],
+  "contentHash": "edc06d015e70e0b3361dd88acb81a5af36d61a31ce6e0a96b735b7cb19bc82fd"
+}

@@ -1,0 +1,15 @@
+import { z } from 'zod';
+import { MarketShapeExplanationDimensionSchema } from './market-shape-explanation-contracts';
+import { MarketShapeExplanationOutputSchema } from './market-shape-explanation-output-contracts';
+const id = z.string().min(1).max(240), digest = z.string().regex(/^[a-f0-9]{64}$/), identity = z.string().regex(/^market-shape-(?:explanation|revision):[a-f0-9]{64}$/);
+export const MarketShapeSynthesisEvidenceRowSchema = z.object({ id, context: z.record(z.string(), z.string().nullable()), cells: z.array(z.object({ id, value: z.number().finite().nullable(), unit: z.string() }).strict()).min(1) }).strict();
+export const MarketShapeSynthesisChildSchema = z.object({ childId: id, leafWindowIds: z.array(id).min(1), section: MarketShapeExplanationOutputSchema.shape.dimensions.element }).strict();
+export const MarketShapeSynthesisLimitationSchema = z.object({ code: id, detail: z.string().min(1), provenance: z.discriminatedUnion('mode', [z.object({ mode: z.literal('direct-rule'), leafWindowIds: z.array(id).length(0) }).strict(), z.object({ mode: z.literal('reviewed-in-leaves'), leafWindowIds: z.array(id).min(1) }).strict()]) }).strict();
+const base = { version: z.literal('market-shape-synthesis-input/v1'), nodeId: id, inputDigest: digest, explanationCatalogId: identity, revisionId: identity, directChildIds: z.array(id).min(2), leafWindowIds: z.array(id).min(1), children: z.array(MarketShapeSynthesisChildSchema).min(2), evidenceRows: z.array(MarketShapeSynthesisEvidenceRowSchema), limitations: z.array(MarketShapeSynthesisLimitationSchema) };
+export const MarketShapeDimensionSynthesisInputSchema = z.object({ ...base, mode: z.literal('dimension-reduce'), dimension: MarketShapeExplanationDimensionSchema }).strict();
+export const MarketShapeFinalSynthesisInputSchema = z.object({ ...base, mode: z.literal('final'), dimension: z.literal('final'), children: z.array(MarketShapeSynthesisChildSchema).length(6) }).strict();
+export const MarketShapeDimensionSynthesisOutputSchema = z.object({ version: z.literal('market-shape-dimension-synthesis-output/v1'), nodeId: id, inputDigest: digest, section: MarketShapeExplanationOutputSchema.shape.dimensions.element }).strict();
+export const MarketShapeFinalSynthesisOutputSchema = z.object({ version: z.literal('market-shape-final-synthesis-output/v1'), nodeId: id, inputDigest: digest, synthesis: MarketShapeExplanationOutputSchema.shape.synthesis }).strict();
+export type MarketShapeSynthesisChild = z.infer<typeof MarketShapeSynthesisChildSchema>;
+export type MarketShapeDimensionSynthesisInput = z.infer<typeof MarketShapeDimensionSynthesisInputSchema>;
+export type MarketShapeFinalSynthesisInput = z.infer<typeof MarketShapeFinalSynthesisInputSchema>;

@@ -448,3 +448,24 @@ button.nav-item {
   .help-feedback-entry { margin-top:10px; }
   .sync-status,.sidebar-bottom>p { display:none; }
 }
+.market-shape-workspace{display:grid;gap:20px;min-width:0}.market-shape-controls,.market-shape-report{padding:22px;min-width:0}.market-shape-controls form{display:grid;gap:14px}.market-shape-controls label{display:grid;gap:6px;max-width:100%;font-size:13px}.market-shape-controls input,.market-shape-controls select,.market-shape-controls textarea{border:1px solid #cad6e6;border-radius:7px;padding:8px;background:#fff;color:#24364f;max-width:100%;box-sizing:border-box}.market-shape-controls textarea{width:100%;resize:vertical}.market-shape-controls details{margin:18px 0}.market-shape-controls td p{margin:5px 0;overflow-wrap:anywhere}.market-shape-table{overflow:auto;max-width:100%;margin:16px 0;border:1px solid #e0e7f0;border-radius:8px}.market-shape-table table{border-collapse:collapse;width:100%;min-width:680px;font-size:13px}.market-shape-table th,.market-shape-table td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #e0e7f0;line-height:1.6}.market-shape-table thead{background:#f4f7fb}.market-shape-report p{line-height:1.7}.market-shape-report details{margin-top:16px}.market-shape-report small,.market-shape-controls small{color:#62758e}.market-shape-controls input[type=checkbox]{width:18px;height:18px}.market-shape-controls button{max-width:100%}@media(max-width:600px){.market-shape-controls,.market-shape-report{padding:16px}.market-shape-controls .market-theme-actions{display:grid;grid-template-columns:minmax(0,1fr)}.market-shape-controls input,.market-shape-controls textarea{width:100%}}
+
+.market-shape-controls .market-shape-table{max-height:520px}.market-shape-report .market-shape-table{max-height:580px}.market-shape-table thead th{position:sticky;top:0;background:#f4f7fb;z-index:1}.market-shape-controls h2,.market-shape-controls h3,.market-shape-report h3{font-weight:650;margin:0 0 12px}.market-shape-controls form>.primary-btn{justify-self:start}
+/* Reference metadata stays within the existing shape report and scroll containers. */
+.market-shape-structure { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e9f4; }
+.market-shape-structure h4 { margin: 18px 0 10px; }
+.market-shape-structure select { display: block; max-width: 100%; min-height: 36px; margin-top: 6px; }
+.market-shape-structure-source { margin-top: 14px; }
+.market-shape-structure-source p { overflow-wrap: anywhere; }
+
+/* Saved shape explanations extend the existing report cards. */
+.market-shape-explanation-report{margin-top:20px;padding:20px;color:#24364f;font-size:14px;line-height:1.7}
+.market-shape-explanation-report>h3{margin:0 0 18px;font-size:18px}
+.market-shape-explanation-report>section{padding:18px 0;border-top:1px solid #e0e7f0}
+.market-shape-explanation-report h4{margin:0 0 12px;font-size:16px}
+.market-shape-explanation-report h5{margin:18px 0 8px;font-size:13px;color:#62758e}
+.market-shape-explanation-report p{margin:8px 0}
+.market-shape-explanation-report details{margin:6px 0 14px;font-size:12px;color:#526784}
+.market-shape-explanation-report summary{cursor:pointer}
+.market-shape-explanation-report details[open]{padding:10px;background:#f4f7fb;border-radius:8px}
+@media(max-width:600px){.market-shape-explanation-report{padding:14px;font-size:13px}.market-shape-report>.market-theme-actions{flex-wrap:wrap}.market-shape-report select{max-width:100%}}

@@ -38,6 +38,7 @@ import { PostgresSyncJobStore } from "./postgres/sync-job-store";
 import { PostgresTrafficDataSnapshotStore } from "./postgres/traffic-data-snapshot-store";
 import { PostgresAdminUserPresenceStore } from "./postgres/admin-user-presence-store";
 import { PostgresTrafficDetailRecoveryStore } from './postgres/traffic-detail-recovery-store';
+import { PostgresMarketResearchStore } from './postgres/market-research-store';
 
 export interface OpenPostgresAgentRepositoryOptions {
   readonly connectionString: string;
@@ -68,9 +69,12 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly concurrencyControl: PostgresConcurrencyControlStore;
   readonly adminUserPresence: PostgresAdminUserPresenceStore;
   readonly trafficDetailRecoveries: PostgresTrafficDetailRecoveryStore;
+  readonly marketResearch: PostgresMarketResearchStore;
+  readonly marketExecutionContext: PostgresQueryContext;
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
+    this.marketExecutionContext = this.#queries;
     this.vocAutomations = new PostgresVocAutomationStore(this.#queries);
     const productDependencyReconciler =
       new PostgresProductDependencyReconciler(this.#queries);
@@ -96,6 +100,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     );
     this.adminUserPresence = new PostgresAdminUserPresenceStore(this.#queries);
     this.trafficDetailRecoveries = new PostgresTrafficDetailRecoveryStore(this.#queries);
+    this.marketResearch = new PostgresMarketResearchStore(this.#queries);
   }
 
   transaction: RuntimeAgentRepository["transaction"] = (operation) =>

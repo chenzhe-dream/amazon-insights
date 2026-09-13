@@ -1,0 +1,14 @@
+{
+  "id": "market-synthesize-overview",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketOverviewSynthesisInput@1.0.0",
+  "outputSchema": "MarketOverviewSynthesisOutput@1.0.0",
+  "fixtures": [
+    "market-synthesize-overview-synthetic-v1"
+  ],
+  "contentHash": "5287a45d3658433cf68664feef098799633cbc3c5c396eecd3cfe7b2969edacd"
+}

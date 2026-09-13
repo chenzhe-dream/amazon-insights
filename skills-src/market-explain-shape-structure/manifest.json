@@ -1,0 +1,14 @@
+{
+  "id": "market-explain-shape-structure",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": [
+    "references/contract.md"
+  ],
+  "inputSchema": "MarketShapeStructureExplanationInput@1.0.0",
+  "outputSchema": "MarketShapeStructureExplanationOutput@1.0.0",
+  "fixtures": [
+    "market-explain-shape-structure-synthetic-v1"
+  ],
+  "contentHash": "530156c8d2448e5922ca323a350433c7ff21114e67116aa0faf833157e524f37"
+}

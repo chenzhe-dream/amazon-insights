@@ -1,0 +1,10 @@
+{
+  "id": "market-synthesize-shape-structure",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "allowedReferences": ["references/contract.md"],
+  "inputSchema": "MarketShapeSynthesisInput@1.0.0",
+  "outputSchema": "MarketShapeSynthesisOutput@1.0.0",
+  "fixtures": ["market-synthesize-shape-structure-synthetic-v1"],
+  "contentHash": "725e6b407bc27b85f89dce8e6454479ac66e1dedb36bd6197500f0e661eb9ae9"
+}

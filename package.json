@@ -24,6 +24,8 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "test:agent": "tsx --conditions=react-server --test tests/agent/*.test.ts",
     "test:agent:watch": "tsx --conditions=react-server --test --watch tests/agent/*.test.ts",
+    "test:market-research": "tsx --test tests/agent/market-overview-collector.test.ts tests/agent/market-research-service.test.ts tests/agent/market-research-http.test.ts tests/agent/market-research-display.test.tsx tests/agent/app-tabs.test.ts tests/agent/scoped-connector-credential-resolver.test.ts tests/agent/connector-credential-http-tracer.test.ts tests/agent/agent-service-shutdown.test.ts",
+    "test:market-research:postgres": "tsx --conditions=react-server --test tests/agent/market-research-store.test.ts",
     "test:traffic-regression": "node --test tests/scripts/sync-stage-output.test.mjs tests/scripts/asin-sync-job-postconditions.test.mjs && tsx --conditions=react-server --test tests/agent/traffic-detail-view.test.ts tests/agent/runtime-analysis-data.test.ts tests/agent/stage-output-browser.test.ts tests/agent/traffic-snapshot-browser.test.ts tests/agent/traffic-display-regression.test.tsx",
     "skills:validate": "tsx scripts/validate-agent-skills.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .worktrees",

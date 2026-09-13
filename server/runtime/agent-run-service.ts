@@ -597,7 +597,7 @@ function sameAttemptIdentity(left: AgentRunAttempt, right: AgentRunAttempt) {
   );
 }
 
-function mergeAttemptMetadata(
+export function mergeAttemptMetadata(
   ledger: readonly AgentRunAttempt[],
   local: readonly AgentRunAttempt[],
 ) {
@@ -631,7 +631,7 @@ function lastProviderReasonCode(attempts: readonly AgentRunAttempt[]) {
   return undefined;
 }
 
-function normalizeExecutionError(
+export function normalizeExecutionError(
   error: unknown,
   local: Readonly<SkillRunFailureAudit> | null,
   agentRunId: string,
