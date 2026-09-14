@@ -71,12 +71,14 @@ async function main() {
 
     process.stdout.write(`[sorftime] ${asin} trend ... `);
     try {
-      const [volumeRaw, amountRaw, priceRaw, rankRaw] = await Promise.all([
-        callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesVolume" }),
-        callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesAmount" }),
-        callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Price" }),
-        callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Rank" }),
-      ]);
+      // The formal Sorftime policy permits one request at a time. Avoid spending
+      // the other metrics' admission deadlines while the first request runs.
+      const [volumeRaw, amountRaw, priceRaw, rankRaw] = [
+        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesVolume" }),
+        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesAmount" }),
+        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Price" }),
+        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Rank" }),
+      ];
       const volume = parseSorftimeTrend(volumeRaw);
       const amount = parseSorftimeTrend(amountRaw);
       const price = parseSorftimeTrend(priceRaw);

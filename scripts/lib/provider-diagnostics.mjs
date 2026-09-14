@@ -255,7 +255,7 @@ function sanitizeFieldShape(value) {
 }
 
 function opensProviderBreaker(diagnostic) {
-  return diagnostic.failureKind !== "schema" && diagnostic.failureKind !== "provider-degraded";
+  return !["schema", "provider-degraded", "governor"].includes(diagnostic.failureKind);
 }
 
 function trackerFor(jobId) {

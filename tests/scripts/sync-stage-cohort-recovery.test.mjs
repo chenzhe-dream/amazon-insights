@@ -5,6 +5,13 @@ import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 
 const asins = ["B09NNDX731", "B0BHHP21DP", "B0CZRBL776"];
 
+test("failed command with an empty diagnostic map remains failed, never verified upstream empty", () => {
+  const { job, complete } = fixture();
+  const output = complete(0, "connector-failed", { commandSucceeded: false, resultStatusesByAsin: {}, diagnostics: [] });
+  assert.equal(job.asinProgress[asins[0]].traffic.status, "connector-failed");
+  assert.equal(output.gap.items.find(item => item.asin === asins[0]).causeCode, "CONNECTOR_FAILED");
+});
+
 function fixture() {
   const job = {
     jobId: "cohort-recovery-fixture", asins,

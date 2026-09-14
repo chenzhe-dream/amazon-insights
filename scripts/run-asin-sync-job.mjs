@@ -435,7 +435,6 @@ export function applyPersistedStagePostcondition(
   if (!commandSucceeded) {
     for (const missingAsin of readiness.missingAsins) {
       if (resultStatusesByAsin?.[missingAsin]) continue;
-      if (resultStatusesByAsin) continue;
       markModule(jobId, missingAsin, stageId, {
         status: "connector-failed",
         reason: unavailableReason ?? "连接器未完成该 ASIN",
@@ -446,7 +445,7 @@ export function applyPersistedStagePostcondition(
     const reported = resultStatusesByAsin?.[item.asin];
     if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) return reported;
     if (isAsinStageReady(item, stageId)) return "ready";
-    return commandSucceeded || resultStatusesByAsin ? "upstream-empty" : "connector-failed";
+    return commandSucceeded ? "upstream-empty" : "connector-failed";
   });
   const localStatus = commandSucceeded && !readiness.missingAsins.length
     ? "done"
@@ -458,6 +457,11 @@ export function applyPersistedStagePostcondition(
   const status = terminalStatus ?? reconciledStatus;
   const readyAsins = readiness.items.flatMap((item, index) => statuses[index] === "ready" ? [item.asin] : []);
   const gapItems = boundedDiagnosticGapItems(diagnostics, asins, readyAsins);
+  for (const [index, item] of readiness.items.entries()) {
+    if (gapItems.some(gap => gap.asin === item.asin) || statuses[index] === "ready") continue;
+    gapItems.push({ asin: item.asin, causeCode: statuses[index] === "timeout" ? "CONNECT_TIMEOUT"
+      : statuses[index] === "upstream-empty" ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED" });
+  }
   const cohortStatuses = currentJob?.asins?.map(asin => currentJob.asinProgress?.[asin]?.[stageId]?.status);
   let cohortDetail;
   if (cohortStatuses?.length) {

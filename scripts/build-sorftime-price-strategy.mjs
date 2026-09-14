@@ -206,14 +206,14 @@ async function main() {
 
     process.stdout.write(`[price-strategy] ${asin} ... `);
     try {
-      const [detailRaw, priceRaw] = await Promise.all([
-        callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace }),
-        callSorftimeTool(key, "product_trend", {
+      const [detailRaw, priceRaw] = [
+        await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace }),
+        await callSorftimeTool(key, "product_trend", {
           asin,
           amz_site: marketplace,
           product_trend_type: "Price",
         }),
-      ]);
+      ];
       const detail = detailRaw?.data ?? detailRaw;
       const prices = parseSorftimeTrend(priceRaw);
       const strategy = buildStrategy({

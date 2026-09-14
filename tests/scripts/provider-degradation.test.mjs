@@ -29,8 +29,15 @@ const providerWideFailures = [
   // Auth/quota arrive through the existing safe HTTP contract, not new diagnostic kinds.
   { label: "auth", failureKind: "http", causeCode: "HTTP_4XX" },
   { label: "quota", failureKind: "http", causeCode: "HTTP_5XX" },
-  { label: "governor", failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" },
 ];
+
+test("local request admission failure does not disable later provider stages", () => {
+  const tracker = createProviderDegradationTracker({ threshold: 1 });
+  tracker.record({ connector: "sorftime", stage: "sales_trend", asin: firstAsin,
+    failureKind: "governor", causeCode: "RESOURCE_GOVERNOR" });
+  assert.equal(tracker.isDegraded("sorftime"), false);
+  assert.deepEqual(tracker.snapshot(), []);
+});
 
 test("structured provider diagnostics map transport and timeout failures without upstream-empty", () => {
   assert.deepEqual(diagnosticStatusesByAsin([firstAsin, secondAsin], [
