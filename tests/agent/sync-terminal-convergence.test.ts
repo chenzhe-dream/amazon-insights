@@ -26,3 +26,9 @@ test("quiescence requires terminal job, settled publication, and outputs", () =>
   assert.equal(terminalSyncIsQuiescent({ status: "completed-with-gaps" }, true), true);
   assert.equal(terminalSyncIsQuiescent({ status: "failed" }, true), true);
 });
+
+// Stage/module progress can advance without a persisted stage-output version change.
+test("running and queued observations always hydrate live progress even at the same output version", () => {
+  assert.equal(syncObservationKey({ ...base, status: "running" }), null);
+  assert.equal(syncObservationKey({ ...base, status: "queued" }), null);
+});
