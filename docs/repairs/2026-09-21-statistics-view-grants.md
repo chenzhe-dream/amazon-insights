@@ -24,7 +24,11 @@
 
 ## 发布与验收
 
-当前完成本地实现，未发布，未改变正式人员权限。发布时需通过正式启动流程执行 0055 迁移。
+2026-09-21 已经用户授权发布，代码提交 `b222589ae959e7f11abb92419493e63ae6f61a86`，正式 artifact `046a4ab9cd7abc6d8d5bf40e1da07e202e31f5091eef4e3c7d3fcba55368d28d`。0055 迁移已执行，正式 Web、Agent 和局域网健康检查均 HTTP 200，前后端源码身份一致。
+
+发布前已与「新新指令窗口」确认隔离：市场开发继续在 market-main-20260921，发布仅由本窗口执行。备份位于外部 runtime/backups 下的 statistics-grants-before-2026-09-21T09-37-37-734Z.dump，15,544,286 字节且 pg_restore 目录校验通过。
+
+正式管理页面引用的新资源包含授权开关，HTTP 返回字节与构建一致。28 份既有模块配置、正式环境配置和业务数据 artifact 均保持不变；独立统计授权记录为 0，未自动改变真实人员权限。发布前后任务队列空闲。证据为 `.superpowers/sdd/statistics-grants-release-*` 和 `statistics-grants-production-verification.json`。
 
 上线后：管理页面 → 模块可见性 → 对应人员「配置可见模块」→ 开启「允许查看用户与使用统计」→ 保存。目标人员刷新后可看统计，不能看到模块管理。再撤销开关，验证原账号读取接口失效。
 
