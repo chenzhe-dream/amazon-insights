@@ -3,9 +3,10 @@ export interface ModuleVisibilityRepository {
  readDefaults(organizationId:string):Promise<ModuleVisibilityDefaults>;
  saveDefaults(input:{organizationId:string;actorId:string;visibleModules:ModuleKey[];version:number}):Promise<ModuleVisibilityDefaults>;
  isOwner(organizationId:string,userId:string):Promise<boolean>;
+ hasStatisticsViewGrant(organizationId:string,userId:string):Promise<boolean>;
  read(organizationId:string,userId:string):Promise<ModuleKey[]>;
  list(organizationId:string,q:string,page:number):Promise<VisibilityPeopleResponse>;
- save(input:{organizationId:string;actorId:string;userId:string;visibleModules:ModuleKey[];version:number}):Promise<VisibilityPerson>;
+ save(input:{organizationId:string;actorId:string;userId:string;visibleModules:ModuleKey[];version:number;statisticsViewGranted?:boolean}):Promise<VisibilityPerson>;
 }
 export class VisibilityConflictError extends Error {}
 export class VisibilityPersonNotFoundError extends Error {}

@@ -1,4 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import {createStatisticsViewAccess} from './auth/statistics-view-access';
 
 import Fastify, {
   type FastifyReply,
@@ -198,6 +199,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         })
       : null
     : options.userPresenceAccess;
+  const statisticsViewAccess = createStatisticsViewAccess({legacyAccess:userPresenceAccess,authService,visibility:options.repository?.moduleVisibility??null});
   const localBrowserOrigin =
     env.AGENT_VOC_LOCAL_ORIGIN ??
     (env.AGENT_VOC_LOCAL_FAKE === "1" ? "http://127.0.0.1:31900" : null);
@@ -340,12 +342,13 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     app,
     authService,
     authConfig,
-    userPresenceAccess,
+    statisticsViewAccess,
     options.repository?.moduleVisibility??null,
+    userPresenceAccess,
   );
   registerModuleVisibilityRoutes(app,options.repository?.moduleVisibility??null,userPresenceAccess);
   registerMarketFavoritesRoutes(app,options.repository?.marketFavorites??null,options.repository?.moduleVisibility??null);
-  registerUsageAnalyticsRoutes(app,env.AGENT_USAGE_ANALYTICS_ENABLED==="false"?null:options.repository?.usageAnalytics??null,userPresenceAccess);
+  registerUsageAnalyticsRoutes(app,env.AGENT_USAGE_ANALYTICS_ENABLED==="false"?null:options.repository?.usageAnalytics??null,statisticsViewAccess);
   registerDingTalkAuthRoutes(
     app,
     options.dingTalkService ?? null,
@@ -442,7 +445,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       ? options.repository?.adminUserPresence ?? null
       : options.adminUserPresenceRepository,
     undefined,
-    userPresenceAccess,
+    statisticsViewAccess,
     env.AGENT_USAGE_ANALYTICS_ENABLED==="false"?null:options.repository?.usageAnalytics??null,
   );
   registerFeedbackRoute(app, options.repository ?? null, env);

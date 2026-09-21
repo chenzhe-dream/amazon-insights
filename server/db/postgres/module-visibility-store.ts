@@ -5,7 +5,7 @@ import {type ModuleVisibilityRepository,VisibilityConflictError,VisibilityPerson
 import {PostgresQueryContext} from './query-context';
 
 function person(row:Record<string,unknown>){
- return VisibilityPersonSchema.parse({userId:row.id,displayName:row.display_name,account:row.email,visibleModules:row.is_owner?ALL_MODULES:row.modules_json??ALL_MODULES,version:Number(row.version??0),configured:row.version!=null,isSystemOwner:Boolean(row.is_owner),configurationSource:row.configuration_source??(row.version!=null?'personal':'legacy')});
+ return VisibilityPersonSchema.parse({userId:row.id,displayName:row.display_name,account:row.email,visibleModules:row.is_owner?ALL_MODULES:row.modules_json??ALL_MODULES,version:Number(row.version??0),configured:row.version!=null,statisticsViewGranted:Boolean(row.statistics_view_granted),isSystemOwner:Boolean(row.is_owner),configurationSource:row.configuration_source??(row.version!=null?'personal':'legacy')});
 }
 export class PostgresModuleVisibilityStore implements ModuleVisibilityRepository {
  constructor(private readonly queries:PostgresQueryContext){}
@@ -30,6 +30,10 @@ export class PostgresModuleVisibilityStore implements ModuleVisibilityRepository
   const result=await this.queries.query('SELECT 1 FROM system_owners WHERE organization_id=$1 AND user_id=$2',[organizationId,userId]);
   return result.rows.length>0;
  }
+ async hasStatisticsViewGrant(organizationId:string,userId:string):Promise<boolean>{
+  const result=await this.queries.query("SELECT 1 FROM user_module_visibility v JOIN users u ON u.id=v.user_id AND u.organization_id=v.organization_id WHERE v.organization_id=$1 AND v.user_id=$2 AND v.statistics_view_granted=true AND v.modules_json ? 'admin-users' AND u.status='active' AND u.archived_at IS NULL",[organizationId,userId]);
+  return result.rows.length>0;
+ }
  async read(organizationId:string,userId:string):Promise<ModuleKey[]>{
   const result=await this.queries.query('SELECT v.modules_json FROM users u LEFT JOIN user_module_visibility v ON v.user_id=u.id AND v.organization_id=u.organization_id WHERE u.id=$1 AND u.organization_id=$2 AND u.status=\'active\' AND u.archived_at IS NULL',[userId,organizationId]);
   if(!result.rows.length)throw new VisibilityPersonNotFoundError();
@@ -37,7 +41,7 @@ export class PostgresModuleVisibilityStore implements ModuleVisibilityRepository
  }
  async list(organizationId:string,q:string,page:number){
   const result=await this.queries.query(`WITH people AS MATERIALIZED (
-   SELECT u.id,u.display_name,u.email,v.modules_json,v.version,v.configuration_source,EXISTS(SELECT 1 FROM system_owners o WHERE o.user_id=u.id AND o.organization_id=u.organization_id) is_owner FROM users u
+   SELECT u.id,u.display_name,u.email,v.modules_json,v.version,v.configuration_source,v.statistics_view_granted,EXISTS(SELECT 1 FROM system_owners o WHERE o.user_id=u.id AND o.organization_id=u.organization_id) is_owner FROM users u
    JOIN auth_identities i ON i.user_id=u.id AND i.provider='dingtalk'
    LEFT JOIN user_module_visibility v ON v.user_id=u.id AND v.organization_id=u.organization_id
    WHERE u.organization_id=$1 AND u.archived_at IS NULL AND u.status='active'
@@ -57,14 +61,16 @@ export class PostgresModuleVisibilityStore implements ModuleVisibilityRepository
    if(!selected.rows.length||!actor.rows.length)throw new VisibilityPersonNotFoundError();
    const owner=await client.query('SELECT 1 FROM system_owners WHERE user_id=$1 AND organization_id=$2',[input.userId,input.organizationId]);
    if(owner.rows.length)throw new ProtectedSystemOwnerError();
-   const old=await client.query('SELECT modules_json,version FROM user_module_visibility WHERE user_id=$1 AND organization_id=$2',[input.userId,input.organizationId]);
+   const old=await client.query('SELECT modules_json,version,statistics_view_granted FROM user_module_visibility WHERE user_id=$1 AND organization_id=$2',[input.userId,input.organizationId]);
    if(Number(old.rows[0]?.version??0)!==input.version)throw new VisibilityConflictError();
    const version=input.version+1;
-   await client.query(`INSERT INTO user_module_visibility(user_id,organization_id,modules_json,version,updated_by)
-    VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT(user_id) DO UPDATE SET modules_json=EXCLUDED.modules_json,version=EXCLUDED.version,updated_by=EXCLUDED.updated_by,updated_at=now(),configuration_source='personal',default_version=NULL`,[input.userId,input.organizationId,JSON.stringify(modules),version,input.actorId]);
+   const statisticsViewGranted=input.statisticsViewGranted??Boolean(old.rows[0]?.statistics_view_granted);
+   if(input.statisticsViewGranted===true&&!modules.includes('admin-users'))throw new Error('Statistics grant requires visible module');
+   await client.query(`INSERT INTO user_module_visibility(user_id,organization_id,modules_json,version,updated_by,statistics_view_granted)
+    VALUES($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT(user_id) DO UPDATE SET statistics_view_granted=EXCLUDED.statistics_view_granted,modules_json=EXCLUDED.modules_json,version=EXCLUDED.version,updated_by=EXCLUDED.updated_by,updated_at=now(),configuration_source='personal',default_version=NULL`,[input.userId,input.organizationId,JSON.stringify(modules),version,input.actorId,statisticsViewGranted]);
    await client.query(`INSERT INTO audit_events(id,organization_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
-    VALUES($1,$2,$3,'module-visibility.updated','user',$4,$5::jsonb,now())`,[randomUUID(),input.organizationId,input.actorId,input.userId,JSON.stringify({before:old.rows[0]?.modules_json??null,after:modules,version})]);
-   return person({...selected.rows[0],modules_json:modules,version});
+    VALUES($1,$2,$3,'module-visibility.updated','user',$4,$5::jsonb,now())`,[randomUUID(),input.organizationId,input.actorId,input.userId,JSON.stringify({before:old.rows[0]?.modules_json??null,after:modules,version,statisticsViewGrant:{before:Boolean(old.rows[0]?.statistics_view_granted),after:statisticsViewGranted}})]);
+   return person({...selected.rows[0],modules_json:modules,version,statistics_view_granted:statisticsViewGranted});
   });
  }
 }

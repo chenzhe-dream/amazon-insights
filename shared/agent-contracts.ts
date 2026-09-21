@@ -15,7 +15,7 @@ import {MarketKeywordStartRequestSchema} from './market-keyword-flow-contracts';
 import {MarketKeywordRunResponseSchema} from './market-keyword-public-contracts';
 import {MarketKeywordRevisionRequestSchema,MarketKeywordRevisionIdSchema,MarketKeywordRevisionEntrySchema} from './market-keyword-revision-contracts';
 import {MarketFavoriteListQuerySchema,MarketFavoriteListResponseSchema,MarketFavoriteCreateSchema,MarketFavoriteCreateResponseSchema} from "./market-favorites-contracts";
-import {ModuleVisibilityDefaultsSchema,VisibleModulesSchema,VisibilityPeopleResponseSchema,VisibilitySaveSchema,VisibilitySaveResponseSchema,VisibilityPeopleQuerySchema} from './module-visibility-contracts';
+import {ModuleVisibilityDefaultsSchema,VisibleModulesSchema,VisibilityPeopleResponseSchema,VisibilitySaveSchema,VisibilitySaveResponseSchema,VisibilityPeopleQuerySchema,PersonalVisibilitySaveSchema} from './module-visibility-contracts';
 import {UsageReportSchema,UsagePeopleResponseSchema} from "./usage-analytics-contracts";
 import { VocAutomationRequestSchema, VocAutomationStatusSchema } from "./voc-automation-contracts";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
@@ -2135,7 +2135,7 @@ export const v1Contracts = [
   {method:"DELETE",path:"/v1/market-research/favorites/:favoriteId",params:z.strictObject({favoriteId:z.string().uuid()}),response:z.unknown(),error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/admin/module-visibility/defaults',response:ModuleVisibilityDefaultsSchema,error:ApiErrorResponseSchema},
   {method:'PUT',path:'/v1/admin/module-visibility/defaults',request:VisibilitySaveSchema,response:ModuleVisibilityDefaultsSchema,error:ApiErrorResponseSchema},
-  {method:'PUT',path:'/v1/admin/module-visibility/:userId',params:z.strictObject({userId:z.string().uuid()}),request:VisibilitySaveSchema,response:VisibilitySaveResponseSchema,error:ApiErrorResponseSchema},
+  {method:'PUT',path:'/v1/admin/module-visibility/:userId',params:z.strictObject({userId:z.string().uuid()}),request:PersonalVisibilitySaveSchema,response:VisibilitySaveResponseSchema,error:ApiErrorResponseSchema},
   {method:"GET",path:"/v1/admin/usage",response:UsageReportSchema,error:ApiErrorResponseSchema},
   {method:"GET",path:"/v1/admin/usage/people",response:UsagePeopleResponseSchema,error:ApiErrorResponseSchema},
   {

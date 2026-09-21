@@ -11,6 +11,8 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
  const [data,setData]=useState<VisibilityPeopleResponse|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[message,setMessage]=useState('');
  const [targets,setTargets]=useState<VisibilityPerson[]>([]),[selected,setSelected]=useState<ModuleKey[]>([]),[saving,setSaving]=useState(false),[saveError,setSaveError]=useState('');
  const [defaultsOpen,setDefaultsOpen]=useState(false);
+ const [statisticsGrant,setStatisticsGrant]=useState(false);
+ const [editStatisticsGrant,setEditStatisticsGrant]=useState(false);
  const [checkedIds,setCheckedIds]=useState<string[]>([]);
  const person=targets[0]??null;
  const editablePeople=data?.people.filter(user=>!user.isSystemOwner)??[];
@@ -37,6 +39,8 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
  const open=(people:VisibilityPerson[])=>{
   if(!people.length||loading||people.some(user=>user.isSystemOwner))return;
   setTargets(people);
+  setStatisticsGrant(people.length===1&&people[0].statisticsViewGranted);
+  setEditStatisticsGrant(people.length===1);
   setSelected(ALL_MODULES.filter(key=>people.every(user=>user.visibleModules.includes(key))));
   setSaveError('');setMessage('');
  };
@@ -50,7 +54,7 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
   for(const target of targets){
    if(generation!==saveGeneration.current)return;
    try{
-    const response=await localAgentFetch('/v1/admin/module-visibility/'+target.userId,{method:'PUT',body:JSON.stringify({visibleModules:ALL_MODULES.filter(key=>selected.includes(key)),version:target.version})});
+    const response=await localAgentFetch('/v1/admin/module-visibility/'+target.userId,{method:'PUT',body:JSON.stringify({visibleModules:ALL_MODULES.filter(key=>selected.includes(key)),version:target.version,...(editStatisticsGrant?{statisticsViewGranted:statisticsGrant&&selected.includes('admin-users')}:{})})});
     if(!response.ok)throw new Error(response.status===409?'配置已被其他人更新，请取消后重新打开。':response.status===403?'无权修改该人员的配置（系统所有者不可修改）。':response.status===404?'保存接口或人员不存在（404），请刷新页面后重试。':response.status===400?'模块配置参数无效，请重新打开配置。':response.status===401?'登录已失效，请重新登录。':'服务处理失败（'+response.status+'），请稍后重试。');
     VisibilitySaveResponseSchema.parse(await response.json());succeeded++;
    }catch(e){failed.push(target);failures.push(target.displayName+'：'+(e instanceof Error?e.message:'保存失败'))}
@@ -61,7 +65,7 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
    setTargets(failed);
    setSaveError((succeeded?'已保存 '+succeeded+' 人，剩余 '+failed.length+' 人未保存。':'')+failures.join('；'));
   }else{
-   setMessage((targets.length===1?person.displayName:targets.length+' 人')+'的模块显示设置已保存，对方刷新页面后生效。');setTargets([]);
+   setMessage((targets.length===1?person.displayName:targets.length+' 人')+(editStatisticsGrant?'的模块显示与统计查看授权已保存，对方刷新页面后生效。':'的模块显示设置已保存，统计授权未修改。对方刷新页面后生效。'));setTargets([]);
   }
  };
  return <section className={styles.panel} aria-label="模块可见性配置">
@@ -80,9 +84,10 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
   {person&&<div className={styles.backdrop} onMouseDown={event=>{if(event.target===event.currentTarget)close()}}>
    <div ref={dialog} className={styles.drawer} role="dialog" aria-modal="true" aria-labelledby="visibility-title" tabIndex={-1}>
     <header><div><h2 id="visibility-title">{targets.length>1?"批量配置 · "+targets.length+" 人":person.displayName+" · 可见模块"}</h2><p>{targets.length>1?targets.map(user=>user.displayName).join("、"):person.account}</p></div><button aria-label="关闭配置" disabled={saving} onClick={close}>×</button></header>
-    {targets.length>1&&<p className={styles.note}>初始勾选为所选人员共同显示的模块。保存后将统一替换这 {targets.length} 人的可见模块，请核对选择。</p>}<div className={styles.bulk}><span>已选择 {selected.length} / {MODULES.length}</span><button disabled={saving} onClick={()=>setSelected([...ALL_MODULES])}>全选</button><button disabled={saving} onClick={()=>setSelected([])}>清空</button></div>
-    <div className={styles.options}>{MODULES.map(module=><label key={module.key}><input type="checkbox" checked={selected.includes(module.key)} disabled={saving} onChange={event=>setSelected(previous=>event.target.checked?[...previous,module.key]:previous.filter(key=>key!==module.key))}/><span>{module.label}</span></label>)}</div>
-    <p className={styles.note}>父模块与子页面一起显示或隐藏。用户统计仍需原有查看资格；收藏中的业务页面也遵循对应模块设置。</p>
+    {targets.length>1&&<p className={styles.note}>初始勾选为所选人员共同显示的模块。保存后将统一替换这 {targets.length} 人的可见模块，请核对选择。</p>}<div className={styles.bulk}><span>已选择 {selected.length} / {MODULES.length}</span><button disabled={saving} onClick={()=>setSelected([...ALL_MODULES])}>全选</button><button disabled={saving} onClick={()=>{setSelected([]);setStatisticsGrant(false)}}>清空</button></div>
+    <div className={styles.options}>{MODULES.map(module=><label key={module.key}><input type="checkbox" checked={selected.includes(module.key)} disabled={saving} onChange={event=>{const checked=event.target.checked;if(module.key==='admin-users'&&!checked)setStatisticsGrant(false);setSelected(previous=>checked?[...previous,module.key]:previous.filter(key=>key!==module.key));}}/><span>{module.label}</span></label>)}</div>
+    {editStatisticsGrant?<div className={styles.options}><label><input type="checkbox" checked={statisticsGrant&&selected.includes('admin-users')} disabled={saving} onChange={event=>{setStatisticsGrant(event.target.checked);if(event.target.checked)setSelected(previous=>previous.includes('admin-users')?previous:[...previous,'admin-users']);}}/><span>允许查看用户与使用统计</span></label><p className={styles.note}>允许查看本组织人员的账号、在线与登录状态、页面使用及分析用量；不授予模块配置或其他管理权限。取消后，此项授权立即失效，对方刷新后更新入口。系统所有者与原指定人员的既有授权不受此开关影响。</p></div>:<p className={styles.note}>批量配置只调整模块显示，不修改统计查看授权；如需授权，请逐人打开配置。</p>}
+    <p className={styles.note}>父模块与子页面一起显示或隐藏。仅勾选上方“用户与使用统计”不授予查看权限，需同时开启下方授权。收藏中的业务页面遵循对应模块设置。</p>
     {selected.length===0&&<p className={styles.note}>当前选择会隐藏全部业务模块。</p>}
     {saveError&&<p role="alert" className={styles.error}>{saveError}</p>}
     <footer><button disabled={saving} onClick={close}>取消</button><button className={styles.primary} disabled={saving} onClick={()=>void save()}>{saving?'保存中…':'保存设置'}</button></footer>

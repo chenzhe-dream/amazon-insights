@@ -108,6 +108,7 @@ export function registerAuthRoutes(
   config: AgentAuthenticationConfig,
   userPresenceAccess: UserPresenceAccess | null = null,
   moduleVisibility: ModuleVisibilityRepository | null = null,
+  moduleManagementAccess: UserPresenceAccess | null = null,
 ) {
   app.post("/v1/auth/login", async (request, reply) => {
     const body = parseContract(LoginRequestSchema, request.body);
@@ -185,6 +186,11 @@ export function registerAuthRoutes(
         canViewUserPresence = false;
       }
     }
+    let canManageModuleVisibility = false;
+    if (user && moduleManagementAccess) {
+      try { canManageModuleVisibility = await moduleManagementAccess.canView(principal); }
+      catch { canManageModuleVisibility = false; }
+    }
     const sessionIdentity = createHash("sha256")
       .update(principal.sessionId, "utf8")
       .digest("base64url");
@@ -193,7 +199,7 @@ export function registerAuthRoutes(
       user,
       sessionIdentity: user ? sessionIdentity : null,
       ...(user ? { canViewUserPresence } : {}),
-      ...(user&&moduleVisibility?{visibleModules:await moduleVisibility.read(principal.organizationId,principal.userId),canManageModuleVisibility:canViewUserPresence,isSystemOwner:await moduleVisibility.isOwner(principal.organizationId,principal.userId)}:{}),
+      ...(user&&moduleVisibility?{visibleModules:await moduleVisibility.read(principal.organizationId,principal.userId),canManageModuleVisibility,isSystemOwner:await moduleVisibility.isOwner(principal.organizationId,principal.userId)}:{}),
     });
   });
 }

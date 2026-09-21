@@ -50,7 +50,7 @@ export function NewUserModuleDefaults({onClose,onSaved}:{onClose:()=>void;onSave
     <div className={styles.options}>{MODULES.map(module=><label key={module.key}><input type="checkbox" checked={selected.includes(module.key)} disabled={disabled} onChange={event=>{const checked=event.target.checked;setSelected(previous=>checked?[...previous,module.key]:previous.filter(key=>key!==module.key))}}/><span>{module.label}</span></label>)}</div>
     {selected.length===0&&<p className={styles.note}>当前选择会使新用户没有可见业务模块。</p>}
    </>}
-   <p className={styles.note}>新增模块自动加入列表，由管理员勾选是否默认开放。子页面跟随所属模块；用户统计等功能仍需原有访问资格，系统所有者始终可见全部模块。</p>
+   <p className={styles.note}>新增模块自动加入列表，由管理员勾选是否默认开放。子页面跟随所属模块；默认勾选“用户与使用统计”不会授予查看权限，需在人员配置中单独授权；系统所有者始终可见全部模块。</p>
    {error&&<div><p className={styles.error} role="alert">{error}</p>{(!policy||conflict)&&<p className={styles.note}><button disabled={saving||loading} onClick={reload}>重新读取默认设置</button></p>}</div>}
    <footer><button disabled={saving} onClick={close}>取消</button><button className={styles.primary} disabled={disabled} onClick={()=>void save()}>{saving?'保存中…':'保存默认设置'}</button></footer>
   </div>

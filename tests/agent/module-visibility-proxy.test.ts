@@ -10,6 +10,16 @@ test('formal Web proxy forwards visibility PUT with the real userId segment',asy
  assert.equal(response.status,409);assert.equal(calls,1);
 });
 
+test('formal Web proxy preserves explicit statistics grant fields',async()=>{
+ const id='11111111-1111-4111-8111-111111111111';
+ const payload={visibleModules:['admin-users'],version:2,statisticsViewGranted:true};let calls=0;
+ const response=await proxyAgentRequest(new Request('http://localhost/api/agent/v1/admin/module-visibility/'+id,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}),{params:Promise.resolve({path:['v1','admin','module-visibility',id]})},async request=>{
+  calls++;assert.deepEqual(JSON.parse(String(request.body)),payload);
+  return {status:409,headers:new Headers(),body:{error:{code:'CONFLICT',message:'version mismatch',requestId:'grant-proxy-test'}}};
+ });
+ assert.equal(response.status,409);assert.equal(calls,1);
+});
+
 for(const method of ['GET','PUT'] as const)test('formal Web proxy forwards static defaults '+method,async()=>{
  let calls=0;
  const response=await proxyAgentRequest(new Request('http://localhost/api/agent/v1/admin/module-visibility/defaults',{method,...(method==='PUT'?{headers:{'content-type':'application/json'},body:JSON.stringify({visibleModules:[],version:0})}:{})}),{params:Promise.resolve({path:['v1','admin','module-visibility','defaults']})},async request=>{

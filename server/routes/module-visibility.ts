@@ -1,6 +1,6 @@
 import type {FastifyInstance,FastifyRequest} from 'fastify';
 import {z} from 'zod';
-import {ModuleVisibilityDefaultsSchema,VisibilityPeopleQuerySchema,VisibilitySaveSchema,VisibilitySaveResponseSchema} from '../../shared/module-visibility-contracts';
+import {ModuleVisibilityDefaultsSchema,PersonalVisibilitySaveSchema,VisibilityPeopleQuerySchema,VisibilitySaveSchema,VisibilitySaveResponseSchema} from '../../shared/module-visibility-contracts';
 import type {UserPresenceAccess} from '../auth/user-presence-access';
 import {type ModuleVisibilityRepository,VisibilityConflictError,VisibilityPersonNotFoundError,ProtectedSystemOwnerError} from '../db/module-visibility-repository';
 import {ContractRouteError} from './analysis-runs';
@@ -34,7 +34,7 @@ export function registerModuleVisibilityRoutes(app:FastifyInstance,store:ModuleV
   }
  });
  app.put('/v1/admin/module-visibility/:userId' ,async request=>{
-  const p=await authorized(request),params=z.strictObject({userId:z.string().uuid()}).safeParse(request.params),body=VisibilitySaveSchema.safeParse(request.body);
+  const p=await authorized(request),params=z.strictObject({userId:z.string().uuid()}).safeParse(request.params),body=PersonalVisibilitySaveSchema.safeParse(request.body);
   if(!params.success||!body.success)throw new ContractRouteError(400,'VALIDATION_ERROR','模块配置无效');
   try{return VisibilitySaveResponseSchema.parse({person:await store!.save({organizationId:p.organizationId,actorId:p.userId,userId:params.data.userId,...body.data})})}
   catch(error){
