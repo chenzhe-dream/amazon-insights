@@ -1,6 +1,7 @@
 "use client";
 import {useEffect,useRef,useState} from 'react';
-import {ALL_MODULES,MODULES,VisibilityPeopleResponseSchema,VisibilitySaveResponseSchema,type ModuleKey,type VisibilityPeopleResponse,type VisibilityPerson} from '../../../shared/module-visibility-contracts';
+import {ALL_MODULES,MODULES,VisibilityPeopleResponseSchema,type ModuleKey,type VisibilityPeopleResponse,type VisibilityPerson} from '../../../shared/module-visibility-contracts';
+import {saveModuleVisibility} from '../../lib/module-visibility-save';
 import {localAgentFetch} from '../../lib/local-agent-browser';
 import {useModalInteraction} from '../../lib/use-modal-interaction';
 import styles from './module-visibility-panel.module.css';
@@ -54,16 +55,14 @@ export function ModuleVisibilityPanel({sessionIdentity}:{sessionIdentity:string}
   for(const target of targets){
    if(generation!==saveGeneration.current)return;
    try{
-    const response=await localAgentFetch('/v1/admin/module-visibility/'+target.userId,{method:'PUT',body:JSON.stringify({visibleModules:ALL_MODULES.filter(key=>selected.includes(key)),version:target.version,...(editStatisticsGrant?{statisticsViewGranted:statisticsGrant&&selected.includes('admin-users')}:{})})});
-    if(!response.ok)throw new Error(response.status===409?'配置已被其他人更新，请取消后重新打开。':response.status===403?'无权修改该人员的配置（系统所有者不可修改）。':response.status===404?'保存接口或人员不存在（404），请刷新页面后重试。':response.status===400?'模块配置参数无效，请重新打开配置。':response.status===401?'登录已失效，请重新登录。':'服务处理失败（'+response.status+'），请稍后重试。');
-    VisibilitySaveResponseSchema.parse(await response.json());succeeded++;
+    await saveModuleVisibility(target,{visibleModules:ALL_MODULES.filter(key=>selected.includes(key)),version:target.version,...(editStatisticsGrant?{statisticsViewGranted:statisticsGrant&&selected.includes('admin-users')}:{})});succeeded++;
    }catch(e){failed.push(target);failures.push(target.displayName+'：'+(e instanceof Error?e.message:'保存失败'))}
   }
   if(generation!==saveGeneration.current)return;
   setSaving(false);setRevision(value=>value+1);
   if(failed.length){
    setTargets(failed);
-   setSaveError((succeeded?'已保存 '+succeeded+' 人，剩余 '+failed.length+' 人未保存。':'')+failures.join('；'));
+   setSaveError((succeeded?'已确认 '+succeeded+' 人，剩余 '+failed.length+' 人未完成确认。':'')+failures.join('；'));
   }else{
    setMessage((targets.length===1?person.displayName:targets.length+' 人')+(editStatisticsGrant?'的模块显示与统计查看授权已保存，对方刷新页面后生效。':'的模块显示设置已保存，统计授权未修改。对方刷新页面后生效。'));setTargets([]);
   }

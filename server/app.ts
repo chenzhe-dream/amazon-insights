@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {createStatisticsViewAccess} from './auth/statistics-view-access';
+import {registerAdminRequestDiagnostics} from './admin-request-diagnostics';
 
 import Fastify, {
   type FastifyReply,
@@ -213,6 +214,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     genReqId: (request) =>
       normalizeRequestId(request.headers["x-request-id"], randomUUID),
   });
+  registerAdminRequestDiagnostics(app);
   void app.register(multipart, {
     limits: {
       files: 3,

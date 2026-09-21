@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
+import { ADMIN_READ_WRITE_ROUTES } from '../../shared/admin-request-timing';
 
 import {
   ApiErrorResponseSchema,
@@ -124,11 +125,14 @@ interface CreateAgentServiceClientOptions {
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  onTiming?: (record: AdminProxyTiming) => void;
 }
+
+type AdminProxyTiming={event:'admin-proxy-timing';requestId:string;route:string;method:string;phase:string;timedOut:boolean;upstreamStatus:number|null;headersMs:number|null;bodyMs:number|null;totalMs:number;deadlineMs:number};
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 export function agentRequestTimeoutMs(contractPath: string, override?: number) {
-  return override ?? (contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
+  return override ?? (ADMIN_READ_WRITE_ROUTES.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
 }
 const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 
@@ -383,7 +387,9 @@ export function createAgentServiceClient(
     headers.set("x-agent-proxy-token", config.proxyToken);
     headers.set("x-request-id", requestId);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), agentRequestTimeoutMs(contract.path, options.timeoutMs));
+    const started=performance.now(),deadlineMs=agentRequestTimeoutMs(contract.path, options.timeoutMs);
+    let phase='awaiting-headers',headersMs:number|null=null,bodyMs:number|null=null,upstreamStatus:number|null=null;
+    const timeout = setTimeout(() => controller.abort(), deadlineMs);
     let upstream: Response;
 
     try {
@@ -398,6 +404,7 @@ export function createAgentServiceClient(
             redirect: "error",
           },
         );
+        headersMs=Math.round(performance.now()-started);upstreamStatus=upstream.status;phase='reading-body';
       } catch {
         return controller.signal.aborted
           ? errorResult(
@@ -436,6 +443,7 @@ export function createAgentServiceClient(
       let rawBody: string;
       try {
         rawBody = await readLimitedBody(upstream, maxResponseBytes);
+        bodyMs=Math.round(performance.now()-started)-(headersMs??0);phase='validation';
       } catch (error) {
         if (controller.signal.aborted) {
           return errorResult(
@@ -518,6 +526,7 @@ export function createAgentServiceClient(
         );
       }
       body = parsedResponse.data;
+      phase='complete';
 
       return {
         status: upstream.status,
@@ -526,6 +535,10 @@ export function createAgentServiceClient(
       };
     } finally {
       clearTimeout(timeout);
+      if(ADMIN_READ_WRITE_ROUTES.has(contract.path)){
+        const record:AdminProxyTiming={event:'admin-proxy-timing',requestId,route:contract.path,method:request.method,phase,timedOut:controller.signal.aborted,upstreamStatus,headersMs,bodyMs,totalMs:Math.round(performance.now()-started),deadlineMs};
+        try{if(options.onTiming)options.onTiming(record);else console.info(JSON.stringify(record));}catch{/* Diagnostics must not change the response. */}
+      }
     }
   };
 }
