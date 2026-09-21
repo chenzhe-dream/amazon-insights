@@ -42,3 +42,9 @@ export function manualVocSourceBadge(record: ManualAlexaVocRecord | null) {
     ? `Manual Alexa · PostgreSQL r${record.revision}`
     : `Stale legacy static · generation ${record.generation ?? "?"}`;
 }
+
+/** Presentation only: missing mention counts do not make the accompanying feedback empty. */
+export function formatManualVocMatrixText(item: string, dimensionKey: string): string {
+  if (dimensionKey !== "positives" && dimensionKey !== "negatives") return item;
+  return item.replace(/^(\s*【[^】\r\n]+】)\s*暂无数据\s*[:：]\s*(?=\S)/u, "$1");
+}

@@ -13,9 +13,15 @@ import { buildVocDevelopmentSummary } from "../../app/voc-development-summary";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
 import type { ManualAlexaVocNormalizedRecord } from "../../shared/agent-contracts";
 
+// isolate-product-structure-rules deliberately replaces family-implied hardware
+// templates and retains previously dropped VOC themes. Raw aggregation and P0
+// assertions below stay unchanged; these projections pin the reviewed new actions.
+// v1.1.3 adds polarity-specific source IDs; ordinary lighting is no longer
+// blocked by a reading-purpose prerequisite. Before/after projections were
+// compared: aggregation, percentages, roles, priorities and scores are unchanged.
 const EXPECTED_DIGESTS = {
-  scooter: "199c1e105f1c21ffd1a5009b379fc6f1e2b82dbd6abc6808817eedb180fc1df4",
-  lighting: "92626444fec7ae33e7d3e017be8172d7dfbb608be245133d0bdee5b0e6ba2d20",
+  scooter: "42be2576b27c5161a1a86d84e830b8f8eaf6238cf61c01ada919f37ae1bd2df2",
+  lighting: "2151d330b34989742963dd7df992da6cad1011fdeff9a7efb9c8df4c4f91dd63",
 } as const;
 
 const PRODUCTS = Object.freeze({

@@ -105,7 +105,7 @@ test("rejects a member when only admin is allowed without leaking secrets", asyn
 });
 
 test("rejects Agent status 502 without leaking secrets", async () => {
-  const client = (async () => ({ status: 502, headers: new Headers(), body: { error: "upstream-body-sentinel", url: "internal-url-sentinel", token: "proxy-token-sentinel" } })) as AgentServiceClient;
+  const client = (async () => ({ status: 502, headers: new Headers(), body: { error: "upstream-body-sentinel", url: "internal-url-sentinel", token: "proxy-token-sentinel" } })) as unknown as AgentServiceClient;
   const result = await authorizeWebMutation(request(), { allowedRoles: ["admin", "member"], client });
   assert.equal(result.ok, false);
   if (!result.ok) { assert.equal(result.response.status, 503); await assertNoSecrets(result.response); }

@@ -2,9 +2,13 @@
   min-width: 0;
   min-height: 100vh;
   padding: 32px 20px 48px;
-  background: #f5f2eb;
-  color: #211f1a;
+  background: #f4f7fc;
+  color: #253957;
 }
+
+.managementTabs { display:flex; gap:24px; border-bottom:1px solid #dfe8f5; margin-bottom:20px; }
+.managementTabs button { background:transparent; border:0; border-bottom:3px solid transparent; color:#667d99; padding:10px 0; cursor:pointer; font:inherit; }
+.managementTabs button[aria-pressed=true] { color:#2879ec; border-bottom-color:#3281fa; }
 
 .shell {
   width: min(100%, 1440px);
@@ -27,7 +31,7 @@
 
 .title p {
   margin: 0 0 4px;
-  color: #8a5a1f;
+  color: #60758f;
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -215,3 +219,7 @@
     padding: 20px;
   }
 }
+
+.tableViewport, .stateCard { background:#fff; border-color:#dfe8f5; }
+.summaryTable th { background:#f8faff; color:#60758f; }
+.returnLink { color:#2879ec; border-color:#cfdef4; background:#fff; }

@@ -20,8 +20,10 @@ import {
 } from "./routes/connectors";
 import { registerConcurrencyAdminRoutes } from "./routes/concurrency-admin";
 import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
+import { createSellingTranslationService, registerSellingTranslationRoutes } from "./routes/selling-point-translations";
 import { registerMarketResearchRoutes } from "./routes/market-research";
 import { registerMarketModuleRoutes } from './routes/market-modules';
+import {registerMarketThemeSelectionRoutes} from './routes/market-theme-selection';
 import type { MarketModuleService } from './services/market-module-service';
 import type { MarketResearchService } from "./services/market-research-service";
 import { registerLegacyProjectOwnershipRoutes } from "./routes/legacy-project-ownership";
@@ -39,10 +41,13 @@ import {
   type AgentAuthenticationConfig,
 } from "./config";
 import { registerAuthRoutes, registerPasswordRoute } from "./routes/auth";
+import {registerModuleVisibilityRoutes} from './routes/module-visibility';
+import {registerMarketFavoritesRoutes} from './routes/market-favorites';
 import { registerDingTalkAuthRoutes } from "./routes/dingtalk-auth";
 import { registerFeedbackRoute } from "./routes/feedback";
 import { registerManualAlexaVocRoutes } from "./routes/manual-alexa-voc";
 import { registerAdminUserPresenceRoutes } from "./routes/admin-user-presence";
+import {registerUsageAnalyticsRoutes} from "./routes/usage-analytics";
 import {
   classifyRoute,
   requestPathname,
@@ -187,6 +192,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
           env,
           authService,
           repository: options.repository ?? null,
+          isSystemOwner: options.repository?.moduleVisibility
+            ? (organizationId,userId)=>options.repository!.moduleVisibility!.isOwner(organizationId,userId)
+            : undefined,
         })
       : null
     : options.userPresenceAccess;
@@ -333,7 +341,11 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
     authService,
     authConfig,
     userPresenceAccess,
+    options.repository?.moduleVisibility??null,
   );
+  registerModuleVisibilityRoutes(app,options.repository?.moduleVisibility??null,userPresenceAccess);
+  registerMarketFavoritesRoutes(app,options.repository?.marketFavorites??null,options.repository?.moduleVisibility??null);
+  registerUsageAnalyticsRoutes(app,env.AGENT_USAGE_ANALYTICS_ENABLED==="false"?null:options.repository?.usageAnalytics??null,userPresenceAccess);
   registerDingTalkAuthRoutes(
     app,
     options.dingTalkService ?? null,
@@ -431,6 +443,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
       : options.adminUserPresenceRepository,
     undefined,
     userPresenceAccess,
+    env.AGENT_USAGE_ANALYTICS_ENABLED==="false"?null:options.repository?.usageAnalytics??null,
   );
   registerFeedbackRoute(app, options.repository ?? null, env);
   const vocAutomationService = options.vocAutomationService ?? (options.repository?.vocAutomations ? new VocAutomationService({repository:options.repository, disabled: true}) : null);
@@ -508,8 +521,10 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
         }
       : null;
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
+  registerSellingTranslationRoutes(app, createSellingTranslationService(options.repository ?? null, env));
   registerMarketResearchRoutes(app, options.marketResearchService ?? null);
   registerMarketModuleRoutes(app, options.marketModuleService ?? null);
+  registerMarketThemeSelectionRoutes(app, options.repository?.marketExecutionContext ?? null);
   registerLegacyProjectOwnershipRoutes(
     app,
     options.repository ?? null,

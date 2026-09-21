@@ -1,0 +1,40 @@
+.comparison-overview-shell:not([open]) {
+  display: block;
+  position: static;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  color: inherit;
+}
+.comparison-overview-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.comparison-overview-expand { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 6px 12px; border: 1px solid #cbd9ea; border-radius: 7px; background: #fff; color: #235790; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.comparison-overview-expand:hover { background: #eef5ff; }
+.comparison-overview-expand:focus-visible { outline: 2px solid #1769d3; outline-offset: 2px; }
+.comparison-overview-shell:modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 20px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  color: inherit;
+  overflow: hidden;
+}
+.comparison-overview-shell:modal>.section-head { flex: 0 0 auto; }
+.comparison-overview-shell:modal>.matrix-wrap { flex: 1 1 0; min-height: 0; max-height: none; width: 100%; overflow: auto; }
+.comparison-overview-shell:modal .compare-matrix tr>th:first-child { position: sticky; left: 0; z-index: 5; }
+.comparison-overview-shell:modal .compare-matrix thead tr>th:first-child { z-index: 7; }
+.comparison-overview-shell::backdrop { background: #fff; }
+@media(max-width:640px) {
+  .comparison-overview-shell:modal { padding: 12px; }
+  .comparison-overview-shell>.section-head { flex-wrap: wrap; gap: 8px; }
+}

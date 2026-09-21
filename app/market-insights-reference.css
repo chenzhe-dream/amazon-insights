@@ -1,0 +1,88 @@
+/* Presentation only: scoped to the keyword and Customers Say market views. */
+.market-ui-reference .market-keyword-page .market-insights-context-row {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+}
+.market-ui-reference .market-keyword-page .market-insights-context-row input {
+  box-sizing: border-box;
+  width: min(100%, 920px);
+  min-width: 0;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid #e0e5ed;
+  border-radius: 5px;
+  background: #fff;
+  color: #34465d;
+  font: inherit;
+  font-size: 12px;
+}
+.market-ui-reference .market-keyword-page .market-insights-context-row input:focus {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 1px;
+}
+.market-ui-reference .market-keyword-page .ss-market-query details.market-insights-query-options,
+.market-ui-reference .market-theme-page .ss-market-query details.market-research-boundaries {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+.market-ui-reference .market-keyword-page .market-keyword-report-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.market-ui-reference .market-keyword-page .market-keyword-report-stack > * { min-width: 0; margin: 0; }
+.market-ui-reference .market-keyword-page .launch-section-head-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.market-ui-reference .market-keyword-page .launch-section-head-tools .source-badge { order: 1; }
+.market-ui-reference .market-keyword-page .market-insights-workflow,
+.market-ui-reference .market-theme-page .market-insights-workflow {
+  padding: 14px 18px;
+}
+.market-ui-reference .market-keyword-page .market-insights-workflow > details,
+.market-ui-reference .market-theme-page .market-insights-workflow > details {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.market-ui-reference .market-keyword-page .market-insights-workflow > details > summary,
+.market-ui-reference .market-theme-page .market-insights-workflow > details > summary,
+.market-ui-reference .market-keyword-page .market-insights-evidence > summary {
+  color: #52637a;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.market-ui-reference .market-keyword-page .market-insights-evidence { padding: 14px 18px; }
+.market-ui-reference .market-keyword-page .market-keyword-rules-report { padding: 0; }
+.market-ui-reference .market-keyword-page .launch-section-body .market-insights-table-options {
+  margin: 0 0 10px;
+  font-size: 11px;
+}
+.market-ui-reference .market-keyword-page .market-insights-table-options summary { color: #64748b; }
+.market-ui-reference .market-theme-page .market-insights-topic-notes {
+  margin: 10px 0 0;
+  color: #718095;
+  font-size: 10px;
+}
+.market-ui-reference .market-theme-page .market-insights-topic-notes summary { cursor: pointer; }
+@media (max-width: 760px) {
+  .market-ui-reference .market-keyword-page .launch-section-head-tools { justify-content: flex-start; width: 100%; flex-wrap: wrap; }
+  .market-ui-reference .market-keyword-page .launch-section-head-tools .st-keyword-table-search { min-width: 0; width: 100%; max-width: none; }
+  .market-ui-reference .market-keyword-page .market-insights-context-row { grid-template-columns: 1fr; gap: 6px; }
+  .market-ui-reference .market-theme-page .launch-section-title-row { flex-wrap: wrap; }
+  .market-ui-reference .market-theme-page .launch-section-title-row > h3 { flex: 1 0 100%; }
+  .market-ui-reference .market-theme-page .category-cs-table { min-width: 720px; }
+  .market-ui-reference .market-theme-page .category-cs-table td:last-child { min-width: 240px; }
+  .market-ui-reference .market-theme-page .category-cs-asin-table { min-width: 820px; }
+  .market-ui-reference .market-keyword-page .kw-launch-section-table { min-width: 620px; }
+}

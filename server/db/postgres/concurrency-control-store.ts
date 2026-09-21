@@ -98,13 +98,13 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
             ownerId: permit.ownerId,
             leaseGeneration: permit.leaseGeneration,
           }).catch(() => undefined);
-          throw new ResourceGovernorAdmissionError();
+          throw new ResourceGovernorAdmissionError({reason:'cancelled'});
         }
         return permit;
       }
       assertAdmissionActive(input.signal);
       if (maxWaitMs === 0 || Date.now() - started >= maxWaitMs) {
-        throw new ResourceGovernorAdmissionError();
+        throw new ResourceGovernorAdmissionError({reason:'concurrency'});
       }
       await delay(
         Math.min(50, Math.max(1, maxWaitMs - (Date.now() - started))),
@@ -180,7 +180,6 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
     assertAdmissionActive(input.signal);
     assertText(input.organizationId, "organizationId");
     assertText(input.jobId, "jobId");
-    const recordedAt = input.recordedAt ?? new Date().toISOString();
     return await retryAdmission(async () =>
       this.queries.transaction(async () => {
         assertAdmissionActive(input.signal);
@@ -188,6 +187,8 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           admissionLockId,
         ]);
         assertAdmissionActive(input.signal);
+        const clock = await this.queries.query<{ admission_now: Date | string }>("SELECT clock_timestamp() AS admission_now");
+        const recordedAt = input.recordedAt ?? iso(clock.rows[0].admission_now);
         const policy = await this.readAdmissionPolicyRow(
           input.organizationId,
           input.jobId,
@@ -198,21 +199,25 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
           input.attemptKind,
         );
         if (input.resource === "sellerSprite") {
-          const count = await this.queries.query<{ count: number }>(
-            `SELECT count(*)::integer AS count
-             FROM concurrency_physical_attempts
-             WHERE organization_id = $1
-               AND resource = 'sellerSprite'
+          const count = await this.queries.query<{ count: number; retry_at: Date | string }>(
+            `WITH active AS (
+             SELECT recorded_at FROM concurrency_physical_attempts
+             WHERE organization_id = $1 AND resource = 'sellerSprite'
                AND recorded_at > $2::timestamptz - ($3::text || ' milliseconds')::interval
-               AND recorded_at <= $2::timestamptz`,
+               AND recorded_at <= $2::timestamptz
+           ) SELECT count(*)::integer AS count,
+             (SELECT recorded_at + ($3::text || ' milliseconds')::interval FROM active
+              ORDER BY recorded_at OFFSET GREATEST(0,(SELECT count(*) FROM active)-$4) LIMIT 1) AS retry_at
+             FROM active`,
             [
               input.organizationId,
               recordedAt,
               policy.seller_sprite_rolling_window_ms,
+              policy.seller_sprite_rolling_max_attempts,
             ],
           );
           if ((count.rows[0]?.count ?? 0) >= policy.seller_sprite_rolling_max_attempts) {
-            throw new ResourceGovernorAdmissionError();
+            throw new ResourceGovernorAdmissionError({reason: 'rolling-window', retryAt: new Date(count.rows[0].retry_at).toISOString()});
           }
         }
         assertAdmissionActive(input.signal);
@@ -806,7 +811,7 @@ export class PostgresConcurrencyControlStore implements ConcurrencyControlReposi
     );
     const circuit = result.rows[0];
     if (circuit?.manual_hold || circuit?.auto_paused) {
-      throw new ResourceGovernorAdmissionError();
+      throw new ResourceGovernorAdmissionError({reason:'paused'});
     }
   }
 
@@ -1098,7 +1103,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = () => {
       clearTimeout(timeout);
-      reject(new ResourceGovernorAdmissionError());
+      reject(new ResourceGovernorAdmissionError({reason:'cancelled'}));
     };
     const timeout = setTimeout(() => {
       signal?.removeEventListener("abort", abort);
@@ -1109,5 +1114,5 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 function assertAdmissionActive(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError({reason:'cancelled'});
 }

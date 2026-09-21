@@ -44,7 +44,7 @@ function openRepository(t: test.TestContext) {
   return { ...temporary, repository };
 }
 
-function inspect<T>(path: string, query: string, ...params: unknown[]): T {
+function inspect<T>(path: string, query: string, ...params: import("node:sqlite").SQLInputValue[]): T {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     return database.prepare(query).get(...params) as T;

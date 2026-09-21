@@ -24,11 +24,16 @@ function validateWorktree(candidate) {
   return resolved;
 }
 
-export function resolveFormalWorktreeRoot({
-  env = process.env,
-  cwd = process.cwd(),
-  worktree,
-} = {}) {
+/**
+ * @typedef {object} FormalWorktreeOptions
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ * @property {string} [cwd]
+ * @property {string} [worktree]
+ */
+
+/** @param {FormalWorktreeOptions} [options] */
+export function resolveFormalWorktreeRoot(options = {}) {
+  const { env = process.env, cwd = process.cwd(), worktree } = options;
   const configured = env?.[FORMAL_WORKTREE_ENV];
   if (configured && worktree && path.resolve(configured) !== path.resolve(worktree)) {
     throw new Error("Formal worktree root conflicts with the requested worktree");
@@ -36,10 +41,12 @@ export function resolveFormalWorktreeRoot({
   return validateWorktree(configured ?? worktree ?? cwd);
 }
 
+/** @param {FormalWorktreeOptions} [options] */
 export function resolveFormalWorktreeRunner(options = {}) {
   return resolveFormalWorktreeScript("run-background-rebuild.mjs", options);
 }
 
+/** @param {FormalWorktreeOptions} [options] */
 export function resolveFormalWorktreeScript(scriptName, options = {}) {
   if (typeof scriptName !== "string" || !/^[a-z0-9-]+\.mjs$/.test(scriptName)) {
     throw new Error("Formal runner name is invalid");

@@ -93,6 +93,7 @@ test("apply compares the opaque version, recomputes candidates, and preserves su
     jobId: original.jobId,
     version: legacyRepairVersion(original.updatedAt),
   });
+  assert.ok(applied);
   assert.deepEqual(applied.candidates, legacyRepairCandidates(original));
   assert.equal(repository.updates, 1);
   assert.equal(repository.job?.jobId, original.jobId);
@@ -221,13 +222,13 @@ function memoryRepository(initial: SyncJobRecord | null) {
       if (!repository.job || repository.job.organizationId !== input.organizationId) return null;
       if (legacyRepairVersion(repository.job.updatedAt) !== input.version) return { disposition: "conflict" as const };
       const candidates = legacyRepairCandidates(repository.job);
-      const asinProgress = structuredClone(repository.job.asinProgress);
+      const asinProgress = { ...structuredClone(repository.job.asinProgress) };
       for (const candidate of candidates) {
-        asinProgress[candidate.asin]![candidate.module] = {
+        asinProgress[candidate.asin] = { ...asinProgress[candidate.asin], [candidate.module]: {
           status: "pending",
           reason: "LEGACY_UNVERIFIED",
           updatedAt: input.appliedAt,
-        };
+        } };
       }
       repository.updates += 1;
       repository.job = { ...repository.job, asinProgress, updatedAt: input.appliedAt };

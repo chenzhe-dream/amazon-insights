@@ -36,7 +36,7 @@ export function resolveRatingMetric(
     }
   }
   if (typeof catalog.rating === "number" || typeof catalog.reviews === "number") {
-    return { source: "catalog", value: { rating: catalog.rating, reviewCount: catalog.reviews }, state: "conflict", label: conflictLabel };
+    return { source: "catalog", value: { rating: catalog.rating ?? null, reviewCount: catalog.reviews ?? null }, state: "conflict", label: conflictLabel };
   }
   return { source: "missing", value: null, state: "missing", label: "暂无可用评分 / 评论" };
 }

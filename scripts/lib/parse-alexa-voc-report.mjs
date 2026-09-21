@@ -181,13 +181,14 @@ function extractOverallConclusion(lines) {
 }
 
 export function parseAlexaVocReport(rawText, asinHint = "") {
-  if (!rawText?.trim()) return { ok: false, error: "empty_report", sections: {} };
+  /** @type {Record<string, ReturnType<typeof parseSectionRecords>>} */
+  const sections = {};
+  if (!rawText?.trim()) return { ok: false, error: "empty_report", sections };
 
   const text = rawText.trim();
   const lines = normalizeLines(text);
   const header = extractHeaderMeta(text, asinHint);
   const headings = lines.map((line, index) => ({ ...line, index, key: sectionHeading(line.text) })).filter(line => line.key);
-  const sections = {};
 
   for (let index = 0; index < headings.length; index += 1) {
     const current = headings[index];

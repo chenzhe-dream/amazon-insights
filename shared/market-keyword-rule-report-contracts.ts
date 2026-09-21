@@ -5,7 +5,7 @@ export const KEYWORD_RULE_REPORT_VERSION='market-keyword-rule-report/v2' as cons
 export const KEYWORD_THREE_MONTH_FORMULA_VERSION='calendar-three-month-growth/v1' as const;
 const id=z.string().min(1).max(240),ids=z.array(id).max(2000),num=z.number().finite(),count=num.int().nonnegative(),month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
 const exact=z.object({numerator:z.string().regex(/^-?\d+$/),denominator:z.string().regex(/^[1-9]\d*$/)}).strict().nullable();
-export const MarketKeywordRuleMetricEvidenceSchema=z.object({scope:MarketAnalysisScopeSchema,snapshotId:id,sourceVersion:id,recordIds:ids,metric:id,unit:z.enum(['count','fraction','ratio','USD','label']),method:id,methodVersion:id}).strict();
+export const MarketKeywordRuleMetricEvidenceSchema=z.object({scope:MarketAnalysisScopeSchema,snapshotId:id,sourceVersion:id,recordIds:ids,metric:id,unit:z.enum(['count','fraction','ratio','USD','GBP','EUR','JPY','CAD','label']),method:id,methodVersion:id}).strict();
 const metric=z.object({value:num.nullable(),evidence:MarketKeywordRuleMetricEvidenceSchema.nullable(),missingReason:id.nullable()}).strict();
 const coverage=z.object({value:num.nullable(),weightSum:num.nonnegative(),weightedMemberCount:count,knownValueCount:count,unknownValueCount:count}).strict();
 const volume=z.object({memberIds:ids,memberCount:count,totalSearchVolume:num.nonnegative().nullable(),knownSearchVolume:num.nonnegative(),knownSearchVolumeCount:count,unknownSearchVolumeCount:count}).strict();

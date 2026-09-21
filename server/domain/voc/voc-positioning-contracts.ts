@@ -474,7 +474,7 @@ export function canonicalizeVocPositioningOutput(
     const identities = references.map(themeReferenceIdentity);
     if (new Set(identities).size !== identities.length) return null;
     const resolved = identities.map((identity) => themeByIdentity.get(identity));
-    return resolved.some((item) => item === undefined) ? null : resolved;
+    return resolved.every((item) => item !== undefined) ? resolved : null;
   };
   const canonicalEvidenceIds = (
     references: readonly z.infer<typeof ThemeReferenceSchema>[],

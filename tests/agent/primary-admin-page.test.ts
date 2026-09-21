@@ -107,10 +107,11 @@ test("non-primary accounts render no root-diagnostic builder message node", () =
   }
 });
 
-test("VOC page reports that its dedicated run has not started when no run is present", () => {
+test("VOC page hides the unused agent card when no run or saved report is present", () => {
   const html = renderBuilder(user("member@example.com", "member"), "voc");
 
-  assert.match(html, /VOC Agent · 尚未开始/);
+  assert.doesNotMatch(html, /VOC Agent/);
+  assert.doesNotMatch(html, /<section class="card launch-block"/);
   assert.doesNotMatch(html, /Stage: queued · 0%/);
 });
 

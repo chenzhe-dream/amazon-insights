@@ -1,9 +1,26 @@
+import { isColorDimension, resolveVariantColor } from "./lib/variant-color";
+
 export type XydcVariantDisplayAttribute = Readonly<{
   dimension: string;
   value: string;
+  labelZh?: string;
 }>;
 
 const colorLabels = new Map<string, string>([
+  ["amber", "琥珀色"],
+  ["walnut", "胡桃木色"],
+  ["pink", "粉色"],
+  ["clear", "透明色"],
+  ["green", "绿色"],
+  ["purple", "紫色"],
+  ["red gold", "红金色"],
+  ["green gold", "绿金色"],
+  ["blue purple", "蓝紫色"],
+  ["blue red", "蓝红色"],
+  ["red green", "红绿色"],
+  ["silver gray", "银灰色"],
+  ["creamy white", "奶白色"],
+  ["crystal black", "水晶黑"],
   ["black", "黑色"],
   ["black dimmable", "黑色（可调光款）"],
   ["black remote control", "黑色（遥控款）"],
@@ -47,9 +64,11 @@ function sizeLabel(value: string) {
 }
 
 export function xydcVariantAttributeLabel(attribute: XydcVariantDisplayAttribute) {
+  if (attribute.labelZh?.trim() && /[\u3400-\u9fff]/.test(attribute.labelZh)) return attribute.labelZh.trim();
   const dimension = normalized(attribute.dimension);
-  if (dimension === "color") return colorLabel(attribute.value);
-  if (dimension === "shape") return shapeLabels.get(normalized(attribute.value)) ?? attribute.value;
-  if (dimension === "size") return sizeLabel(attribute.value);
-  return attribute.value;
+  const known = isColorDimension(dimension) ? colorLabel(attribute.value)
+    : dimension === "shape" ? shapeLabels.get(normalized(attribute.value)) ?? attribute.value
+    : dimension === "size" ? sizeLabel(attribute.value) : attribute.value;
+  if (known !== attribute.value) return known;
+  return isColorDimension(dimension) ? resolveVariantColor([attribute]).label : attribute.labelZh || attribute.value;
 }

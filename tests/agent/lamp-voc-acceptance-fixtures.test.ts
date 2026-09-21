@@ -14,8 +14,9 @@ for (const asin of asins) test(`synthetic lamp VOC ${asin} binds only its ASIN a
   assert.deepEqual(parsed.missing, []);
   assert.equal(parsed.rating, null);
   assert.equal(parsed.reviewCount, null);
+  const sections: Record<string, Array<{ text: string }>> = parsed.sections;
   for (const { key } of ALEXA_VOC_DIMENSIONS) {
-    assert.ok(parsed.sections[key].length >= 2, `${key} needs at least two identifiable test points`);
-    for (const record of parsed.sections[key]) assert.match(record.text, /模拟/);
+    assert.ok(sections[key].length >= 2, `${key} needs at least two identifiable test points`);
+    for (const record of sections[key]) assert.match(record.text, /模拟/);
   }
 });

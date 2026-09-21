@@ -22,8 +22,10 @@ test('source steps persist governed collections without requiring a model', { ti
   let productPayload: Record<string, unknown> = { code: 'OK', data: [{ asin, title: 'Synthetic lamp', brand: 'Fixture', totalUnits: 0,
     price: null, totalRevenue: null, ranking: 1, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-01', rating: 4, ratings: 5 }] };
   let failOverviewStatistics=false;
+  let localAdmission: {reason:"rolling-window";retryAt:string}|undefined;
   const connector = (id: 'sellerSprite' | 'sorftime'): RemoteMcpConnector => ({ id, probe: async () => { throw new Error('not used'); }, execute: async request => {
     calls.push(request);
+    if(localAdmission)throw new ConnectorError(id,"local-admission",true,localAdmission);
     if(failOverviewStatistics&&request.operation==='market_research_statistics')throw new ConnectorError('sellerSprite','upstream-permanent',false);
     const overview={nodeIdPath:f.scope.nodeIdPath,nodeId:'34',month:'202608',marketplace:'US',currency:'USD',topProducts:100,totalUnits:0,totalRevenue:0};
     const data = request.operation === 'market_research'?{code:'OK',data:{items:[overview]}}:request.operation==='market_research_statistics'?{code:'OK',data:{...overview,brands:5}}:request.operation === 'market_product_concentration' ? productPayload
@@ -41,6 +43,17 @@ test('source steps persist governed collections without requiring a model', { ti
   }
   const view = (id: string) => f.stores.steps.findModuleRun({ actor: f.actor, moduleRunId: id });
   let productInputId = '', keywordInputId = '', keywordId = '';
+  await t.test('source handler preserves exact local cooldown across flattened collector failure',async()=>{
+    const run=await create('collect-product-month',{month:'2026-08',poolSize:100,newProductMonths:6});
+    localAdmission={reason:'rolling-window',retryAt:new Date(Date.now()+60000).toISOString()};
+    const before=calls.length;await worker.tick();
+    const saved=(await view(run.id))!;assert.equal(saved.steps[0].status,'queued');
+    assert.deepEqual(saved.attempts[0].error,{code:'local-admission',retryable:true,admission:localAdmission});
+    assert.ok(Date.parse(saved.steps[0].nextAttemptAt!)>=Date.parse(localAdmission.retryAt));
+    assert.equal(calls.at(-1)!.sessionScope,'market');assert.equal(await worker.tick(),false);assert.equal(calls.length,before+1);
+    localAdmission=undefined;await pg.pool.query('UPDATE market_analysis_steps SET next_attempt_at=clock_timestamp() WHERE id=$1',[saved.steps[0].id]);
+    await worker.tick();assert.equal((await view(run.id))!.steps[0].status,'succeeded');
+  });
   await t.test('overview endpoints persist raw sources atomically and retry only the failed sibling',async sub=>{
     failOverviewStatistics=true;sub.after(()=>{failOverviewStatistics=false;});
     const operations=['market_research','market_research_statistics'] as const;

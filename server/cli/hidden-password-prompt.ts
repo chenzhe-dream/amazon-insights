@@ -30,7 +30,9 @@ function readHiddenLine(
   }
 
   const previousRawMode = tty.isRaw === true;
-  const previousDataListeners = input.listeners("data");
+  const previousDataListeners = input.listeners("data").filter(
+    (listener): listener is (chunk: Buffer | string) => void => typeof listener === "function",
+  );
   let restored = false;
   let value = "";
 

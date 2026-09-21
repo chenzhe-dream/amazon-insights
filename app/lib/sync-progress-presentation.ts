@@ -1,6 +1,9 @@
+import type { LocalDataSyncPublication } from "../../shared/agent-contracts";
 import type { AsinModuleResult } from "./sync-job-display";
 
 export type SyncStage = {
+  imageAction?: "refresh" | "analyze";
+  repairAsins?: string[];
   id: string;
   label: string;
   kind: "auto" | "manual";
@@ -12,29 +15,7 @@ export type SyncStage = {
   completedAt?: string | null;
 };
 
-export type SyncPublication =
-  | { status: "not-required" }
-  | {
-    status: "pending";
-    requestId: string;
-    artifactId: string;
-    requestedAt: string;
-  }
-  | {
-    status: "applied";
-    requestId: string;
-    artifactId: string;
-    requestedAt: string;
-    appliedAt: string;
-  }
-  | {
-    status: "failed";
-    requestId: string;
-    artifactId: string;
-    requestedAt: string;
-    failedAt: string;
-    code: "WEB_PUBLICATION_FAILED";
-  };
+export type SyncPublication = LocalDataSyncPublication;
 
 export type SyncJob = {
   jobId: string;

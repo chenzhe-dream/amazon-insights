@@ -335,6 +335,10 @@ function Harness() {
     },
     listingContentByAsin: sorftimeListingContentData,
     categoryTrendByNode: sorftimeCategoryTrendData,
+    childSalesByAsin: {},
+    priceStrategyByAsin: {},
+    imageRemarksByAsin: {},
+    imageRemarkOutcomesByAsin: {},
     trafficData: { overview: sifListingTrafficOverview, monthlyTrend: sifMonthlyTrafficTrend, meta: sifListingTrafficMeta },
   });
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputs.reviews);

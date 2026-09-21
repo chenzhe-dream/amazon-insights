@@ -13,6 +13,7 @@ import { createXydcVariantCache, isFreshXydcVariantCache } from "./lib/xydc-vari
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 import { createXydcOrderJobLifetime } from "./lib/xydc-order-job-lifetime";
 import { readXydcRepairStatuses } from "./lib/xydc-repair-readiness";
+import { syncXydcLabelTranslations } from "./lib/xydc-label-model";
 
 type Cache = {
   readMany(country: string, asins: readonly string[]): Promise<Record<string, XydcVariantFamily>>;
@@ -628,6 +629,12 @@ async function main() {
     // Order history is optional enrichment and cannot change core variant sync success.
   }
   process.stdout.write(`[xydc] ${families.length} family snapshots cached; ${orderCount} order snapshots cached\n`);
+  if (!fixturePath) {
+    await syncXydcLabelTranslations({ families, dataRoot: roots.dataRoot, signal: lifetime.signal,
+      beforeRequest: lifetime.beforeRequest }).catch(() => {
+      process.stderr.write("[xydc-labels] Translation unavailable; original labels retained\n");
+    });
+  }
   if (process.env.AGENT_SYNC_REPAIR_INCOMPLETE === "1") {
     const statuses = await readXydcRepairStatuses(asins, country, { dataRoot: roots.dataRoot });
     for (const { asin, status } of statuses) process.stderr.write(`[xydc-repair] ${asin} ${status}\n`);

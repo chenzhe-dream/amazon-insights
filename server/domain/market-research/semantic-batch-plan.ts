@@ -14,7 +14,10 @@ import { createMarketInputSnapshot } from './snapshot';
 import { validateMarketSemanticInput } from './semantic-validation';
 
 export const MARKET_SEMANTIC_BATCH_PLANNER_VERSION = 'market-semantic-batches/v1';
-const memberCaps = { 'market-overview-synthesis':1, 'market-shape-synthesis':1, 'market-shape-structure-explanation':1, 'market-overview-explanation': 1, 'market-product-shape-suggestion': 10,
+export const MARKET_SHAPE_SUGGESTION_BATCH_POLICY = Object.freeze({
+  plannerVersion: 'market-semantic-batches/shape-single-product-v2', maxMembers: 1,
+} as const);
+const memberCaps = { 'market-overview-synthesis':1, 'market-shape-synthesis':1, 'market-shape-structure-explanation':1, 'market-overview-explanation': 1, 'market-product-shape-suggestion': MARKET_SHAPE_SUGGESTION_BATCH_POLICY.maxMembers,
   'market-keyword-semantics': 20, 'market-customer-theme-mapping': 12 } as const;
 const kinds = { 'market-overview-synthesis':'overview', 'market-shape-synthesis':'overview', 'market-shape-structure-explanation':'overview', 'market-overview-explanation': 'overview', 'market-product-shape-suggestion': 'products',
   'market-keyword-semantics': 'keywords', 'market-customer-theme-mapping': 'customer-themes' } as const;
@@ -32,7 +35,7 @@ export interface MarketPreparedSemanticBatch {
   bindingId: string; memberRefs: string[]; input: MarketSemanticInput; validationBinding: MarketSemanticValidationBinding;
 }
 export interface MarketSemanticBatchPlan {
-  plannerVersion: typeof MARKET_SEMANTIC_BATCH_PLANNER_VERSION; basisHash: string;
+  plannerVersion: typeof MARKET_SEMANTIC_BATCH_PLANNER_VERSION | typeof MARKET_SHAPE_SUGGESTION_BATCH_POLICY.plannerVersion; basisHash: string;
   expectedMemberIds: string[]; missingMemberIds: string[];
   rejectedMembers: { memberId: string; reason: 'request-too-large' | 'missing-source' }[];
   batches: MarketPreparedSemanticBatch[];
@@ -71,6 +74,8 @@ export async function planMarketSemanticBatches(raw: MarketSemanticBatchPlanInpu
   fits: (input: MarketSemanticInput) => Promise<boolean>, signal?: AbortSignal): Promise<MarketSemanticBatchPlan> {
   signal?.throwIfAborted();
   const task = MarketSemanticTaskNameSchema.parse(raw.task);
+  const plannerVersion = task === 'market-product-shape-suggestion'
+    ? MARKET_SHAPE_SUGGESTION_BATCH_POLICY.plannerVersion : MARKET_SEMANTIC_BATCH_PLANNER_VERSION;
   z.string().uuid().parse(raw.moduleRunId);
   z.string().min(1).max(160).parse(raw.selectionRevision); z.string().min(1).max(240).parse(raw.configurationVersion);
   z.string().datetime().parse(raw.dataCutoffAt);
@@ -92,7 +97,7 @@ export async function planMarketSemanticBatches(raw: MarketSemanticBatchPlanInpu
   freeze(sources);
   const shapeExplanationCatalog=(task==='market-shape-structure-explanation'||task==='market-shape-synthesis')?validateMarketShapeExplanationCatalog(raw.shapeExplanationCatalog as MarketShapeExplanationCatalog):undefined;
   const sourceCatalog = freeze(Object.fromEntries(records.map(r => [r.id, r.semantic])));
-  const basisHash = digest({ planner: MARKET_SEMANTIC_BATCH_PLANNER_VERSION, task, moduleRunId, snapshotId: snapshot.snapshotId,
+  const basisHash = digest({ planner: plannerVersion, task, moduleRunId, snapshotId: snapshot.snapshotId,
     selectionRevision, configurationVersion, dataCutoffAt });
   function batch(members: typeof records, verifySources = false): MarketPreparedSemanticBatch {
     const memberRefs = members.map(r => r.id), identity = { basisHash, memberRefs };
@@ -123,7 +128,7 @@ export async function planMarketSemanticBatches(raw: MarketSemanticBatchPlanInpu
   // resizing only changes the partition of these validated immutable records;
   // it must not repeatedly rebuild the entire snapshot once per added member.
   for (let i = 0; i < records.length; i += memberCaps[task]) { signal?.throwIfAborted(); batch(records.slice(i, i + memberCaps[task]), true); }
-  const plan: MarketSemanticBatchPlan = { plannerVersion: MARKET_SEMANTIC_BATCH_PLANNER_VERSION, basisHash,
+  const plan: MarketSemanticBatchPlan = { plannerVersion, basisHash,
     expectedMemberIds: [...snapshot.expectedRecordIds], missingMemberIds: snapshot.expectedRecordIds.filter(id => !Object.hasOwn(sourceCatalog, id)), rejectedMembers: [], batches: [] };
   let current: typeof records = [], accepted: MarketPreparedSemanticBatch | undefined;
   for (const record of records) {

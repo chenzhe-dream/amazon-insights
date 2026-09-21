@@ -15,9 +15,13 @@ import {
   type User,
 } from "../../shared/agent-contracts";
 import { localAgentFetch } from "./local-agent-browser";
+import type {ModuleKey} from '../../shared/module-visibility-contracts';
 
 export type AuthFetch = (path: string, init?: RequestInit) => Promise<Response>;
 export type AuthenticatedWebIdentity = Readonly<{
+  visibleModules?: ModuleKey[];
+  isSystemOwner?: boolean;
+  canManageModuleVisibility?: boolean;
   user: User;
   sessionIdentity: string;
   canViewUserPresence: boolean;
@@ -27,7 +31,7 @@ export type AuthSessionState =
   | Readonly<{ status: "checking"; user: null; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unauthenticated"; user: null; message: string | null; retryAfterSeconds: number | null }>
   | Readonly<{ status: "submitting"; user: null; message: null; retryAfterSeconds: null }>
-  | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; canViewUserPresence: boolean; message: null; retryAfterSeconds: null }>
+  | Readonly<{ status: "authenticated"; user: User; sessionIdentity: string; canViewUserPresence: boolean; visibleModules?: ModuleKey[]; isSystemOwner?: boolean; canManageModuleVisibility?: boolean; message: null; retryAfterSeconds: null }>
   | Readonly<{ status: "unavailable"; user: null; message: string; retryAfterSeconds: null }>;
 
 export type WebAuthErrorKind =
@@ -74,6 +78,9 @@ export async function readWebSession(fetchImpl: AuthFetch = localAgentFetch): Pr
         user: parsed.data.user,
         sessionIdentity: parsed.data.sessionIdentity,
         canViewUserPresence: parsed.data.canViewUserPresence,
+        ...(parsed.data.visibleModules!==undefined?{visibleModules:parsed.data.visibleModules}:{}),
+        ...(parsed.data.isSystemOwner!==undefined?{isSystemOwner:parsed.data.isSystemOwner}:{}),
+        ...(parsed.data.canManageModuleVisibility!==undefined?{canManageModuleVisibility:parsed.data.canManageModuleVisibility}:{}),
       };
     }
     return null;

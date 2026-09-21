@@ -83,10 +83,16 @@ export interface ResourceGovernor {
   }): Promise<T>;
 }
 
+export const LOCAL_ADMISSION_REASONS = ['rolling-window', 'concurrency', 'paused', 'unavailable', 'cancelled'] as const;
+export type LocalAdmission = { reason: typeof LOCAL_ADMISSION_REASONS[number]; retryAt: string | null };
 export class ResourceGovernorAdmissionError extends Error {
-  constructor(options?: ErrorOptions) {
+  readonly reason: LocalAdmission['reason'];
+  readonly retryAt: string | null;
+  constructor(options?: ErrorOptions & Partial<LocalAdmission>) {
     super("External request capacity is temporarily unavailable", options);
     this.name = "ResourceGovernorAdmissionError";
+    this.reason = options?.reason ?? 'unavailable';
+    this.retryAt = this.reason === 'rolling-window' && options?.retryAt && Number.isFinite(Date.parse(options.retryAt)) ? new Date(options.retryAt).toISOString() : null;
   }
 }
 
@@ -149,7 +155,7 @@ export class PostgresResourceGovernor implements ResourceGovernor {
       });
       if (input.signal?.aborted) {
         await this.compensateUndispatchedAttempt(receipt);
-        throw new ResourceGovernorAdmissionError();
+        throw new ResourceGovernorAdmissionError({reason:'cancelled'});
       }
       return await input.operation();
     } finally {
@@ -176,5 +182,5 @@ export class PostgresResourceGovernor implements ResourceGovernor {
 }
 
 function assertAdmissionActive(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError({reason:'cancelled'});
 }

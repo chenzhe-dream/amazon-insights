@@ -158,6 +158,21 @@ function buildPresenceApp(
   });
 }
 
+test('paged presence validates queries and forwards only server-owned organization scope',async t=>{
+  const repository=new FakePresenceRepository();
+  const app=buildPresenceApp('admin',repository);t.after(()=>app.close());
+  for(const suffix of ['page=0','pageSize=500','source=unknown','organizationId=forged']){
+    const response=await app.inject({method:'GET',url:'/v1/admin/users?'+suffix,headers:proxyHeaders()});
+    assert.equal(response.statusCode,400);
+  }
+  assert.equal(repository.listCalls.length,0);
+  const response=await app.inject({method:'GET',url:'/v1/admin/users?page=2&pageSize=10&source=all&q=Person',headers:proxyHeaders()});
+  assert.equal(response.statusCode,200);
+  assert.equal(repository.listCalls[0].organizationId,principal('admin').organizationId);
+  assert.equal(repository.listCalls[0].query?.page,2);
+  assert.equal(response.json().pagination.page,1);
+});
+
 function assertPublicPayload(payload: unknown) {
   const serialized = JSON.stringify(payload);
   assert.doesNotMatch(
@@ -298,10 +313,13 @@ test("admin presence GET scopes the repository and shares one server asOf with t
   const app = buildPresenceApp("admin", repository);
   t.after(() => app.close());
 
+  const forged = await app.inject({
+    method: "GET",url: "/v1/admin/users?organizationId=attacker-org",headers: proxyHeaders(),
+  });
+  assert.equal(forged.statusCode,400);
+  assert.equal(repository.listCalls.length,0);
   const response = await app.inject({
-    method: "GET",
-    url: "/v1/admin/users?organizationId=attacker-org",
-    headers: proxyHeaders(),
+    method: "GET",url: "/v1/admin/users",headers: proxyHeaders(),
   });
 
   assert.equal(response.statusCode, 200);
@@ -320,7 +338,7 @@ test("admin presence GET scopes the repository and shares one server asOf with t
   assert.equal(AdminUserPresenceResponseSchema.safeParse(payload).success, true);
   assert.deepEqual(payload, {
     asOf: read.asOf,
-    recentActivityWindowSeconds: 300,
+    recentActivityWindowSeconds: 900,
     users: [
       {
         account: "visible-admin@example.com",

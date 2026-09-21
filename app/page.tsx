@@ -1,6 +1,12 @@
 "use client";
+import {readHistoricalSyncPointer,sourceProjectIdForSave} from "./lib/image-source-project";
+import {ListingImageSourceProject} from "./listing-image-source-project";
+import {ComparisonOverviewCard} from "./comparison-overview-card";
+import {publishUsagePage} from "./lib/usage-analytics-browser";
 
 import Link from "next/link";
+import {canSeeTab,firstVisibleTab} from './lib/module-visibility';
+import {ModuleVisibilityLink} from './module-visibility-link';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ManualAlexaVocNormalizedRecord } from "../shared/agent-contracts";
@@ -32,6 +38,7 @@ import {
   manualVocDimensions,
   manualVocDisplayMeta,
   manualVocSourceBadge,
+  formatManualVocMatrixText,
 } from "./voc-display-schema";
 import { VocDimensionLabel } from "./voc-dimension-label";
 import { buildVocDevelopmentSummary, hasVocDevelopmentData, vocDevBarPalette, vocDevelopmentSummaryMeta, vocInsightRingDimensions } from "./voc-development-summary";
@@ -72,13 +79,17 @@ import { CategoryNodeTrendSection } from "./category-node-trend-section";
 import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
 import { listingImageRemarks } from "./listing-image-remarks";
+import { projectSegmentName } from "../shared/project-segment-name";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
+import { SellingPointTranslation } from "./selling-point-translation";
 import { useAnalysisProjectFavorites } from "./use-analysis-project-favorites";
 import { AnalysisProjectFavoriteButton } from "./analysis-project-favorite-button";
 import { inferAmazonMajorCategory } from "./amazon-major-categories";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { buildAppTabHref as buildTabHref, tabFromParam, type TabId } from "./lib/app-tabs";
+import {MarketSiteSchema} from "../shared/market-sites";
+import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView } from "./lib/market-navigation";
 import { MarketResearchSection } from "./market-research-section";
 import "./market-research.css";
 import {
@@ -131,54 +142,6 @@ const RUNTIME_ANALYSIS_REFRESH_FAILED = "最新分析数据暂未刷新，页面
 type RuntimeAnalysisRefreshResult =
   | Readonly<{ ok: true; snapshot: RuntimeAnalysisDataSnapshot }>
   | Readonly<{ ok: false; reason: "failed" | "superseded"; message: string }>;
-
-type HistoricalSyncPointer = Readonly<{
-  projectId: string;
-  runId: string;
-  jobId: string;
-}>;
-
-async function readHistoricalSyncPointer(project: AnalysisProject): Promise<HistoricalSyncPointer | null> {
-  try {
-    const projectResponse = await localAgentFetch(`/v1/projects/${encodeURIComponent(project.id)}`);
-    const projectPayload = await projectResponse.json() as {
-      project?: { id?: unknown; currentRunId?: unknown };
-    };
-    const runId = projectPayload.project?.currentRunId;
-    if (!projectResponse.ok || projectPayload.project?.id !== project.id || typeof runId !== "string" || !runId) {
-      return null;
-    }
-
-    const runResponse = await localAgentFetch(`/v1/runs/${encodeURIComponent(runId)}`);
-    const runPayload = await runResponse.json() as {
-      run?: { id?: unknown; projectId?: unknown; idempotencyKey?: unknown };
-    };
-    const jobId = runPayload.run?.idempotencyKey;
-    if (
-      !runResponse.ok ||
-      runPayload.run?.id !== runId ||
-      runPayload.run?.projectId !== project.id ||
-      typeof jobId !== "string" ||
-      !jobId
-    ) return null;
-
-    const jobResponse = await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`);
-    const job = await jobResponse.json() as SyncJob;
-    if (
-      !jobResponse.ok ||
-      job.jobId !== jobId ||
-      job.scope?.runId !== runId ||
-      !isSyncJobScopeMatch(
-      { asins: job.asins ?? [], marketplace: job.marketplace ?? "", scope: job.scope },
-      { asins: project.asins, marketplace: project.marketplace || "US", projectId: project.id, runId },
-      )
-    ) return null;
-
-    return { projectId: project.id, runId, jobId };
-  } catch {
-    return null;
-  }
-}
 
 type Keyword = { word: string; share: number; type: "自然" | "广告" };
 type VariantDetail = { name: string; reviews: number | null; share: number | null; launch: string | null };
@@ -272,7 +235,7 @@ const savedReportStageLabels = {
   "product-definition": "产品定义",
 } as const;
 
-type NavLeaf = { id: TabId; label: string; sub: string };
+type NavLeaf = { id: TabId; label: string; sub: string; marketView?: MarketView };
 type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
 type NavEntry = NavLeaf | NavGroup;
 
@@ -510,7 +473,7 @@ function sameAsinSet(left: string[], right: string[]) {
   return left.every(item => other.has(item));
 }
 
-function replaceAppUrl(params: URLSearchParams, basePath = "/") {
+function replaceAppUrl(params: URLSearchParams | string, basePath = "/") {
   if (typeof window === "undefined") return;
   const query = params.toString();
   const url = query ? `${basePath}?${query}` : basePath;
@@ -768,7 +731,7 @@ function parseMotiveStarRating(segment: string) {
 }
 
 function renderVocMatrixItem(item: string, dimensionKey: string) {
-  if (dimensionKey !== "motives" || !item.includes("｜")) return item;
+  if (dimensionKey !== "motives" || !item.includes("｜")) return formatManualVocMatrixText(item, dimensionKey);
   const parts = item.split("｜");
   if (parts.length < 3) return item;
   const starRating = parseMotiveStarRating(parts[1]);
@@ -900,6 +863,45 @@ function SalesTrendSparkline({ asin, sales30d, color, trendByAsin }: { asin: str
   const record = trendByAsin[asin];
   const [open, setOpen] = useState(false);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelClose = () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
+  const closeChart = () => {
+    cancelClose();
+    setOpen(false);
+    setPinned(false);
+    setHoverIndex(null);
+  };
+  const keepOpen = () => { cancelClose(); setOpen(true); };
+  const scheduleClose = () => {
+    cancelClose();
+    if (!pinned) closeTimer.current = setTimeout(closeChart, 1000);
+  };
+  useEffect(() => () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = () => {
+      if (closeTimer.current !== null) clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+      setOpen(false); setPinned(false); setHoverIndex(null);
+    };
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !cardRef.current?.contains(event.target)) dismiss();
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
 
   const volumeColor = "#5DAFE8";
   const amountColor = "#7A67D8";
@@ -958,25 +960,30 @@ function SalesTrendSparkline({ asin, sales30d, color, trendByAsin }: { asin: str
   return (
     <div
       className="sales-trend-cell"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => {
-        setOpen(false);
-        setHoverIndex(null);
-      }}
+      ref={cardRef}
+      onMouseEnter={keepOpen}
+      onMouseLeave={scheduleClose}
+      onFocus={keepOpen}
+      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose(); }}
     >
       <div className="sales-trend-value">
         <strong>{displaySales === null || displaySales === undefined ? "—" : `${Number(displaySales).toLocaleString()}+`}</strong>
-        <span className="sales-trend-spark" aria-label="悬停查看历史销量趋势">
+        <button type="button" className="sales-trend-spark" aria-label="查看历史销量趋势" aria-expanded={open} aria-pressed={pinned}
+          title="悬停预览，点击固定展开" onClick={() => { if (pinned) closeChart(); else { keepOpen(); setPinned(true); } }}>
           <svg viewBox={`0 0 ${sparkW} ${sparkH}`} width={sparkW} height={sparkH} role="img">
             <polyline points={sparkPoints} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-        </span>
+        </button>
       </div>
       {open && merged.length > 0 && (
-        <div className="sales-trend-popover">
+        <div className="sales-trend-popover" onMouseEnter={keepOpen} onMouseLeave={scheduleClose}>
           <div className="sales-trend-popover-head">
             <span className="sales-trend-popover-title">
               <i />销量趋势
+            </span>
+            <span className="sales-trend-popover-actions">
+              <small>{pinned ? "已固定 · 点击外部可关闭" : "点击缩略图可固定"}</small>
+              <button type="button" aria-label="关闭销量趋势" onClick={closeChart}>×</button>
             </span>
           </div>
           <div className="sales-trend-popover-legend">
@@ -1660,10 +1667,7 @@ export function TrafficAnalysisConclusionSection({
 
 export function VocRunStatusSummary({ observation }: { observation: VocRunObservation | null }) {
   if (!observation) {
-    return <>
-      <strong>VOC Agent · 尚未开始</strong>
-      <p>VOC 分析尚未开始</p>
-    </>;
+    return null;
   }
   const stage = observation.stage;
   const stageStatus = typeof stage?.status === "string" ? stage.status.trim() : "";
@@ -1687,6 +1691,17 @@ export function VocRunStatusSummary({ observation }: { observation: VocRunObserv
 }
 
 export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
+  const params=useSearchParams(),pathname=usePathname(),router=useRouter();
+  const requested=tabFromParam(params.get('tab'));
+  const allowed=canSeeTab(authSession.visibleModules,requested);
+  const fallback=firstVisibleTab(authSession.visibleModules);
+  const href=fallback?buildTabHref(fallback,params,pathname):null;
+  useEffect(()=>{if(!allowed&&href)router.replace(href)},[allowed,href,router]);
+  if(!allowed)return <main className="auth-session-shell"><section className="auth-login-card"><h1>{fallback?'正在打开可见模块':'暂无可见模块'}</h1><p>{fallback?'当前模块未设置为显示。':'请联系管理员设置需要显示的模块。'}</p><AuthIdentityControl session={authSession}/></section></main>;
+  return <VisibleAmazonOpportunityApp authSession={authSession}/>;
+}
+
+function VisibleAmazonOpportunityApp({ authSession }: { authSession: AuthenticatedWebSession }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();
@@ -1703,6 +1718,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const tabHref = (tabId: TabId) => buildTabHref(tabId, searchParams, workspacePath);
   const initialAsins = resolveActiveAsins(slugParam ? null : asinsParam);
   const activeTab = tabFromParam(tabParam);
+  const activeMarketSite=MarketSiteSchema.safeParse(searchParams.get("marketSite")).data??"US";
+  const activeMarketView = marketViewFromParam(searchParams.get("themeView"));
+  const isLeafActive = (leaf: NavLeaf) => leaf.id === activeTab && (!leaf.marketView || leaf.marketView === activeMarketView);
+  const leafHref = (leaf: NavLeaf) => leaf.marketView ? marketViewHref(leaf.marketView, searchParams) : tabHref(leaf.id);
+  useEffect(()=>{if(activeTab!=="market-overview")publishUsagePage(activeTab)},[activeTab]);
   const [market, setMarket] = useState<MarketCode>("US");
   const [inputs, setInputs] = useState(() => buildInputSlots(initialAsins));
   const [asinDraft, setAsinDraft] = useState(() => initialAsins.join("\n"));
@@ -1753,6 +1773,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   }, []);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
+  const [imageProjectContext,setImageProjectContext] = useState<{projectId:string;kind:string}|null>(null);
   const [savingKeywordCompare, setSavingKeywordCompare] = useState(false);
   const [savingTrafficPromo, setSavingTrafficPromo] = useState(false);
   const [savingChecklist, setSavingChecklist] = useState(false);
@@ -1880,14 +1901,17 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     setRefreshingProjectId(null);
     replaceAppUrl(clearSyncJobFromSearch(window.location.search), window.location.pathname);
   }, [activeAsins, terminalPointerRetained]);
-  const restartTerminalSync = useCallback(async (parentJob: SyncJob) => {
-    if (terminalRepairInFlight.current || !workspaceReady || !resumedSyncScope.canAdopt || !resumedProjectId || authSession.logoutPending) return;
+  const restartTerminalSync = useCallback(async (parentJob: SyncJob, imageAction?: {asin:string;action:"refresh"|"analyze"}) => {
+    if (terminalRepairInFlight.current || !workspaceReady || !resumedSyncScope.canAdopt || !resumedProjectId || authSession.logoutPending) {
+      if (imageAction) throw new Error("当前项目正在切换或提交任务，请稍后重试");
+      return;
+    }
     const captured = terminalRepairScope.current.capture();
     const isCurrent = () => terminalRepairScope.current.isCurrent(captured);
     terminalRepairInFlight.current = true;
     setTerminalRepairPending(true);
     try {
-      const result = await terminalRepair.current({ asins: activeAsins, marketplace: market, projectId: resumedProjectId, parentJobId: parentJob.jobId }, isCurrent);
+      const result = await terminalRepair.current({ asins: activeAsins, marketplace: market, projectId: resumedProjectId, parentJobId: parentJob.jobId, ...(imageAction ? {imageAction} : {}) }, isCurrent);
       if (!result || !isCurrent()) return;
       if ("noWork" in result) {
         setMessage(result.message);
@@ -1907,9 +1931,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       const params = clearVocRunFromSearch(new URLSearchParams(searchWithSyncJobId(window.location.search, result.jobId)));
       params.set("run", result.scope.runId);
       replaceAppUrl(params, window.location.pathname);
-      setMessage("补抓未完成数据已启动");
+      setMessage(imageAction ? `${imageAction.asin} · ${imageAction.action === "refresh" ? "重新抓取并重新分析" : "重新分析"}已排队` : "补抓未完成数据已启动");
+      return result.jobId;
     } catch (error) {
       if (isCurrent()) setMessage(error instanceof Error ? error.message : "补抓启动失败");
+      if (imageAction) throw error;
     } finally {
       terminalRepairInFlight.current = false;
       setTerminalRepairPending(false);
@@ -1961,6 +1987,20 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     return disposition;
   }, [activeAsins, market, resumedSyncScope.context?.projectId, terminalOwnerFor]);
   const stageOutputJobId = syncJobId ?? terminalSyncJob?.jobId ?? null;
+  const runListingImageAction = async (asin:string, action:"refresh"|"analyze") => {
+    if (!resumedProjectId || !workspaceReady || !resumedSyncScope.canAdopt) throw new Error("请先加载已同步的项目");
+    if (imageProjectContext?.projectId !== currentProjectId || imageProjectContext.kind !== "analysis") throw new Error("当前是收藏视图或项目仍在读取，请先使用上方入口打开来源分析项目");
+    const captured = terminalRepairScope.current.capture();
+    const pointer = stageOutputJobId ? {jobId:stageOutputJobId} : await readHistoricalSyncPointer({id:resumedProjectId,asins:activeAsins,marketplace:market},{strict:true});
+    if (!terminalRepairScope.current.isCurrent(captured)) return;
+    if (!pointer) throw new Error("当前分析项目尚无基础同步任务，请先完成基础同步");
+    const response=await localAgentFetch(`/v1/local-data/sync-asins/${encodeURIComponent(pointer.jobId)}`);
+    const parent=await response.json() as SyncJob;
+    if (!terminalRepairScope.current.isCurrent(captured)) return;
+    if (!response.ok || parent.jobId!==pointer.jobId || !isSyncJobScopeMatch({asins:parent.asins??[],marketplace:parent.marketplace??"",scope:parent.scope},{asins:activeAsins,marketplace:market,projectId:resumedProjectId,runId:parent.scope?.runId ?? null})) throw new Error("同步记录与当前项目不匹配");
+    if (!["completed","completed-with-gaps","failed"].includes(parent.status)) throw new Error("当前项目正在同步，请完成后再处理图片");
+    return await restartTerminalSync(parent,{asin,action});
+  };
   const stageOutputRunId = baseSyncRunId ?? resumedSyncScope.context?.runId ?? null;
   const stageOutputScopeKey = [
     authSession.sessionIdentity,
@@ -1979,6 +2019,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (reason === "owner-disposed") return;
     setStageOutputReceipt({ scopeKey: stageOutputOwnerToken.scopeKey, ownerToken: stageOutputOwnerToken, snapshot });
   }, [stageOutputOwnerToken]);
+  const [imageJobReceipt, setImageJobReceipt] = useState<{ownerToken: typeof stageOutputOwnerToken; job: SyncJob} | null>(null);
+  const onImageJobSnapshot = useCallback((job: SyncJob) => {
+    setImageJobReceipt({ownerToken: stageOutputOwnerToken, job});
+  }, [stageOutputOwnerToken]);
+  const currentImageJob = imageJobReceipt?.ownerToken === stageOutputOwnerToken ? imageJobReceipt.job : null;
   const currentStageReceipt = stageOutputReceipt?.ownerToken === stageOutputOwnerToken ? stageOutputReceipt : null;
   const reviewScope = useMemo(() => !authSession.logoutPending && resumedProjectId && stageOutputRunId && stageOutputJobId ? {
     organizationId: authSession.user.organizationId, projectId: resumedProjectId,
@@ -2012,6 +2057,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     },
     knownSessionJobIds: syncSessionJobIds,
     onSyncJobObserved: rememberSyncJob,
+    onJobSnapshot: onImageJobSnapshot,
     onDismiss: dismissSyncJob,
     onComplete: handleTerminalSyncJob,
     onTerminal: handleTerminalSyncJob,
@@ -2019,7 +2065,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     restartPending: terminalRepairPending,
     canResumeFailedStages: isPrimaryAdministrator(authSession.user),
     allowDismiss: !terminalPointerRetained,
-  }), [authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, onScopedStageOutput, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, terminalRepairPending, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
+  }), [onImageJobSnapshot, authSession.logoutPending, authSession.sessionIdentity, authSession.user.organizationId, onScopedStageOutput, dismissSyncJob, handleTerminalSyncJob, rememberSyncJob, restartTerminalSync, terminalRepairPending, resumedProjectId, resumedSyncScope.canAdopt, resumedSyncScope.context, resumedSyncScope.resolving, stageOutputScopeKey, syncJobId, syncSessionJobIds, terminalPointerRetained, terminalSyncJob, workspaceReady]);
 
   const products = useMemo(
     () => activeAsins.map(asin => catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin)),
@@ -2131,6 +2177,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
   const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
+    analysisScope: { organizationId: authSession.user.organizationId, projectId: resumedProjectId ?? workspacePath, marketplace: market },
     manualVocByAsin,
     keywordSources: { analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword },
     reviewFallbackCandidates: reviewAnalysisByAsin,
@@ -2148,7 +2195,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         enrichmentByKeyword: keywordEnrichmentByKeyword,
       },
     ),
-  }), [keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products, reviewAnalysisByAsin]);
+  }), [authSession.user.organizationId, resumedProjectId, workspacePath, market, keywordAnalysisByAsin, keywordEnrichmentByKeyword, manualVocByAsin, products, reviewAnalysisByAsin]);
   const trafficOverviewByAsin = stageOutputView.trafficData.overview;
   const trafficMonthlyTrendByAsin = stageOutputView.trafficData.monthlyTrend;
   const trafficMeta = stageOutputView.trafficData.meta;
@@ -2375,7 +2422,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     if (options?.normalizeInput !== false) replaceInputAsins(project.asins);
     setCurrentProjectId(project.id);
     setCurrentProjectName(project.name);
-    if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
+    if (projectSegmentName(project)) {
       setWorkspaceLabel(project.name);
     } else {
       setWorkspaceLabel("");
@@ -2453,7 +2500,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
-        if (project.name && project.categoryLabel && project.name !== project.categoryLabel && !project.name.startsWith(`${project.categoryLabel} ·`)) {
+        if (projectSegmentName(project)) {
           setWorkspaceLabel(project.name);
         } else {
           setWorkspaceLabel("");
@@ -2499,13 +2546,13 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     };
   }, [activeAsins.length, setMessage, syncJobId, workspaceReady]);
 
-  const nav: NavEntry[] = useMemo(
+  const allNav: NavEntry[] = useMemo(
     () => [
       {
         id: "market-group",
         label: "市场调研",
         sub: "类目规模 · 销售 · 新品",
-        children: [{ id: "market-overview", label: "市场总览", sub: "类目采集 · 基础指标" }],
+        children: marketNavigation.map(({ view, label, sub }) => ({ id: "market-overview", marketView: view, label, sub })),
       },
       {
         id: "overview-group",
@@ -2552,6 +2599,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     ],
     []
   );
+  const nav:NavEntry[]=allNav.flatMap<NavEntry>(entry=>{
+    if(!isNavGroup(entry))return canSeeTab(authSession.visibleModules,entry.id)?[entry]:[];
+    const children=entry.children.filter(child=>canSeeTab(authSession.visibleModules,child.id));
+    return children.length?[{...entry,children}]:[];
+  });
   const activeFlyoutGroup = flyoutGroupId
     ? nav.find((entry): entry is NavGroup => isNavGroup(entry) && entry.id === flyoutGroupId) ?? null
     : null;
@@ -2559,7 +2611,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
   const activeLeaf = (() => {
     for (const entry of nav) {
       if (isNavGroup(entry)) {
-        const child = entry.children.find(item => item.id === activeTab);
+        const child = entry.children.find(isLeafActive);
         if (child) return { parent: entry.label, ...child };
       } else if (entry.id === activeTab) {
         return { parent: null as string | null, ...entry };
@@ -2628,6 +2680,24 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     } catch {
       return null;
     }
+  };
+
+  const prepareAnalysisFavorite = async () => {
+    const name = workspaceLabel.trim();
+    if (!name) {
+      document.getElementById("workspace-segment-name")?.focus();
+      throw new Error("请先填写细分名称，再收藏项目");
+    }
+    if (!currentProjectId) return false;
+    if (name === currentProjectName) return true;
+    const response = await localAgentFetch(`/v1/local-data/projects/${encodeURIComponent(currentProjectId)}`, {
+      method: "PATCH", body: JSON.stringify({ name }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(localAgentErrorMessage(payload, "保存细分名称失败，请重试"));
+    setCurrentProjectName(name);
+    setWorkspaces(previous => previous.map(project => project.id === currentProjectId ? { ...project, name } : project));
+    return true;
   };
 
   const runAnalysis = async () => {
@@ -2727,7 +2797,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       replaceInputAsins(values);
       syncSuppressedKey.current = null;
       autoSyncStartedKey.current = values.join(",");
-      const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams, payload.jobId));
+      const finalParams = new URLSearchParams(searchWithSyncJobId(cleanParams.toString(), payload.jobId));
       finalParams.set("run", payload.scope.runId);
       finalParams.delete("asins");
       finalParams.delete("project");
@@ -2849,11 +2919,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         hour: "2-digit",
         minute: "2-digit",
       });
-      const response = await fetch("/api/projects", {
+      const response = await localAgentFetch("/v1/local-data/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "keyword-compare",
+          sourceProjectId: await sourceProjectIdForSave(currentProjectId),
           name: `${categoryHint} · 流量词对比 · ${stamp}`,
           majorCategory: inferAmazonMajorCategory(products),
           categoryLabel: categoryHint,
@@ -2863,7 +2934,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "保存失败"));
       const project = payload.project as AnalysisProject;
       applyProject(project, { announce: false });
       setMessage(`已保存到收藏夹「流量词对比」：${project.name}`);
@@ -2903,11 +2974,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         hour: "2-digit",
         minute: "2-digit",
       });
-      const response = await fetch("/api/projects", {
+      const response = await localAgentFetch("/v1/local-data/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "traffic-promo",
+          sourceProjectId: await sourceProjectIdForSave(currentProjectId),
           name: `${categoryHint} · 推广能力分析 · ${stamp}`,
           majorCategory: inferAmazonMajorCategory(products),
           categoryLabel: categoryHint,
@@ -2917,7 +2989,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "保存失败"));
       const project = payload.project as AnalysisProject;
       applyProject(project, { announce: false });
       setMessage(`已保存到收藏夹「竞品推广能力分析」：${project.name}`);
@@ -2944,11 +3016,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         hour: "2-digit",
         minute: "2-digit",
       });
-      const response = await fetch("/api/projects", {
+      const response = await localAgentFetch("/v1/local-data/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "checklist",
+          sourceProjectId: await sourceProjectIdForSave(currentProjectId),
           name: `${categoryHint} · 立项确认清单 · ${stamp}`,
           majorCategory: inferAmazonMajorCategory(products),
           categoryLabel: categoryHint,
@@ -2958,7 +3031,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "保存失败");
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "保存失败"));
       const project = payload.project as AnalysisProject;
       applyProject(project, { announce: false });
       setMessage(`已保存到收藏夹「项目确认清单」：${project.name}`);
@@ -3036,8 +3109,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 <span className="nav-chevron" aria-hidden="true" />
               </button>
             ) : (
-              <Link
-                href={tabHref(entry.id)}
+<ModuleVisibilityLink
+                visibleModules={authSession.visibleModules} tab={entry.id} href={tabHref(entry.id)}
                 data-dim={entry.id}
                 className={activeTab === entry.id ? "nav-item active" : "nav-item"}
                 onClick={closeFlyout}
@@ -3047,7 +3120,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                   <b>{entry.label}</b>
                   <NavSubText text={entry.sub} />
                 </span>
-              </Link>
+              </ModuleVisibilityLink>
             )}
           </Fragment>
         ))}
@@ -3055,7 +3128,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       <div className="sidebar-bottom">
         <HelpFeedbackDrawer user={authSession.user} />
         {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status"><i/>数据源状态正常</div>}
-        {activeTab === "market-overview" ? <p>美国站 · 类目调研</p> : <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>}
+        {activeTab === "market-overview" ? <p>{activeMarketSite} · 类目调研</p> : <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>}
       </div>
     </aside>
 
@@ -3072,11 +3145,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeFlyoutGroup ? (
         <div className="sidebar-flyout-list">
           {activeFlyoutGroup.children.map(child => (
-            <Link
-              key={child.id}
-              href={tabHref(child.id)}
+<ModuleVisibilityLink
+              key={child.marketView ?? child.id}
+              visibleModules={authSession.visibleModules} tab={child.id} href={leafHref(child)}
               data-dim={child.id}
-              className={activeTab === child.id ? "sidebar-flyout-item active" : "sidebar-flyout-item"}
+              className={isLeafActive(child) ? "sidebar-flyout-item active" : "sidebar-flyout-item"}
+              aria-current={isLeafActive(child) ? "page" : undefined}
               onClick={closeFlyout}
             >
               <NavThemeIcon dim={child.id} />
@@ -3084,7 +3158,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 <b>{child.label}</b>
                 <NavSubText text={child.sub} />
               </span>
-            </Link>
+            </ModuleVisibilityLink>
           ))}
         </div>
       ) : null}
@@ -3094,62 +3168,55 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
     <section className="workspace">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{activeTab === "market-overview" ? "市场调研 · Amazon US" : `${products[0]?.subRankCategory && products[0].subRankCategory !== "等待同步" ? products[0].subRankCategory : "竞品分析"} · Amazon ${markets[market].short}`}</p>
+          <p className="eyebrow">{activeTab === "market-overview" ? `市场调研 · Amazon ${activeMarketSite}` : `${products[0]?.subRankCategory && products[0].subRankCategory !== "等待同步" ? products[0].subRankCategory : "竞品分析"} · Amazon ${markets[market].short}`}</p>
           <h1>{pageTitle}</h1>
         </div>
         <div className="top-actions">
           <AuthIdentityControl session={authSession} />
           {activeTab === "market-overview" ? null : activeTab === "keywords" ? (
             <>
-              <button
+{canSeeTab(authSession.visibleModules,'keyword-compare')&&<button
                 type="button"
                 className="ghost-btn"
                 disabled={savingKeywordCompare || activeAsins.length < 3}
                 onClick={() => void saveKeywordCompareProject()}
               >
                 {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
-              </button>
+              </button>}
               <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
                 抓取关键词数据
               </button>
             </>
           ) : activeTab === "traffic" ? (
             <>
-              <button
+{canSeeTab(authSession.visibleModules,'traffic-promo')&&<button
                 type="button"
                 className="ghost-btn"
                 disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3}
                 onClick={() => void saveTrafficPromoProject()}
               >
                 {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
-              </button>
+              </button>}
               <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
                 抓取流量数据
               </button>
             </>
           ) : activeTab === "checklist" ? (
             <>
-              <button
+{canSeeTab(authSession.visibleModules,'checklist-library')&&<button
                 type="button"
                 className="ghost-btn"
                 disabled={savingChecklist || activeAsins.length < 3}
                 onClick={() => void saveChecklistProject()}
               >
                 {savingChecklist ? "保存中…" : "保存到项目确认清单"}
-              </button>
-              <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
+              </button>}
+<ModuleVisibilityLink className="primary-btn" visibleModules={authSession.visibleModules} tab={"overview"} href={tabHref("overview")}>管理竞品 ASIN</ModuleVisibilityLink>
             </>
           ) : (
             <>
-              <button
-                type="button"
-                className="ghost-btn"
-                disabled={!savedReportView}
-                onClick={downloadSavedAnalysisReports}
-              >
-                导出对比报告
-              </button>
-              <Link className="primary-btn" href={tabHref("overview")}>管理竞品 ASIN</Link>
+
+<ModuleVisibilityLink className="primary-btn" visibleModules={authSession.visibleModules} tab={"overview"} href={tabHref("overview")}>管理竞品 ASIN</ModuleVisibilityLink>
             </>
           )}
         </div>
@@ -3187,20 +3254,21 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       ) : null}
 
 
-      {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} /></div>}
+      {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} view={activeMarketView} onViewChange={view => router.push(marketViewHref(view, window.location.search), { scroll: false })} /></div>}
 
       {activeTab === "overview" && <div className="page-content compare-page">
         <section className="card asin-builder">
           <div className="section-head"><div><h3>设置对标竞品</h3><p>工作区按「类目 + 站点」分开：美国落地灯是 /p/floor-lamps-us，英国站会是 /p/floor-lamps-uk。同一站点再开一批细分（如儿童三轮 vs 成人滑板车）会再生成新地址。输入 3–10 个 ASIN 后点「开始全自动分析」。</p></div><span className="required-note">3–10 个</span></div>
           <div className="asin-builder-body">
             <div className="builder-meta-row">
-            <label className="market-inline">目标市场<select value={market} onChange={e=>{const next=e.target.value as MarketCode;setMarket(next);setMessage(`已切换至 ${markets[next].label}，ASIN 链接与数据口径将同步更新`);}}>{Object.entries(markets).map(([code,item])=><option key={code} value={code}>{item.option}</option>)}</select></label>
+            <label className="market-inline"><strong>目标市场</strong><select value={market} onChange={e=>{const next=e.target.value as MarketCode;setMarket(next);setMessage(`已切换至 ${markets[next].label}，ASIN 链接与数据口径将同步更新`);}}>{Object.entries(markets).map(([code,item])=><option key={code} value={code}>{item.option}</option>)}</select></label>
             <label className="workspace-alias-field">
-              细分名称
+              <strong>细分名称</strong>
               <input
+                id="workspace-segment-name"
                 value={workspaceLabel}
                 onChange={e => setWorkspaceLabel(e.target.value)}
-                placeholder="可选：儿童三轮 / 置物架灯 / Kids 3-Wheel"
+                placeholder="收藏前必填，如：融蜡灯 / 儿童三轮"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -3221,8 +3289,8 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             ) : null}
           </div>
           <div className="builder-actions">
-            <AnalysisProjectFavoriteButton projectId={currentProjectId} favorites={projectFavorites} />
-            <Link className="ghost-btn" href={tabHref("projects")}>收藏与历史</Link>
+            {canSeeTab(authSession.visibleModules,'projects')&&<AnalysisProjectFavoriteButton projectId={currentProjectId} favorites={projectFavorites} beforeFavorite={prepareAnalysisFavorite} />}
+<ModuleVisibilityLink className="ghost-btn" visibleModules={authSession.visibleModules} tab={"projects"} href={tabHref("projects")}>收藏与历史</ModuleVisibilityLink>
             {currentProjectName ? (
               <span className="builder-project-chip">
                 当前工作区：{currentProjectName}
@@ -3245,7 +3313,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         </section>
 
         {activeAsins.length > 0 || syncAsins ? (
-        <AsinSyncProgressSection
+        <AsinSyncProgressSection visibleModules={authSession.visibleModules}
           asins={activeAsins}
           marketplace={market}
           syncRequest={syncAsins}
@@ -3284,6 +3352,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             asins={activeAsins}
             records={reviewAnalysisByAsin}
             reasonCode={reviewGapReasonCode}
+            gapItems={stageOutputSnapshot.reviews && "gap" in stageOutputSnapshot.reviews ? stageOutputSnapshot.reviews.gap.items : []}
           />
         ) : null}
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
@@ -3295,9 +3364,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             asins={activeAsins}
             records={fbaFeeByAsin}
             reasonCode={fbaGapReasonCode}
+            gapItems={stageOutputSnapshot.fba && "gap" in stageOutputSnapshot.fba ? stageOutputSnapshot.fba.gap.items : []}
           />
         ) : null}
-        <section className="card compare-table-card"><div className="section-head"><div><h3>竞品参数总览</h3><p>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</p></div><SourceBadge>MCP 综合</SourceBadge></div><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
+        <ComparisonOverviewCard description={<>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</>} badge={<SourceBadge>MCP 综合</SourceBadge>}><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
           <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/></td>)}</tr>
           <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const metric=resolveRatingMetric(ratingByAsin[p.asin],p);return <td key={p.asin}>{metric.value?<>{metric.value.rating===null?<span>— / {metric.value.reviewCount?.toLocaleString() ?? "—"}</span>:<RatingCell rating={metric.value.rating} reviews={metric.value.reviewCount}/>} {metric.label?<small className="no-data-text">{metric.label}</small>:null}</>:<span className="no-data-text">{metric.label}</span>}</td>})}</tr>
@@ -3308,10 +3378,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];const metric=resolveFbaMetric(record);return <td key={p.asin}>{metric.value!=null?<div className="fba-fee-cell"><strong>${metric.value.toFixed(2)}</strong>{record?.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record?.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{metric.label ?? sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><div className="spec-lines">{p.specifications.map(spec=><div key={spec}>{spec}</div>)}</div></td>)}</tr>
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}>{p.launch}</td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}>{variationTheme(p)}</td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}>{p.variants}</td>)}</tr>
-          <tr><th>近30天子体销量<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
+          <tr><th>近期披露子体销量<small className="insight-source">Sorftime · 页面披露口径</small><small className="insight-source">统计周期未提供</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant)).slice(0,5);return <td key={p.asin}><ChildSalesBars items={items}/></td>})}</tr>
           <tr><th>价格策略分析<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const strategy=priceStrategyByAsin[p.asin] as typeof sorftimePriceStrategies[string] | undefined;const metric=resolvePriceMetric(strategy,p.price);return <td key={p.asin}>{strategy&&metric.source==="sorftime"?<div className="price-strategy-cell"><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>:<span className="no-data-text">{metric.label ?? sorftimePriceStrategyMeta.emptyMessage}</span>}</td>})}</tr>
-          <tr><th>主要卖点<small className="insight-source">Amazon Bullet Point 总结</small></th>{products.map(p=><td key={p.asin} className="selling-points-cell"><ul>{p.sellingPoints.map((point,index)=><li key={`${p.asin}-bp-${index}`}>{point}</li>)}</ul></td>)}</tr>
-        </tbody></table></div></section>
+          <tr><th>主要卖点<small className="insight-source">亚马逊商品卖点中文翻译</small></th>{products.map(p=><td key={p.asin} className="selling-points-cell"><SellingPointTranslation key={`${runtimeSessionKey}:${currentProjectId}:${p.asin}`} projectId={authSession.logoutPending ? null : currentProjectId} asin={p.asin} /></td>)}</tr>
+        </tbody></table></div></ComparisonOverviewCard>
 
         <section className="card compare-chart-card sales-combined-card">
           <div className="section-head">
@@ -3383,7 +3453,12 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </div>
             <SourceBadge>{LISTING_IMAGES_SOURCE_LABEL}</SourceBadge>
           </section>
+          <ListingImageSourceProject key={`${runtimeScopeKey}:${currentProjectId}`} projectId={currentProjectId} asins={activeAsins} marketplace={market} onContext={setImageProjectContext} onOpen={project=>applyProject(project)} />
           <ListingImagesSection
+            key={runtimeScopeKey}
+            imageActionJob={currentImageJob}
+            onImageAction={resumedProjectId && imageProjectContext?.projectId === currentProjectId && imageProjectContext.kind === "analysis" ? runListingImageAction : undefined}
+            imageActionPending={terminalRepairPending || Boolean(syncAsins)}
             products={products.map(p => ({ asin: p.asin, brand: p.brand, image: p.image }))}
             market={markets[market]}
             colors={colors}
@@ -3405,8 +3480,11 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "voc" && <div className="page-content compare-page">
         <section className="card page-intro"><div><span className="status-chip">多竞品 VOC 对比</span><h2>七个相同维度同屏对齐，直接比较顾客关注与购买决策差异</h2><p>入口：Alexa for Shopping 对话框 · 中文七问一次性提交 · 输出完整报告 · 数据源为 Customer Review（经 Alexa 整理）。</p></div><SourceBadge>{products.length} 个 ASIN 同屏</SourceBadge></section>
-        <section className="card voc-dimension-format-card">
-          <div className="section-head"><div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div><SourceBadge>{manualVocDisplayMeta.source}</SourceBadge></div>
+        <details className="card voc-dimension-format-card" open>
+          <summary className="section-head voc-dimension-format-toggle">
+            <div><h3>VOC 核心主题 · 七维格式</h3><p>矩阵左列展示格式说明，各 ASIN 列按同一结构对齐</p></div>
+            <span className="voc-dimension-format-actions"><SourceBadge>{manualVocDisplayMeta.source}</SourceBadge><span className="voc-dimension-format-toggle-label"><span className="voc-dimension-format-collapse">收起 ▴</span><span className="voc-dimension-format-expand">展开 ▾</span></span></span>
+          </summary>
           <table className="voc-dimension-format-table">
             <thead><tr><th>维度</th><th>格式说明</th></tr></thead>
             <tbody>
@@ -3424,7 +3502,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
               </tr>
             </tbody>
           </table>
-        </section>
+        </details>
         <AlexaVocImportPanel
           key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
           projectId={alexaVocPageScope.authoritativeImportScope?.projectId ?? null}
@@ -3501,6 +3579,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             asins={activeAsins}
             records={reviewAnalysisByAsin}
             reasonCode={reviewGapReasonCode}
+            gapItems={stageOutputSnapshot.reviews && "gap" in stageOutputSnapshot.reviews ? stageOutputSnapshot.reviews.gap.items : []}
           />
         ) : null}
         {reviewRefreshFailed ? <p role="status">本次评论结果读取失败；如有本项目已验证结果，将继续保留显示。重新进入 VOC 页可重试读取。</p> : null}
@@ -3522,7 +3601,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
           market={market}
         />
         <VocSevenDimensionInsightSection products={products} manualVocByAsin={manualVocByAsin} reviewAnalysisData={reviewAnalysisByAsin} />
-        <section className="card launch-block" data-voc-run={vocRun?.runId ?? undefined}>
+        {(vocRun || savedReportView) ? <section className="card launch-block" data-voc-run={vocRun?.runId ?? undefined}>
             <VocRunStatusSummary observation={vocRun} />
             {vocRun?.kind === "active" ? (
               <button type="button" className="ghost-btn" onClick={() => void cancelCurrentVocRun()}>取消运行</button>
@@ -3571,7 +3650,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 ))}
               </div>
             ) : null}
-          </section>
+          </section> : null}
       </div>}
 
       {activeTab === "keywords" && <div className="page-content compare-page">
@@ -3634,9 +3713,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </div>
           </div>
           <div className="builder-actions">
-            <Link className="ghost-btn" href={tabHref("keyword-compare")}>
+<ModuleVisibilityLink className="ghost-btn" visibleModules={authSession.visibleModules} tab={"keyword-compare"} href={tabHref("keyword-compare")}>
               ★ 流量词对比
-            </Link>
+            </ModuleVisibilityLink>
             {currentProjectName ? (
               <span className="builder-project-chip">
                 当前工作区：{currentProjectName}
@@ -3654,9 +3733,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 {message}
               </span>
             ) : null}
-            <button type="button" className="ghost-btn" disabled={savingKeywordCompare || activeAsins.length < 3} onClick={() => void saveKeywordCompareProject()}>
+{canSeeTab(authSession.visibleModules,'keyword-compare')&&<button type="button" className="ghost-btn" disabled={savingKeywordCompare || activeAsins.length < 3} onClick={() => void saveKeywordCompareProject()}>
               {savingKeywordCompare ? "保存中…" : "保存到流量词对比"}
-            </button>
+            </button>}
             <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
               抓取关键词数据
             </button>
@@ -3690,6 +3769,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         />
 
         <KeywordDemandSection
+          analysisScope={productLaunchSources.analysisScope}
           mode="analysis"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
           sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
@@ -3699,6 +3779,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
       {activeTab === "keyword-insight" && <div className="page-content compare-page">
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="keywords" />
         <KeywordDemandSection
+          analysisScope={productLaunchSources.analysisScope}
           mode="insight"
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title, subRankCategory: p.subRankCategory, image: p.image, price: p.price }))}
           sources={{ analysisByAsin: keywordAnalysisByAsin, enrichmentByKeyword: keywordEnrichmentByKeyword }}
@@ -3717,7 +3798,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
         <LocalVocDefinition
           key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
           initialRunId={new URLSearchParams(appSearch).get("vocRun") ?? new URLSearchParams(appSearch).get("vocHistory")}
-          projectId={currentProjectId} baseSyncRunId={baseSyncRunId} onImported={manualVoc.onImported}
+          projectId={currentProjectId} baseSyncRunId={baseSyncRunId} jobId={stageOutputJobId} onImported={manualVoc.onImported}
           products={products} sources={productLaunchSources}
           initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}
           enabled={!authSession.logoutPending && workspaceReady && market === "US"}
@@ -3739,10 +3820,10 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             subRankCategory: p.subRankCategory,
             rankCategory: p.rankCategory,
           }))}
-          onSaveToLibrary={() => void saveChecklistProject()}
+          onSaveToLibrary={canSeeTab(authSession.visibleModules,'checklist-library')?() => void saveChecklistProject():undefined}
           savingToLibrary={savingChecklist}
           canSaveToLibrary={activeAsins.length >= 3}
-          libraryHref={tabHref("checklist-library")}
+          libraryHref={canSeeTab(authSession.visibleModules,'checklist-library')?tabHref("checklist-library"):undefined}
           libraryMessage={
             message.includes("项目确认清单") || message.includes("立项确认清单") ? message : null
           }
@@ -3809,9 +3890,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
             </div>
           </div>
           <div className="builder-actions">
-            <Link className="ghost-btn" href={tabHref("traffic-promo")}>
+<ModuleVisibilityLink className="ghost-btn" visibleModules={authSession.visibleModules} tab={"traffic-promo"} href={tabHref("traffic-promo")}>
               ★ 推广能力分析
-            </Link>
+            </ModuleVisibilityLink>
             {currentProjectName ? (
               <span className="builder-project-chip">
                 当前工作区：{currentProjectName}
@@ -3829,9 +3910,9 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
                 {message}
               </span>
             ) : null}
-            <button type="button" className="ghost-btn" disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3} onClick={() => void saveTrafficPromoProject()}>
+{canSeeTab(authSession.visibleModules,'traffic-promo')&&<button type="button" className="ghost-btn" disabled={savingTrafficPromo || inputs.filter(Boolean).length < 3} onClick={() => void saveTrafficPromoProject()}>
               {savingTrafficPromo ? "保存中…" : "保存到推广能力分析"}
-            </button>
+            </button>}
             <button type="button" className="primary-btn" onClick={() => void runAnalysis()}>
               抓取流量数据
             </button>
@@ -3963,7 +4044,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "keyword-compare" && <div className="page-content compare-page">
         {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
-          <UrlResumableAsinSyncFunnel
+          <UrlResumableAsinSyncFunnel visibleModules={authSession.visibleModules}
             asins={activeAsins}
             marketplace={market}
             syncRequest={syncAsins}
@@ -4017,7 +4098,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "traffic-promo" && <div className="page-content compare-page">
         {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
-          <UrlResumableAsinSyncFunnel
+          <UrlResumableAsinSyncFunnel visibleModules={authSession.visibleModules}
             asins={activeAsins}
             marketplace={market}
             syncRequest={syncAsins}
@@ -4071,7 +4152,7 @@ export function AuthenticatedAmazonOpportunityApp({ authSession }: { authSession
 
       {activeTab === "checklist-library" && <div className="page-content compare-page">
         {syncAsins || syncResume.syncJobId || syncResume.terminalJob ? (
-          <UrlResumableAsinSyncFunnel
+          <UrlResumableAsinSyncFunnel visibleModules={authSession.visibleModules}
             asins={activeAsins}
             marketplace={market}
             syncRequest={syncAsins}

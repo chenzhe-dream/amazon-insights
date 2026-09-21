@@ -175,3 +175,20 @@ test("contract repair guidance accepts only bounded printable lines", () => {
   assert.equal(normalizeFormatRepairGuidance(["x".repeat(24_001)]), null);
   assert.equal(normalizeFormatRepairGuidance(Array.from({ length: 9 }, () => "line")), null);
 });
+
+
+test("registered market rule IDs survive but unknown market strings and raw messages do not", () => {
+  const raw = "RAW_MARKET_VALIDATION_MUST_NOT_ESCAPE";
+  const schema = z.strictObject({ themes: z.array(z.string()) });
+  const format = createStructuredResponseFormat(schema, "MarketDiagnosticTest@1.0.0");
+  const error = new z.ZodError([
+    { code: 'custom', path: ['themes', 0], message: raw, params: { ruleId: 'market-invalid-span' } },
+    { code: 'custom', path: [raw], message: raw, params: { ruleId: `market-${raw}` } },
+  ]);
+  const issues = summarizeZodValidationIssues(error, format);
+  assert.equal(issues[0].ruleId, 'market-invalid-span');
+  assert.equal(issues[1].ruleId, undefined);
+  assert.equal(freezeSafeValidationIssues(issues, format.format.schema)[0].ruleId, 'market-invalid-span');
+  assert.equal(freezeSafeValidationIssues([{ code: 'custom', path: [], ruleId: `market-${raw}` }], format.format.schema)[0].ruleId, undefined);
+  assert.doesNotMatch(JSON.stringify(issues), new RegExp(raw));
+});

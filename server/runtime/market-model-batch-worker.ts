@@ -7,12 +7,17 @@ import type { MarketSemanticExecutionService, ResolvedMarketSemanticConfiguratio
 import { createTrustedExecutionAbortReason } from './execution-abort';
 
 export interface MarketModelWorkerEvent {
-  event: 'succeeded' | 'failed' | 'observing' | 'preparation-failed' | 'persistence-failed' | 'poll-failed';
+  event: 'succeeded' | 'failed' | 'cancelled' | 'observing' | 'preparation-failed' | 'persistence-failed' | 'poll-failed';
   moduleRunId?: string; stepId?: string; attemptId?: string;
 }
 export interface MarketModelWorkerOptions {
   ownerId?: string; pollMs?: number; leaseMs?: number; heartbeatMs?: number; stopTimeoutMs?: number;
+  moduleKindsByStepKind?: Parameters<MarketModuleExecutionRepository['claimStep']>[0]['moduleKindsByStepKind'];
+  flowVersionsByStepKind?: Parameters<MarketModuleExecutionRepository['claimStep']>[0]['flowVersionsByStepKind'];
   onEvent?: (event: Readonly<MarketModelWorkerEvent>) => void;
+}
+export class MarketModelConfigurationUnavailableError extends Error {
+  constructor() { super('Market model configuration is unavailable'); this.name = 'MarketModelConfigurationUnavailableError'; }
 }
 interface Dependencies extends MarketModelWorkerOptions {
   steps: MarketModuleExecutionRepository;
@@ -70,7 +75,9 @@ export class MarketModelBatchWorker {
   }
   async #run(): Promise<boolean> {
     const controller = new AbortController(); this.#controller = controller;
-    const claim = await this.deps.steps.claimStep({ leaseOwnerId: this.#owner, leaseMs: this.#leaseMs, kinds: ['model-batch'] });
+    const claim = await this.deps.steps.claimStep({ leaseOwnerId: this.#owner, leaseMs: this.#leaseMs, kinds: ['model-batch'],
+      ...(this.deps.moduleKindsByStepKind ? { moduleKindsByStepKind: this.deps.moduleKindsByStepKind } : {}),
+      ...(this.deps.flowVersionsByStepKind ? { flowVersionsByStepKind: this.deps.flowVersionsByStepKind } : {}) });
     if (!claim) return false;
     const identity = { moduleRunId: claim.moduleRunId, stepId: claim.stepId, attemptId: claim.attemptId };
     let preparationDone = false;
@@ -92,10 +99,10 @@ export class MarketModelBatchWorker {
       await endPreparation(); // Transfer lease maintenance to executeBatch; no competing completion heartbeat.
       controller.signal.throwIfAborted();
       const result = await this.deps.execution.executeBatch(claim, configuration, controller.signal);
-      this.#emit({ ...identity, event: result.status });
-    } catch {
+      this.#emit({ ...identity, event: result.agentRun.terminalStatus==='cancelled'?'cancelled':result.status });
+    } catch (error) {
       await endPreparation();
-      await this.#handleFailure(claim, controller.signal);
+      await this.#handleFailure(claim, controller.signal, error);
     } finally { await endPreparation(); }
     return true;
   }
@@ -107,16 +114,22 @@ export class MarketModelBatchWorker {
     try { return await Promise.race([this.deps.resolveConfiguration(input), interrupted]); }
     finally { signal.removeEventListener('abort', abort); }
   }
-  async #handleFailure(claim: MarketStepClaim, signal: AbortSignal) {
+  async #handleFailure(claim: MarketStepClaim, signal: AbortSignal, failure: unknown) {
     const identity = { moduleRunId: claim.moduleRunId, stepId: claim.stepId, attemptId: claim.attemptId };
     try {
       const records = await this.deps.audit.listAgentRuns({ actor: { organizationId: claim.organizationId, userId: claim.createdBy }, studyId: claim.studyId, moduleRunId: claim.moduleRunId });
+      const cancelled=records.find(r=>r.attemptId===claim.attemptId)?.terminalStatus==='cancelled';
+      const view=await this.deps.steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+      if(view?.run.status==='cancelled'&&(cancelled||!records.some(r=>r.attemptId===claim.attemptId))){this.#emit({...identity,event:'cancelled'});return;}
       if (records.some(r => r.attemptId === claim.attemptId)) {
         // A model/audit may already exist. Do not overwrite it or enqueue an outer retry.
         this.#emit({ ...identity, event: 'persistence-failed' }); return;
       }
+      const unavailable = failure instanceof MarketModelConfigurationUnavailableError;
       const receipt = await this.deps.steps.settleAndEnqueue({ claim,
-        outcome: { status: 'failed', error: { code: signal.aborted ? 'interrupted' : 'invalid-data', retryable: false } } });
+        outcome: unavailable
+          ? { status: 'failed', error: { code: 'governance', retryable: false }, diagnostic: { reason: 'model-configuration-unavailable' } }
+          : { status: 'failed', error: { code: signal.aborted ? 'interrupted' : 'invalid-data', retryable: false } } });
       this.#emit({ ...identity, event: receipt.status === 'lease-lost' ? 'persistence-failed' : 'preparation-failed' });
     } catch { this.#emit({ ...identity, event: 'persistence-failed' }); }
   }

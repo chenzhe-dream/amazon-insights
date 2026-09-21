@@ -18,7 +18,7 @@ export interface MarketProductPoolCollection {
   /** Internal diagnostic input; publish only validated report fields through HTTP. */
   rawPayload:MarketJsonValue|null;
   issues:MarketProductPoolIssue[];
-  sampling:{requestedSize:number;receivedSize:number;rankBasis:'provider-head-listings'|'fixed-selected-members';selectedAsins:string[]|null;missingAsins:string[];bsrTopVerified:false;exhaustive:false};
+  sampling:{requestedSize:number;receivedSize:number;selectedSize:number;rankBasis:'provider-head-listings'|'fixed-selected-members';selectedAsins:string[]|null;missingAsins:string[];bsrTopVerified:false;exhaustive:false};
   boundaries:string[];
 }
 export interface CollectMarketProductPoolInput {
@@ -37,6 +37,8 @@ const argumentsSchema=z.object({
     context.addIssue({code:'custom',path:['selectedAsins'],message:'Selected ASINs must be unique and match the requested pool size'});
   }
 });
+// Provider topN controls upstream analysis, not necessarily its response row count.
+const MAX_PROVIDER_PRODUCT_ROWS=1000;
 const messages:Record<IssueCode,string>={
   configuration:'商品池数据源未配置',authentication:'商品池数据源认证失败','rate-limit':'商品池数据源限流',
   timeout:'商品池采集超时','upstream-temporary':'商品池数据源暂时不可用','upstream-permanent':'商品池数据源拒绝请求',
@@ -100,7 +102,7 @@ export async function collectMarketProductPool(input:CollectMarketProductPoolInp
   const timer=setTimeout(()=>deadline.abort(new Error('deadline')),options.timeoutMs);
   const signal=AbortSignal.any([...(input.signal?[input.signal]:[]),deadline.signal]);
   const base:MarketProductPoolCollection={status:'failed',scope:options.scope,month:options.month,products:[],evidence:null,rawPayload:null,issues:[],
-    sampling:{requestedSize:options.poolSize,receivedSize:0,rankBasis:selectedAsins?'fixed-selected-members':'provider-head-listings',selectedAsins,missingAsins:selectedAsins?[...selectedAsins]:[],bsrTopVerified:false,exhaustive:false},
+    sampling:{requestedSize:options.poolSize,receivedSize:0,selectedSize:0,rankBasis:selectedAsins?'fixed-selected-members':'provider-head-listings',selectedAsins,missingAsins:selectedAsins?[...selectedAsins]:[],bsrTopVerified:false,exhaustive:false},
     boundaries:[
       selectedAsins?'商品池固定为所选 ASIN；当月未返回的成员保留缺口，不以其他商品替代或补零。':'商品池为来源接口返回的头部Listing样本，不代表全市场，也未验证为BSR前N。',
       '月销量按接口月份参数取得；返回缺少月份回显时保留未核验状态。',
@@ -129,7 +131,7 @@ export async function collectMarketProductPool(input:CollectMarketProductPoolInp
     if(!record(envelope)||typeof envelope.code!=='string')throw new CollectionFailure('malformed-response');
     if(envelope.code!=='OK')throw new CollectionFailure('upstream-permanent');
     const rows=envelope.data;
-    if(!Array.isArray(rows)||rows.length>options.poolSize||rows.some(row=>!record(row)))throw new CollectionFailure('malformed-response');
+    if(!Array.isArray(rows)||rows.length>MAX_PROVIDER_PRODUCT_ROWS||rows.some(row=>!record(row)))throw new CollectionFailure('malformed-response');
     base.sampling.receivedSize=rows.length;
     const paths:Partial<Record<MarketSourceIdentityField,MarketSourcePayloadPath[]>>={};
     const expected={marketplace:options.scope.marketplace,nodeIdPath:options.scope.nodeIdPath,nodeId:options.scope.nodeIdPath.split(':').at(-1)!,month:options.month,currency:options.scope.currency};
@@ -145,14 +147,14 @@ export async function collectMarketProductPool(input:CollectMarketProductPoolInp
     }
     // A member-level echo establishes that member's unit only. A pool-wide unit
     // requires an envelope declaration or a declaration on every returned row.
-    const sourceCurrency=Object.hasOwn(envelope,'currency')||(rows.length>0&&rows.every(row=>Object.hasOwn(row as object,'currency')))?'USD':null;
+    const sourceCurrency=Object.hasOwn(envelope,'currency')||(rows.length>0&&rows.every(row=>Object.hasOwn(row as object,'currency')))?options.scope.currency:null;
     const currencyUnit=sourceCurrency?{status:'known',unit:'currency',rawUnit:'currency',currency:sourceCurrency}
       :{status:'unknown',rawUnit:null,reason:'接口未回显金额币种；价格和金额原值保留，待单位核验'};
-    const evidence=createMarketSourceEvidence({scope:options.scope,provider:'sellerSprite',operation:'market_product_concentration',
+    const buildEvidence=()=>createMarketSourceEvidence({scope:options.scope,provider:'sellerSprite',operation:'market_product_concentration',
       requestIdentity:{marketplace:options.scope.marketplace,nodeIdPath:options.scope.nodeIdPath,month:options.month},responseIdentityPaths:paths,
       payload:base.rawPayload,fetchedAt:source.fetchedAt,observationPeriod:{kind:'calendar-months',fromMonth:options.month,toMonth:options.month},
       units:{units:{status:'known',unit:'count',rawUnit:'totalUnits'},price:currencyUnit,revenue:currencyUnit},
-      coverage:{receivedCount:rows.length,expectedCount:selectedAsins?.length??null,truncation:{status:'unknown',reason:selectedAsins?'固定成员查询不代表全类目覆盖；缺失成员的当月数据未知':'接口返回头部样本，未证明全类目覆盖'}}},input.now?.()??new Date());
+      coverage:{receivedCount:rows.length,expectedCount:selectedAsins&&[...identities].every(asin=>selectedSet!.has(asin))?selectedAsins.length:null,truncation:{status:'unknown',reason:selectedAsins?'来源返回量与固定成员命中数分别记录；额外商品不纳入样本，缺失成员的当月数据未知':'接口返回样本按来源顺序截取到请求数量，未证明全类目覆盖'}}},input.now?.()??new Date());
     const identities=new Set<string>();
     const products:MarketPoolProduct[]=[];
     const issues:MarketProductPoolIssue[]=[];
@@ -160,8 +162,9 @@ export async function collectMarketProductPool(input:CollectMarketProductPoolInp
       const row=value as Record<string,unknown>;
       const asin=MarketSourceIdentityValueSchemas.asin.safeParse(row.asin);
       if(!asin.success||identities.has(asin.data))throw new CollectionFailure('malformed-response');
-      if(selectedSet&&!selectedSet.has(asin.data))throw new CollectionFailure('scope-mismatch');
       identities.add(asin.data);
+      // Validate every identity above, even for rows excluded from local selection.
+      if(selectedSet?!selectedSet.has(asin.data):products.length>=options.poolSize)continue;
       const metric=(field:string,integer=false,max?:number,min=0):number|null=>{
         const result=numeric(row[field],integer,max,min);
         if(result===null)issues.push({...issue(row[field]===null||row[field]===undefined?'missing-metric':'invalid-metric'),asin:asin.data,field});
@@ -174,8 +177,8 @@ export async function collectMarketProductPool(input:CollectMarketProductPoolInp
     }
     const missingAsins=selectedAsins?.filter(asin=>!identities.has(asin))??[];
     for(const asin of missingAsins)issues.push({...issue('missing-member'),asin});
-    if(!rows.length)issues.unshift(issue('empty'));
-    return {...base,sampling:{...base.sampling,missingAsins},products,evidence,issues,status:!rows.length?'empty':issues.length?'partial':'ready'};
+    if(!products.length)issues.unshift(issue('empty'));
+    return {...base,sampling:{...base.sampling,selectedSize:products.length,missingAsins},products,evidence:buildEvidence(),issues,status:!products.length?'empty':issues.length?'partial':'ready'};
   } catch(error){
     if(performance.now()>=deadlineAt)deadline.abort(new Error('deadline'));
     return {...base,issues:[classify(error,signal,input.signal)]};

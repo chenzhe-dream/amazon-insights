@@ -3,9 +3,9 @@ import { summarizeXydcOrders } from "../shared/xydc-order-summary";
 import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
 import type { XydcVariantFamilyGroup, XydcVariantMarket, XydcVariantProduct } from "./xydc-variant-section";
 import { xydcVariantAttributeLabel } from "./xydc-variant-label";
+import { resolveVariantColor, variantColorNote } from "./lib/variant-color";
 
 const imagePlaceholder = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Crect width='72' height='72' fill='%23f2f6fa'/%3E%3Cpath d='M17 50l12-13 9 8 8-10 10 15z' fill='%239aabba'/%3E%3Ccircle cx='28' cy='26' r='6' fill='%239aabba'/%3E%3C/svg%3E";
-const orderColors = ["#10a5a5", "#1769d3", "#f0a000", "#8756d8", "#e85d75", "#2b8a3e", "#52677f", "#d96c1f"];
 
 const orderReasonLabels = {
   NOT_CONFIGURED: "西柚订单数据源未配置",
@@ -31,8 +31,14 @@ const variantReasonLabels = {
   PARTIAL_CHILD_INFO: "部分子体详情暂未返回",
 } satisfies Record<NonNullable<XydcVariantFamilyGroup["reasonCode"]>, string>;
 
-export function orderColorMap(asins: readonly string[]) {
-  return new Map([...new Set(asins)].sort().map((asin, index) => [asin, orderColors[index % orderColors.length]!]));
+export function orderColorMap(asins: readonly string[], children: XydcVariantFamilyGroup["children"] = []) {
+  const byAsin = new Map(children.map(child => [child.asin, child]));
+  return new Map([...new Set(asins)].map(asin => [asin, resolveVariantColor(byAsin.get(asin)?.attributes ?? []).background]));
+}
+
+export function orderColorTitle(child: XydcVariantFamilyGroup["children"][number] | undefined) {
+  const color = resolveVariantColor(child?.attributes ?? []);
+  return `${orderAttributeLabel(child)} · 原属性：${child?.attributes.map(attribute => attribute.value).join(" · ") || "未提供"} · ${color.kind === "unknown" ? "颜色待确认" : variantColorNote}`;
 }
 
 export function orderAttributeLabel(child: XydcVariantFamilyGroup["children"][number] | undefined) {
@@ -102,7 +108,7 @@ export function XydcOrderCard({
     missingMonths: window.months,
     undisclosedMonths: 0,
   }));
-  const colors = orderColorMap(group.children.map(child => child.asin));
+  const colors = orderColorMap(rows.map(row => row.asin), group.children);
   const parentImage = product?.image?.trim() || group.children.find(child => child.imageUrl?.trim())?.imageUrl || imagePlaceholder;
   const brand = product && product.brand.trim() && product.brand !== "等待同步" ? product.brand : "品牌资料待补充";
   const title = product && product.title.trim() && product.title !== "等待卖家精灵与 SIF MCP 返回商品数据"
@@ -172,9 +178,9 @@ export function XydcOrderCard({
               className="xydc-order-share-segment"
               dataOrderColor={colors.get(row.asin)}
               label={`查看 ${orderAttributeLabel(childByAsin.get(row.asin))} 年度订单明细（年度份额区段）`}
-              title={`${orderAttributeLabel(childByAsin.get(row.asin))} ${formatOrderShare(row.share)}`}
-              style={{ width: `${row.share}%`, background: colors.get(row.asin) }}
-            >{row.share !== null && row.share >= 8 ? formatOrderShare(row.share) : ""}
+              title={`${orderColorTitle(childByAsin.get(row.asin))} · ${formatOrderShare(row.share)}`}
+              style={{ width: `${row.share}%`, background: colors.get(row.asin), color: resolveVariantColor(childByAsin.get(row.asin)?.attributes ?? []).textColor }}
+            >{row.share !== null && row.share >= 8 ? <span className={resolveVariantColor(childByAsin.get(row.asin)?.attributes ?? []).kind === "single" ? undefined : "xydc-order-share-label-backed"}>{formatOrderShare(row.share)}</span> : ""}
             </XydcAnnualInspectionTrigger>
           ))}
         </div>
@@ -185,6 +191,7 @@ export function XydcOrderCard({
           model={model}
           asin={row.asin}
           dataOrderColor={colors.get(row.asin)}
+          title={orderColorTitle(childByAsin.get(row.asin))}
         ><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</XydcAnnualInspectionTrigger>)}
       </div>
 
@@ -195,7 +202,7 @@ export function XydcOrderCard({
             {rows.slice(0, 3).map(row => {
               const child = childByAsin.get(row.asin);
               return <tr key={row.asin} data-order-preview-row={row.asin}>
-                <th scope="row"><span><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(child)}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a>{childInfoLabel(child) ? <small className={`xydc-order-child-state xydc-order-child-state-${child?.infoStatus}`}>{childInfoLabel(child)}</small> : null}</th>
+                <th scope="row"><span title={orderColorTitle(child)}><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(child)}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a>{childInfoLabel(child) ? <small className={`xydc-order-child-state xydc-order-child-state-${child?.infoStatus}`}>{childInfoLabel(child)}</small> : null}</th>
                 <td><b>{formatOrderCount(row.total, row.complete)}</b><small>{formatOrderShare(row.share)}</small></td>
                 <td>{formatPrice(child)}</td>
                 <td>{formatListingDate(child)}</td>
@@ -211,8 +218,9 @@ export function XydcOrderCard({
         查看全部 {group.children.length} 个子体{snapshot ? "与月度趋势" : ""}
       </button>
       <footer className="xydc-order-meta">
+        <span>{variantColorNote} 未识别颜色用中性纹理表示。</span>
         <span>统计窗口：{sourceWindow.startMonth} — {sourceWindow.endMonth}</span>
-        <span>来源：西柚洞察 · 子体汇总</span>
+        <span>来源：西柚洞察 · 按自然月披露订单汇总</span>
         {historical
           ? <em className="xydc-order-cache-badge">历史缓存 · 当前统计区间待补齐</em>
           : snapshot?.cacheState === "stale"

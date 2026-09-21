@@ -96,7 +96,7 @@ test("manual, submit, and mine are available to every user while management is p
 });
 
 test("manual explains all four workflows without requiring a live service", () => {
-  const text = renderText(HelpManual({}));
+  const text = renderText(HelpManual());
   assert.match(text, /使用手册/);
   assert.match(text, /提交反馈/);
   assert.match(text, /我的反馈/);

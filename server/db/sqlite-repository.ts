@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readLatestProjectAnalysts, type ProjectLatestAnalystInput } from "./project-latest-analyst-repository";
 import { SqliteVocAutomationStore } from './sqlite/voc-automation-store';
+import { UnavailableSyncJobRepository } from './sync-job-repository';
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
@@ -390,6 +392,7 @@ const analysisReportSelect = `
   JOIN projects p ON p.id = r.project_id`;
 const userFeedbackListSelect = `
   SELECT feedback.*, workflow.status, workflow.version AS workflow_version,
+         reporter.display_name AS actor_display_name, reporter.email AS actor_email,
          workflow.admin_seen_at,
          (SELECT COUNT(*) FROM user_feedback_attachments attachment
            WHERE attachment.feedback_id = feedback.id
@@ -397,7 +400,9 @@ const userFeedbackListSelect = `
     FROM user_feedback feedback
     JOIN user_feedback_workflow workflow
       ON workflow.feedback_id = feedback.id
-     AND workflow.organization_id = feedback.organization_id`;
+     AND workflow.organization_id = feedback.organization_id
+    LEFT JOIN users reporter ON reporter.id = feedback.actor_user_id
+     AND reporter.organization_id = feedback.organization_id`;
 
 function firstValue(row: SqliteRow | undefined) {
   return row ? Object.values(row)[0] : undefined;
@@ -575,6 +580,7 @@ export class SqliteAgentRepository
   readonly #nowProvider: () => Date;
   readonly #transactionContext = new AsyncLocalStorage<SqliteTransactionContext>();
   readonly vocAutomations: SqliteVocAutomationStore;
+  readonly syncJobs = new UnavailableSyncJobRepository();
   readonly manualAlexaVoc: ManualAlexaVocRepository;
   readonly adminUserPresence: AdminUserPresenceRepository;
 
@@ -3950,12 +3956,14 @@ export class SqliteAgentRepository
                   mbr.format_repair, mbr.response_id
            FROM model_budget_reservations mbr
            JOIN agent_runs ar ON ar.id = mbr.agent_run_id
-           JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+           JOIN job_attempts ja ON ja.id = COALESCE(ar.active_job_attempt_id, ar.job_attempt_id)
            JOIN run_stages rs ON rs.id = ja.stage_id
            JOIN analysis_runs r ON r.id = rs.run_id
            JOIN projects p ON p.id = r.project_id
            WHERE mbr.agent_run_id = ?
-             AND ar.job_attempt_id = ?
+             AND COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = ?
+             AND ja.stage_id = ar.stage_id AND r.id = ar.run_id
+             AND mbr.organization_id = p.organization_id AND mbr.project_id = p.id
              AND mbr.run_id = ?
              AND p.organization_id = ?
              AND mbr.state IN ('dispatched', 'settled')
@@ -4237,6 +4245,12 @@ export class SqliteAgentRepository
         .get(id) as SqliteRow | undefined;
       return row ? mapProject(row) : null;
     });
+  }
+
+  listLatestProjectAnalysts(input: ProjectLatestAnalystInput) {
+    return this.#serialize(() => readLatestProjectAnalysts(input, "sqlite", async (sql, values) =>
+      this.#database.prepare(sql).all(...values) as Array<{ project_id: string; display_name: string | null }>,
+    ));
   }
 
   listProjectsByOrganization(organizationId: string): Promise<ProjectRecord[]> {
@@ -4932,11 +4946,13 @@ export class SqliteAgentRepository
       .prepare(
         `SELECT 1
          FROM agent_runs ar
-         JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+         JOIN job_attempts ja ON ja.id = COALESCE(ar.active_job_attempt_id, ar.job_attempt_id)
          JOIN run_stages rs ON rs.id = ja.stage_id
          JOIN analysis_runs r ON r.id = rs.run_id
          JOIN projects p ON p.id = r.project_id
-         WHERE ar.id = ? AND ar.job_attempt_id = ?
+         WHERE ar.id = ? AND COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = ?
+           AND ja.stage_id = ar.stage_id AND r.id = ar.run_id
+           AND (ar.logical_execution_cycle_id IS NULL OR ja.logical_execution_cycle_id = ar.logical_execution_cycle_id)
            AND p.organization_id = ? AND ar.validation_status = 'pending'
            AND ar.execution_claim_token = ?
            AND ar.execution_claim_owner_id = ?
@@ -4961,15 +4977,24 @@ export class SqliteAgentRepository
         this.#database
           .prepare(
             `SELECT 1 FROM agent_runs
-             WHERE id = ? AND run_id = ? AND job_attempt_id = ?`,
+             WHERE id = ? AND run_id = ? AND COALESCE(active_job_attempt_id, job_attempt_id) = ?`,
           )
           .get(authority.agentRunId, subject.runId, authority.jobAttemptId) ===
           undefined) ||
       (subject.reservationId !== undefined &&
         this.#database
           .prepare(
-            `SELECT 1 FROM model_budget_reservations
-             WHERE id = ? AND job_attempt_id = ? AND agent_run_id = ?`,
+            `SELECT 1 FROM model_budget_reservations reservation
+             JOIN agent_runs ar ON ar.id = reservation.agent_run_id
+             JOIN job_attempts attempt ON attempt.id = reservation.job_attempt_id
+             JOIN analysis_runs run ON run.id = ar.run_id
+             JOIN projects project ON project.id = run.project_id
+             WHERE reservation.id = ? AND COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = ? AND ar.id = ?
+               AND reservation.run_id = ar.run_id AND reservation.project_id = project.id
+               AND reservation.organization_id = project.organization_id
+               AND attempt.stage_id = ar.stage_id
+               AND (attempt.id = ar.job_attempt_id OR
+                 (ar.logical_execution_cycle_id IS NOT NULL AND attempt.logical_execution_cycle_id = ar.logical_execution_cycle_id))`,
           )
           .get(
             subject.reservationId,
@@ -5351,7 +5376,14 @@ export class SqliteAgentRepository
   }
 
   enqueueJob(job: EnqueueJobInput): Promise<JobAttemptRecord> {
-    return this.#serialize(() => {
+    return this.#authTransaction(() => {
+      if (job.supersedeVocPredecessors) {
+        const scope = this.#database.prepare(`SELECT rs.stage, rs.status, ar.status AS run_status
+          FROM run_stages rs JOIN analysis_runs ar ON ar.id = rs.run_id WHERE rs.id = ?`).get(job.stageId) as SqliteRow | undefined;
+        if (!scope || scope.stage !== "voc-positioning" || scope.run_status === "cancelled" || scope.status === "cancelled") throw new JobLeaseLostError();
+        const pending = this.#database.prepare(`SELECT id FROM job_attempts WHERE stage_id = ? AND status = 'queued' AND attempt_number >= ? ORDER BY attempt_number DESC LIMIT 1`).get(job.stageId, job.attemptNumber) as SqliteRow | undefined;
+        if (pending) return this.#findJob(String(pending.id))!;
+      }
       this.#database
         .prepare(
           `INSERT INTO job_attempts (
@@ -5375,6 +5407,17 @@ export class SqliteAgentRepository
           job.createdAt,
           job.createdAt,
         );
+      if (job.supersedeVocPredecessors) {
+        this.#database.prepare(`UPDATE job_attempts SET status = 'cancelled', leased_by = NULL, lease_expires_at = NULL,
+          lease_generation = lease_generation + 1, retryable = FALSE, retry_scheduled_at = NULL,
+          report_publication_retry_at = NULL, completed_at = COALESCE(completed_at, ?), updated_at = ?, error_json = ?
+          WHERE stage_id = ? AND attempt_number < ?
+          AND (status IN ('queued', 'running') OR (status = 'failed' AND retryable = TRUE AND retry_scheduled_at IS NULL))`)
+          .run(job.createdAt, job.createdAt, JSON.stringify({ code: "SUPERSEDED", message: "新 VOC 输入已接替本次定位，旧任务停止且不再重试。", retryable: false }), job.stageId, job.attemptNumber);
+        this.#database.prepare(`UPDATE run_stages SET status = 'queued', progress = 0, started_at = NULL,
+          completed_at = NULL, last_error_json = NULL, updated_at = ? WHERE id = ?`).run(job.createdAt, job.stageId);
+        this.#refreshAnalysisRunStatus(this.#findJob(job.id)!.runId, job.createdAt);
+      }
       return this.#findJob(job.id)!;
     });
   }
@@ -7677,6 +7720,8 @@ function mapUserFeedback(row: SqliteRow): UserFeedbackRecord {
 function mapFeedbackList(row: SqliteRow): FeedbackListRecord {
   return Object.freeze({
     ...mapUserFeedback(row),
+    actorDisplayName: row.actor_display_name == null ? null : String(row.actor_display_name),
+    actorEmail: row.actor_email == null ? null : String(row.actor_email),
     status: validateFeedbackStatus(String(row.status)),
     workflowVersion: Number(row.workflow_version),
     adminSeenAt: row.admin_seen_at === null ? null : DateTimeSchema.parse(String(row.admin_seen_at)),

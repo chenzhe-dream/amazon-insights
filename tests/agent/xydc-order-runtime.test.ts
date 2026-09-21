@@ -10,8 +10,34 @@ import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import type { XydcOrderSnapshot } from "../../shared/xydc-order-contract";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
+import { writeXydcVariantFamily, xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import { translateXydcVariantLabels } from "../../scripts/lib/xydc-label-translation";
 
 const now = new Date("2026-09-08T09:00:00.000Z");
+
+test("runtime enriches translated labels without rewriting provider evidence and preserves them through the API schema", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "xydc-label-runtime-"));
+  const previousRoot = process.env.AGENT_DATA_ROOT;
+  try {
+    const family = variant("B000000001", "B0PARENT01", ["B0CHILD001"]);
+    const attribute = { dimension: "Color", value: "Ocean Mist" };
+    family.children[0]!.attributes = [attribute];
+    await writeXydcVariantFamily(dataRoot, "US", family);
+    const sourcePath = xydcVariantCachePath(dataRoot, "US", family.inputAsin);
+    const original = await readFile(sourcePath, "utf8");
+    await translateXydcVariantLabels({ dataRoot, attributes: [attribute],
+      translate: async items => items.map(item => ({ id: item.id, labelZh: "海雾色" })),
+    });
+    process.env.AGENT_DATA_ROOT = dataRoot;
+    const result = RuntimeAnalysisDataSnapshotSchema.parse(readGeneratedRuntimeAnalysisData([family.inputAsin], "US", { now }));
+    assert.deepEqual(result.variants.families[0]!.children[0]!.attributes, [{ ...attribute, labelZh: "海雾色" }]);
+    assert.equal(await readFile(sourcePath, "utf8"), original);
+  } finally {
+    if (previousRoot === undefined) delete process.env.AGENT_DATA_ROOT;
+    else process.env.AGENT_DATA_ROOT = previousRoot;
+    await rm(dataRoot, { recursive: true, force: true });
+  }
+});
 
 function variant(inputAsin: string, parentAsin: string, children: readonly string[]): XydcVariantFamily {
   return {

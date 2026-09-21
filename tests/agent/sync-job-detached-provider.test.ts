@@ -53,7 +53,7 @@ test("detached sync jobs receive freshly resolved managed connector credentials"
 
 test("detached environment bypasses only an explicit safe OpenAI hostname", () => {
   for (const protocol of ["http", "https"]) {
-    const base = {
+    const base: NodeJS.ProcessEnv = { NODE_ENV: "test",
       HTTPS_PROXY: "http://proxy.example.test:8080",
       NO_PROXY: "localhost,127.0.0.1",
       no_proxy: "internal.example.test",
@@ -63,8 +63,8 @@ test("detached environment bypasses only an explicit safe OpenAI hostname", () =
       SORFTIME_MCP_ENDPOINT: "https://sorftime.example.test/mcp",
     };
 
-    const first = detachedProviderEnvironment(base);
-    const second = detachedProviderEnvironment(first);
+    const first: NodeJS.ProcessEnv = detachedProviderEnvironment(base);
+    const second: NodeJS.ProcessEnv = detachedProviderEnvironment(first);
     for (const name of ["NO_PROXY", "no_proxy"] as const) {
       const entries = (first[name] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
       assert.deepEqual(entries, ["localhost", "127.0.0.1", "internal.example.test", "relay.example.test"]);
@@ -83,13 +83,13 @@ test("detached environment bypasses only an explicit safe OpenAI hostname", () =
     "https://user:unsafe-provider-credential-sentinel@relay.example.test/v1",
     "https://relay.example.test/v1#unsafe-fragment",
   ]) {
-    const environment = {
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: "test",
       HTTPS_PROXY: "http://proxy.example.test:8080",
       NO_PROXY: "localhost",
       no_proxy: "internal.example.test",
       ...(openAiBaseUrl === undefined ? {} : { OPENAI_BASE_URL: openAiBaseUrl }),
     };
-    const result = detachedProviderEnvironment(environment);
+    const result: NodeJS.ProcessEnv = detachedProviderEnvironment(environment);
     assert.equal(result.NO_PROXY, environment.NO_PROXY);
     assert.equal(result.no_proxy, environment.no_proxy);
   }
@@ -150,6 +150,7 @@ test("a degraded connector stops subsequent automatic requests without fake or c
   assert.equal(result.persisted.status, "connector-failed");
   assert.equal(result.persisted.secondFetchCalls, 0);
   assert.equal(result.attempts.length, 1);
+  assert.ok(Array.isArray(result.mirror.diagnostics));
   assert.deepEqual(result.mirror.diagnostics.map((entry: Record<string, unknown>) => entry.failureKind), [
     "dns",
     "provider-degraded",

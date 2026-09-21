@@ -1,4 +1,4 @@
-import {MARKET_PRODUCT_SOURCE_POLICY,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../shared/market-product-source-policy';
+import {marketProductSourcePolicy,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../shared/market-product-source-policy';
 import { z } from 'zod';
 import { MarketShapeRunResponseSchema, MarketShapeRevisionPublicSchema } from '../../shared/market-shape-public-contracts';
 import { MarketSemanticRecordSchema, type MarketShapeSuggestionOutput } from '../../shared/market-semantic-contracts';
@@ -12,6 +12,8 @@ import { PostgresMarketAgentRunStore } from '../db/postgres/market-agent-run-sto
 import { isMarketShapeFlow, inspectMarketShapeContinuation, MarketShapeFlowParamsSchema } from '../domain/market-research/shape-price-flow';
 import { readMarketProductMonth } from '../domain/market-research/product-month-evidence';
 import { validateMarketShapeSuggestions } from '../domain/market-research/semantic-validation';
+import {buildMarketShapePeriodProjection} from '../domain/market-research/shape-period-projection';
+import {projectMarketShapeSourceMetadata} from '../domain/market-research/shape-source-metadata';
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 function invalid(): never { throw new MarketExecutionConflictError(); }
 type Saved = NonNullable<Awaited<ReturnType<PostgresMarketShapePriceRevisionStore['find']>>>;
@@ -19,9 +21,10 @@ export function marketShapePublicRevision(saved: Saved) {
     const c = saved.catalog, r = c.revision;
     // Preserve the configured bands even when there are no eligible sales.
     const bands = c.analysis.shapes[0].bands.map(b => b.band);
-    return MarketShapeRevisionPublicSchema.parse({ revisionId: r.revisionId, parentRevisionId: r.parentRevisionId, ordinal: saved.ordinal, createdAt: r.createdAt, catalogId: c.catalogId, scope: c.scope, selectedAsins: r.selectedAsins, taxonomyVersion: r.taxonomyVersion, labels: r.labels, assignments: r.assignments, note: r.note, bands, totalUnits: c.analysis.totals.totalUnits, eligibleAsins: c.analysis.scope.eligibleAsins, coverage: c.analysis.coverage.status,
+    const report = MarketShapeRevisionPublicSchema.parse({ revisionId: r.revisionId, parentRevisionId: r.parentRevisionId, ordinal: saved.ordinal, createdAt: r.createdAt, catalogId: c.catalogId, scope: c.scope, selectedAsins: r.selectedAsins, taxonomyVersion: r.taxonomyVersion, labels: r.labels, assignments: r.assignments, note: r.note, bands, totalUnits: c.analysis.totals.totalUnits, eligibleAsins: c.analysis.scope.eligibleAsins, coverage: c.analysis.coverage.status,
         groups: c.analysis.shapes.map(s => ({ labelId: s.shape, units: s.totals.totalUnits, links: s.totals.eligibleLinkCount, monthlyUnitsPerLink: s.totals.monthlyUnitsPerLink, bands: s.bands.map(b => ({ id: b.band.id, units: b.metrics.totalUnits, links: b.metrics.eligibleLinkCount, share: b.salesShareWithinShape.value, denominatorUnits: b.salesShareWithinShape.denominator })) })),
         comparisonBasis: c.comparisonBasis, priceBasis: c.priceBasis, historicalPriceStatus: c.historicalPriceStatus, products: c.products.map(p => ({ asin: p.asin, shape: p.shape, price: p.referencePrice.value, rawPrice: p.referencePrice.rawValue, priceIssues: p.referencePrice.issues,...(p.referencePrice.provenance?{provenance:p.referencePrice.provenance}:{}), observations: p.observations.map(o => ({ month: o.month, units: o.units, rawUnits: o.rawUnits, issues: o.issues,...(o.provenance?{provenance:o.provenance}:{}) })) })), monthly: c.monthly.map(m => ({ month: m.month, totalUnits: m.analysis.totals.totalUnits, eligibleAsins: m.analysis.scope.eligibleAsins })), semanticStatus: 'not-integrated', ...(c.structure?{structure:c.structure}:{}),...(c.sourcePolicy?{sourcePolicy:c.sourcePolicy}:{}) });
+    return MarketShapeRevisionPublicSchema.parse({...report,periodProjection:buildMarketShapePeriodProjection(report)});
 }
 export async function readMarketShapeRun(context: PostgresQueryContext, actor: MarketExecutionActor, id: string) {
     const steps = new PostgresMarketModuleExecutionStore(context), snapshots = new PostgresMarketAnalysisSnapshotStore(context), revisions = new PostgresMarketShapePriceRevisionStore(context), audits = new PostgresMarketAgentRunStore(context);
@@ -53,7 +56,7 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         if (!saved || !raw)
             invalid();
         const checked = await readMarketProductMonth({ month: view.run.scope.toMonth, snapshot: saved.snapshot, sourceRef: raw.id }, { [raw.id]: raw.evidence });
-        source = { referenceAttemptId: a.id, historyAttemptIds: view.steps.filter(s => current.has(s.stepKey) && s.kind === 'collect-product-month' && s.id !== anchor!.id && ['succeeded', 'empty'].includes(s.status)).map(s => s.latestAttemptId!), referenceSnapshotId: saved.snapshot.snapshotId, fetchedAt: raw.evidence.fetchedAt, selectionBasis: 'provider-row-order', bsrTopVerified: false, products: checked.products.map(p => ({ asin: p.asin, title: p.title, brand: p.brand, price: p.price, units: p.units })) };
+        source = { referenceAttemptId: a.id, historyAttemptIds: view.steps.filter(s => current.has(s.stepKey) && s.kind === 'collect-product-month' && s.id !== anchor!.id && ['succeeded', 'empty'].includes(s.status)).map(s => s.latestAttemptId!), referenceSnapshotId: saved.snapshot.snapshotId, fetchedAt: raw.evidence.fetchedAt, selectionBasis: 'provider-row-order', bsrTopVerified: false, products: checked.products.map(p => ({ asin: p.asin, title: p.title, brand: p.brand, price: p.price, units: p.units, metadata: projectMarketShapeSourceMetadata(checked,p.asin,view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION) })) };
     }
     const items: MarketShapeSuggestionOutput['products'] = [];
     const modelSteps = view.steps.filter(s => current.has(s.stepKey) && s.kind === 'model-batch');
@@ -88,6 +91,6 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         ordinal: number;
         stored_at: Date;
     }>('SELECT revision_id,ordinal,stored_at FROM market_shape_price_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100', [actor.organizationId, id])).rows.map(r => ({ revisionId: r.revision_id, ordinal: r.ordinal, createdAt: new Date(r.stored_at).toISOString() }));
-    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:MARKET_PRODUCT_SOURCE_POLICY}:{}), source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
-            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', asin: null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
+    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
+            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', asin: null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
 }

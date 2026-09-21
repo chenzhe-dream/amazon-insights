@@ -37,10 +37,12 @@ test('overview page restores fixed reports, shares selection and isolates late h
   assert.equal(await page.getByLabel('类目节点或路径').inputValue(),overviewScope.nodeIdPath);
   await page.getByRole('button',{name:'类目买家评论见解',exact:true}).click();assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),overviewScope.nodeIdPath);assert.equal(writes.length,0);
   await page.getByRole('button',{name:'市场总览',exact:true}).click();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();
+  await page.getByText('分析设置与任务管理',{exact:true}).click();
   slow=true;await page.getByLabel('总览报告版本').selectOption(overviewEntry(true).attemptId);await requested;await page.getByLabel('总览报告版本').selectOption('latest');slow=false;release?.();
   await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(await page.getByRole('region',{name:'已保存总览报告'}).getByText('17',{exact:true}).count(),0);
   await page.reload();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(writes.length,0);
   await page.getByLabel('类目节点或路径').fill('999:888');await page.getByText('查询条件已改变').waitFor();assert.equal(writes.length,0);
+  await page.getByText('分析设置与任务管理',{exact:true}).click();
   await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByText('synthetic temporary failure').waitFor();assert.equal(writes.length,1);assert.equal(errors.length,0,errors.join('\n'));
   await mkdir('test-results/market-overview-page',{recursive:true});await page.screenshot({path:'test-results/market-overview-page/report-and-selection.png',fullPage:true});
   allowStarts=true;await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByText('synthetic run unavailable').waitFor();

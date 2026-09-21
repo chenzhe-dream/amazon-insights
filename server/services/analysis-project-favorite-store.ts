@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { projectSegmentName } from "../../shared/project-segment-name";
 import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -30,7 +31,7 @@ export function createAnalysisProjectFavoriteStore(options: {
     let raw;
     try { raw = JSON.parse(readFileSync(join(dataRoot, "projects", `${id}.json`), "utf8")); }
     catch (error) { if (missing(error)) return false; throw error; }
-    return raw?.id?.toLowerCase() === id && (raw.kind == null || raw.kind === "analysis");
+    return raw?.id?.toLowerCase() === id && (raw.kind == null || raw.kind === "analysis") ? raw : null;
   }
   return {
     list(organizationId: string): string[] {
@@ -49,7 +50,9 @@ export function createAnalysisProjectFavoriteStore(options: {
     },
     set(organizationId: string, userId: string, projectId: string, favorited: boolean) {
       const org = canonicalId(organizationId), actor = canonicalId(userId), id = canonicalId(projectId);
-      if (!readAnalysisProject(id)) throw new FavoriteProjectError(404, "Analysis project not found");
+      const project = readAnalysisProject(id);
+      if (!project) throw new FavoriteProjectError(404, "Analysis project not found");
+      if (favorited && !projectSegmentName(project)) throw new FavoriteProjectError(400, "请先填写细分名称并保存，再收藏项目");
       const directory = join(root, org), file = join(directory, `${id}.json`);
       if (!favorited) {
         try { unlinkSync(file); } catch (error) { if (!missing(error)) throw error; }

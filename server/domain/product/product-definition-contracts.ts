@@ -128,6 +128,11 @@ export function canonicalizeProductDefinitionOutput(
   if (!isRecord(candidate)) return candidate;
   const result = { ...candidate };
   delete result.evidenceSelection;
+  // This is model output, not a deterministic rule-engine execution. Never
+  // persist a model-invented trace or claim today's rules explain old reports.
+  delete result.ruleTrace;
+  delete result.ruleSetVersion;
+  delete result.ruleDefinitions;
   return {
     ...result,
     identity: {

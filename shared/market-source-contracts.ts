@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {normalizeMarketSite} from './market-sites';
 import { MarketAnalysisScopeSchema, MarketInputRecordSchema, type MarketAnalysisScope, type ReadonlyMarketJsonValue } from "./market-analysis-contracts";
 
 const reason = z.string().trim().min(1).max(500);
@@ -11,7 +12,7 @@ export const MARKET_SOURCE_IDENTITY_FIELDS = ["marketplace", "nodeIdPath", "node
 export type MarketSourceIdentityField = typeof MARKET_SOURCE_IDENTITY_FIELDS[number];
 
 export const MarketSourceIdentityValueSchemas = {
-  marketplace: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/),
+  marketplace: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/).transform(normalizeMarketSite),
   nodeIdPath: z.string().regex(/^\d+(?::\d+)*$/).max(240),
   nodeId: z.union([z.string().regex(/^\d+$/).max(80), z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).transform(String)]),
   month: z.string().regex(/^20\d{2}-?(0[1-9]|1[0-2])$/).transform(value => value.includes("-") ? value : `${value.slice(0, 4)}-${value.slice(4)}`),

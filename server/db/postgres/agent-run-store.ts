@@ -634,12 +634,16 @@ export class PostgresAgentRunStore implements AgentRunRepository {
                 reservation.format_repair, reservation.response_id
            FROM model_budget_reservations reservation
            JOIN agent_runs agent_run ON agent_run.id = reservation.agent_run_id
-           JOIN job_attempts attempt ON attempt.id = agent_run.job_attempt_id
+           JOIN job_attempts attempt ON attempt.id = COALESCE(agent_run.active_job_attempt_id, agent_run.job_attempt_id)
            JOIN run_stages stage ON stage.id = attempt.stage_id
            JOIN analysis_runs run ON run.id = stage.run_id
            JOIN projects project ON project.id = run.project_id
           WHERE reservation.agent_run_id = $1
-            AND agent_run.job_attempt_id = $2
+            AND COALESCE(agent_run.active_job_attempt_id, agent_run.job_attempt_id) = $2
+            AND attempt.stage_id = agent_run.stage_id
+            AND run.id = agent_run.run_id
+            AND reservation.organization_id = project.organization_id
+            AND reservation.project_id = project.id
             AND reservation.run_id = $3
             AND project.organization_id = $4
             AND reservation.state IN ('dispatched', 'settled')

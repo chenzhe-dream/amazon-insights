@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
+import {sorftimeMarketSite,normalizeMarketSite} from '../../shared/market-sites';
 import {
   MarketAnalysisScopeSchema, MarketInputRecordSchema,
   type MarketAnalysisScope, type MarketJsonValue, type ReadonlyMarketJsonValue,
@@ -42,6 +43,7 @@ export type MarketCustomerThemesCollection = {
 
 const OPERATION = "product_customers_say";
 const messages: Record<MarketCustomerThemesIssueCode, string> = {
+  "local-admission": "Local request capacity is unavailable",
   configuration: "Customers Say connector configuration is unavailable",
   authentication: "Customers Say connector authentication failed",
   "rate-limit": "Customers Say request was limited by connector capacity or rate policy",
@@ -125,7 +127,7 @@ async function executeOnce(input: CollectMarketCustomerThemesInput, asin: string
     const running = Promise.resolve().then(() => {
       throwIfStopped();
       return input.connector.execute({
-        operation: OPERATION, input: { asin, site: "US" }, signal: controller.signal,
+        operation: OPERATION, input: { asin, site: sorftimeMarketSite(input.scope.marketplace) }, signal: controller.signal,
         governorScope: { organizationId, jobId },
       });
     });
@@ -212,7 +214,7 @@ export async function collectMarketCustomerThemes(input: CollectMarketCustomerTh
   const responseIdentityPaths: Partial<Record<EchoField, MarketSourcePayloadPath[]>> = {};
   for (const echo of echoes) {
     const checkedIdentity = MarketSourceIdentityValueSchemas[echo.field].safeParse(echo.value);
-    if (!checkedIdentity.success || checkedIdentity.data !== (echo.field === "asin" ? asin : "US")) {
+    if (!checkedIdentity.success || (echo.field === "asin" ? checkedIdentity.data !== asin : normalizeMarketSite(String(checkedIdentity.data)) !== scope.marketplace)) {
       return failed([issue("identity-mismatch", false, echo.path)]);
     }
     const paths = responseIdentityPaths[echo.field] ?? [];
@@ -247,7 +249,7 @@ export async function collectMarketCustomerThemes(input: CollectMarketCustomerTh
   try {
     evidence = createMarketSourceEvidence({
       scope, provider: "sorftime", operation: OPERATION,
-      requestIdentity: { asin, marketplace: "US" }, responseIdentityPaths, payload: rawPayload,
+      requestIdentity: { asin, marketplace: scope.marketplace }, responseIdentityPaths, payload: rawPayload,
       fetchedAt: source.data.fetchedAt,
       observationPeriod: { kind: "unknown", reason: "Customers Say is a retrieved summary; topic update dates do not establish the review observation window" },
       units: {

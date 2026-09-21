@@ -13,7 +13,7 @@ function statusModule() {
   const ready = asins.map((asin) => ({
     asin, inCatalog: true, keywords: "ready", reviews: "ready", sales: "ready", childSales: "ready",
     priceStrategy: "ready", fba: "ready", listing: "ready", imageRemarks: "ready", category: "ready", traffic: "ready", voc: "ready",
-  }));
+  } as const));
   return {
     asinsNeedingCatalogSync: () => [], asinsNeedingMcpSync: () => [], asinsNeedingTrafficSync: () => [],
     asinsNeedingListingSync: () => [], asinsNeedingImageRemarksSync: () => [], getAsinDataStatus: () => ready,
@@ -27,7 +27,7 @@ test("authorized scoped starts call the dynamic adapter once and reuse without a
   let creates = 0;
   const adapterCalls: unknown[] = [];
   const job = {
-    jobId: "job-1", asins: [...asins].sort(), marketplace: "US", status: "queued", message: "Queued",
+    jobVersion: 1, jobId: "job-1", asins: [...asins].sort(), marketplace: "US" as const, status: "queued" as const, message: "Queued",
     currentStageId: "queue", stages: [], asinProgress: {}, createdAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:00:00.000Z",
   };
   const starter = createAsinSyncJobStarter({
@@ -42,6 +42,8 @@ test("authorized scoped starts call the dynamic adapter once and reuse without a
           return { job, reused: !created };
         },
       }),
+      failSyncJob: () => ({ ...job, status: "failed" as const }),
+      readSyncJob: () => job,
       patchSyncJob: () => job,
     }),
     launchSyncRunner: async () => { launches += 1; },
@@ -69,7 +71,7 @@ test("local starter passes the exact pending static image count into admission a
   let estimatedOptions: { imageRemarksCount?: number } | undefined;
   const item = { ...statusModule().getAsinDataStatus()[0], imageRemarks: "missing" as const };
   const job = {
-    jobId: "job-image-eta", asins: [...asins], marketplace: "US", status: "queued", message: "Queued",
+    jobVersion: 1, jobId: "job-image-eta", asins: [...asins], marketplace: "US" as const, status: "queued" as const, message: "Queued",
     currentStageId: "queue", stages: [], asinProgress: {}, createdAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:00:00.000Z",
   };
   const starter = createAsinSyncJobStarter({
@@ -91,6 +93,8 @@ test("local starter passes the exact pending static image count into admission a
           return { job, reused: false };
         },
       }),
+      failSyncJob: () => ({ ...job, status: "failed" as const }),
+      readSyncJob: () => job,
       patchSyncJob: () => job,
     }),
     launchSyncRunner: async () => undefined,

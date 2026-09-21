@@ -45,11 +45,11 @@ const legacyRepairPreview = {
   candidates: [{
     asin: "B0CCYMV1T1",
     module: "keywords",
-    connectorId: "sif",
-    nextStatus: "pending",
-    reason: "LEGACY_UNVERIFIED",
+    connectorId: "sif" as const,
+    nextStatus: "pending" as const,
+    reason: "LEGACY_UNVERIFIED" as const,
   }],
-} as const;
+};
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = (init?.method ?? "GET").toUpperCase();

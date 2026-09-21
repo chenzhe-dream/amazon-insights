@@ -1,3 +1,4 @@
+import { isMarketSemanticValidationRuleId } from '../domain/market-research/semantic-validation-rules';
 import type { z } from "zod";
 
 import { isVocPositioningValidationRuleId } from "../domain/voc/voc-positioning-contracts";
@@ -167,7 +168,7 @@ function safeRuleId(issue: unknown): string | undefined {
     ? (issue as { params?: { ruleId?: unknown }; ruleId?: unknown }).params?.ruleId ??
       (issue as { ruleId?: unknown }).ruleId
     : undefined;
-  return isVocPositioningValidationRuleId(ruleId) ? ruleId : undefined;
+  return isVocPositioningValidationRuleId(ruleId) || isMarketSemanticValidationRuleId(ruleId) ? ruleId : undefined;
 }
 
 function declaredPropertyNames(schema: Readonly<Record<string, unknown>>): ReadonlySet<string> {

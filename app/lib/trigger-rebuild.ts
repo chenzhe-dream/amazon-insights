@@ -11,7 +11,7 @@ export type RebuildResult = {
 };
 
 type TriggerDependencies = {
-  env: NodeJS.ProcessEnv;
+  env: Readonly<Record<string, string | undefined>>;
   cwd: string;
   spawn: typeof spawn;
   randomOwner: () => string;

@@ -911,7 +911,8 @@ test("monthly trend diagnostics retain only projected fetchedAt failures", async
         .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
       (error: unknown) => {
         assert.ok(error instanceof SifTrafficSnapshotTaskError, scenario.name);
-        assert.deepEqual(error.shapeDiagnostic?.fields.fetchedAt, scenario.expected.fetchedAt, scenario.name);
+        assert.ok(error.shapeDiagnostic?.kind === "monthly-trend");
+        assert.deepEqual(error.shapeDiagnostic.fields.fetchedAt, scenario.expected.fetchedAt, scenario.name);
         assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expected.firstInvalid, scenario.name);
         assert.doesNotMatch(
           JSON.stringify(error.shapeDiagnostic),
@@ -1077,7 +1078,7 @@ test("B0G monthly primitive zero projects every score array to canonical records
     for (const directory of directories) rmSync(directory, { recursive: true, force: true });
   });
 
-  const fingerprints = [];
+  const fingerprints: Array<readonly [string, number, { contentHash: string; sourceChecksum: string; requestChecksum: string }]> = [];
   for (const [index, repository] of repositories.entries()) {
     const subject = await seedTrafficJob(repository, "collect-missing", RETAINED_ASINS);
     const variant = variants[index]!;
@@ -1137,7 +1138,7 @@ test("B0F monthly score-null objects project to canonical missing points without
     for (const directory of directories) rmSync(directory, { recursive: true, force: true });
   });
 
-  const fingerprints = [];
+  const fingerprints: Array<{ field: string; index: number; contentHash: string; sourceChecksum: string; requestChecksum: string }> = [];
   for (const [index, repository] of repositories.entries()) {
     const subject = await seedTrafficJob(repository, "collect-missing", FINAL_ASINS);
     const variant = variants[index]!;
@@ -1316,12 +1317,13 @@ test("malformed projected trend core fields fail closed without snapshot writes"
           scenario.name,
         );
         if (scenario.name === "missing dates") {
-          assert.deepEqual(error.shapeDiagnostic?.fields.dates, {
+          assert.ok(error.shapeDiagnostic?.kind === "monthly-trend");
+          assert.deepEqual(error.shapeDiagnostic.fields.dates, {
             present: false,
             type: "missing",
           });
         }
-        if (scenario.expectedFirstInvalid) {
+        if ("expectedFirstInvalid" in scenario && scenario.expectedFirstInvalid) {
           assert.deepEqual(error.shapeDiagnostic?.firstInvalid, scenario.expectedFirstInvalid);
         }
         return true;
@@ -1409,7 +1411,8 @@ test("trend diagnostics bound core failures without retaining discarded fields",
       .createForRun({ ...subject, marketplace: "US", asins: RETAINED_ASINS, dataCutoffAt: CUTOFF }),
     (error: unknown) => {
       assert.ok(error instanceof SifTrafficSnapshotTaskError);
-      assert.deepEqual(error.shapeDiagnostic!.coreLengthMismatch, {
+      assert.ok(error.shapeDiagnostic?.kind === "monthly-trend");
+      assert.deepEqual(error.shapeDiagnostic.coreLengthMismatch, {
         field: "nfScore",
         expectedLength: 2,
         actualLength: 1,
@@ -1796,7 +1799,7 @@ function runtimeConfig() {
 
 function fakeSifFetch(
   calls: Array<{ operation: string; asin: string }>,
-  resultFor: typeof fakeOperationResult = fakeOperationResult,
+  resultFor: (operation: string, asin: string, position: number) => unknown = fakeOperationResult,
 ): typeof fetch {
   return async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as {
@@ -1822,7 +1825,7 @@ function fakeSifFetch(
 
 function directSifConnector(
   calls: Array<{ operation: string; asin: string }>,
-  resultFor: typeof fakeOperationResult,
+  resultFor: (operation: string, asin: string, position: number) => unknown,
 ): RemoteMcpConnector {
   return {
     id: "sif",
@@ -1835,7 +1838,8 @@ function directSifConnector(
       ) + 1;
       calls.push({ operation: request.operation, asin });
       return {
-        data: resultFor(request.operation, asin, position),
+        // Malformed provider payloads intentionally cross the transport boundary in these cases.
+        data: resultFor(request.operation, asin, position) as import("../../server/connectors/connector-contract").ConnectorResult["data"],
         source: {
           connectorId: "sif",
           operation: request.operation,

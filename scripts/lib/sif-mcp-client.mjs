@@ -4,15 +4,31 @@ import { governExternalRequest } from "./postgres-resource-governor.mjs";
 import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
 
+/** @param {Readonly<Record<string, string | undefined>>} [env] */
 export function readSifHeaders(env = process.env) {
   const secret = readServerConnectorSecret("sif", env);
   return secret ? { "secret-key": secret, Authorization: secret } : null;
 }
 
+/**
+ * @typedef {object} SifMcpOptions
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AbortSignal} [signal]
+ * @property {import('../../server/db/concurrency-control-repository').ResourceGovernor} [resourceGovernor]
+ * @property {boolean} [requireResourceGovernor]
+ * @property {string | null} [organizationId]
+ * @property {string | null} [jobId]
+ * @property {import('../../server/db/concurrency-control-repository').GovernedAttemptKind} [attemptKind]
+ */
+
+/** @param {SifMcpOptions} [options] */
 export async function requestSifMcp(
   method,
   params,
-  {
+  options = {},
+) {
+  const {
     env = process.env,
     fetchImpl = fetch,
     signal,
@@ -21,8 +37,7 @@ export async function requestSifMcp(
     organizationId,
     jobId,
     attemptKind = "initial",
-  } = {},
-) {
+  } = options;
   const headers = readSifHeaders(env);
   if (!headers) throw new Error("SIF server credential is not configured");
 
@@ -60,6 +75,7 @@ export async function requestSifMcp(
   });
 }
 
+/** @param {SifMcpOptions} [options] */
 export async function callSifTool(toolName, args, options = {}) {
   const env = options.env ?? process.env;
   return await runWithProviderDiagnostics({

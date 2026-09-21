@@ -1544,3 +1544,33 @@ test("stop remains bounded when a handler ignores its abort signal", async (t) =
   assert.equal(stoppedBeforeNextTurn, true);
   assert.equal(clock.pendingSleeps, 0);
 });
+
+
+test("VOC replacement aborts a suspended provider on heartbeat and runs its successor", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "worker-voc-replacement-"));
+  const repository = openSqliteAgentRepository({ path: join(directory, "agent.sqlite"), busyTimeoutMs: 5000 });
+  t.after(() => { repository.close(); rmSync(directory, { recursive: true, force: true }); });
+  const { stageId } = await seedJob(repository);
+  const clock = new ManualClock();
+  let started!: () => void, finish!: (value: unknown) => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let oldSignal!: AbortSignal, executions = 0;
+  const loop = new JobAttemptWorkerLoop({ repository, ownerId: "replacement", stage: "voc-positioning", queueTimeoutMs: 300000,
+    handler: ({ signal }) => { if (++executions > 1) return Promise.resolve({ status: "succeeded" }); oldSignal = signal; started(); return new Promise(resolve => { finish = resolve; }); },
+    clock, leaseDurationMs: 600000, heartbeatIntervalMs: 1000, pollIntervalMs: 100, stopTimeoutMs: 1000,
+    retryPolicy: { maxAttempts: 3, initialDelayMs: 100, maxDelayMs: 1000, jitterRatio: 0 } });
+  const execution = loop.runOnce(); await ready;
+  const { wakeVocPositioning } = await import("../../server/runtime/alexa-voc-normalization-runtime");
+  const { UnavailableSyncJobRepository } = await import("../../server/db/sync-job-repository");
+  const stage = (await repository.findRunStage(stageId))!;
+  await wakeVocPositioning(Object.assign(repository, { syncJobs: new UnavailableSyncJobRepository() }), stage.runId, clock.now());
+  clock.advance(1000); await flushAsyncWork();
+  assert.equal(oldSignal.aborted, true);
+  await execution;
+  finish({ status: "succeeded" }); await flushAsyncWork();
+  assert.equal((await repository.listJobAttempts(stageId))[0].status, "cancelled");
+  assert.equal(await loop.runOnce(), true);
+  assert.equal((await repository.findRunStage(stageId))?.status, "succeeded");
+  assert.equal(executions, 2);
+  await loop.stop();
+});

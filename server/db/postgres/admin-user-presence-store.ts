@@ -10,7 +10,8 @@ import type {
 import { PostgresQueryContext } from "./query-context";
 
 type PostgresRow = Record<string, unknown>;
-const RECENT_ACTIVITY_WINDOW_MS = 300_000;
+import {RECENT_ACTIVITY_WINDOW_MS} from "../../../shared/usage-analytics-contracts";
+import {PresenceQuerySchema} from '../../../shared/admin-user-presence-query';
 const HEARTBEAT_THROTTLE_MS = 60_000;
 
 export class PostgresAdminUserPresenceStore
@@ -25,6 +26,7 @@ export class PostgresAdminUserPresenceStore
   async listOrganizationUsers(
     input: AdminUserPresenceReadInput,
   ): Promise<AdminUserPresenceReadResult> {
+    if (input.query) return this.listPage(input);
     const organizationId = EntityIdSchema.parse(input.organizationId);
     const asOf = canonicalDateTime(input.asOf);
     const recentThreshold = offsetDateTime(asOf, -RECENT_ACTIVITY_WINDOW_MS);
@@ -82,13 +84,66 @@ export class PostgresAdminUserPresenceStore
          LEFT JOIN ranked_logins
            ON ranked_logins.user_id = u.id
           AND ranked_logins.recent_rank <= 10
-        WHERE u.organization_id = $1
+        WHERE u.organization_id = $1 AND u.archived_at IS NULL
         ORDER BY lower(btrim(u.email)) ASC,
                  ranked_logins.created_at DESC,
                  ranked_logins.session_sort_id ASC`,
       [organizationId, asOf, recentThreshold],
     );
     return mapReadRows(result.rows);
+  }
+
+  private async listPage(input: AdminUserPresenceReadInput): Promise<AdminUserPresenceReadResult> {
+    const organizationId=EntityIdSchema.parse(input.organizationId), asOf=canonicalDateTime(input.asOf);
+    const query=PresenceQuerySchema.parse(input.query);
+    const rows=await this.#queries.query<PostgresRow>(`
+      WITH facts AS MATERIALIZED (
+        SELECT u.id,u.email,u.display_name,u.role,u.status,
+          CASE WHEN EXISTS(SELECT 1 FROM auth_identities i WHERE i.user_id=u.id AND i.provider='dingtalk') THEN 'dingtalk' ELSE 'local' END AS source,
+          COUNT(s.id)::int AS login_count, MAX(s.created_at) AS last_login_at,
+          MAX(s.last_seen_at) AS last_activity_at,
+          MAX(s.expires_at) FILTER(WHERE u.status='active' AND s.revoked_at IS NULL AND s.expires_at>$2::timestamptz) AS valid_session_expires_at,
+          COALESCE(BOOL_OR(u.status='active' AND s.revoked_at IS NULL AND s.expires_at>$2::timestamptz),false) AS has_valid_session,
+          COALESCE(BOOL_OR(u.status='active' AND s.revoked_at IS NULL AND s.expires_at>$2::timestamptz
+            AND s.last_seen_at >= $3::timestamptz AND s.last_seen_at <= $2::timestamptz),false) AS has_recently_active_valid_session
+        FROM users u LEFT JOIN sessions s ON s.user_id=u.id
+        WHERE u.organization_id=$1 AND u.archived_at IS NULL GROUP BY u.id
+      ), scoped AS MATERIALIZED (
+        SELECT *, CASE WHEN status='disabled' THEN 'disabled'
+          WHEN has_recently_active_valid_session THEN 'recently-online'
+          WHEN has_valid_session THEN 'valid-session-idle'
+          WHEN login_count=0 THEN 'never-logged-in' ELSE 'session-expired' END AS presence_status
+        FROM facts WHERE ($4='all' OR source=$4)
+          AND ($5='' OR strpos(lower(display_name),lower($5))>0 OR strpos(lower(email),lower($5))>0)
+      ), filtered AS MATERIALIZED (
+        SELECT * FROM scoped WHERE $6='all' OR presence_status=$6
+      ), meta AS (
+        SELECT COUNT(*)::int AS total,
+          LEAST($7::int,GREATEST(1,CEIL(COUNT(*)::numeric/$8::int)::int)) AS page
+        FROM filtered
+      ), summary AS (
+        SELECT COUNT(*)::int AS summary_total,
+          COUNT(*) FILTER(WHERE presence_status='recently-online')::int AS recently_online,
+          COUNT(*) FILTER(WHERE presence_status='never-logged-in')::int AS never_logged_in FROM scoped
+      ), selected AS (
+        SELECT * FROM filtered ORDER BY last_activity_at DESC NULLS LAST,lower(email),id
+        LIMIT $8 OFFSET (SELECT (page-1)*$8 FROM meta)
+      )
+      SELECT meta.*,summary.*,u.*,
+        login.created_at AS login_created_at,login.last_seen_at AS login_last_seen_at,
+        login.expires_at AS login_expires_at,login.revoked_at AS login_revoked_at
+      FROM meta CROSS JOIN summary LEFT JOIN selected u ON true
+      LEFT JOIN LATERAL (
+        SELECT s.* FROM sessions s WHERE s.user_id=u.id ORDER BY s.created_at DESC,s.id LIMIT 10
+      ) login ON true
+      ORDER BY u.last_activity_at DESC NULLS LAST,lower(u.email),u.id,login.created_at DESC,login.id
+    `,[organizationId,asOf,offsetDateTime(asOf,-RECENT_ACTIVITY_WINDOW_MS),query.source,query.q,query.status,query.page,query.pageSize]);
+    const meta=rows.rows[0];
+    return {
+      ...mapReadRows(rows.rows.filter(row=>row.email!==null)),
+      pagination:{page:Number(meta.page),pageSize:query.pageSize,total:Number(meta.total)},
+      summary:{total:Number(meta.summary_total),recentlyOnline:Number(meta.recently_online),neverLoggedIn:Number(meta.never_logged_in)},
+    };
   }
 
   async recordHeartbeat(
@@ -144,6 +199,7 @@ function mapReadRows(rows: readonly PostgresRow[]): AdminUserPresenceReadResult 
     const account = requireString(row.email);
     if (!current || current.account !== account) {
       current = {
+        ...(row.source==='dingtalk'||row.source==='local'?{source:row.source}:{}),
         account,
         displayName: requireString(row.display_name),
         role: parseRole(row.role),

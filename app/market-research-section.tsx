@@ -1,12 +1,22 @@
 "use client";
+import { browserRequestId } from "./lib/browser-request-id";
+import {publishUsagePage} from "./lib/usage-analytics-browser";
+import { marketNavigation, marketViewFromParam, type MarketView } from "./lib/market-navigation";
+import {MarketSiteSchema} from "../shared/market-sites";
+import {MarketSharedFavorites,type KeywordFavoriteInput} from "./market-shared-favorites";
+import type {MarketFavorite} from "../shared/market-favorites-contracts";
+
 
 import React, { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { MarketResearchScopeSchema, type MarketOverviewReport, type MarketResearchJob, type MarketResearchScope } from "../shared/market-research-contracts";
 import { createMarketResearchHistoryReader, createMarketResearchJob, listMarketResearchJobs, retryMarketResearchJob } from "./lib/market-research-browser";
 import { MarketThemeSection } from './market-theme-section';
-import {MarketOverviewSection} from './market-overview-section';
+import {MarketOverviewSection,type MarketOverviewController} from './market-overview-section';
 import {MarketShapeSection} from './market-shape-section';
 import {MarketKeywordSection} from './market-keyword-section';
+
+import {MarketOverviewQuery} from "./market-overview-query";
+import {LaunchSection} from "./launch-section";
 
 const statusLabels: Record<MarketResearchJob["status"], string> = {
   queued: "排队中", running: "采集中", succeeded: "采集完成", partial: "部分数据可用", failed: "采集失败",
@@ -22,10 +32,10 @@ export function canRetryMarketResearchJob(job: MarketResearchJob) {
   return job.status === "failed" && job.error?.retryable === true && job.attempts < 3;
 }
 
-function numeric(value: number | null, money = false) {
+function displayNumber(value: number | null, money = false, currency = "USD") {
   if (value == null || !Number.isFinite(value)) return "未知";
   return money
-    ? new Intl.NumberFormat("zh-CN", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value)
+    ? new Intl.NumberFormat("zh-CN", { style: "currency", currency, maximumFractionDigits: 2 }).format(value)
     : new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
 }
 
@@ -33,7 +43,9 @@ function displayTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
-export function MarketOverviewResult({ report }: { report: MarketOverviewReport }) {
+export function MarketOverviewResult({ report, onOpenReport }: { report: MarketOverviewReport; onOpenReport?:()=>void }) {
+  const [expanded,setExpanded]=useState(false);
+  const numeric=(value:number|null,money=false)=>displayNumber(value,money,report.currency);
   const metrics = report.metrics;
   const groups: Array<{ title: string; fields: Array<[string, number | null, boolean?]> }> = [
     { title: "样本规模与销售", fields: [["样本商品数", metrics.sampleProducts], ["品牌数", metrics.brands], ["卖家数", metrics.sellers], ["样本销量", metrics.totalUnits], ["样本销售额", metrics.totalRevenue, true], ["平均单品销量", metrics.avgUnits]] },
@@ -41,18 +53,22 @@ export function MarketOverviewResult({ report }: { report: MarketOverviewReport 
     { title: `上架 ${report.scope.newProductMonths} 个月内的新品`, fields: [["新品数量", metrics.newCount], ["新品平均价格", metrics.newAvgPrice, true], ["新品平均销量", metrics.newAvgUnits]] },
   ];
   return <section className="market-research-result" aria-label="市场总览结果">
-    <div className="market-research-result-heading"><div><h3>{report.categoryName || `类目 ${report.nodeId}`}</h3><p>美国站 · {report.scope.month} · Node {report.nodeId}</p></div><p>采集时间（北京时间）<br />{displayTime(report.collectedAt)}</p></div>
+    <div className="market-research-result-heading"><div><h3>{report.categoryName || `类目 ${report.nodeId}`}</h3><p>{report.scope.marketplace} · {report.scope.month} · Node {report.nodeId}</p></div><p>采集时间（北京时间）<br />{displayTime(report.collectedAt)}</p></div>
     <p className="market-research-note">以下为上游返回的样本指标，不代表整个市场。未知表示本次未获得该指标。</p>
+    <div className="ss-niche-table-wrap" role="region" aria-label="类目市场概览表" tabIndex={0}><table className="ss-niche-table"><thead><tr>{['#','细分市场','样本数量','月总销量','月均销量 / 头部','月均销售额 / 头部','平均评分数 / 星级','平均 BSR / 头部','平均卖家数 / 均价','卖家类型','集中度','新品数量 / 占比','商品总数','退货率 / 同类目','操作'].map(h=><th key={h} scope="col">{h}</th>)}</tr></thead><tbody><tr><td>1</td><td className="ss-niche-name"><b>{report.categoryName||report.nodeId}</b></td><td><div>商品 {numeric(metrics.sampleProducts)}</div><small>品牌 {numeric(metrics.brands)} · 卖家 {numeric(metrics.sellers)}</small></td><td className="ss-niche-accent">{numeric(metrics.totalUnits)}</td><td>{numeric(metrics.avgUnits)}<small>头部 未知</small></td><td>未知<small>头部 未知</small></td><td>{numeric(metrics.avgRatings)}<small>{numeric(metrics.avgRating)}</small></td><td>未知<small>头部 未知</small></td><td>未知<small>{numeric(metrics.avgPrice,true)}</small></td><td>未知</td><td>单位待确认<small>原值见详情</small></td><td>{numeric(metrics.newCount)}<small>占比未知</small></td><td>未知</td><td>未知<small>同类目 未知</small></td><td className="ss-niche-ops">{onOpenReport&&<button type="button" onClick={onOpenReport}>查看市场分析报告</button>}<button type="button" onClick={()=>setExpanded(v=>!v)} aria-expanded={expanded}>{expanded?'收起指标':'查看指标详情'}</button></td></tr></tbody></table></div>
+    <details className="market-research-boundaries" open={expanded} onToggle={e=>setExpanded(e.currentTarget.open)}><summary>完整基础指标与原始比例</summary>
     {groups.map(group => <section key={group.title} className="market-research-metric-group"><h4>{group.title}</h4><dl className="market-research-metrics">{group.fields.map(([label, value, money]) => <div key={label}><dt>{label}</dt><dd>{numeric(value, money)}</dd></div>)}</dl></section>)}
     <section className="market-research-metric-group"><h4>头部 Top {report.scope.headTopN} 集中度</h4><p className="market-research-note">上游比例原值（单位待确认）；暂不据此判断集中程度。</p><dl className="market-research-metrics">
       {[["商品", metrics.productConcentrationRaw], ["品牌", metrics.brandConcentrationRaw], ["卖家", metrics.sellerConcentrationRaw]].map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value == null ? "未知" : String(value)}</dd></div>)}
     </dl></section>
+    </details>
     {report.issues.length > 0 && <div className="market-research-notice" role="status"><h4>部分数据未能取得</h4><ul>{report.issues.map((issue, index) => <li key={`${issue.dataset}-${index}`}>{issue.message}</li>)}</ul></div>}
     {report.boundaries.length > 0 && <details className="market-research-boundaries"><summary>数据口径与范围</summary><ul>{report.boundaries.map((item, index) => <li key={index}>{item}</li>)}</ul><p>类目路径：{report.nodeIdPath}</p><p>来源：卖家精灵 · 已取得 {report.evidence.length} 份上游响应。</p></details>}
   </section>;
 }
 
 function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:MarketResearchScope;setScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>;fromMonth:string;setFromMonth:(month:string)=>void}) {
+  const overviewController=useRef<MarketOverviewController|null>(null);
   const [jobs, setJobs] = useState<MarketResearchJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,9 +121,10 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:
     const parsed = MarketResearchScopeSchema.safeParse(scope);
     if (!parsed.success || scope.month > previousCompleteMonth()) { setError("请输入有效的数字类目节点或冒号分隔的路径，并选择已结束的月份。"); return; }
     const serialized = JSON.stringify(parsed.data);
-    if (submission.current?.scope !== serialized) submission.current = { scope: serialized, key: crypto.randomUUID() };
-    const key = submission.current.key;
-    await mutate(signal => createMarketResearchJob(parsed.data, key, signal), true);
+    await mutate(signal => {
+      if (submission.current?.scope !== serialized) submission.current = { scope: serialized, key: browserRequestId() };
+      return createMarketResearchJob(parsed.data, submission.current.key, signal);
+    }, true);
   }
 
   async function mutate(operation: (signal: AbortSignal) => Promise<MarketResearchJob>, creating = false) {
@@ -134,44 +151,58 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:
 
   const selected = jobs.find(job => job.id === selectedId) ?? null;
   return <div className="market-research-page">
-    <section className="card market-research-query"><div className="section-head"><div><h2>市场总览</h2><p>选择美国站类目和完整月份，采集规模、销售、新品与头部基础指标。</p></div></div>
-      <form onSubmit={event => void submit(event)}><fieldset disabled={submitting}><legend className="market-research-sr-only">市场总览查询条件</legend><div className="market-research-fields">
-        <label>站点<input value="美国站 · US" readOnly /></label>
-        <label className="market-research-node">类目节点或路径<input required maxLength={240} pattern="[0-9]+(:[0-9]+)*" placeholder="例如 13280971 或 123:456" value={scope.nodeQuery} onChange={event => setScope(current => ({ ...current, nodeQuery: event.target.value.trim() }))} /></label>
-        <label>月份<input required type="month" min="2000-01" max={previousCompleteMonth()} value={scope.month} onChange={event => setScope(current => ({ ...current, month: event.target.value }))} /></label>
-        <label>头部数量<select value={scope.headTopN} onChange={event => setScope(current => ({ ...current, headTopN: Number(event.target.value) as MarketResearchScope["headTopN"] }))}>{[5, 10, 20].map(value => <option key={value} value={value}>Top {value}</option>)}</select></label>
-        <label>新品定义<select value={scope.newProductMonths} onChange={event => setScope(current => ({ ...current, newProductMonths: Number(event.target.value) as MarketResearchScope["newProductMonths"] }))}>{[1, 3, 6, 12].map(value => <option key={value} value={value}>上架 {value} 个月内</option>)}</select></label>
-      </div><button type="submit" className="primary-btn">{submitting ? "提交中…" : "开始采集"}</button></fieldset></form>
-      <p className="market-research-note">本页可独立使用，无需先录入 ASIN。上方采集基础指标；下方“总览分析与报告”提供分布数据与分析。</p>
-      {error && <p className="market-research-error" role="alert">{error}</p>}
-    </section>
-    <MarketOverviewSection scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} onRestoreScope={run=>{setScope({marketplace:'US',nodeQuery:run.scope.nodeIdPath,month:run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
-    <div className="market-research-body"><aside className="card market-research-history"><div className="section-head"><h3>采集历史</h3><button className="ghost-btn" type="button" disabled={submitting} onClick={() => void refresh()}>刷新</button></div>
+    <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
+    <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${selected.scope.month} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，统计以完整自然月为准。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
+      {selected?.report?<MarketOverviewResult report={selected.report} onOpenReport={()=>overviewController.current?.openReport(selected.scope)}/>:<div className="pending-box" role="status"><strong>{submitting||selected?.status==='queued'||selected?.status==='running'?'正在从卖家精灵拉取':selected?.status==='failed'?'卖家精灵暂无可用结果':'等待指定类目节点'}</strong><span>{selected?.error?.message??'已有数据和历史版本会保留；没有来源的指标不会填零。'}</span></div>}
+    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
+    </LaunchSection>
+    <details className="card market-reference-history"><summary>采集历史与状态</summary><div className="market-research-body"><aside className="card market-research-history"><div className="section-head"><h3>采集历史</h3><button className="ghost-btn" type="button" disabled={submitting} onClick={() => void refresh()}>刷新</button></div>
       <p className="market-research-note">最近 30 次，可刷新页面恢复结果。</p>
       {loading ? <p role="status">正在读取…</p> : jobs.length === 0 ? <p>暂无采集记录。</p> : <ol>{jobs.map(job => <li key={job.id}><button type="button" aria-pressed={job.id === selectedId} onClick={() => setSelectedId(job.id)}><strong>{job.report?.categoryName || `类目 ${job.scope.nodeQuery}`}</strong><span>{job.scope.month} · Top {job.scope.headTopN} · 新品 {job.scope.newProductMonths} 个月</span><span className={`market-research-status ${job.status}`}>{statusLabels[job.status]}</span><small>{displayTime(job.createdAt)}</small></button></li>)}</ol>}
     </aside><section className="card market-research-detail" aria-live="polite">{selected ? <><div className="market-research-job-heading"><span className={`market-research-status ${selected.status}`}>{statusLabels[selected.status]}</span><span>已尝试 {selected.attempts} 次</span></div>
       {(selected.status === "queued" || selected.status === "running") && <p role="status">{selected.status === "queued" ? "任务正在排队，可稍后回来查看。" : "正在获取类目数据，状态会自动更新。"}</p>}
       {selected.error && <div className="market-research-notice"><p>{selected.error.message}</p>{canRetryMarketResearchJob(selected) && <button className="primary-btn" type="button" disabled={submitting} onClick={() => void mutate(signal => retryMarketResearchJob(selected.id, signal))}>重试采集</button>}</div>}
-      {selected.report && <MarketOverviewResult report={selected.report} />}
-    </> : <div className="market-research-empty"><h3>从一个类目开始</h3><p>输入类目节点，点击“开始采集”，或从历史中选择结果。</p></div>}</section></div>
+      {selected.report && <p className="market-research-note">所选记录的基础指标显示在上方「类目节点市场概览」。</p>}
+    </> : <div className="market-research-empty"><h3>从一个类目开始</h3><p>输入类目节点，点击“筛选市场”，或从历史中选择结果。</p></div>}</section></div></details>
   </div>;
 }
 
-function MarketResearchModules() {
-  const [view,setView]=useState('overview');
+type MarketNavigationProps = { view?: MarketView; onViewChange?: (view: MarketView) => void };
+
+function MarketResearchModules({ view: controlledView, onViewChange }: MarketNavigationProps) {
+  const [restoreVersion,setRestoreVersion]=useState(0),[favoriteRequest,setFavoriteRequest]=useState(0);
+  const [keywordInput,setKeywordInput]=useState<KeywordFavoriteInput|undefined>(),[restoredKeywordInput,setRestoredKeywordInput]=useState<KeywordFavoriteInput|undefined>();
+  const [localView,setView]=useState<MarketView>('overview');
+  const view = controlledView ?? localView;
+  const [viewRestored,setViewRestored]=useState(false);
+  useEffect(()=>{if(viewRestored)publishUsagePage(view==="shapes"?"market-shapes":view==="keywords"?"market-keywords":view==="themes"?"market-themes":"market-overview")},[view,viewRestored]);
   const [scope,setScope]=useState<MarketResearchScope>({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6}),[fromMonth,setFromMonth]=useState(previousCompleteMonth());
-  useEffect(()=>{const params=new URL(window.location.href).searchParams;if(['themes','shapes','keywords'].includes(params.get('themeView')??''))setView(params.get('themeView')!);
-    const parsed=MarketResearchScopeSchema.safeParse({marketplace:'US',nodeQuery:params.get('marketNode')??'',month:params.get('marketMonth')??previousCompleteMonth(),headTopN:Number(params.get('marketHead')??10),newProductMonths:Number(params.get('marketNew')??6)});
+  useEffect(()=>{const params=new URL(window.location.href).searchParams;setView(marketViewFromParam(params.get('themeView')));
+    setViewRestored(true);
+    setScope(current=>({...current,marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US'}));
+    const parsed=MarketResearchScopeSchema.safeParse({marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US',nodeQuery:params.get('marketNode')??'',month:params.get('marketMonth')??previousCompleteMonth(),headTopN:Number(params.get('marketHead')??10),newProductMonths:Number(params.get('marketNew')??6)});
     if(parsed.success&&parsed.data.month<=previousCompleteMonth()){setScope(parsed.data);const from=params.get('marketFrom');setFromMonth(from&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(from)&&from<=parsed.data.month?from:parsed.data.month);}
   },[]);
-  const rememberScope=(next:MarketResearchScope)=>{const url=new URL(window.location.href);url.searchParams.set('marketNode',next.nodeQuery);url.searchParams.set('marketMonth',next.month);url.searchParams.set('marketHead',String(next.headTopN));url.searchParams.set('marketNew',String(next.newProductMonths));window.history.replaceState(window.history.state,'',url);};
+  const rememberScope=(next:MarketResearchScope)=>{const url=new URL(window.location.href);url.searchParams.set('marketSite',next.marketplace);url.searchParams.set('marketNode',next.nodeQuery);url.searchParams.set('marketMonth',next.month);url.searchParams.set('marketHead',String(next.headTopN));url.searchParams.set('marketNew',String(next.newProductMonths));window.history.replaceState(window.history.state,'',url);};
   const updateScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>=next=>setScope(current=>{const updated=typeof next==='function'?next(current):next;rememberScope(updated);return updated;});
   const updateFrom=(month:string)=>{setFromMonth(month);const url=new URL(window.location.href);url.searchParams.set('marketFrom',month);window.history.replaceState(window.history.state,'',url);};
   useEffect(()=>{if(fromMonth>scope.month)updateFrom(scope.month);},[scope.month,fromMonth]);
-  const selection={nodeIdPath:scope.nodeQuery,fromMonth,toMonth:scope.month},changeSelection=(next:Partial<typeof selection>)=>{updateScope(current=>({...current,nodeQuery:next.nodeIdPath??current.nodeQuery,month:next.toMonth??current.month}));if(next.fromMonth)updateFrom(next.fromMonth);};
-  return <><nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{[['overview','市场总览'],['shapes','商品形态及价格带'],['keywords','类目关键词洞察'],['themes','类目买家评论见解']].map(([id,label])=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{setView(id);const url=new URL(window.location.href);url.searchParams.set('themeView',id);window.history.replaceState(window.history.state,'',url);}}>{label}</button>)}</nav>
-    {view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection}/>}</>;
+  const selection={marketplace:scope.marketplace,nodeIdPath:scope.nodeQuery,fromMonth,toMonth:scope.month},changeSelection=(next:Partial<typeof selection>)=>{updateScope(current=>({...current,marketplace:next.marketplace??current.marketplace,nodeQuery:next.nodeIdPath??current.nodeQuery,month:next.toMonth??current.month}));if(next.fromMonth)updateFrom(next.fromMonth);};
+  const favoriteQuery:Record<string,string>={marketMonth:scope.month,marketFrom:fromMonth,marketHead:String(scope.headTopN),marketNew:String(scope.newProductMonths),marketSite:scope.marketplace,...(scope.nodeQuery?{marketNode:scope.nodeQuery}:{})};
+  function restoreFavorite(favorite:MarketFavorite){
+    const params=new URLSearchParams({tab:"market-overview",themeView:favorite.module,...favorite.query});
+    const artifact=new URLSearchParams(window.location.search).get("webArtifact");if(artifact)params.set("webArtifact",artifact);
+    window.history.replaceState(window.history.state,"","/?"+params);
+    const next=MarketResearchScopeSchema.safeParse({marketplace:favorite.query.marketSite??"US",nodeQuery:favorite.query.marketNode??"",month:favorite.query.marketMonth??previousCompleteMonth(),headTopN:Number(favorite.query.marketHead??10),newProductMonths:Number(favorite.query.marketNew??6)});
+    setScope(next.success?next.data:{marketplace:"US",nodeQuery:"",month:previousCompleteMonth(),headTopN:10,newProductMonths:6});
+    setFromMonth(favorite.query.marketFrom??favorite.query.marketMonth??previousCompleteMonth());
+    setRestoredKeywordInput(favorite.keywordInput);setKeywordInput(favorite.keywordInput);setView(favorite.module);setRestoreVersion(value=>value+1);
+    // The URL carries the saved run identity; do not invoke a collection action here.
+  }
+  return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);const url=new URL(window.location.href);url.searchParams.set('themeView',id);window.history.replaceState(window.history.state,'',url);}}>{label}</button>)}</nav>}
+    <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
+    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
 }
-export function MarketResearchSection({ sessionIdentity }: { sessionIdentity: string }) {
-  return <MarketResearchModules key={sessionIdentity} />;
+export function MarketResearchSection({ sessionIdentity, ...navigation }: { sessionIdentity: string } & MarketNavigationProps) {
+  return <MarketResearchModules key={sessionIdentity} {...navigation} />;
 }

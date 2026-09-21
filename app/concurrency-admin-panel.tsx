@@ -501,7 +501,7 @@ function ConnectorCredentialCard({
   onProbe,
 }: {
   credential: ConnectorCredentialState;
-  health: ConcurrencyAdminResponse["connectors"][ManagedConnectorId];
+  health: Pick<ConnectorHealthResponse, "available" | "checkedAt" | "reason">;
   isPrimary: boolean;
   pending: string | null;
   secret: string;
@@ -627,7 +627,7 @@ const connectorEnvironmentName: Readonly<Record<ManagedConnectorId, string>> = O
 
 function connectorHealthText(
   credential: ConnectorCredentialState,
-  health: ConcurrencyAdminResponse["connectors"][ManagedConnectorId],
+  health: Pick<ConnectorHealthResponse, "available" | "checkedAt" | "reason">,
 ) {
   if (!credential.configured) return "尚未配置";
   if (health.available) return "连接正常";

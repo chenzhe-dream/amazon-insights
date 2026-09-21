@@ -466,7 +466,6 @@ test("production main fixes a permanent category timeout gap while preserving pr
   const result = await execFileAsync(process.execPath, [runnerPath, CATEGORY_TIMEOUT_JOB_ID], {
     cwd: projectRoot,
     env: {
-      NODE_ENV: "test",
       ...safeChildEnvironment(binDirectory, {
         AGENT_VOC_LOCAL_FAKE: "1",
         FAKE_CALLS_FILE: callsFile,
@@ -585,7 +584,7 @@ test("production main runs only image remarks before the pending build on image 
     maxBuffer: 1_000_000,
   });
 
-  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
+  const calls = (await readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const persisted = JSON.parse(await readFile(join(projectRoot, "data", "sync-jobs", `${jobId}.json`), "utf8"));
   assert.doesNotMatch(result.stderr, /\[error\]/);
   assert.deepEqual(calls.map((call: { stage: string }) => call.stage), ["image_remarks"], "no Provider stage ran");
@@ -1593,7 +1592,7 @@ if (process.env.FAKE_IMAGE_OUTCOME === "integrity-failed") {
   return binDirectory;
 }
 
-function safeChildEnvironment(binDirectory: string, additions: Record<string, string>) {
+function safeChildEnvironment(binDirectory: string, additions: Record<string, string>): NodeJS.ProcessEnv {
   const inheritedKeys = ["ComSpec", "SystemRoot", "PATHEXT", "TEMP", "TMP", "WINDIR"];
   const environment = Object.fromEntries(inheritedKeys.flatMap((key) =>
     process.env[key] ? [[key, process.env[key]]] : []
@@ -1601,6 +1600,7 @@ function safeChildEnvironment(binDirectory: string, additions: Record<string, st
   const inheritedPath = process.env.PATH ?? process.env.Path ?? "";
   return {
     ...environment,
+    NODE_ENV: "test",
     PATH: `${binDirectory}${delimiter}${inheritedPath}`,
     ...additions,
   };

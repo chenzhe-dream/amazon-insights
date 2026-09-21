@@ -16,6 +16,7 @@ import {
 import type { AgentAuthenticationConfig } from "../config";
 import type { AuthenticationService } from "../auth/authentication-service";
 import type { UserPresenceAccess } from "../auth/user-presence-access";
+import type {ModuleVisibilityRepository} from '../db/module-visibility-repository';
 import {
   parseSessionCookie,
   serializeClearedSessionCookie,
@@ -106,6 +107,7 @@ export function registerAuthRoutes(
   service: AuthenticationService | null,
   config: AgentAuthenticationConfig,
   userPresenceAccess: UserPresenceAccess | null = null,
+  moduleVisibility: ModuleVisibilityRepository | null = null,
 ) {
   app.post("/v1/auth/login", async (request, reply) => {
     const body = parseContract(LoginRequestSchema, request.body);
@@ -191,6 +193,7 @@ export function registerAuthRoutes(
       user,
       sessionIdentity: user ? sessionIdentity : null,
       ...(user ? { canViewUserPresence } : {}),
+      ...(user&&moduleVisibility?{visibleModules:await moduleVisibility.read(principal.organizationId,principal.userId),canManageModuleVisibility:canViewUserPresence,isSystemOwner:await moduleVisibility.isOwner(principal.organizationId,principal.userId)}:{}),
     });
   });
 }

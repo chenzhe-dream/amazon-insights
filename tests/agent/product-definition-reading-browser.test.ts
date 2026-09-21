@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdir } from 'node:fs/promises';
+import { createServer } from 'vite';
+import react from '@vitejs/plugin-react';
+import { chromium } from 'playwright';
+
+test('concise conclusions and complete qualifications coexist with keyboard expansion and original table',async t=>{
+  const server=await createServer({configFile:false,define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0}});
+  await server.listen();t.after(()=>server.close());
+  const address=server.httpServer!.address();assert.ok(address && typeof address!=='string');
+  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+  page.on('console',message=>{if(message.type()==='error') errors.push(message.text());});
+  await page.goto(`http://127.0.0.1:${address.port}/tests/agent/helpers/product-definition-reading-harness.html`);
+  const section=(number:number)=>page.locator('section').filter({has:page.getByRole('heading',{name:new RegExp(`^${number}\\.`)})});
+  const table=section(4);
+  const audienceCard=page.locator('.final-oneliner-card').filter({has:page.locator('.final-oneliner-label',{hasText:'做给谁'})});
+  assert.ok((await audienceCard.innerText()).includes('居家装饰爱好者'));
+  assert.ok((await audienceCard.innerText()).includes('不推荐独立操作，须成人监护'));
+  assert.ok(!(await audienceCard.innerText()).includes('Perfect addition'));
+  await audienceCard.getByText('查看原文',{exact:true}).click();
+  const fullOriginal=page.locator('.definition-full-original');
+  const originalText=await fullOriginal.locator('.definition-synthesis-merged').textContent();
+  assert.equal(await fullOriginal.locator('.definition-synthesis-merged').isVisible(),false);
+  await fullOriginal.locator('summary').focus();await page.keyboard.press('Enter');
+  assert.equal(await fullOriginal.locator('.definition-synthesis-merged').isVisible(),true);
+  assert.equal(await fullOriginal.locator('.definition-synthesis-merged').textContent(),originalText);
+  await page.keyboard.press('Enter');
+  assert.ok((await audienceCard.innerText()).includes('Perfect addition'));
+  await audienceCard.getByText('查看原文',{exact:true}).click();
+  assert.equal(await table.locator('thead th').count(),7);
+  const row=table.locator('tbody tr').filter({has:page.getByRole('rowheader',{name:'目标人群/年龄',exact:true})});
+  const conclusion=row.locator('td').nth(0);
+  assert.doesNotMatch(await conclusion.innerText(),/Perfect addition|VOC记录|约占25/);
+  assert.ok((await conclusion.innerText()).includes('居家装饰爱好者'));
+  assert.ok((await conclusion.innerText()).includes('不推荐独立操作，须成人监护'));
+  const more=conclusion.locator('summary');await more.focus();await page.keyboard.press('Enter');
+  assert.ok((await conclusion.innerText()).includes('办公室用户'));
+  await page.keyboard.press('Enter');
+  assert.ok(!(await conclusion.innerText()).includes('办公室用户'));
+  const evidence=row.locator('td').nth(1);
+  const textBefore=await evidence.locator('.definition-inline-copy').textContent();
+  await evidence.getByRole('button',{name:'展开全文 ▾',exact:true}).click();
+  assert.equal(await evidence.locator('.definition-inline-copy').textContent(),textBefore);
+  await evidence.getByRole('button',{name:'收起 ▴',exact:true}).click();
+  const action=row.locator('td').nth(3);
+  assert.ok((await action.innerText()).includes('禁止用于冰面'));
+  assert.ok((await action.innerText()).includes('仅限成人监督使用'));
+  assert.ok(!(await action.innerText()).includes('复测稳定性'));
+  await action.locator('summary').focus();await page.keyboard.press('Enter');
+  assert.ok((await action.innerText()).includes('复测稳定性'));
+  await page.keyboard.press('Enter');
+  for(const n of [3,5]) {
+    const part=section(n);await part.getByRole('button',{name:'展开全文 ▾',exact:true}).first().click();
+    assert.ok((await part.innerText()).includes('Perfect addition'));
+    await part.getByRole('button',{name:'收起 ▴',exact:true}).first().click();
+  }
+  assert.equal(await section(7).locator('tbody td').last().locator('.definition-inline-copy').count(),0);
+  await mkdir('.superpowers/sdd/product-definition-reading',{recursive:true});
+  await table.locator('.launch-table-wrap').evaluate(node=>{node.scrollTop=0;});
+  await table.screenshot({path:'.superpowers/sdd/product-definition-reading/desktop.png'});
+  for(let index=1;index<=9;index++) {
+    assert.equal(await section(index).count(),1);
+    await section(index).locator('.launch-table-wrap').evaluateAll(nodes=>nodes.forEach(node=>{node.scrollTop=0;}));
+    await section(index).screenshot({path:`.superpowers/sdd/product-definition-reading/section-${index}.png`});
+  }
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({path:'.superpowers/sdd/product-definition-reading/full-page.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
+  await table.screenshot({path:'.superpowers/sdd/product-definition-reading/mobile.png'});
+  assert.deepEqual(errors,[]);
+});

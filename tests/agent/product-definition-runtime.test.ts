@@ -23,11 +23,13 @@ import type {
 import {
   SCOOTER_ASINS,
   realVocFacts,
+  validAmazonVocInsightOutput,
   realVocSnapshot,
   validVocPositioningOutput,
 } from "./helpers/voc-positioning-fixture";
 
-const NOW = "2026-08-17T00:00:00.000Z";
+// Queued jobs use the real runtime clock; historical createdAt triggers queue expiry.
+const NOW = new Date().toISOString();
 const CUTOFF = "2026-08-15T23:59:59.999Z";
 
 test("product definition waits with exact dependencies and auto-runs after keyword snapshot arrives", async (t) => {
@@ -108,12 +110,11 @@ test("product definition waits with exact dependencies and auto-runs after keywo
       stage: "product-definition",
     });
     assert.deepEqual(persisted, reports);
+    assert.equal(reopened.listAppliedMigrations().at(-1)?.version, latestMigrationVersion);
   } finally {
     reopened.close();
   }
 
-  // Planned 0022 migrations must advance this explicit runtime contract in their own unit.
-  assert.equal(latestMigrationVersion, 21);
 });
 
 test("keyword snapshot alone never runs product definition and lists missing validated VOC report", async (t) => {
@@ -215,7 +216,7 @@ class ProductRuntimeProvider implements ModelProvider {
     const input = request.input as { kind?: string };
     if (input.kind === "voc-positioning-input") {
       return {
-        value: validVocPositioningOutput(this.vocFacts) as T,
+        value: validAmazonVocInsightOutput(this.vocFacts) as T,
         responseId: "voc-response",
         inputTokens: 100,
         outputTokens: 50,

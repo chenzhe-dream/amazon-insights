@@ -216,7 +216,7 @@ after(async () => {
   await server?.close();
 });
 
-function syncJob(scope = { projectId, runId }) {
+function syncJob(scope: { projectId: string | null; runId: string | null } = { projectId, runId }) {
   return {
     jobId: "job-1",
     asins,
@@ -1384,7 +1384,7 @@ test("SIF discovery destinations come only from ready status", () => {
     ],
   );
   assert.deepEqual(
-    presentSyncProgress(jobWithSifStatus("connector-failed", "skipped"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
+    presentSyncProgress(jobWithSifStatus("connector-failed", "upstream-empty"), Date.parse("2026-08-24T00:00:00.000Z")).sifDestinations,
     [],
   );
 });
@@ -1780,7 +1780,7 @@ test("an invalid run URL neither adopts an unscoped job nor starts a replacement
       });
       const params = new URLSearchParams({ run: runId, ...(resumeJobId ? { syncJob: resumeJobId } : {}) });
       await page.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?${params}`);
-      await page.waitForTimeout(200);
+      await page.locator('[data-sync-resume="invalid"]').waitFor();
       assert.equal(calls.run, 1, resumeJobId ?? "run-only");
       assert.equal(calls.job, 0, resumeJobId ?? "run-only");
       assert.equal(calls.post, 0, resumeJobId ?? "run-only");
@@ -3235,7 +3235,8 @@ test("the production terminal owner restores progress without a reload loop unti
 
 test("a delayed terminal read never overlaps another poll or duplicates terminal side effects", async () => {
   const page = await browser.newPage();
-  let releaseFirst: (() => void) | null = null;
+  let releaseFirst!: () => void;
+  const firstReleased = new Promise<void>(resolve => { releaseFirst = resolve; });
   let firstStarted!: () => void;
   const firstRequest = new Promise<void>(resolve => { firstStarted = resolve; });
   const calls = { get: 0, post: 0, active: 0, maxActive: 0 };
@@ -3252,7 +3253,7 @@ test("a delayed terminal read never overlaps another poll or duplicates terminal
         calls.maxActive = Math.max(calls.maxActive, calls.active);
         if (calls.get === 1) {
           firstStarted();
-          await new Promise<void>(resolve => { releaseFirst = resolve; });
+          await firstReleased;
         }
         calls.active -= 1;
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...syncJob(), status: "completed", message: "delayed complete", needsReload: true }) });

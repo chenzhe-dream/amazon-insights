@@ -1,3 +1,4 @@
+import type { LocalAdmission } from '../db/concurrency-control-repository';
 export const CONNECTOR_IDS = ["sif", "sorftime", "sellerSprite"] as const;
 
 export type ConnectorId = (typeof CONNECTOR_IDS)[number];
@@ -5,6 +6,7 @@ export type ConnectorId = (typeof CONNECTOR_IDS)[number];
 export type ConnectorErrorCode =
   | "configuration"
   | "authentication"
+  | "local-admission"
   | "rate-limit"
   | "timeout"
   | "upstream-temporary"
@@ -13,6 +15,7 @@ export type ConnectorErrorCode =
 
 const SAFE_ERROR_MESSAGES: Readonly<Record<ConnectorErrorCode, string>> =
   Object.freeze({
+    "local-admission": "Local request capacity is unavailable",
     configuration: "Connector configuration is unavailable",
     authentication: "Connector authentication failed",
     "rate-limit": "Connector rate limit was exceeded",
@@ -31,6 +34,7 @@ export class ConnectorError extends Error {
     connectorId: ConnectorId,
     code: ConnectorErrorCode,
     retryable: boolean,
+    readonly admission?: LocalAdmission,
   ) {
     super(SAFE_ERROR_MESSAGES[code]);
     this.name = "ConnectorError";
@@ -41,6 +45,7 @@ export class ConnectorError extends Error {
 }
 
 export interface ConnectorRequest {
+  sessionScope?: "market";
   operation: string;
   input: Readonly<Record<string, unknown>>;
   signal?: AbortSignal;
@@ -84,6 +89,7 @@ export interface ConnectorExecutionPolicy {
 
 export interface RemoteMcpConnector {
   readonly id: ConnectorId;
+  close?(): Promise<void>;
   execute(request: ConnectorRequest): Promise<ConnectorResult>;
   probe(scope?: Readonly<{ organizationId: string; jobId: string }>): Promise<ConnectorHealth>;
 }

@@ -366,7 +366,9 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
       authority.leaseGeneration,
       asOf,
     ];
-    const authorityPredicate = `ar.id = $1 AND ar.job_attempt_id = $2
+    const authorityPredicate = `ar.id = $1 AND COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = $2
+      AND ja.stage_id = ar.stage_id AND r.id = ar.run_id
+      AND (ar.logical_execution_cycle_id IS NULL OR ja.logical_execution_cycle_id = ar.logical_execution_cycle_id)
       AND p.organization_id = $3 AND ar.validation_status = 'pending'
       AND ar.execution_claim_token = $4
       AND ar.execution_claim_owner_id = $5
@@ -378,29 +380,33 @@ export class PostgresModelBudgetStore implements ModelBudgetLedgerRepository {
         ? await this.#queries.query<{ agent_run_id: string }>(
             `SELECT ar.id AS agent_run_id
                FROM agent_runs ar
-               JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+               JOIN job_attempts ja ON ja.id = COALESCE(ar.active_job_attempt_id, ar.job_attempt_id)
                JOIN run_stages rs ON rs.id = ja.stage_id
                JOIN analysis_runs r ON r.id = rs.run_id
                JOIN projects p ON p.id = r.project_id
               WHERE ${authorityPredicate}
                 AND ($8::text IS NULL OR ar.run_id = $8)
-                AND ($9::text IS NULL OR ar.job_attempt_id = $9)
+                AND ($9::text IS NULL OR COALESCE(ar.active_job_attempt_id, ar.job_attempt_id) = $9)
               FOR UPDATE OF ar, ja`,
             [...parameters, subject.runId ?? null, subject.jobAttemptId ?? null],
           )
         : await this.#queries.query<{ agent_run_id: string }>(
             `SELECT ar.id AS agent_run_id
                FROM agent_runs ar
-               JOIN job_attempts ja ON ja.id = ar.job_attempt_id
+               JOIN job_attempts ja ON ja.id = COALESCE(ar.active_job_attempt_id, ar.job_attempt_id)
                JOIN run_stages rs ON rs.id = ja.stage_id
                JOIN analysis_runs r ON r.id = rs.run_id
                JOIN projects p ON p.id = r.project_id
                JOIN model_budget_reservations reservation
                  ON reservation.id = $8
-                AND reservation.job_attempt_id = ar.job_attempt_id
                 AND reservation.agent_run_id = ar.id
                 AND reservation.run_id = ar.run_id
                 AND reservation.organization_id = p.organization_id
+                AND reservation.project_id = p.id
+               JOIN job_attempts reservation_attempt ON reservation_attempt.id = reservation.job_attempt_id
+                AND reservation_attempt.stage_id = ar.stage_id
+                AND (reservation_attempt.id = ar.job_attempt_id OR
+                  (ar.logical_execution_cycle_id IS NOT NULL AND reservation_attempt.logical_execution_cycle_id = ar.logical_execution_cycle_id))
               WHERE ${authorityPredicate}
               FOR UPDATE OF ar, ja, reservation`,
             [...parameters, subject.reservationId],

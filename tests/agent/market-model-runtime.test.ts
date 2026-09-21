@@ -8,13 +8,14 @@ import { runPostgresMigrations } from '../../server/db/postgres/migrations';
 import { PostgresQueryContext } from '../../server/db/postgres/query-context';
 import { MarketModelBatchWorker, type MarketModelWorkerEvent } from '../../server/runtime/market-model-batch-worker';
 import { createMarketModelRuntime } from '../../server/runtime/market-model-runtime';
+import { loadMarketModelRuntimeConfig } from '../../server/runtime/market-model-config';
 import type { OpenAIProviderOptions } from '../../server/runtime/openai-provider';
 import { SkillRegistry } from '../../server/skills/registry';
 import { createMarketSemanticFixture } from './helpers/market-semantic-fixture';
 import { startPostgresTestContainer } from './helpers/postgres-test-container';
 
 const syntheticMarketEnvironment = {
-  OPENAI_API_KEY: 'synthetic-market-key', AGENT_VOC_MODEL: 'synthetic-market-model',
+  OPENAI_API_KEY: 'synthetic-market-key', AGENT_VOC_MODEL: 'gpt-5.6', // Known tokenizer; every request uses the injected synthetic client.
   AGENT_VOC_ESTIMATED_INPUT_TOKENS: '10000', AGENT_VOC_MAX_OUTPUT_TOKENS: '4000', AGENT_VOC_TIMEOUT_MS: '90000',
   AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: '1', AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: '2',
   AGENT_VOC_CALL_MAX_TOKENS: '100000', AGENT_VOC_CALL_MAX_COST_MICROS: '1000000',
@@ -66,6 +67,45 @@ test('market model queue lifecycle with isolated PostgreSQL and synthetic provid
     finally { await restarted.stop(); }
     const rows = (await pg.pool.query('SELECT validation_status FROM market_agent_runs WHERE module_run_id=$1 AND attempt_id<>$2', [f.subject.moduleRunId, f.modelClaim.attemptId])).rows;
     assert.deepEqual(rows.map(r => r.validation_status), ['passed']);
+  });
+  await t.test('market runtime forwards safe validation diagnostics for initial and repair attempts', async () => {
+    let calls = 0; const validationEvents: unknown[] = [];
+    const runtime = await createMarketModelRuntime(context, base, { validationLogger: entry => validationEvents.push(entry),
+      client: client(async body => { calls++; const reply = syntheticReply(body);
+        reply.output[0].content[0].text = JSON.stringify({ secretOutput: 'RAW_MARKET_DIAGNOSTIC_SENTINEL' }); return reply; }) });
+    const f = await queued(runtime.configurationVersion);
+    try { assert.equal(await runtime.tick(), true); assert.equal(await status(f), 'failed'); }
+    finally { await runtime.stop(); }
+    assert.equal(calls, 2);
+    assert.deepEqual(validationEvents.map(entry => (entry as { attemptKind: string }).attemptKind), ['initial', 'format-repair']);
+    assert.ok(validationEvents.every(entry => (entry as { issueCount: number }).issueCount > 0));
+    assert.ok(validationEvents.every(entry => (entry as { task: string }).task === 'market-keyword-semantics'));
+    assert.doesNotMatch(JSON.stringify(validationEvents), /RAW_MARKET_DIAGNOSTIC_SENTINEL|secretOutput|synthetic-market-key/);
+  });
+  await t.test('throwing market validation logger cannot change repair or accounting', async () => {
+    let calls = 0, logs = 0;
+    const runtime = await createMarketModelRuntime(context, base, { validationLogger: () => { logs++; throw Error('logger unavailable'); },
+      client: client(async body => { calls++; const reply = syntheticReply(body);
+        reply.output[0].content[0].text = '{}'; return reply; }) });
+    const f = await queued(runtime.configurationVersion);
+    try { assert.equal(await runtime.tick(), true); assert.equal(await status(f), 'failed'); }
+    finally { await runtime.stop(); }
+    assert.equal(calls, 2); assert.equal(logs, 2);
+    const rows = (await pg.pool.query('SELECT terminal_status,attempt_count,input_tokens,output_tokens FROM market_agent_runs WHERE module_run_id=$1 AND attempt_id<>$2', [f.subject.moduleRunId, f.modelClaim.attemptId])).rows;
+    assert.equal(rows.length, 1); assert.equal(rows[0].terminal_status, 'failed');
+    assert.equal(Number(rows[0].attempt_count), 2); assert.equal(Number(rows[0].input_tokens), 200); assert.equal(Number(rows[0].output_tokens), 100);
+  });
+  await t.test('market request timeout is terminal and cannot trigger a blind retry', async () => {
+    let calls = 0;
+    const runtime = await createMarketModelRuntime(context, { ...base, model: { ...base.model, timeoutMs: 100 } },
+      { client: client(async () => { calls++; return new Promise(() => {}); }) });
+    const f = await queued(runtime.configurationVersion);
+    try { assert.equal(await runtime.tick(), true); assert.equal(await status(f), 'failed'); }
+    finally { await runtime.stop(); }
+    assert.equal(calls, 1);
+    const rows = (await pg.pool.query('SELECT terminal_status,attempt_count,error_json FROM market_agent_runs WHERE module_run_id=$1 AND attempt_id<>$2', [f.subject.moduleRunId, f.modelClaim.attemptId])).rows;
+    assert.equal(rows.length, 1); assert.equal(rows[0].terminal_status, 'failed'); assert.equal(Number(rows[0].attempt_count), 1);
+    assert.equal(rows[0].error_json.message, 'Market semantic model request timed out');
   });
   await t.test('configuration lineage failure ends preparation without model dispatch or raw error logging', async () => {
     let calls = 0; const events: MarketModelWorkerEvent[] = [];
@@ -190,11 +230,13 @@ test('market model queue lifecycle with isolated PostgreSQL and synthetic provid
   });
   await t.test('real Agent Service start consumes native queue and stop leaves subsequent work untouched', async () => {
     let calls = 0;
+    const marketOverrideEnv = { ...syntheticMarketEnvironment, AGENT_VOC_TRANSPORT: 'relay-chat-json',
+      OPENAI_BASE_URL: 'https://synthetic.invalid/v1', AGENT_MARKET_MODEL_TRANSPORT: 'responses-strict' };
     const sdk = client(async body => { calls++; return syntheticReply(body); });
-    const configurationOnly = await createMarketModelRuntime(context, base, { client: sdk });
+    const configurationOnly = await createMarketModelRuntime(context, loadMarketModelRuntimeConfig(marketOverrideEnv), { client: sdk });
     const f = await queued(configurationOnly.configurationVersion); await configurationOnly.stop();
     const service = await createAgentService({ repository: new PostgresAgentRepository(pg.pool), logger: false, marketModelClient: sdk,
-      env: { ...syntheticMarketEnvironment, AGENT_VOC_LOCAL_FAKE: '1', AGENT_SERVICE_PROXY_TOKEN: 'synthetic-service-token',
+      env: { ...marketOverrideEnv, AGENT_VOC_LOCAL_FAKE: '1', AGENT_SERVICE_PROXY_TOKEN: 'synthetic-service-token',
         AGENT_SERVICE_TRUSTED_ORIGINS: 'http://127.0.0.1:3001', AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: '1' } });
     try {
       await service.start({ host: '127.0.0.1', port: 0 });

@@ -3,6 +3,8 @@
  * 对齐 Skill：define-amazon-product-from-voc-keywords
  */
 
+import type { AnalysisRuleTrace } from "../shared/product-structure-rules";
+import { explainFinalActions } from "./lib/product-structure-analysis";
 import type { KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { formatSeasonMonthLabel } from "./keyword-demand-conclusions";
 import type { VocPositioningConclusion, VocMergedThemeRow, VocPriorityLevel } from "./voc-positioning";
@@ -21,6 +23,8 @@ export type FinalProductRole =
 export type FinalOpportunityGrade = "A" | "B" | "C" | "D";
 
 export type FinalCrossRow = {
+  ruleDecisionIds?: string[];
+  sourceDecisionIds?: VocMergedThemeRow["sourceDecisionIds"];
   theme: string;
   vocEvidence: string;
   keywordEvidence: string;
@@ -33,6 +37,7 @@ export type FinalCrossRow = {
 };
 
 export type FinalDefinitionRow = {
+  ruleDecisionIds?: string[];
   dimension: string;
   conclusion: string;
   vocBasis: string;
@@ -43,6 +48,7 @@ export type FinalDefinitionRow = {
 };
 
 export type FinalKeywordGroupRow = {
+  ruleDecisionIds?: string[];
   type: string;
   keywords: string;
   productLink: string;
@@ -51,6 +57,7 @@ export type FinalKeywordGroupRow = {
 };
 
 export type FinalPriorityRow = {
+  ruleDecisionIds?: string[];
   priority: string;
   direction: string;
   evidence: string;
@@ -59,15 +66,11 @@ export type FinalPriorityRow = {
   acceptance: string;
 };
 
-export type FinalFeatureLayers = {
-  mustHave: Array<{ item: string; evidence: string }>;
-  differentiation: Array<{ item: string; evidence: string }>;
-  optional: Array<{ item: string; evidence: string }>;
-  notInV1: Array<{ item: string; evidence: string }>;
-  p0Avoid: Array<{ item: string; evidence: string }>;
-};
+export type FinalFeatureRow = { item: string; evidence: string; ruleDecisionIds?: string[] };
+export type FinalFeatureLayers = Record<"mustHave" | "differentiation" | "optional" | "notInV1" | "p0Avoid", FinalFeatureRow[]>;
 
 export type FinalProductDefinitionReport = {
+  ruleTrace?: AnalysisRuleTrace;
   meta: {
     categoryLabel: string;
     productCount: number;
@@ -149,6 +152,11 @@ function keywordItemValue(keyword: KeywordLaunchConclusions | null, sectionId: s
     return normalizeSeasonalityText(value);
   }
   return value;
+}
+
+function keywordAcceptedValue(keyword: KeywordLaunchConclusions | null, sectionId: string, label: string) {
+  const value = keyword?.sections.find(section => section.id === sectionId)?.items.find(item => item.label === label)?.acceptedValue?.trim();
+  return value && value !== "—" ? value : null;
 }
 
 function pickTexts(items: Array<string | null | undefined>, limit = 4) {
@@ -269,14 +277,14 @@ function mapRole(
     return {
       role: "核心强化",
       judgment: "VOC 高喜爱但搜索未必是获客词 → 保留体验基础，不作为唯一流量卖点",
-      priority: priority === "P0" ? "P0" : "P1",
+      priority: "P1",
     };
   }
   if (vocRole === "保留并重做") {
     return {
       role: "保留并重做",
       judgment: "喜爱与差评同时偏高 → 保留功能目标，重做结构/说明/耐久实现",
-      priority: priority === "P0" ? "P0" : "P1",
+      priority: "P1",
     };
   }
   if (vocRole === "差异化突破") {
@@ -392,6 +400,8 @@ function buildCrossRows(voc: VocPositioningConclusion, keyword: KeywordLaunchCon
 
     return {
       theme: theme.theme,
+      ruleDecisionIds: theme.ruleDecisionIds,
+      sourceDecisionIds: theme.sourceDecisionIds,
       vocEvidence: theme.judgment,
       keywordEvidence: kw.text,
       marketDemand: kw.demand,
@@ -413,23 +423,20 @@ function buildDefinitionRows(args: {
 }): FinalDefinitionRow[] {
   const { categoryLabel, voc, keyword, priceBand, crossRows } = args;
   const audience =
-    keywordItemValue(keyword, "customer_profile", "核心使用人群") ??
     voc.dimensionRows.find(row => row.dimension === "目标人群")?.conclusion ??
     "待验证";
+  const searchAudience = keywordItemValue(keyword, "customer_profile", "核心使用人群");
   const age = keywordItemValue(keyword, "customer_profile", "重点年龄段");
   const scenario =
-    keywordItemValue(keyword, "customer_profile", "主要使用场景") ??
     voc.dimensionRows.find(row => row.dimension === "核心场景")?.conclusion ??
     "待验证";
+  const searchScenario = keywordItemValue(keyword, "customer_profile", "主要使用场景");
   const motive = keywordItemValue(keyword, "customer_profile", "核心购买动机") ?? "待验证";
-  const form =
-    keywordItemValue(keyword, "product_dev", "建议产品形态") ??
-    voc.dimensionRows.find(row => row.dimension === "产品形态")?.conclusion ??
-    categoryLabel;
-  const baseFn = keywordItemValue(keyword, "product_dev", "基础功能清单");
-  const diffFn = keywordItemValue(keyword, "product_dev", "差异化功能清单");
-  const material = keywordItemValue(keyword, "product_dev", "建议材质与规格");
-  const colorSku = keywordItemValue(keyword, "product_dev", "建议颜色/SKU");
+  const form = voc.dimensionRows.find(row => row.dimension === "产品形态")?.conclusion ?? categoryLabel;
+  const baseFn = keywordAcceptedValue(keyword, "product_dev", "基础功能清单");
+  const diffFn = keywordAcceptedValue(keyword, "product_dev", "差异化功能清单");
+  const material = keywordAcceptedValue(keyword, "product_dev", "建议材质与规格");
+  const colorSku = keywordAcceptedValue(keyword, "product_dev", "建议颜色/SKU");
   const price = keywordItemValue(keyword, "product_dev", "建议目标售价") ?? (priceBand ? `竞品带 ${priceBand}` : "待验证");
   const demand = keywordItemValue(keyword, "market_demand", "核心需求规模") ?? "待验证";
   const trend = keywordItemValue(keyword, "market_demand", "近12个月趋势") ?? "待验证";
@@ -441,7 +448,7 @@ function buildDefinitionRows(args: {
   const diff = crossRows.filter(row => row.role === "差异化突破").map(row => row.theme);
   const combos = (keyword?.keywordCombos ?? []).slice(0, 5).map(row => row.keyword).join("、") || "待验证";
   const paramsFromAudience =
-    keywordItemValue(keyword, "customer_profile", "人群→产品参数") ?? "需将年龄/人群转为尺寸、承重、安全与操作难度";
+    keywordAcceptedValue(keyword, "customer_profile", "人群→产品参数") ?? "核对商品适龄限制、实际尺寸与操作难度后确定适配范围";
 
   return [
     {
@@ -473,21 +480,21 @@ function buildDefinitionRows(args: {
     },
     {
       dimension: "目标人群/年龄",
-      conclusion: [audience, age].filter(Boolean).join(" · "),
+      conclusion: `${audience}；搜索人群线索：${[searchAudience, age].filter(Boolean).join(" · ") || "暂无"}（不代表商品适龄）`,
       vocBasis: voc.dimensionRows.find(row => row.dimension === "目标人群")?.conclusion ?? "—",
-      keywordBasis: [audience, age].filter(Boolean).join(" · ") || "—",
+      keywordBasis: [searchAudience, age].filter(Boolean).join(" · ") || "—",
       action: paramsFromAudience,
       priority: "P0",
-      pending: age ? "—" : "年龄段词不足，承重/尺寸待测",
+      pending: "搜索年龄不等于商品适龄；需核对商品说明与 VOC 中的限制",
     },
     {
       dimension: "核心场景",
       conclusion: scenario,
       vocBasis: voc.dimensionRows.find(row => row.dimension === "核心场景")?.conclusion ?? "—",
-      keywordBasis: scenario,
-      action: "场景转成便携/稳定/户外耐候等规格要求",
+      keywordBasis: searchScenario ? `搜索场景线索（不代表适用）：${searchScenario}` : "—",
+      action: "按各 ASIN 已记录的场景及限制制定验证步骤，核对尺寸、使用效果及环境适应性；不适用场景不作使用推荐",
       priority: "P0",
-      pending: "—",
+      pending: "VOC 场景记录须保留适用条件；搜索场景不等于实际适用场景",
     },
     {
       dimension: "购买动机",
@@ -511,7 +518,7 @@ function buildDefinitionRows(args: {
       dimension: "产品形态",
       conclusion: form,
       vocBasis: voc.dimensionRows.find(row => row.dimension === "产品形态")?.conclusion ?? "—",
-      keywordBasis: form,
+      keywordBasis: keywordAcceptedValue(keyword, "product_dev", "建议产品形态") ?? "搜索形态尚待商品结构验证",
       action: "只选一个主形态；冲突形态拆 SKU/二代，不堆叠",
       priority: "P0",
       pending: "—",
@@ -541,7 +548,7 @@ function buildDefinitionRows(args: {
       conclusion: paramsFromAudience,
       vocBasis: voc.dimensionRows.find(row => row.dimension === "材质/结构")?.conclusion ?? "—",
       keywordBasis: keywordItemValue(keyword, "customer_profile", "最关注属性/规格") ?? "—",
-      action: "年龄词 → 承重、把位、Deck 高度、安全间距",
+      action: "先核对商品适龄限制与实际结构，再测量对应使用尺寸和操作难度；不从年龄词直接推出硬件配置",
       priority: "P0",
       pending: "工程参数待样机测量",
     },
@@ -587,11 +594,7 @@ function buildDefinitionRows(args: {
       dimension: "避坑要求",
       conclusion: p0.join("、") || voc.mustAvoid.join("、") || "待验证",
       vocBasis: voc.mustAvoid.join("、"),
-      keywordBasis:
-        (keyword?.functionMatrix ?? [])
-          .filter(row => row.type === "伪需求")
-          .map(row => row.keyword)
-          .join("、") || "伪需求词少，以 VOC P0 为准",
+      keywordBasis: "搜索量和关键词覆盖不足以否定功能需求，避坑以 VOC P0 证据为准",
       action: "P0 写入一票否决与出厂验收",
       priority: "P0",
       pending: "—",
@@ -604,14 +607,20 @@ function buildFeatureLayers(
   keyword: KeywordLaunchConclusions | null,
   voc: VocPositioningConclusion
 ): FinalFeatureLayers {
+  const withOrigins = (row: FinalFeatureRow, layer: keyof FinalFeatureLayers): FinalFeatureRow => {
+    // Decorations describe the same source theme, never expand its ASIN scope.
+    const label = row.item.replace(/（(?:核心基础|核心强化|保留并重做|VOC 核心保留|VOC 避坑)）$/u, "");
+    const source = crossRows.find(item => item.theme === label || `${item.theme}：${item.judgment}` === row.item);
+    const dimension = layer === "p0Avoid" ? "negatives" : layer === "differentiation" ? "unmet" : layer === "mustHave" ? "positives" : null;
+    const rawDimension = /（VOC 核心保留）$/u.test(row.item) ? "positives" : /（VOC 避坑）$/u.test(row.item) ? "negatives" : !source && dimension === "unmet" ? "unmet" : null;
+    const ids = rawDimension ? voc.themeDecisionIds?.[`${rawDimension}:${label}`] : dimension && source?.sourceDecisionIds ? source.sourceDecisionIds[dimension] : source?.ruleDecisionIds;
+    return { ...row, ruleDecisionIds: ids };
+  };
   const mustHave = pickTexts(
     [
       ...crossRows
         .filter(row => row.role === "核心基础" || row.role === "核心强化" || row.role === "保留并重做")
         .map(row => `${row.theme}（${row.role}）`),
-      ...(keyword?.functionMatrix ?? [])
-        .filter(row => row.type === "基础必备" || row.type === "高关注")
-        .map(row => `${row.keyword}（关键词${row.type}）`),
       ...voc.mustKeep.map(item => `${item}（VOC 核心保留）`),
     ],
     6
@@ -620,7 +629,6 @@ function buildFeatureLayers(
   const differentiation = pickTexts(
     [
       ...crossRows.filter(row => row.role === "差异化突破").map(row => row.theme),
-      ...(keyword?.functionMatrix ?? []).filter(row => row.type === "差异化").map(row => row.keyword),
       ...voc.mustValidate,
     ],
     4
@@ -629,7 +637,7 @@ function buildFeatureLayers(
   const optional = pickTexts(
     [
       ...crossRows.filter(row => row.role === "可选配置" || row.role === "体验优化").map(row => row.theme),
-      keywordItemValue(keyword, "product_dev", "建议颜色/SKU"),
+      keywordAcceptedValue(keyword, "product_dev", "建议颜色/SKU"),
     ],
     4
   ).map(item => ({ item, evidence: "中频需求或变体逻辑" }));
@@ -637,12 +645,10 @@ function buildFeatureLayers(
   const notInV1 = pickTexts(
     [
       ...crossRows.filter(row => row.role === "暂不开发").map(row => row.theme),
-      ...(keyword?.functionMatrix ?? []).filter(row => row.type === "伪需求").map(row => `${row.keyword}（伪需求）`),
-      "首代全新专利转向机构 + 大改模具同步推进",
       "仅凭高搜索宽泛大词堆功能",
     ],
     5
-  ).map(item => ({ item, evidence: "伪需求 / 高复杂度 / 低转化风险" }));
+  ).map(item => ({ item, evidence: "VOC 交叉判断 / 复杂度与成本风险；关键词信号不足不构成否定依据" }));
 
   const p0Avoid = pickTexts(
     [
@@ -652,7 +658,7 @@ function buildFeatureLayers(
     5
   ).map(item => ({ item, evidence: "P0：安全/无法使用/高频差评，关键词不得降级" }));
 
-  return { mustHave, differentiation, optional, notInV1, p0Avoid };
+  return { mustHave: mustHave.map(row=>withOrigins(row,"mustHave")), differentiation: differentiation.map(row=>withOrigins(row,"differentiation")), optional: optional.map(row=>withOrigins(row,"optional")), notInV1: notInV1.map(row=>withOrigins(row,"notInV1")), p0Avoid: p0Avoid.map(row=>withOrigins(row,"p0Avoid")) };
 }
 
 function buildKeywordGroups(keyword: KeywordLaunchConclusions | null): FinalKeywordGroupRow[] {
@@ -675,7 +681,7 @@ function buildKeywordGroups(keyword: KeywordLaunchConclusions | null): FinalKeyw
   const age = keywordItemValue(keyword, "customer_profile", "重点年龄段");
   const scenario = keywordItemValue(keyword, "customer_profile", "主要使用场景");
   const form = keywordItemValue(keyword, "product_dev", "建议产品形态");
-  const risk = keyword.functionMatrix.filter(row => row.type === "伪需求").map(row => row.keyword).join("、");
+  const pending = keyword.functionMatrix.filter(row => row.type === "待验证" || row.type === "数据不足");
 
   return [
     {
@@ -695,9 +701,9 @@ function buildKeywordGroups(keyword: KeywordLaunchConclusions | null): FinalKeyw
     {
       type: "高转化功能词",
       keywords: base.map(row => row.keyword).join("、") || "—",
-      productLink: "基础必备/高关注配置",
-      listingAngle: "Bullet 前三条对应可验证功能",
-      skuHint: "全 SKU 标配",
+      productLink: `验证搜索需求「${base.map(row => row.keyword).join("、") || "待补齐"}」与当前商品结构及实际功能是否匹配`,
+      listingAngle: "确认实际功能及证据后再编写对应 Bullet",
+      skuHint: "是否纳入 SKU 待适用性验证",
     },
     {
       type: "人群 / 年龄词",
@@ -716,16 +722,16 @@ function buildKeywordGroups(keyword: KeywordLaunchConclusions | null): FinalKeyw
     {
       type: "差异化长尾词",
       keywords: [...diff.map(row => row.keyword), ...combos.slice(0, 2).map(row => row.keyword)].join("、") || "—",
-      productLink: "差异化功能与未满足需求",
+      productLink: `验证搜索需求「${diff.map(row => row.keyword).join("、") || "待补齐"}」是否对应当前商品的未满足需求`,
       listingAngle: "用于精准广告与长尾自然流量",
-      skuHint: "主推或高配",
+      skuHint: "验证适用性与付费意愿后评估配置",
     },
     {
-      type: "不匹配 / 风险词",
-      keywords: risk || "宽泛大词、品牌词、错配形态词",
-      productLink: "不进入核心定义",
-      listingAngle: "否词/避免堆砌",
-      skuHint: "不做",
+      type: "待验证功能词",
+      keywords: pending.map(row => `${row.keyword}（${row.type}）`).join("、") || "—",
+      productLink: "结合 VOC、竞品实际功能与付费意愿验证",
+      listingAngle: "确认产品实际具备该功能后再承接搜索词",
+      skuHint: "配置待评估",
     },
   ];
 }
@@ -744,6 +750,7 @@ function buildPriorityRows(
       evidence: `${row.source} · ${row.mention}`,
       businessImpact: row.userImpact,
       action: row.productAction,
+      ruleDecisionIds: row.ruleDecisionIds,
       acceptance: row.acceptance,
     }));
 
@@ -756,6 +763,7 @@ function buildPriorityRows(
       evidence: `VOC：${row.vocEvidence}；KW：${row.keywordEvidence}`,
       businessImpact: row.userValue,
       action: row.judgment,
+      ruleDecisionIds: row.sourceDecisionIds ? [...(row.sourceDecisionIds.negatives ?? []), ...(row.sourceDecisionIds.unmet ?? [])] : row.ruleDecisionIds,
       acceptance: row.priority === "P0" ? "出厂抽检 + 差评主题回落" : "可感知卖点可演示/可证明",
     }));
 
@@ -767,7 +775,7 @@ function buildPriorityRows(
             direction: `承接组合词「${keyword.keywordCombos[0].keyword}」`,
             evidence: `月搜 ${formatVolume(keyword.keywordCombos[0].volume)} · ${keyword.verdict.gradeLabel}`,
             businessImpact: "匹配高搜索入口，降低流量错配",
-            action: "产品参数与 Listing 与该词群人群/年龄一致",
+            action: "先核对商品适龄和结构限制，再验证词群人群与产品参数的匹配",
             acceptance: "主词相关流量占比与转化不劣化",
           },
         ]
@@ -796,6 +804,61 @@ function buildOneLiner(voc: VocPositioningConclusion): {
     tone,
   }));
   return { oneLiner: voc.oneLiner, cards };
+}
+
+/** Guard every newly generated downstream action, using the same live ASIN
+ * contexts. Saved reports are displayed directly and never enter this builder. */
+function explainDownstreamActions(
+  base: AnalysisRuleTrace | undefined, keyword: AnalysisRuleTrace | undefined,
+  definitionRows: FinalDefinitionRow[], layers: FinalFeatureLayers,
+  priorities: FinalPriorityRow[], groups: FinalKeywordGroupRow[],
+) {
+  type Candidate = { dimension: string; action: string; ruleDecisionIds?: string[] };
+  const candidates: Candidate[] = [...definitionRows];
+  const copies: Array<() => void> = [];
+  const pendingFeatures: FinalFeatureRow[] = [];
+  for (const [layer, rows] of Object.entries(layers) as Array<[keyof FinalFeatureLayers, FinalFeatureRow[]]>) {
+    for (const [index, row] of rows.entries()) {
+      const candidate: Candidate = { dimension: `功能分层-${layer}-${index}`, action: row.item, ruleDecisionIds: row.ruleDecisionIds };
+      candidates.push(candidate);
+      copies.push(() => {
+        row.ruleDecisionIds = candidate.ruleDecisionIds;
+        row.item = candidate.action;
+        if (/^待核对|】待核对/.test(row.item) && (layer === "mustHave" || layer === "differentiation")) pendingFeatures.push(row);
+      });
+    }
+  }
+  for (const [index, row] of priorities.entries()) {
+    const candidate: Candidate = { dimension: `开发优先级-${index}`, action: row.action, ruleDecisionIds: row.ruleDecisionIds };
+    candidates.push(candidate);
+    copies.push(() => {
+      row.action = candidate.action; row.ruleDecisionIds = candidate.ruleDecisionIds;
+      if (/^待核对|】待核对/.test(row.action)) { row.direction = "待核对原候选的适用条件"; row.acceptance = "补齐原候选所缺来源与结构条件后制定验收"; }
+    });
+  }
+  for (const [index, row] of groups.entries()) {
+    if (row.type === "待补齐") continue;
+    // Keywords remain verbatim demand signals. Only landing/configuration
+    // recommendations are gated; a keyword never establishes existing hardware.
+    const candidate: Candidate = { dimension: `词群承接-${index}`, action: row.productLink };
+    candidates.push(candidate);
+    copies.push(() => {
+      row.productLink = candidate.action; row.ruleDecisionIds = candidate.ruleDecisionIds;
+      if (/^待核对|】待核对/.test(row.productLink)) {
+        row.listingAngle = "核对搜索意图与商品适用条件后再决定是否承接";
+        row.skuHint = "需求信号，暂不承诺配置";
+      }
+    });
+  }
+  const trace = explainFinalActions(base, keyword, candidates);
+  if (!base?.contexts?.length) {
+    for (const candidate of candidates.slice(definitionRows.length)) candidate.action = "待核对：缺少当前商品的结构与来源记录";
+  }
+  copies.forEach(copy => copy());
+  layers.mustHave = layers.mustHave.filter(row => !pendingFeatures.includes(row));
+  layers.differentiation = layers.differentiation.filter(row => !pendingFeatures.includes(row));
+  layers.optional.push(...pendingFeatures);
+  return trace;
 }
 
 export function buildFinalProductDefinition(args: {
@@ -851,9 +914,16 @@ export function buildFinalProductDefinition(args: {
 
   const crossRows = buildCrossRows(vocPositioning, keyword);
   const definitionRows = buildDefinitionRows({ categoryLabel, voc: vocPositioning, keyword, priceBand, crossRows });
+  for (const row of definitionRows) {
+    row.ruleDecisionIds = vocPositioning.dimensionRows.find(v => v.dimension === row.dimension)?.ruleDecisionIds;
+    if (row.dimension === "目标人群/年龄" || row.action === keywordItemValue(keyword, "customer_profile", "人群→产品参数")) {
+      row.ruleDecisionIds = [...(vocPositioning.dimensionRows.find(v=>v.dimension==="目标人群")?.ruleDecisionIds ?? []), ...(keyword?.sections.find(s=>s.id === "customer_profile")?.items.find(i=>i.label === "人群→产品参数")?.ruleDecisionIds ?? [])];
+    }
+  }
   const featureLayers = buildFeatureLayers(crossRows, keyword, vocPositioning);
   const keywordGroups = buildKeywordGroups(keyword);
   const priorityRows = buildPriorityRows(vocPositioning, crossRows, keyword);
+  const ruleTrace = explainDownstreamActions(vocPositioning.ruleTrace, keyword?.ruleTrace, definitionRows, featureLayers, priorityRows, keywordGroups);
   const opportunity = decideGrade(keyword, vocPositioning, crossRows);
   const { oneLiner, cards: oneLinerCards } = buildOneLiner(vocPositioning);
 
@@ -946,7 +1016,7 @@ export function buildFinalProductDefinition(args: {
       keywordItemValue(keyword, "competition", "竞争进入难度"),
       ...vocPositioning.optimizeRows.filter(row => row.priority === "P0").map(row => row.risk),
       "成本/毛利/广告费模型未闭合",
-      "专利与儿童品合规（ASTM/CPSIA）待检索",
+      "根据已确认用途、适龄范围与目标站点核对适用标准和专利",
       "MOQ 与旺季备货匹配待验证",
     ],
     6
@@ -954,9 +1024,12 @@ export function buildFinalProductDefinition(args: {
 
   const nextValidations = pickTexts(
     [
+      (keyword?.functionMatrix ?? [])
+        .filter(row => row.type === "待验证" || row.type === "数据不足")
+        .map(row => `${row.keyword}（${row.type}）：${row.action}`).join("；"),
       ...vocPositioning.nextValidations,
       keyword?.dataGaps[0] ?? null,
-      "P0 结构/备件/转向方案工程样机验收",
+      "针对已确认的 P0 痛点制定工程样件对照验收",
       "差异化功能成本与付费意愿小样本测试",
       "核心组合词 Listing 匹配与否词策略",
       "完整立项清单：利润、专利、合规、供应链",
@@ -965,6 +1038,7 @@ export function buildFinalProductDefinition(args: {
   );
 
   return {
+    ruleTrace,
     meta: {
       categoryLabel,
       productCount,
@@ -987,3 +1061,4 @@ export function buildFinalProductDefinition(args: {
     dataBoundary: DATA_BOUNDARY,
   };
 }
+

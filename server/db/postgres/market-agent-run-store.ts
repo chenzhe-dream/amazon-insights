@@ -16,6 +16,7 @@ import { MarketAgentRunConflictError, type MarketAgentRunRepository, type Market
 import { PostgresAgentRunStore } from './agent-run-store';
 import { PostgresMarketAnalysisSnapshotStore } from './market-analysis-snapshot-store';
 import { PostgresQueryContext } from './query-context';
+import { PostgresMarketModelBudgetStore } from './market-model-budget-store';
 
 type Row = Record<string, unknown>;
 type OverviewSynthesisRestoration = Awaited<ReturnType<typeof loadMarketOverviewSynthesisEvidenceWithSourceReport>>;
@@ -225,10 +226,33 @@ export class PostgresMarketAgentRunStore implements MarketAgentRunRepository {
       await this.#active(input.authority);const row=await this.#row(input.authority);
       if(row.validation_status!=='pending'){if(row.execution_claim_token!==input.authority.claimToken)throw new MarketAgentRunConflictError();same(row.outcome_json,input.outcome);return {record:mapAudit(row),transitioned:false};}
       await this.#assert(input.authority);const o=input.outcome;
-      const result=await this.#q.query<Row>(`UPDATE market_agent_runs SET validation_status=$2,terminal_status=$3,output_json=$4::jsonb,error_json=$5::jsonb,terminal_metadata_json=$6::jsonb,attempts_json=$7::jsonb,outcome_json=$8::jsonb,outcome_hash=$9,input_tokens=$10,output_tokens=$11,estimated_cost_micros=$12,duration_ms=$13,attempt_count=$14,usage_completeness=$15,completed_at=clock_timestamp() WHERE id=$1 RETURNING *`,[row.id,o.validationStatus,o.terminalStatus,JSON.stringify(o.output),JSON.stringify(o.error),JSON.stringify(o.terminalMetadata),JSON.stringify(o.attempts),JSON.stringify(o),digest(o),o.inputTokens,o.outputTokens,o.estimatedCostMicros,o.durationMs,o.attemptCount,o.usageCompleteness]);
+      const result=await this.#persistOutcome(row,o);
       await this.#active(input.authority);
       const live=(await this.#q.query<{live:boolean}>('SELECT $1::timestamptz>clock_timestamp() AS live',[row.execution_claim_expires_at])).rows[0].live;if(!live)throw new MarketAgentRunConflictError();
-      return {record:mapAudit(result.rows[0]),transitioned:true};
+      return {record:mapAudit(result),transitioned:true};
+    });
+  });}
+  async #persistOutcome(row:Row,o:FinalizeAgentRunOutcome):Promise<Row>{
+    const result=await this.#q.query<Row>(`UPDATE market_agent_runs SET validation_status=$2,terminal_status=$3,output_json=$4::jsonb,error_json=$5::jsonb,terminal_metadata_json=$6::jsonb,attempts_json=$7::jsonb,outcome_json=$8::jsonb,outcome_hash=$9,input_tokens=$10,output_tokens=$11,estimated_cost_micros=$12,duration_ms=$13,attempt_count=$14,usage_completeness=$15,completed_at=clock_timestamp() WHERE id=$1 AND validation_status='pending' RETURNING *`,[row.id,o.validationStatus,o.terminalStatus,JSON.stringify(o.output),JSON.stringify(o.error),JSON.stringify(o.terminalMetadata),JSON.stringify(o.attempts),JSON.stringify(o),digest(o),o.inputTokens,o.outputTokens,o.estimatedCostMicros,o.durationMs,o.attemptCount,o.usageCompleteness]);
+    if(!result.rows[0])throw new MarketAgentRunConflictError();
+    return result.rows[0];
+  }
+  /** Cancellation owns the module lock and atomically closes every pending audit,
+   * including abandoned older attempts. It never restores execution authority. */
+  async cancelPendingAgentRuns(value:unknown){return this.#execute(async()=>{
+    const scope=readSchema.parse(value);
+    return this.#q.transaction(async()=>{
+      const run=(await this.#q.query<Row>('SELECT * FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2 AND study_id=$3 FOR UPDATE',[scope.moduleRunId,scope.actor.organizationId,scope.studyId])).rows[0];
+      if(!run||run.cancelled_at===null||!await this.#readActor(scope))throw new MarketAgentRunConflictError();
+      const rows=(await this.#q.query<Row>("SELECT * FROM market_agent_runs WHERE module_run_id=$1 AND organization_id=$2 AND study_id=$3 AND validation_status='pending' ORDER BY started_at,id FOR UPDATE",[scope.moduleRunId,scope.actor.organizationId,scope.studyId])).rows;
+      const budget=new PostgresMarketModelBudgetStore(this.#q);
+      for(const row of rows){
+        const record=mapAudit(row),authority=MarketModelExecutionAuthoritySchema.parse({kind:'market-module-run',organizationId:record.organizationId,studyId:record.studyId,moduleRunId:record.moduleRunId,stepId:record.stepId,attemptId:record.attemptId,dataCutoffAt:record.dataCutoffAt,agentRunId:record.id,claimToken:record.claim.token,leaseOwnerId:record.claim.ownerId,leaseGeneration:record.claim.generation});
+        const usage=await budget.getAgentUsage(authority);
+        const outcome=outcomeSchema.parse({terminalStatus:'cancelled',validationStatus:'failed',responseId:usage.responseId,output:null,error:{code:'CANCELLED',message:'Market analysis was cancelled',requestId:record.id,retryable:false},inputTokens:usage.inputTokens,outputTokens:usage.outputTokens,estimatedCostMicros:usage.estimatedCostMicros,durationMs:Math.max(0,Date.parse(iso(run.cancelled_at))-Date.parse(record.startedAt)),attemptCount:usage.attempts.length,usageCompleteness:usage.usageCompleteness,attempts:usage.attempts,terminalMetadata:{kind:'cancelled'}});
+        await this.#persistOutcome(row,outcome);
+      }
+      return {cancelledAuditCount:rows.length};
     });
   });}
   async listAgentRuns(value:unknown){return this.#execute(async()=>{const scope=readSchema.parse(value);if(!await this.#readActor(scope))return [];return (await this.#q.query<Row>('SELECT * FROM market_agent_runs WHERE organization_id=$1 AND study_id=$2 AND module_run_id=$3 ORDER BY started_at,id',[scope.actor.organizationId,scope.studyId,scope.moduleRunId])).rows.map(mapAudit);});}

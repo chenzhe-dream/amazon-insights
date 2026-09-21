@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { readAlexaVocNormalizationStatuses, pollAlexaVocNormalizationOnce } from "./lib/alexa-voc-normalization-status-client";
 import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
@@ -9,19 +9,51 @@ import { ProductDefinitionSection } from "./product-definition-section";
 import { readEvidenceRun } from "./lib/voc-evidence-browser";
 import { LocalProductDefinitionSection } from "./local-product-definition-section";
 import type { LaunchProductInput, ProductLaunchRuntimeSources } from "./product-launch-analysis";
+import { saveLocalRuleReport, readLocalRuleReports } from "./lib/local-rule-report-browser";
+import type { LocalRuleReport } from "../shared/local-rule-report";
+import { AnalysisRuleExplanation } from "./analysis-rule-explanation";
 
 export function selectLocalVocSources(products: LaunchProductInput[], sources: ProductLaunchRuntimeSources, reviewFallback: boolean): ProductLaunchRuntimeSources {
   const manualVocByAsin = Object.fromEntries(products.map(p => [p.asin, sources.manualVocByAsin[p.asin]]));
   // Reviews only fill missing ASINs when explicitly requested.
   const reviewAnalysisByAsin = Object.fromEntries(products.filter(p => reviewFallback && !hasVocDevelopmentData([p], manualVocByAsin)).flatMap(p => sources.reviewFallbackCandidates?.[p.asin] ? [[p.asin, sources.reviewFallbackCandidates[p.asin]]] : []));
-  return {manualVocByAsin, reviewAnalysisByAsin, keywordDemand: buildKeywordDemandAnalysis(products, sources.keywordSources ?? {analysisByAsin:{},enrichmentByKeyword:{}})};
+  return {analysisScope:sources.analysisScope, manualVocByAsin, reviewAnalysisByAsin, keywordDemand: buildKeywordDemandAnalysis(products, sources.keywordSources ?? {analysisByAsin:{},enrichmentByKeyword:{}})};
 }
 
-export function LocalVocDefinition({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, onImported, initialRunId}: {
-  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialRunId?: string | null; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
+export function LocalVocDefinition({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, jobId, onImported, initialRunId}: {
+  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialRunId?: string | null; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; jobId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
 }) {
   const [selected, setSelected] = useState(() => initialSelectedAsins ?? products.map(p => p.asin));
   const [reviewFallback, setReviewFallback] = useState(false);
+  const [ruleReports, setRuleReports] = useState<LocalRuleReport[]>([]);
+  const [savedRuleReport, setSavedRuleReport] = useState<LocalRuleReport | null>(null);
+  const [ruleHistoryOpen, setRuleHistoryOpen] = useState(false);
+  const [savingRuleReport, setSavingRuleReport] = useState(false);
+  const [ruleReportError, setRuleReportError] = useState<string | null>(null);
+  const [loadingRuleReports, setLoadingRuleReports] = useState(false);
+  const selectedRuleKey = [...selected].sort().join(",");
+  const ruleScopeKey = JSON.stringify([projectId,sources.analysisScope,selectedRuleKey,reviewFallback]);
+  const [reportScope, setReportScope] = useState(ruleScopeKey);
+  const saveController = useRef<AbortController | null>(null);
+  // Reset before children render, so a changed selection never displays a prior snapshot.
+  if (reportScope !== ruleScopeKey) {
+    setReportScope(ruleScopeKey);
+    setSavingRuleReport(false); setSavedRuleReport(null); setRuleReports([]); setRuleReportError(null);
+    setLoadingRuleReports(ruleHistoryOpen);
+  }
+  useEffect(() => {
+    saveController.current?.abort();
+    return () => saveController.current?.abort();
+  }, [ruleScopeKey]);
+  useEffect(() => {
+    if (!enabled || !projectId || !ruleHistoryOpen || !selectedRuleKey) return;
+    const controller = new AbortController();
+    void readLocalRuleReports(projectId, selectedRuleKey.split(","), controller.signal).then(reports => {
+      if (!controller.signal.aborted) { setRuleReports(reports); setRuleReportError(null); }
+    }).catch(error => { if (!controller.signal.aborted) setRuleReportError(error instanceof Error ? error.message : "规则报告读取失败"); })
+      .finally(() => { if (!controller.signal.aborted) setLoadingRuleReports(false); });
+    return () => controller.abort();
+  }, [projectId, enabled, ruleHistoryOpen, selectedRuleKey]);
   const selectedProducts = useMemo(() => products.filter(p => selected.includes(p.asin)), [products, selected]);
   const scoped = useMemo(() => selectLocalVocSources(selectedProducts, sources, reviewFallback), [selectedProducts, sources, reviewFallback]);
   const [refresh, setRefresh] = useState(0);
@@ -85,9 +117,28 @@ export function LocalVocDefinition({products, sources, enabled, initialSelectedA
         <p>{message}</p><small>{sourceLabel}</small>
       </div>
       <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p>{sourceLabel}</p>{selectedProducts.map(p=><p key={p.asin}>{p.asin}：{hasVocDevelopmentData([p],scoped.manualVocByAsin) ? "手工 VOC" : scoped.reviewAnalysisByAsin?.[p.asin] ? "Sorftime 评论兜底" : "等待输入"}</p>)}<p>只使用所选商品的数据；缺失关键词信息保留为待验证。</p></details>
-      <div className="voc-actions"><button onClick={()=>setRefresh(value=>value+1)}>重新检查输入</button><button disabled={!reviewFallback && !Object.keys(sources.reviewFallbackCandidates ?? {}).length} onClick={()=>setReviewFallback(value=>!value)}>{reviewFallback ? "恢复仅手工 VOC 分析" : "使用评论兜底分析"}</button></div>
+      <div className="voc-actions"><button onClick={()=>setRefresh(value=>value+1)}>重新检查输入</button><button disabled={!reviewFallback && !Object.keys(sources.reviewFallbackCandidates ?? {}).length} onClick={()=>setReviewFallback(value=>!value)}>{reviewFallback ? "恢复仅手工 VOC 分析" : "使用评论兜底分析"}</button>
+        <button disabled={!ready || !projectId || savingRuleReport} onClick={async () => {
+          if (!projectId) return;
+          saveController.current?.abort();
+          const controller = new AbortController();
+          saveController.current = controller;
+          setSavingRuleReport(true); setRuleReportError(null);
+          try {
+            const report = await saveLocalRuleReport({projectId,asins:selectedProducts.map(p=>p.asin),products:selectedProducts.map(p=>({asin:p.asin,brand:p.brand,title:p.title,subRankCategory:p.subRankCategory,rankCategory:p.rankCategory,features:p.features,price:p.price,sales:p.sales,rating:p.rating,reviews:p.reviews,launch:p.launch})),baseSyncRunId:baseSyncRunId && jobId ? baseSyncRunId : undefined,jobId:baseSyncRunId && jobId ? jobId : undefined,reviewFallback},controller.signal);
+            if (!controller.signal.aborted) { setRuleReports(previous=>[report,...previous]); setSavedRuleReport(report); setRuleHistoryOpen(true); }
+          } catch(error) { if (!controller.signal.aborted) setRuleReportError(error instanceof Error ? error.message : "规则报告保存失败"); }
+          finally { if (!controller.signal.aborted) setSavingRuleReport(false); }
+        }}>{savingRuleReport ? "正在生成并保存…" : "生成并保存规则结果"}</button>
+      </div>
+      {ruleReportError && <p role="alert">{ruleReportError}</p>}
+      <small>保存时使用项目当前来源重新生成结果；已保存版本保留当时的结果、依据与规则版本。</small>
+      <details className="voc-coverage" open={ruleHistoryOpen} onToggle={event=>{setRuleHistoryOpen(event.currentTarget.open);setLoadingRuleReports(event.currentTarget.open);}}>
+        <summary>已保存的规则结果</summary>
+        {loadingRuleReports ? <p role="status">正在读取规则报告…</p> : !ruleReports.length ? <p>当前所选商品暂无已保存的规则结果。</p> : ruleReports.map(report=><div key={report.id} className="voc-actions"><span>{new Date(report.createdAt).toLocaleString("zh-CN")} · {report.ruleSetVersion}</span><button onClick={()=>setSavedRuleReport(report)}>查看此版本</button></div>)}
+      </details>
       {initialRunId && <details className="voc-coverage" onToggle={event=>setHistoryOpen(event.currentTarget.open)}><summary>查看已保存的 VOC 分析</summary>{historyError ? <p role="alert">{historyError}</p> : !history ? <p>正在读取历史报告…</p> : history.reports.filter(report=>report.stage === "voc-positioning").map(report=><div key={report.id}><p>历史版本 {report.version}（不代表本次规则结果）</p><p>{String((report.result.insight as {summary?:unknown} | undefined)?.summary ?? "该报告暂无摘要。")}</p></div>)}</details>}
     </section>
-    {ready ? <LocalProductDefinitionSection products={selectedProducts} sources={scoped} /> : <ProductDefinitionSection products={selectedProducts} sources={scoped} current={false} executionState="waiting-input" sourceLabel={message} />}
+    {savedRuleReport ? <><section className="voc-evidence-panel"><p>正在查看已保存的规则结果 · {new Date(savedRuleReport.createdAt).toLocaleString("zh-CN")} · {savedRuleReport.ruleSetVersion}</p><p>{savedRuleReport.inputSourceNote}</p>{savedRuleReport.sourceAvailability && <p role="status">{savedRuleReport.sourceAvailability.message}</p>}<button onClick={()=>setSavedRuleReport(null)}>返回当前分析</button></section><LocalProductDefinitionSection products={savedRuleReport.products} sources={scoped} savedAnalysis={savedRuleReport.analysis} savedReport={savedRuleReport.finalDefinition} /></> : ready ? <LocalProductDefinitionSection products={selectedProducts} sources={scoped} /> : <><AnalysisRuleExplanation /><ProductDefinitionSection products={selectedProducts} sources={scoped} current={false} executionState="waiting-input" sourceLabel={message} /></>}
   </div>;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   buildKeywordDemandAnalysis,
@@ -21,9 +21,18 @@ import { SegmentStackBar, segmentStackColors } from "./segment-stack-bar";
 import { buildKeywordLaunchConclusions, type KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { sifKeywordFieldTitle } from "./sif-keyword-field-glossary";
 import { amazonMediaSrc } from "./lib/amazon-image";
+import { copyKeywordText } from "./lib/copy-keyword-text";
+import { AnalysisRuleExplanation, RuleDecisionExplanation } from "./analysis-rule-explanation";
+import type { AnalysisInputScope } from "../shared/product-structure-rules";
 
 function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
+}
+
+function rowDecisionIds(row: unknown): string[] | undefined {
+  if (!row || typeof row !== "object" || !("ruleDecisionIds" in row)) return undefined;
+  const value = (row as { ruleDecisionIds?: unknown }).ruleDecisionIds;
+  return Array.isArray(value) && value.every(item => typeof item === "string") ? value : undefined;
 }
 
 function formatPct(value: number | null | undefined, digits = 1) {
@@ -260,15 +269,16 @@ function KeywordLaunchConclusionsBlock({ conclusions }: { conclusions: KeywordLa
       ))}
 
       {conclusions.functionMatrix.length ? (
-        <LaunchSection title="功能需求分层" description="基础必备 / 高关注 / 差异化 / 伪需求 · 指导 BOM 与 Listing 优先级">
+        <LaunchSection title="功能需求分层" description="基于搜索量与关键词覆盖的初步分层；待验证、数据不足不代表不建议配置，需结合 VOC 与实际功能确认。">
           <LaunchTable className="kw-function-matrix-table">
             <thead>
               <tr>
                 <th>关键词</th>
                 <th>类型</th>
                 <th>月搜索量</th>
-                <th>竞品覆盖</th>
+                <th>关键词覆盖竞品</th>
                 <th>开发动作</th>
+                <th>判定依据</th>
               </tr>
             </thead>
             <tbody>
@@ -276,13 +286,14 @@ function KeywordLaunchConclusionsBlock({ conclusions }: { conclusions: KeywordLa
                 <tr key={row.keyword}>
                   <th>{row.keyword}</th>
                   <td>
-                    <span className={`kw-fn-tier tier-${row.type === "基础必备" ? "p0" : row.type === "高关注" ? "p1" : row.type === "差异化" ? "diff" : "skip"}`}>
+                    <span className={`kw-fn-tier tier-${row.type === "基础必备" ? "p0" : row.type === "高关注" ? "p1" : row.type === "差异化" ? "diff" : row.type === "待验证" ? "pending" : "skip"}`}>
                       {row.type}
                     </span>
                   </td>
                   <td>{formatNum(row.volume)}</td>
                   <td>{row.coverage} 个</td>
                   <td className="launch-muted">{row.action}</td>
+                  <td><RuleDecisionExplanation trace={conclusions.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                 </tr>
               ))}
             </tbody>
@@ -502,12 +513,36 @@ function KeywordComparisonMatrixTable({
     [products, filter, sort, sources],
   );
   const rows = matrix.rows;
+  const copyScope = JSON.stringify([products.map(product => product.asin), filter, rows.map(row => row.keyword).sort()]);
+  const [selection, setSelection] = useState<{ scope: string; words: Set<string> }>({ scope: "", words: new Set() });
+  const selectedWords = rows.filter(row => selection.scope === copyScope && selection.words.has(row.keyword)).map(row => row.keyword);
+  const [copyResult, setCopyResult] = useState<{ scope: string; text: string; failed: boolean; message: string } | null>(null);
+  const copyAttempt = useRef(0);
+  const activeCopyScope = useRef(copyScope);
+  activeCopyScope.current = copyScope;
+  useEffect(() => {
+    copyAttempt.current += 1;
+    setSelection({ scope: copyScope, words: new Set() });
+    setCopyResult(null);
+  }, [copyScope]);
+  const visibleCopyResult = copyResult?.scope === copyScope ? copyResult : null;
+  const toggleWord = (word: string, checked: boolean) => {
+    const words = new Set(selectedWords);
+    if (checked) words.add(word); else words.delete(word);
+    setSelection({ scope: copyScope, words });
+  };
+  const copyWords = async (words: string[]) => {
+    if (!words.length) return;
+    const attempt = ++copyAttempt.current;
+    const text = words.join("\n");
+    setCopyResult({ scope: copyScope, text, failed: false, message: "正在复制…" });
+    const copied = await copyKeywordText(text);
+    if (copyAttempt.current !== attempt || activeCopyScope.current !== copyScope) return;
+    setCopyResult({ scope: copyScope, text, failed: !copied,
+      message: copied ? `已复制 ${words.length} 个关键词` : "浏览器未能自动复制，请选择下方文本后手动复制。" });
+  };
   const palette = ["#2F80ED", "#7A67D8", "#29A7C7", "#F0A020", "#E65B6A", "#26A269"];
   const activeCategories = categories.filter(item => item.keywordCount > 0);
-
-  if (!rows.length) {
-    return <div className="pending-box">暂无流量词数据</div>;
-  }
 
   return (
     <>
@@ -527,6 +562,16 @@ function KeywordComparisonMatrixTable({
           展示 {rows.length} / {matrix.totalRows} 个去重词 · 默认按共享率降序 · 点击「月搜索量」按搜索量从高到低 · 悬停列头可看释义
         </span>
       </div>
+      <div className="kw-matrix-copy-toolbar">
+        <button type="button" className="ghost-btn" disabled={!selectedWords.length} onClick={() => void copyWords(selectedWords)}>复制已选（{selectedWords.length}）</button>
+        <button type="button" className="ghost-btn" disabled={!rows.length} onClick={() => void copyWords(rows.map(row => row.keyword))}>复制当前列表（{rows.length}）</button>
+        {selectedWords.length > 0 && <button type="button" className="ghost-btn" onClick={() => setSelection({ scope: copyScope, words: new Set() })}>清空选择</button>}
+        <span className="launch-muted">每行一个词，按当前排序复制；当前列表最多 150 词。</span>
+        <span role="status" aria-live="polite">{visibleCopyResult?.message}</span>
+      </div>
+      {visibleCopyResult?.failed && <label className="kw-copy-manual">手动复制关键词
+        <textarea readOnly rows={4} value={visibleCopyResult.text} onFocus={event => event.currentTarget.select()} />
+      </label>}
       <div className="kw-matrix-period-legend launch-muted">
         <span><b>近30天</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3（SIF listingSearch lately·30）</span>
         <span><b>月粒度</b>：月搜索量、ABA 排名、月搜索趋势（SIF keyword_history · 近12期）</span>
@@ -550,7 +595,12 @@ function KeywordComparisonMatrixTable({
           </colgroup>
           <thead>
             <tr>
-              <th className="kw-matrix-sticky kw-matrix-index">#</th>
+              <th className="kw-matrix-sticky kw-matrix-index">
+                <input type="checkbox" aria-label="全选当前列表" title="全选当前列表" disabled={!rows.length}
+                  checked={rows.length > 0 && selectedWords.length === rows.length}
+                  ref={element => { if (element) element.indeterminate = selectedWords.length > 0 && selectedWords.length < rows.length; }}
+                  onChange={event => setSelection({ scope: copyScope, words: new Set(event.target.checked ? rows.map(row => row.keyword) : []) })} />
+              </th>
               <th className="kw-matrix-sticky kw-matrix-keyword kw-matrix-help" title={sifKeywordFieldTitle("keyword")}>
                 关键词
               </th>
@@ -628,11 +678,16 @@ function KeywordComparisonMatrixTable({
             </tr>
           </thead>
           <tbody>
+            {!rows.length && <tr><td colSpan={10 + matrix.competitors.length}>当前筛选下暂无流量词数据</td></tr>}
             {rows.map((row, index) => (
               <tr key={row.keyword}>
-                <th className="kw-matrix-sticky kw-matrix-index">{index + 1}</th>
+                <th className="kw-matrix-sticky kw-matrix-index">
+                  <label className="kw-copy-row-index"><input type="checkbox" aria-label={`选择关键词 ${row.keyword}`}
+                    checked={selectedWords.includes(row.keyword)} onChange={event => toggleWord(row.keyword, event.target.checked)} />{index + 1}</label>
+                </th>
                 <td className="kw-matrix-sticky kw-matrix-keyword">
                   <b>{row.keyword}</b>
+                  <button type="button" className="kw-copy-word" aria-label={`复制关键词 ${row.keyword}`} onClick={() => void copyWords([row.keyword])}>复制</button>
                 </td>
                 <td className="kw-matrix-sticky kw-matrix-category">
                   <span className="kw-tag" style={{ background: row.categoryColor }}>
@@ -683,13 +738,18 @@ export function KeywordDemandSection({
   products,
   mode = "analysis",
   sources,
+  analysisScope,
 }: {
   products: KeywordDemandProduct[];
   mode?: KeywordDemandSectionMode;
   sources?: KeywordDemandSources;
+  analysisScope?: Partial<AnalysisInputScope>;
 }) {
   const analysis = useMemo(() => buildKeywordDemandAnalysis(products, sources), [products, sources]);
-  const conclusions = useMemo(() => buildKeywordLaunchConclusions(analysis, products), [analysis, products]);
+  const conclusions = useMemo(
+    () => buildKeywordLaunchConclusions(analysis, products, analysisScope),
+    [analysis, products, analysisScope],
+  );
   const [showTaxonomy, setShowTaxonomy] = useState(false);
   const eyebrow = mode === "insight" ? "关键词调研 · 关键词洞察" : "关键词调研 · 竞品关键词分析";
   const title =
@@ -736,6 +796,11 @@ export function KeywordDemandSection({
           </span>
         </div>
       </section>
+
+      <AnalysisRuleExplanation
+        trace={conclusions.ruleTrace}
+        resultAvailable={analysis.hasData}
+      />
 
       {!analysis.hasData ? (
         <LaunchSection title="等待 SIF 关键词数据" description="反查流量词尚未同步到本地">

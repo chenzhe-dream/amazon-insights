@@ -7,8 +7,6 @@ import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {createMarketSemanticFixture} from './helpers/market-semantic-fixture';
 import {createMarketModelRuntime} from '../../server/runtime/market-model-runtime';
 import {loadVocPositioningRuntimeConfig} from '../../server/config';
-import {marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
-import {MARKET_SOURCE_HANDLER_VERSION} from '../../shared/market-source-contracts';
 import {MarketOverviewReportService} from '../../server/services/market-overview-report-service';
 import {MarketOverviewDetailsResponseSchema} from '../../shared/market-overview-report-contracts';
 import {MarketOverviewWindowPlanSchema} from '../../server/domain/market-research/overview-window-plan';
@@ -22,6 +20,9 @@ import {createMarketOverviewSynthesisReportStep} from '../../server/runtime/mark
 import {MarketOverviewSynthesisReportSchema} from '../../shared/market-overview-report-contracts';
 import {PostgresMarketAgentRunStore} from '../../server/db/postgres/market-agent-run-store';
 import type {MarketModuleRunView} from '../../server/db/market-module-execution-repository';
+import {createAgentService} from '../../server/agent-service';
+import {PostgresAgentRepository} from '../../server/db/postgres-repository';
+import {createSessionToken} from '../../server/auth/session';
 
 test('overview v5 reduces audited dimensions and saves frozen final synthesis without rerunning successful children',{timeout:300000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);const f=await createMarketSemanticFixture(pg.pool);
@@ -61,9 +62,18 @@ test('overview v5 reduces audited dimensions and saves frozen final synthesis wi
  }}} as unknown as OpenAIProviderOptions['client'];
  const create=()=>createMarketModelRuntime(f.context,base,{client,connectors:{sellerSprite:connector,sorftime:connector}});
  let runtime=await create();t.after(()=>runtime.stop());
- const flow='market-overview-flow/v5',rule='market-overview-source-catalog/v6';
- const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{flow,headTopN:10,newProductMonths:6},versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule,mapping:rule,planner:flow,model:runtime.modelAlias,prompt:runtime.overviewSynthesisPromptVersion,configuration:runtime.overviewSynthesisConfigurationVersion},collectionRevision:'full-flow-synthetic/v1',idempotencyKey:randomUUID()};
- const created=await f.stores.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)}),id=created.run.id;
+ const repository=new PostgresAgentRepository(pg.pool),token=createSessionToken();
+ await repository.createSession({id:randomUUID(),userId:f.actor.userId,tokenHash:token.tokenHash,expiresAt:new Date(Date.now()+3600000).toISOString(),revokedAt:null,createdAt:new Date().toISOString(),lastSeenAt:null});
+ const service=await createAgentService({repository,logger:false,marketModelClient:client,connectors:{sellerSprite:connector,sorftime:connector,sif:{...connector,id:'sif'}},env:{
+  OPENAI_API_KEY:'synthetic-key',AGENT_VOC_MODEL:'synthetic-model',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'12000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'60000',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2',AGENT_VOC_CALL_MAX_TOKENS:'1000000',AGENT_VOC_CALL_MAX_COST_MICROS:'10000000',AGENT_VOC_RUN_MAX_TOKENS:'1000000',AGENT_VOC_RUN_MAX_COST_MICROS:'10000000',AGENT_VOC_DAILY_MAX_TOKENS:'1000000',AGENT_VOC_DAILY_MAX_COST_MICROS:'10000000',AGENT_VOC_WORKER_OWNER_ID:'synthetic-full-worker',
+  AGENT_SERVICE_PROXY_TOKEN:'synthetic-service-token',AGENT_SERVICE_TRUSTED_ORIGINS:'http://127.0.0.1:3001'
+ }});t.after(()=>service.stop());
+ const started=await service.app.inject({method:'POST',url:`/v1/market-analysis/studies/${f.scope.researchId}/overview`,headers:{'idempotency-key':randomUUID(),'x-agent-proxy-token':'synthetic-service-token',origin:'http://127.0.0.1:3001',cookie:`__Host-agent_session=${token.rawToken}`},payload:{headTopN:10,newProductMonths:6}});
+ assert.equal(started.statusCode,201,started.body);const id=started.json().run.id;
+ const frozen=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:id}))!.run;
+ assert.equal((frozen.params as {flow:string}).flow,'market-overview-flow/v5');
+ assert.equal(frozen.versions.configuration,runtime.overviewSynthesisConfigurationVersion,'Production entry must inject the synthesis identity');
+ assert.equal(frozen.versions.prompt,runtime.overviewSynthesisPromptVersion);
  const readView=async()=>(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:id}))!;
  const phase=(input:unknown)=>z.object({phase:z.string().optional()}).passthrough().parse(input).phase;
  const task=(input:unknown)=>z.object({task:z.string().optional()}).passthrough().parse(input).task;
@@ -105,7 +115,19 @@ test('overview v5 reduces audited dimensions and saves frozen final synthesis wi
  assert.notEqual(forged.synthesis.result.summary.decision,actual.synthesis.result.summary.decision);
  await assert.rejects(f.stores.steps.settleAndEnqueue({claim,outcome:{status:'succeeded',output:{...forged,reportHash:digest(forged)}}}));
  const rejected=await readView();assert.equal(rejected.run.latestReportAttemptId,beforeFinal.run.latestReportAttemptId);assert.equal(rejected.steps.find(step=>step.id===claim.stepId)!.status,'running');
- assert.equal((await f.stores.steps.settleAndEnqueue({claim,...settlement.value})).status,'committed');
+ // Simulate a report-save interruption followed by an explicit retry with the model configuration removed.
+ // The already validated model result must still be publishable by the production source-only service.
+ await f.stores.steps.settleAndEnqueue({claim,outcome:{status:'failed',error:{code:'interrupted',retryable:false}}});
+ await f.stores.steps.retryFailedSteps({actor:f.actor,moduleRunId:id,steps:[{stepId:claim.stepId,failedAttemptId:claim.attemptId}],idempotencyKey:randomUUID()});
+ await runtime.stop();
+ const fallback=await createAgentService({repository,logger:false,connectors:{sellerSprite:connector,sorftime:connector,sif:{...connector,id:'sif'}},env:{AGENT_SERVICE_PROXY_TOKEN:'synthetic-service-token',AGENT_SERVICE_TRUSTED_ORIGINS:'http://127.0.0.1:3001'}});
+ const beforeFallbackCalls={sourceCalls,modelCalls};
+ try {
+  await fallback.start({host:'127.0.0.1',port:0});const deadline=Date.now()+9000;
+  while(Date.now()<deadline){const pending=(await readView()).steps.find(step=>step.id===claim.stepId)!;if(['succeeded','failed'].includes(pending.status))break;await new Promise(resolve=>setTimeout(resolve,40));}
+  assert.equal((await readView()).steps.find(step=>step.id===claim.stepId)!.status,'succeeded','Saved synthesis must publish after model configuration disappears');
+  assert.deepEqual({sourceCalls,modelCalls},beforeFallbackCalls);
+ }finally {await fallback.stop();}
  const view=await readView();
  const reports=new MarketOverviewReportService(f.context),entry=(await reports.read({actor:f.actor,moduleRunId:id}))!.currentReport;
  assert.ok(entry,JSON.stringify(view.attempts.filter(a=>a.status==='failed')));

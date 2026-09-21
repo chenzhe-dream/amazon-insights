@@ -14,7 +14,7 @@ export function registerAnalysisProjectFavoriteRoutes(app: FastifyInstance, stor
     return request.authPrincipal;
   }
   function storageError(error: unknown): never {
-    if (error instanceof FavoriteProjectError) throw new ContractRouteError(error.statusCode, "NOT_FOUND", error.message);
+    if (error instanceof FavoriteProjectError) throw new ContractRouteError(error.statusCode, error.statusCode === 400 ? "VALIDATION_ERROR" : "NOT_FOUND", error.message);
     throw new ContractRouteError(500, "INFRASTRUCTURE_ERROR", "收藏服务暂时不可用，请稍后重试");
   }
   app.get("/v1/local-data/project-favorites", async request => {

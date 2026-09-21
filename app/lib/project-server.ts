@@ -5,6 +5,7 @@ export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "ch
 
 export type AnalysisProject = {
   id: string;
+  sourceProjectId?: string | null;
   kind: ProjectKind;
   slug?: string | null;
   name: string;
@@ -15,6 +16,7 @@ export type AnalysisProject = {
   asins: string[];
   note: string | null;
   createdBy: string | null;
+  latestAnalystName?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -46,7 +48,7 @@ async function importStore() {
     listProjects: (options?: { kind?: string }) => AnalysisProject[];
     readProject: (id: string) => AnalysisProject | null;
     createProject: (input: Record<string, unknown>) => AnalysisProject;
-    updateProject: (id: string, patch: Record<string, unknown>) => AnalysisProject | null;
+    updateProject: (id: string, patch: Record<string, unknown>, options?: { preserveUpdatedAt?: boolean }) => AnalysisProject | null;
     deleteProject: (id: string) => boolean;
     normalizeProjectAsins: (values: unknown) => string[] | null;
   }>;
@@ -57,7 +59,7 @@ export async function fetchProjects(options?: { kind?: ProjectKind }) {
   return store.listProjects(options).map(project => {
     const enriched = enrichProject(project)!;
     if (enriched.majorCategory && enriched.majorCategory !== project.majorCategory) {
-      store.updateProject(project.id, { majorCategory: enriched.majorCategory });
+      store.updateProject(project.id, { majorCategory: enriched.majorCategory }, { preserveUpdatedAt: true });
     }
     return enriched;
   });

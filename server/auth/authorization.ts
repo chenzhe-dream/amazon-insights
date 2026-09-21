@@ -84,7 +84,7 @@ export function classifyRoute(method: string, pathname: string): RouteAccess {
     return { kind: "proxy-only" };
   }
 
-  if (normalizedMethod === "GET" && pathname === "/v1/admin/users") {
+  if (normalizedMethod === "GET" && ["/v1/admin/users","/v1/admin/usage","/v1/admin/usage/people"].includes(pathname)) {
     return { kind: "session", roles: MEMBER_ROLES };
   }
 

@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createServer } from "vite";
+import react from "@vitejs/plugin-react";
+import { chromium } from "playwright";
+
+test("traffic keyword copy supports single, selected, current list, filtering and HTTP fallback", async t => {
+  const server = await createServer({ configFile: false, define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0 } });
+  await server.listen(); t.after(() => server.close());
+  const address = server.httpServer!.address(); assert.ok(address && typeof address !== "string");
+  const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors: string[] = []; page.on("pageerror", e => errors.push(e.message));
+  await page.addInitScript(() => {
+    Object.assign(window, { copies: [] as string[], copyFail: false });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    document.execCommand = () => {
+      const state = window as unknown as { copies: string[]; copyFail: boolean };
+      if (state.copyFail) return false;
+      state.copies.push((document.activeElement as HTMLTextAreaElement).value); return true;
+    };
+  });
+  await page.goto(`http://127.0.0.1:${address.port}/tests/agent/helpers/keyword-copy-harness.html`);
+  const copies = () => page.evaluate(() => (window as unknown as { copies: string[] }).copies);
+  await page.getByRole("button", { name: "复制关键词 snow sled", exact: true }).click({ timeout: 10000 });
+  assert.equal((await copies()).at(-1), "snow sled");
+  await page.locator("section").filter({ has: page.getByRole("heading", { name: "流量词对比", exact: true }) }).screenshot({ path: ".superpowers/sdd/keyword-copy-preview.png" });
+  await page.getByRole("checkbox", { name: "选择关键词 snow sled", exact: true }).check();
+  await page.getByRole("checkbox", { name: "选择关键词 red snow sled", exact: true }).check();
+  await page.getByRole("button", { name: "复制已选（2）" }).click();
+  assert.deepEqual(new Set((await copies()).at(-1)!.split("\n")), new Set(["snow sled", "red snow sled"]));
+  await page.getByRole("button", { name: "复制当前列表（3）" }).click();
+  const visible = await page.locator(".kw-matrix-keyword b").allTextContents();
+  assert.equal((await copies()).at(-1), visible.join("\n"));
+  await page.getByRole("checkbox", { name: "全选当前列表" }).check();
+  assert.equal(await page.getByRole("button", { name: "复制已选（3）" }).isEnabled(), true);
+  await page.getByLabel("含义筛选").selectOption("material_style");
+  assert.equal(await page.getByRole("button", { name: "复制已选（0）" }).isDisabled(), true);
+  await page.getByRole("button", { name: "复制当前列表（1）" }).click();
+  assert.equal((await copies()).at(-1), "red snow sled");
+  await page.getByLabel("含义筛选").selectOption("all");
+  assert.equal(await page.getByRole("button", { name: "复制已选（0）" }).isDisabled(), true);
+  await page.evaluate("Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.copies.push(text); } } })");
+  await page.getByRole("button", { name: "复制关键词 snow sled", exact: true }).click();
+  assert.equal((await copies()).at(-1), "snow sled");
+  await page.evaluate("Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('clipboard denied'); } } })");
+  await page.getByRole("button", { name: "复制关键词 red snow sled", exact: true }).click();
+  assert.equal((await copies()).at(-1), "red snow sled");
+  await page.evaluate(() => { (window as unknown as { copyFail: boolean }).copyFail = true; });
+  await page.getByRole("button", { name: "复制关键词 red snow sled", exact: true }).click();
+  await page.getByLabel("手动复制关键词").waitFor();
+  assert.equal(await page.getByLabel("手动复制关键词").inputValue(), "red snow sled");
+  await page.getByRole("button", { name: "切换测试项目" }).click();
+  assert.equal(await page.getByRole("button", { name: "复制已选（0）" }).isDisabled(), true);
+  assert.equal(await page.getByLabel("手动复制关键词").count(), 0);
+  assert.deepEqual(errors, []);
+});

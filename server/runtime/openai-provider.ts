@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { createModelDiagnosticFetch, type ModelNetworkDiagnostic } from './model-network-diagnostics';
 import { ZodError } from "zod";
 
 import type { VocProviderTransport } from "../config";
@@ -16,9 +17,16 @@ import {
 } from "./model-provider";
 
 export interface OpenAIProviderOptions {
+  /** Opt-in safe fetch phases. Injected clients own their transport instrumentation. */
+  networkLogger?: (entry: ModelNetworkDiagnostic) => void;
+  /** Market-only protocol policy; existing callers retain their current behavior. */
+  responsesLowReasoning?: boolean;
+  enforceOutputTokenLimit?: boolean;
   /** Only for runners that validate and repair before publishing. */
   deferOutputValidation?: boolean;
-  schemaPromptMode?: "native" | "duplicated";
+  schemaPromptMode?: "native" | "duplicated" | "prompt-and-native";
+  /** Market compatibility only: a single whole-response JSON object fence, never prose extraction. */
+  allowSingleJsonFence?: boolean;
   apiKey?: string;
   organizationId?: string;
   jobId?: string;
@@ -34,7 +42,7 @@ export function classifyOpenAIError(error: unknown): ModelProviderError {
     return new ModelProviderError(
       "invalid_output",
       "OpenAI structured output could not be parsed",
-      { cause: error },
+      { cause: error, validationDiagnostic: {stage:"sdk",code:"sdk_parse_failed"} },
     );
   }
   if (error instanceof OpenAI.APIUserAbortError) {
@@ -214,11 +222,14 @@ function validatedChatUsage(completion: {
       ? inputTokens + outputTokens
       : Number.NaN;
   if (
+    typeof inputTokens !== "number" ||
     !Number.isSafeInteger(inputTokens) ||
     inputTokens < 0 ||
+    typeof outputTokens !== "number" ||
     !Number.isSafeInteger(outputTokens) ||
     outputTokens < 0 ||
     !Number.isSafeInteger(totalTokens) ||
+    typeof reportedTotalTokens !== "number" ||
     !Number.isSafeInteger(reportedTotalTokens) ||
     reportedTotalTokens < 0 ||
     reportedTotalTokens !== totalTokens
@@ -310,7 +321,7 @@ function extractCompletedChatOutputText(
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI response contained an unexpected output structure",
-      { usage },
+      { usage, validationDiagnostic: {stage:"response-envelope",code:"invalid_envelope"} },
     );
   }
   const choice = completion.choices[0];
@@ -318,7 +329,7 @@ function extractCompletedChatOutputText(
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI response contained an unexpected output structure",
-      { usage },
+      { usage, validationDiagnostic: {stage:"response-envelope",code:"invalid_envelope"} },
     );
   }
   const choiceRecord = choice as Record<string, unknown>;
@@ -331,7 +342,7 @@ function extractCompletedChatOutputText(
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI response contained an unexpected output structure",
-      { usage },
+      { usage, validationDiagnostic: {stage:"response-envelope",code:"invalid_envelope"} },
     );
   }
   const messageRecord = message as Record<string, unknown>;
@@ -344,7 +355,7 @@ function extractCompletedChatOutputText(
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI response contained an unexpected output structure",
-      { usage },
+      { usage, validationDiagnostic: {stage:"response-envelope",code:"invalid_envelope"} },
     );
   }
   return messageRecord.content;
@@ -355,15 +366,26 @@ function parseStructuredOutput<T>(
   request: StructuredGenerationRequest<T>,
   usage: ModelProviderUsage,
   deferOutputValidation = false,
+  allowSingleJsonFence = false,
 ) {
   let outputValue: unknown;
   try {
-    outputValue = JSON.parse(outputText);
+    const fence = allowSingleJsonFence
+      ? /^\s*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(outputText)
+      : null;
+    if (fence) {
+      if (fence[1].includes('```')) throw new SyntaxError('Multiple code fences are not supported');
+      outputValue = JSON.parse(fence[1]);
+      if (outputValue === null || typeof outputValue !== 'object' || Array.isArray(outputValue)) {
+        throw new SyntaxError('Fenced output must be an object');
+      }
+    } else outputValue = JSON.parse(outputText);
   } catch (error) {
     throw new ModelProviderError(
       "invalid_output",
       "OpenAI structured output was not valid JSON",
       {
+        validationDiagnostic: {stage:"json",code:"invalid_json"},
         cause: error instanceof Error ? error : undefined,
         usage,
       },
@@ -379,6 +401,7 @@ function parseStructuredOutput<T>(
       "invalid_output",
       "OpenAI structured output failed runtime Zod validation",
       {
+        validationDiagnostic: {stage:"schema",code:"contract_mismatch"},
         cause: parsed.error,
         usage,
         validationIssues: summarizeZodValidationIssues(
@@ -392,7 +415,7 @@ function parseStructuredOutput<T>(
   return { value: parsed.data, ...usage };
 }
 
-function createRelayJsonSchemaInstruction(
+export function createRelayJsonSchemaInstruction(
   format: StrictJsonSchemaResponseFormat,
 ) {
   return JSON.stringify({
@@ -403,8 +426,11 @@ function createRelayJsonSchemaInstruction(
 }
 
 export class OpenAIProvider implements ModelProvider {
+  private readonly responsesLowReasoning: boolean;
+  private readonly enforceOutputTokenLimit: boolean;
   private readonly deferOutputValidation: boolean;
-  private readonly schemaPromptMode: "native" | "duplicated";
+  private readonly schemaPromptMode: "native" | "duplicated" | "prompt-and-native";
+  private readonly allowSingleJsonFence: boolean;
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
   private readonly organizationId: string | undefined;
@@ -412,8 +438,11 @@ export class OpenAIProvider implements ModelProvider {
   private readonly resourceGovernor: ResourceGovernor | undefined;
 
   constructor(options: OpenAIProviderOptions) {
+    this.responsesLowReasoning = options.responsesLowReasoning ?? false;
+    this.enforceOutputTokenLimit = options.enforceOutputTokenLimit ?? false;
     this.deferOutputValidation = options.deferOutputValidation ?? false;
     this.schemaPromptMode = options.schemaPromptMode ?? "duplicated";
+    this.allowSingleJsonFence = options.allowSingleJsonFence ?? false;
     this.transport = options.transport ?? "responses-strict";
     this.organizationId = options.organizationId;
     this.jobId = options.jobId;
@@ -432,6 +461,7 @@ export class OpenAIProvider implements ModelProvider {
       apiKey: options.apiKey,
       baseURL: options.baseUrl ?? undefined,
       maxRetries: 0,
+      ...(options.networkLogger ? { fetch: createModelDiagnosticFetch(globalThis.fetch, options.networkLogger) } : {}),
     });
   }
 
@@ -477,19 +507,24 @@ export class OpenAIProvider implements ModelProvider {
           },
         ));
         const usage = validatedChatUsage(completion);
+        this.assertOutputLimit(request, usage);
         const outputText = extractCompletedChatOutputText(completion, usage);
-        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation);
+        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence);
       }
       const response = await this.runGovernedModelAttempt(request, () =>
         this.client.responses.create(
         {
           model: request.model,
-          instructions: request.instructions,
+          instructions: this.schemaPromptMode === 'prompt-and-native'
+            ? `${request.instructions}\n\n${createRelayJsonSchemaInstruction(request.responseFormat.format)}`
+            : request.instructions,
           input,
           max_output_tokens: request.maxOutputTokens,
           store: false,
+          ...(this.responsesLowReasoning ? { reasoning: { effort: 'low' as const } } : {}),
           text: {
             format: request.responseFormat.format,
+            ...(this.responsesLowReasoning ? { verbosity: 'low' as const } : {}),
           },
         },
         {
@@ -499,6 +534,7 @@ export class OpenAIProvider implements ModelProvider {
         },
       ));
       const usage = validatedResponseUsage(response);
+      this.assertOutputLimit(request, usage);
 
       if (response.status === "incomplete") {
         const reason = safeIncompleteReason(response.incomplete_details?.reason);
@@ -520,9 +556,18 @@ export class OpenAIProvider implements ModelProvider {
         );
       }
       const outputText = extractCompletedOutputText(response.output, usage);
-      return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation);
+      return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence);
     } catch (error) {
       throw classifyOpenAIError(error);
+    }
+  }
+
+  private assertOutputLimit(request: StructuredGenerationRequest<unknown>, usage: ModelProviderUsage): void {
+    if (this.enforceOutputTokenLimit && usage.outputTokens > request.maxOutputTokens) {
+      // Preserve actual charges for settlement. A provider ignoring the cap is a
+      // permanent protocol failure, never a reason to spend again on format repair.
+      throw new ModelProviderError('permanent', 'Model provider exceeded the requested output token limit',
+        { usage, reasonCode: 'OUTPUT_LIMIT_EXCEEDED' });
     }
   }
 

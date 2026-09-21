@@ -7,7 +7,7 @@ import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accou
 import {MarketShapeCatalogVersionSchema,MARKET_SHAPE_STRUCTURE_CATALOG_VERSION,type MarketShapeStructure} from '../../../shared/market-shape-structure-contracts';
 import {buildMarketShapeStructure} from './shape-structure';
 import {marketProductSourceAdmission} from './product-source-admission';
-import {MARKET_PRODUCT_SOURCE_POLICY,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../../shared/market-product-source-policy';
+import {marketProductSourcePolicy,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../../shared/market-product-source-policy';
 export const MARKET_SHAPE_PRICE_CATALOG_VERSION = 'market-shape-price-catalog/v1';
 function freeze<T>(value: T): T { if (value && typeof value === 'object') {
     Object.values(value).forEach(freeze);
@@ -78,6 +78,6 @@ export async function buildMarketShapePriceCatalog(options: {
     const extra:{structure?:MarketShapeStructure}=version!==MARKET_SHAPE_PRICE_CATALOG_VERSION?{structure:buildMarketShapeStructure({reference,products,analysis,bands,requestBound})}:{};
     const value = { version, scope, dataCutoffAt: cutoff, revision, referenceSnapshotId: options.reference.snapshot.snapshotId,
         inputSnapshotIds: [...observations.values()].sort((a, b) => a.observation.month.localeCompare(b.observation.month)).map(o => o.observation.snapshot.snapshotId), priceBasis: 'reference-observation' as const, historicalPriceStatus: 'not-collected' as const,
-        comparisonBasis: 'complete-common-members' as const, products, analysis, monthly,...extra,...(requestBound?{sourcePolicy:{...MARKET_PRODUCT_SOURCE_POLICY}}:{}) };
+        comparisonBasis: 'complete-common-members' as const, products, analysis, monthly,...extra,...(requestBound?{sourcePolicy:marketProductSourcePolicy(scope.marketplace)}:{}) };
     return freeze({ ...value, catalogId: 'market-shape-price:' + digest(value) });
 }

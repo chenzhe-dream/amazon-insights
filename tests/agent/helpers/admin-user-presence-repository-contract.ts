@@ -229,7 +229,7 @@ async function seedReadFixture(repository: AgentRepository) {
     repository,
     IDLE_USER_ID,
     sessionId(92),
-    "2026-08-31T11:54:59.999Z",
+    "2026-08-31T11:44:59.999Z",
   );
   await createSession(
     repository,
@@ -396,7 +396,7 @@ function expectedReadResult() {
           },
           {
             loggedInAt: "2026-08-31T10:00:00.000Z",
-            lastActivityAt: "2026-08-31T11:54:59.999Z",
+            lastActivityAt: "2026-08-31T11:44:59.999Z",
             expiresAt: "2026-09-02T00:00:00.000Z",
             revokedAt: null,
           },

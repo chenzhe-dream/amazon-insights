@@ -1,4 +1,5 @@
 import {MarketShapeExplanationRunResponseSchema} from './market-shape-explanation-public-contracts';
+import { SellingTranslationParams, SellingTranslationEmpty, SellingTranslationResponse } from "./selling-point-translation-contracts";
 import {MarketShapeStartRequestSchema,MarketShapeRevisionRequestSchema} from './market-shape-price-contracts';
 import {MarketShapeRunResponseSchema,MarketShapeRevisionResponseSchema,MarketShapeRevisionIdSchema} from './market-shape-public-contracts';
 import { MarketResearchScopeSchema, MarketResearchJobResponseSchema, MarketResearchListResponseSchema } from "./market-research-contracts";
@@ -9,6 +10,13 @@ import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSche
   MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from './market-module-contracts';
 import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
 import { z } from "zod";
+import {MarketThemeSelectionResponseSchema,MarketThemeSelectionRequestSchema,MarketThemeSelectionRevisionIdSchema} from './market-theme-selection-contracts';
+import {MarketKeywordStartRequestSchema} from './market-keyword-flow-contracts';
+import {MarketKeywordRunResponseSchema} from './market-keyword-public-contracts';
+import {MarketKeywordRevisionRequestSchema,MarketKeywordRevisionIdSchema,MarketKeywordRevisionEntrySchema} from './market-keyword-revision-contracts';
+import {MarketFavoriteListQuerySchema,MarketFavoriteListResponseSchema,MarketFavoriteCreateSchema,MarketFavoriteCreateResponseSchema} from "./market-favorites-contracts";
+import {ModuleVisibilityDefaultsSchema,VisibleModulesSchema,VisibilityPeopleResponseSchema,VisibilitySaveSchema,VisibilitySaveResponseSchema,VisibilityPeopleQuerySchema} from './module-visibility-contracts';
+import {UsageReportSchema,UsagePeopleResponseSchema} from "./usage-analytics-contracts";
 import { VocAutomationRequestSchema, VocAutomationStatusSchema } from "./voc-automation-contracts";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
@@ -376,6 +384,7 @@ export const AgentRunAttemptErrorClassificationSchema = z.enum([
 ]);
 
 export const ModelProviderReasonCodeSchema = z.enum([
+  "OUTPUT_LIMIT_EXCEEDED",
   "HTTP_REQUEST_REJECTED",
   "HTTP_AUTHENTICATION",
   "HTTP_RATE_LIMITED",
@@ -424,8 +433,16 @@ const WorkerErrorCategorySchema = z.enum([
   "cancelled",
 ]);
 const BudgetAuditValueSchema = z.number().nonnegative().finite();
+export const MarketShapeSpanNormalizationSchema = strictObject({
+  path: z.union([z.tuple([z.literal('products'),z.number().int().min(0).max(9),z.literal('decision'),z.literal('evidence'),z.number().int().min(0).max(7)]),z.tuple([z.literal('products'),z.number().int().min(0).max(9),z.literal('decision'),z.literal('candidates'),z.number().int().min(0).max(2),z.literal('evidence'),z.number().int().min(0).max(7)])]),
+  refId: z.string().min(1).max(160),
+  oldStart: z.number().int().nonnegative(), oldEnd: z.number().int().nonnegative(),
+  newStart: z.number().int().nonnegative(), newEnd: z.number().int().nonnegative(),
+  ruleVersion: z.literal('market-shape-exact-span/v1'),
+});
+export type MarketShapeSpanNormalization = z.infer<typeof MarketShapeSpanNormalizationSchema>;
 export const AgentRunTerminalMetadataSchema = z.discriminatedUnion("kind", [
-  strictObject({ kind: z.literal("succeeded") }),
+  strictObject({ kind: z.literal("succeeded"), marketShapeSpanNormalizations: z.array(MarketShapeSpanNormalizationSchema).min(1).max(240).optional() }),
   strictObject({
     kind: z.literal("budget-exceeded"),
     scope: z.enum(["call", "run", "daily"]),
@@ -874,6 +891,9 @@ export const SessionResponseSchema = z.discriminatedUnion("authenticated", [
     user: UserSchema,
     sessionIdentity: SessionIdentitySchema,
     canViewUserPresence: z.boolean().default(false),
+    visibleModules: VisibleModulesSchema.optional(),
+    isSystemOwner: z.boolean().optional(),
+    canManageModuleVisibility: z.boolean().optional(),
   }),
   strictObject({ authenticated: z.literal(false), user: z.null(), sessionIdentity: z.null() }),
 ]);
@@ -993,6 +1013,8 @@ export const FeedbackListItemSchema = strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
   actorUserId: EntityIdSchema,
+  actorDisplayName: z.string().max(200).nullable().optional(),
+  actorEmail: z.string().max(320).nullable().optional(),
   category: FeedbackCategorySchema,
   title: z.string().min(1).max(200),
   description: z.string().min(1).max(4_000),
@@ -1306,6 +1328,7 @@ export const LocalDataProjectKindSchema = z.enum([
 ]);
 export const LocalDataProjectSchema = strictObject({
   id: z.string().trim().min(1).max(200),
+  sourceProjectId: z.string().uuid().nullable().optional(),
   kind: LocalDataProjectKindSchema,
   slug: z.string().trim().min(1).max(200).nullable(),
   name: z.string().trim().min(1).max(200),
@@ -1315,11 +1338,13 @@ export const LocalDataProjectSchema = strictObject({
   asins: z.array(AsinSchema).min(3).max(10),
   note: z.string().trim().max(2000).nullable(),
   createdBy: z.string().trim().max(200).nullable(),
+  latestAnalystName: z.string().trim().max(200).nullable().optional(),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
 });
 export type LocalDataProject = z.infer<typeof LocalDataProjectSchema>;
 const LocalDataProjectFieldsSchema = {
+  sourceProjectId: z.string().uuid().nullable().optional(),
   kind: LocalDataProjectKindSchema.optional(),
   slug: z.string().trim().min(1).max(200).optional(),
   name: z.string().trim().min(1).max(200).optional(),
@@ -1339,8 +1364,21 @@ export const LocalDataCreateProjectRequestSchema = strictObject({
 export const LocalDataUpdateProjectRequestSchema = strictObject(LocalDataProjectFieldsSchema)
   .refine((value) => Object.keys(value).length > 0, "Project update must contain a field");
 export const LocalDataProjectIdParamsSchema = strictObject({ id: z.string().trim().min(1).max(200) });
-export const LocalDataProjectListQuerySchema = strictObject({ kind: LocalDataProjectKindSchema.optional() });
-export const LocalDataProjectsResponseSchema = strictObject({ projects: z.array(LocalDataProjectSchema) });
+export const LocalDataProjectListQuerySchema = strictObject({
+  sort: z.enum(["created_desc", "created_asc", "updated_desc", "updated_asc"]).optional(),
+  kind: LocalDataProjectKindSchema.optional(),
+  page: z.coerce.number().int().min(1).max(1000000).optional(),
+  pageSize: z.coerce.number().int().min(1).max(50).optional(),
+  search: z.string().max(200).optional(), category: z.string().max(200).optional(),
+  view: z.enum(["history", "favorites"]).optional(),
+});
+export const LocalDataProjectsResponseSchema = strictObject({ projects: z.array(LocalDataProjectSchema),
+  pagination: strictObject({ page: z.number().int().positive(), pageSize: z.number().int().positive(),
+    total: z.number().int().nonnegative(), totalPages: z.number().int().positive(),
+    historyTotal: z.number().int().nonnegative(), favoritesTotal: z.number().int().nonnegative(),
+    categories: z.array(z.string()),
+  }).optional(),
+});
 export const LocalDataProjectResponseSchema = strictObject({ project: LocalDataProjectSchema });
 export const LocalDataDeleteProjectResponseSchema = strictObject({ ok: z.literal(true) });
 
@@ -1366,9 +1404,10 @@ export const LocalDataSyncStartRequestSchema = strictObject({
   marketplace: MarketplaceSchema.optional(),
   projectId: EntityIdSchema.optional(),
   runId: EntityIdSchema.optional(),
+  imageAction: strictObject({ asin: AsinSchema, action: z.enum(["refresh", "analyze"]) }).optional(),
   mode: z.literal("repair-incomplete").optional(),
   parentJobId: z.string().trim().min(1).max(200).optional(),
-}).refine(value => value.mode === "repair-incomplete" ? Boolean(value.projectId && value.parentJobId && !value.runId) : !value.parentJobId, { message: "Repair requires projectId and parentJobId and cannot reuse runId" });
+}).refine(value => value.mode === "repair-incomplete" ? Boolean(value.projectId && value.parentJobId && !value.runId) : !value.parentJobId, { message: "Repair requires projectId and parentJobId and cannot reuse runId" }).refine(value => !value.imageAction || (value.mode === "repair-incomplete" && value.asins.includes(value.imageAction.asin)), { message: "Image action requires an in-scope repair target" });
 export const LocalDataSyncReadinessResponseSchema = strictObject({
   asins: LocalDataAsinListSchema,
   items: z.array(LocalDataSyncStatusSchema),
@@ -1404,6 +1443,7 @@ export const LocalDataSyncStageSchema = strictObject({
   catalogProviderPlan: LocalDataCatalogProviderPlanSchema.optional(),
   repairAsins: z.array(AsinSchema).optional(),
   repairParentJobId: z.string().trim().min(1).max(200).optional(),
+  imageAction: z.enum(["refresh", "analyze"]).optional(),
   repairXydcAsins: z.array(AsinSchema).optional(),
 }).refine((stage) => stage.catalogProviderPlan === undefined || stage.id === "catalog", {
   message: "Catalog provider plan is only valid on the catalog stage",
@@ -1638,6 +1678,12 @@ export type ContractDefinition = Readonly<{
 }>;
 
 export const v1Contracts = [
+  { method: "GET", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
+  { method: "POST", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, request: SellingTranslationEmpty, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
+  {method:'POST',path:'/v1/market-analysis/studies/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordStartRequestSchema,response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/runs/:id/keywords/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordRevisionRequestSchema,response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/keywords/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketKeywordRevisionIdSchema}).strict(),response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/studies/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeStartRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/runs/:id/shape-price/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeRevisionRequestSchema,response:MarketShapeRevisionResponseSchema,error:ApiErrorResponseSchema},
@@ -1657,6 +1703,9 @@ export const v1Contracts = [
   { method: 'GET', path: '/v1/market-analysis/runs/:id', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketThemeRunResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/details', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeDetailQuerySchema, response: MarketThemeDetailResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/evidence', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeEvidenceQuerySchema, response: MarketThemeEvidenceResponseSchema, error: ApiErrorResponseSchema },
+  {method:'GET',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict(),response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict(),request:MarketThemeSelectionRequestSchema,response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection/:revisionId',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema,revisionId:MarketThemeSelectionRevisionIdSchema}).strict(),response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},
   { method: 'POST', path: '/v1/market-analysis/runs/:id/retry', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketModuleRetryRequestSchema, response: MarketModuleRetryResponseSchema, error: ApiErrorResponseSchema },
   { method: 'POST', path: '/v1/market-analysis/runs/:id/cancel', params: z.object({ id: MarketModuleIdSchema }).strict(), request: z.object({}).strict(), response: MarketModuleCancelResponseSchema, error: ApiErrorResponseSchema },
   {
@@ -2080,6 +2129,15 @@ export const v1Contracts = [
     response: AdminUserPresenceResponseSchema,
     error: ApiErrorResponseSchema,
   },
+  {method:'GET',path:'/v1/admin/module-visibility',request:VisibilityPeopleQuerySchema,response:VisibilityPeopleResponseSchema,error:ApiErrorResponseSchema},
+  {method:"GET",path:"/v1/market-research/favorites",request:MarketFavoriteListQuerySchema,response:MarketFavoriteListResponseSchema,error:ApiErrorResponseSchema},
+  {method:"POST",path:"/v1/market-research/favorites",request:MarketFavoriteCreateSchema,response:MarketFavoriteCreateResponseSchema,error:ApiErrorResponseSchema},
+  {method:"DELETE",path:"/v1/market-research/favorites/:favoriteId",params:z.strictObject({favoriteId:z.string().uuid()}),response:z.unknown(),error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/admin/module-visibility/defaults',response:ModuleVisibilityDefaultsSchema,error:ApiErrorResponseSchema},
+  {method:'PUT',path:'/v1/admin/module-visibility/defaults',request:VisibilitySaveSchema,response:ModuleVisibilityDefaultsSchema,error:ApiErrorResponseSchema},
+  {method:'PUT',path:'/v1/admin/module-visibility/:userId',params:z.strictObject({userId:z.string().uuid()}),request:VisibilitySaveSchema,response:VisibilitySaveResponseSchema,error:ApiErrorResponseSchema},
+  {method:"GET",path:"/v1/admin/usage",response:UsageReportSchema,error:ApiErrorResponseSchema},
+  {method:"GET",path:"/v1/admin/usage/people",response:UsagePeopleResponseSchema,error:ApiErrorResponseSchema},
   {
     method: "PUT",
     path: "/v1/admin/concurrency/policy",
@@ -2127,6 +2185,10 @@ export const v1Contracts = [
 ] as const satisfies readonly ContractDefinition[];
 
 export type AgentServiceV1Path =
+  | "/v1/admin/module-visibility"
+  | "/v1/market-research/favorites"
+  | `/v1/market-research/favorites/${string}`
+  | `/v1/admin/module-visibility/${string}`
   | `/v1/runs/${string}/traffic-details/refresh`
   | "/v1/capabilities"
   | "/v1/connectors"
@@ -2152,6 +2214,8 @@ export type AgentServiceV1Path =
   | `/v1/feedback/admin/${string}/status`
   | "/v1/admin/concurrency"
   | "/v1/admin/users"
+  | "/v1/admin/usage"
+  | "/v1/admin/usage/people"
   | "/v1/admin/concurrency/policy"
   | "/v1/admin/seller-sprite/quota/total"
   | "/v1/admin/seller-sprite/quota/refresh"
@@ -2194,11 +2258,12 @@ const compiledContracts = v1Contracts.map((contract) => {
     : projectableSyncStagePathPattern;
   const pattern = escapedPath
     .replace(
-      /:(?:projectId|runId|reportId|feedbackId|attachmentId|attemptId)/g,
+      /:(?:projectId|runId|reportId|feedbackId|attachmentId|attemptId|userId|favoriteId)/g,
       uuidV4PathPattern,
     )
     .replace(":connectorId", "(?:sif|sorftime|sellerSprite)")
-    .replace(/:(?:id|jobId)/g, "[^/]+")
+    .replace(":asin", "[A-Z0-9]{10}")
+    .replace(/:(?:id|jobId|revisionId)/g, "[^/]+")
     .replace(":stage", stagePathPattern);
   return { contract, pattern: new RegExp(`^${pattern}$`) };
 });

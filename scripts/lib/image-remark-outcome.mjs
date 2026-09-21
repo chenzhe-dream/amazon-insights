@@ -16,7 +16,20 @@ export function validImageRemarkAttemptJobId(value) {
   return SAFE_JOB_ID_PATTERN.test(jobId) ? jobId : null;
 }
 
-export function imageRemarkOutcome(status, { attemptJobId } = {}) {
+/**
+ * @typedef {object} ImageRemarkOutcome
+ * @property {keyof typeof IMAGE_REMARK_OUTCOME_REASONS} status
+ * @property {string} reason
+ * @property {string} [attemptJobId]
+ */
+
+/**
+ * @param {unknown} status
+ * @param {{ attemptJobId?: unknown }} [options]
+ * @returns {ImageRemarkOutcome}
+ */
+export function imageRemarkOutcome(status, options = {}) {
+  const { attemptJobId } = options;
   const safeStatus = Object.hasOwn(IMAGE_REMARK_OUTCOME_REASONS, status)
     ? status
     : "upstream-empty";

@@ -627,7 +627,7 @@ function projectListingOverviewCandidate(candidate: unknown): unknown {
 
 function isVerifiedAllNaturalOverview(
   source: ProjectedListingOverviewCandidate,
-  overview: object,
+  overview: Record<string, unknown>,
 ): boolean {
   if (
     Object.hasOwn(overview, "ad") ||
@@ -651,7 +651,7 @@ function isVerifiedAllNaturalOverview(
   return Math.abs(natural.score - source.total) <= 1e-8;
 }
 
-function isPlainObject(value: unknown): value is object {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -667,21 +667,32 @@ function diagnoseMonthlyTrendShape(
   const objectCandidate = candidateType === "object"
     ? candidate as ProjectedMonthlyTrendCandidate
     : null;
-  const fields = Object.fromEntries(
-    MONTHLY_TREND_DIAGNOSTIC_FIELDS.map((field) => {
-      const present = objectCandidate !== null && Object.hasOwn(objectCandidate, field);
-      const value = present ? objectCandidate[field] : undefined;
-      const type = present ? jsonShapeType(value) : "missing";
-      return [field, {
-        present,
-        type,
-        ...(Array.isArray(value) ? { arrayLength: value.length } : {}),
-        ...(field === "fetchedAt"
-          ? { dateOnlyValid: MonthlyTrendFetchedAtSchema.safeParse(value).success }
-          : {}),
-      }];
-    }),
-  ) as SifTrafficShapeDiagnostic["fields"];
+  const diagnoseField = (field: (typeof MONTHLY_TREND_DIAGNOSTIC_FIELDS)[number]) => {
+    const present = objectCandidate !== null && Object.hasOwn(objectCandidate, field);
+    const value = present ? objectCandidate[field] : undefined;
+    const type: JsonShapeType = present ? jsonShapeType(value) : "missing";
+    return {
+      present,
+      type,
+      ...(Array.isArray(value) ? { arrayLength: value.length } : {}),
+    };
+  };
+  const fields: SifMonthlyTrendShapeDiagnostic["fields"] = {
+    dates: diagnoseField("dates"),
+    nf: diagnoseField("nf"),
+    ad: diagnoseField("ad"),
+    nfScore: diagnoseField("nfScore"),
+    adScore: diagnoseField("adScore"),
+    data_notice: diagnoseField("data_notice"),
+    fetchedAt: {
+      ...diagnoseField("fetchedAt"),
+      dateOnlyValid: MonthlyTrendFetchedAtSchema.safeParse(
+        objectCandidate !== null && Object.hasOwn(objectCandidate, "fetchedAt")
+          ? objectCandidate.fetchedAt
+          : undefined,
+      ).success,
+    },
+  };
   const firstInvalid = firstMonthlyTrendInvalid(objectCandidate);
   return {
     kind: "monthly-trend",
@@ -727,7 +738,7 @@ function rawMonthlyTrendPoint(
   if (!Array.isArray(points)) return undefined;
   const value = points[index];
   const type = jsonShapeType(value);
-  if (type === "missing" || type === "null") return undefined;
+  if (type === "null") return undefined;
   if (type !== "object") return { type };
   const present = Object.hasOwn(value, "score");
   return {
@@ -850,13 +861,9 @@ function jsonShapeType(value: unknown): Exclude<JsonShapeType, "missing"> {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   if (typeof value === "object") return "object";
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return typeof value;
-  }
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
   return "non-json";
 }
 
@@ -1264,7 +1271,7 @@ function latestFetchedAt(requests: readonly RequestEvidence[]) {
 
 function safeTaskError(error: unknown) {
   if (error instanceof ConnectorError) {
-    const category = error.code === "timeout"
+    const category = error.code === "local-admission" ? "rate-limit" : error.code === "timeout"
       ? "upstream-temporary"
       : error.code === "malformed-response"
       ? "data-quality"

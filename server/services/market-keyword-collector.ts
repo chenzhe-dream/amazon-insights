@@ -1,6 +1,7 @@
 import { normalizeMarketKeywordPageMembers, marketKeywordMemberId as memberId, missingKeywordMetric as missing, parseKeywordDecimal as decimalValue } from '../domain/market-research/keyword-source-normalization';
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
+import {sorftimeMarketSite} from '../../shared/market-sites';
 import { MarketInputRecordSchema, type MarketAnalysisScope, type MarketJsonValue } from "../../shared/market-analysis-contracts";
 import {
   MarketKeywordPageRequestSchema, MarketKeywordTrendRequestSchema,
@@ -96,7 +97,7 @@ export async function executeOnce(connector: RemoteMcpConnector, request: Connec
 }
 function transportFailure(operation: Operation, error: unknown): MarketKeywordSourceFailure {
   if (error instanceof DeadlineError) return failed(operation, error.code, null, [], error.code === "timeout");
-  if (error instanceof ConnectorError) return failed(operation, error.code, null, [], error.retryable);
+  if (error instanceof ConnectorError) return failed(operation, error.code === 'local-admission' ? 'rate-limit' : error.code, null, [], error.retryable);
   return failed(operation, "upstream-temporary", null, [], true);
 }
 function validNow(now: Date): boolean { return now instanceof Date && Number.isFinite(now.getTime()); }
@@ -159,7 +160,7 @@ export async function collectMarketKeywordPage(input: CollectMarketKeywordPageIn
   const request = parsed.data;
   let response: ConnectorResult;
   try {
-    response = await executeOnce(input.connector, { operation, input: { keyword: request.seed, keyword_support_site: request.scope.marketplace, page: request.page }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
+    response = await executeOnce(input.connector, { operation, input: { keyword: request.seed, keyword_support_site: sorftimeMarketSite(request.scope.marketplace), page: request.page }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
   } catch (error) { return transportFailure(operation, error); }
   const raw = copyPayload(own(response, "data"));
   if (raw === undefined) return failed(operation, "malformed-response");
@@ -181,23 +182,32 @@ function parseSeries(raw: MarketJsonValue | undefined, field: string, label: str
   // Count tokens must have integer syntax before any lossy Number conversion.
   const tokenPattern = integer ? "(?:0|[1-9]\\d*)" : "(?:0|[1-9]\\d*)(?:\\.\\d+)?";
   const pattern = new RegExp(`^(20\\d{2}-(?:0[1-9]|1[0-2])) ${label} (${tokenPattern})$`);
-  const points = new Map<string, { value: number; index: number }>();
+  // The observed -1 bid cannot be a nonnegative bid. Preserve it as unknown;
+  // the supplier documentation does not establish what the negative value means.
+  const unavailableBidPattern = field === "recommended_bid_trend"
+    ? /^(20\d{2}-(?:0[1-9]|1[0-2])) CPC recommended bid -1(?:\.0+)?$/ : null;
+  const points = new Map<string, { value: number | null; index: number; conflict: boolean }>();
   raw.forEach((item, index) => {
-    const match = typeof item === "string" ? pattern.exec(item) : null;
-    const value = match ? (integer ? Number(match[2]) : decimalValue(match[2])) : null;
-    if (!match || value === null || !Number.isFinite(value) || value > Number.MAX_SAFE_INTEGER || (integer && !Number.isSafeInteger(value))) {
+    const unavailableBid = typeof item === "string" ? unavailableBidPattern?.exec(item) : null;
+    const match = unavailableBid ?? (typeof item === "string" ? pattern.exec(item) : null);
+    const value = match && !unavailableBid ? (integer ? Number(match[2]) : decimalValue(match[2])) : null;
+    if (!match || (!unavailableBid && (value === null || !Number.isFinite(value) || value > Number.MAX_SAFE_INTEGER || (integer && !Number.isSafeInteger(value))))) {
       issues.push({ code: "invalid", path: ["data", field, index] }); return;
     }
+    if (unavailableBid) issues.push({ code: "missing", path: ["data", field, index] });
     const previous = points.get(match[1]);
-    if (previous) issues.push({ code: previous.value === value ? "duplicate-month" : "conflicting-month", path: ["data", field, index] });
-    else points.set(match[1], { value, index });
+    if (previous) {
+      const conflict = previous.conflict || previous.value !== value;
+      issues.push({ code: conflict ? "conflicting-month" : "duplicate-month", path: ["data", field, index] });
+      if (conflict) points.set(match[1], { value: null, index: previous.index, conflict: true });
+    } else points.set(match[1], { value, index, conflict: false });
   });
   return [...points.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([month, point]) => {
     if (month >= completeBefore) {
       issues.push({ code: "incomplete-month", path: ["data", field, point.index] });
       return { month, measurement: { value: null, reason: "incomplete-month" } };
     }
-    return { month, measurement: { value: point.value, reason: null } };
+    return { month, measurement: { value: point.value, reason: point.value === null ? "missing" : null } };
   });
 }
 function shiftMonth(month: string, delta: number): string {
@@ -220,7 +230,7 @@ export async function collectMarketKeywordTrend(input: CollectMarketKeywordTrend
   const request = parsed.data;
   let response: ConnectorResult;
   try {
-    response = await executeOnce(input.connector, { operation, input: { keyword: request.keyword, keyword_support_site: request.scope.marketplace }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
+    response = await executeOnce(input.connector, { operation, input: { keyword: request.keyword, keyword_support_site: sorftimeMarketSite(request.scope.marketplace) }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
   } catch (error) { return transportFailure(operation, error); }
   const raw = copyPayload(own(response, "data"));
   if (raw === undefined) return failed(operation, "malformed-response");
@@ -236,7 +246,7 @@ export async function collectMarketKeywordTrend(input: CollectMarketKeywordTrend
     searchRank: parseSeries(raw.data.search_rank_trend, "search_rank_trend", "search rank", true, completeBefore, issues),
     recommendedBid: parseSeries(raw.data.recommended_bid_trend, "recommended_bid_trend", "CPC recommended bid", false, completeBefore, issues),
   };
-  if (issues.some(issue => issue.code === "invalid" || issue.code === "conflicting-month")) return failed(operation, "malformed-response", raw, issues);
+  if (issues.some(issue => issue.code === "invalid")) return failed(operation, "malformed-response", raw, issues);
   const observedCompleteMonths = [...new Set(Object.values(series).flat().filter(point => point.measurement.value !== null).map(point => point.month))].sort();
   const period: MarketObservationPeriod = observedCompleteMonths.length ? { kind: "calendar-months", fromMonth: observedCompleteMonths[0], toMonth: observedCompleteMonths.at(-1)! } : { kind: "unknown", reason: "No valid complete calendar-month observation was returned" };
   let source: MarketSourceEvidence;

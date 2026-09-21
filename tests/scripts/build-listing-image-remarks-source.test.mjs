@@ -214,14 +214,14 @@ test("generator queues every static gallery slot while skipping videos and exist
   assert.match(queuePreparation, /if \(isVideoThumb\(url\)\) \{[\s\S]*?continue;/);
   assert.match(
     queuePreparation,
-    /if \(!force && remarks\[asin\]\[slotIndex\]\?\.remark\) \{[\s\S]*?imageRemarkOutcome\("ready"\);[\s\S]*?continue;/,
+    /if \(!force && !explicitImageAction && remarks\[asin\]\[slotIndex\]\?\.remark\) \{[\s\S]*?imageRemarkOutcome\("ready"\);[\s\S]*?continue;/,
   );
   assert.match(queuePreparation, /imageTasks\.push\(\{ asin, slotIndex, url \}\);/);
 });
 
 test("generator preserves fully cached readiness and emits bounded terminal outcomes", () => {
-  assert.match(generatorSource, /completeWithoutWork:\s*remarksComplete\(asin, listing\[asin\], remarks\)/);
-  assert.match(generatorSource, /persistedComplete:\s*remarksComplete\(asin, listing\[asin\], remarks\)/);
+  assert.match(generatorSource, /completeWithoutWork:\s*currentAttemptComplete\(asin\)/);
+  assert.match(generatorSource, /persistedComplete:\s*currentAttemptComplete\(asin\)/);
   assert.match(generatorSource, /IMAGE_REMARK_OUTCOME/);
   assert.match(generatorSource, /completed-with-gaps/);
   assert.match(generatorSource, /integrity-failed/);

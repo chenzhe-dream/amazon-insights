@@ -808,7 +808,7 @@ test("malformed provider JSON receives one constrained format repair", async (t)
   assert.match(provider.requests[1]!.instructions, /产品机会优先级排序/);
   assert.match(
     provider.requests[1]!.instructions,
-    /顾客关注点.*好评点.*差评点.*未被满足的需求.*使用场景.*使用人群.*购买动机/s,
+    /顾客关注点[\s\S]*好评点[\s\S]*差评点[\s\S]*未被满足的需求[\s\S]*使用场景[\s\S]*使用人群[\s\S]*购买动机/,
   );
   assert.doesNotMatch(provider.requests[1]!.instructions, /VOC_REPAIR_GUIDANCE_V1/);
   assert.equal(

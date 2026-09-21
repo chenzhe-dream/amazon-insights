@@ -1,6 +1,10 @@
 "use client";
 
+import { resolveRemarkForGalleryImage } from "./lib/listing-image-remark-resolution";
+
 import { useEffect, useState } from "react";
+import type { SyncJob } from "./lib/sync-progress-presentation";
+import { ListingImageActions, type ListingImageAction } from "./listing-image-actions";
 import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
 import { amazonMediaSrc } from "./lib/amazon-image";
 import {
@@ -68,6 +72,9 @@ function getListingImageOutcome(asin: string, slotIndex: number): ImageRemarkOut
 }
 
 type ListingImagesSectionProps = {
+  onImageAction?: (asin:string, action:ListingImageAction) => Promise<string | void>;
+  imageActionJob?: SyncJob | null;
+  imageActionPending?: boolean;
   products: ProductRef[];
   market: MarketInfo;
   colors: string[];
@@ -92,6 +99,9 @@ function resolveGallery(
 
 export function ListingImagesSection({
   products,
+  onImageAction,
+  imageActionPending,
+  imageActionJob,
   market,
   colors,
   listingByAsin = sorftimeListingContentData,
@@ -100,6 +110,11 @@ export function ListingImagesSection({
 }: ListingImagesSectionProps) {
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const [pinnedPreview, setPinnedPreview] = useState<PinnedPreview | null>(null);
+  const remarkForImage = (asin: string, slotIndex: number) => {
+    const record = listingByAsin[asin] as (SorftimeListingContentRecord & {previousGalleryImages?: string[]}) | undefined;
+    const url = record?.galleryImages?.[slotIndex];
+    return url ? resolveRemarkForGalleryImage(url, slotIndex, record?.previousGalleryImages, index => resolveImageRemark(asin, index)) : resolveImageRemark(asin, slotIndex);
+  };
   const imageColumnCount = Math.min(
     MAX_IMAGE_COLUMNS,
     Math.max(
@@ -126,7 +141,7 @@ export function ListingImagesSection({
     const gallery = resolveGallery(product.asin, product.image, listingByAsin);
     return (
       count +
-      gallery.urls.filter((url, slotIndex) => Boolean(url) && !resolveImageRemark(product.asin, slotIndex)).length
+      gallery.urls.filter((url, slotIndex) => Boolean(url) && !remarkForImage(product.asin, slotIndex)).length
     );
   }, 0);
 
@@ -179,7 +194,7 @@ export function ListingImagesSection({
               const gallery = resolveGallery(product.asin, product.image, listingByAsin);
               const listingUrl = `https://${market.domain}/dp/${product.asin}`;
               const readyRemarkCount = gallery.urls.reduce(
-                (count, _, slotIndex) => count + (resolveImageRemark(product.asin, slotIndex) ? 1 : 0),
+                (count, _, slotIndex) => count + (remarkForImage(product.asin, slotIndex) ? 1 : 0),
                 0,
               );
 
@@ -223,6 +238,7 @@ export function ListingImagesSection({
                         ) : (
                           <small className="listing-images-count muted">MCP 暂未返回商品图 · upstream-empty</small>
                         )}
+                        <ListingImageActions asin={product.asin} onAction={onImageAction} job={imageActionJob} disabled={imageActionPending} />
                       </div>
                     </div>
                   </th>
@@ -231,7 +247,7 @@ export function ListingImagesSection({
                     const label = `${product.brand} · 图片${slotIndex + 1}${slotIndex === 0 ? " · 主图" : " · 辅图"}`;
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
-                    const imageRemark = resolveImageRemark(product.asin, slotIndex);
+                    const imageRemark = remarkForImage(product.asin, slotIndex);
                     const imageOutcome = resolveImageOutcome(product.asin, slotIndex);
                     const imageOutcomeReason = imageOutcome
                       ? IMAGE_REMARK_OUTCOME_REASONS[imageOutcome.status]
@@ -273,6 +289,7 @@ export function ListingImagesSection({
                             </button>
                             {imageRemark ? (
                               <div className="listing-image-remark-block">
+                                {imageOutcome && imageOutcome.status !== "ready" ? <p className="listing-image-caption muted">本次重新分析失败，暂显示上次结果 · {imageOutcomeReason}</p> : null}
                                 {imageRemark.image_types.length > 0 ? (
                                   <p className="listing-image-type-tags">
                                     {imageRemark.image_types.slice(0, 2).join(" · ")}

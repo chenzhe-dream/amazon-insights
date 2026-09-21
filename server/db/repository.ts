@@ -16,6 +16,7 @@ import type { ConcurrencyControlRepository } from "./concurrency-control-reposit
 import type { SyncJobRepository } from "./sync-job-repository";
 import type { TrafficDataSnapshotRepository } from "./traffic-data-snapshot-repository";
 import type { AdminUserPresenceRepositoryCapability } from "./admin-user-presence-repository";
+import type { ProjectLatestAnalystRepository } from "./project-latest-analyst-repository";
 
 export interface UserRecord {
   id: string;
@@ -199,6 +200,8 @@ export interface FeedbackStatusEventRecord {
 }
 
 export interface FeedbackListRecord extends UserFeedbackRecord {
+  readonly actorDisplayName?: string | null;
+  readonly actorEmail?: string | null;
   readonly status: FeedbackStatus;
   readonly workflowVersion: number;
   readonly adminSeenAt: string | null;
@@ -484,6 +487,8 @@ export interface RunStageRecord {
 }
 
 export interface EnqueueJobInput {
+  /** New VOC input replaces earlier positioning work, never normalization siblings. */
+  supersedeVocPredecessors?: boolean;
   id: string;
   stageId: string;
   attemptNumber: number;
@@ -703,6 +708,7 @@ export interface AgentRepository extends AuthenticationRepository {
   ): Promise<T>;
   createUser(user: UserRecord): Promise<UserRecord>;
   findUserById(id: string): Promise<UserRecord | null>;
+  listLatestProjectAnalysts?: ProjectLatestAnalystRepository["listLatestProjectAnalysts"];
   createProject(project: CreateProjectInput): Promise<ProjectRecord>;
   findProjectById(id: string): Promise<ProjectRecord | null>;
   createProjectOnce?: ComparisonProjectRepository["createProjectOnce"];
@@ -760,6 +766,9 @@ export type RuntimeAgentRepository = AgentRepository &
   AdminUserPresenceRepositoryCapability &
   ManualAlexaVocRepositoryCapability & {
     readonly marketResearch?: import('./market-research-repository').MarketResearchRepository;
+    readonly usageAnalytics?: import('./usage-analytics-repository').UsageAnalyticsRepository;
+    readonly moduleVisibility?: import('./module-visibility-repository').ModuleVisibilityRepository;
+    readonly marketFavorites?: import('./market-favorites-repository').MarketFavoritesRepository;
     /** Native market transactions are available only on the PostgreSQL runtime. */
     readonly marketExecutionContext?: import('./postgres/query-context').PostgresQueryContext;
     readonly vocAutomations: import('./voc-automation-repository').VocAutomationRepository;

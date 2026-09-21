@@ -771,9 +771,11 @@ export async function wakeVocPositioning(
       resumedAt: now,
     })) !== null;
   }
-  if (stage.status === "running") {
+  if (stage.status === "running" || stage.status === "queued") {
     const jobs = await repository.listJobAttempts(stage.id);
-    if (jobs.some((job) => job.status === "queued")) return false;
+    // A never-started successor will read the latest snapshot. A released old
+    // execution retains startedAt and must not inherit the new input's cycle.
+    if (jobs.some((job) => job.status === "queued" && job.startedAt === null)) return false;
     const latestAttempt = jobs.reduce(
       (latest, job) => Math.max(latest, job.attemptNumber),
       0,
@@ -788,6 +790,7 @@ export async function wakeVocPositioning(
       stageId: stage.id,
       attemptNumber,
       maxAttempts: Math.max(latestMaxAttempts, attemptNumber + 2),
+      supersedeVocPredecessors: true,
       availableAt: now,
       createdAt: now,
     });

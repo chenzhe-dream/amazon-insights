@@ -49,13 +49,13 @@ test("connector secrets are loaded only from declared server environment variabl
     }),
   );
 
-  const cursorOnlyEnv = { USERPROFILE: cursorHome, HOME: cursorHome };
+  const cursorOnlyEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", USERPROFILE: cursorHome, HOME: cursorHome };
   assert.equal(readServerConnectorSecret("sif", cursorOnlyEnv), null);
   assert.equal(readSifHeaders(cursorOnlyEnv), null);
   assert.equal(readSorftimeKey(cursorOnlyEnv), null);
   assert.equal(readSellerSpriteSecretKey(cursorOnlyEnv), null);
 
-  const serverEnv = {
+  const serverEnv: NodeJS.ProcessEnv = { NODE_ENV: "test",
     SIF_MCP_SECRET: "  server-sif-secret  ",
     SORFTIME_MCP_KEY: " server-sorftime-secret ",
     SELLERSPRITE_SECRET_KEY: " server-seller-secret ",
@@ -175,7 +175,7 @@ test("SellerSprite helper preserves normalized object and array results", async 
       "review",
       { asin: "B000000000" },
       {
-        fetchImpl: async (_input, init) => {
+        fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
           const payload = JSON.parse(String(init?.body ?? "{}"));
           if (payload.method === "initialize") {
             return new Response(JSON.stringify({

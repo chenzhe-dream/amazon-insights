@@ -1,0 +1,118 @@
+import assert from "node:assert/strict";
+import {randomUUID} from "node:crypto";
+import {fileURLToPath} from "node:url";
+import {mkdir} from "node:fs/promises";
+import {performance} from "node:perf_hooks";
+import Fastify from "fastify";
+import {createServer} from "vite";
+import react from "@vitejs/plugin-react";
+import {chromium} from "playwright";
+import {startPostgresTestContainer} from "../agent/helpers/postgres-test-container";
+import {runPostgresMigrations} from "../../server/db/postgres/migrations";
+import {PostgresQueryContext} from "../../server/db/postgres/query-context";
+import {PostgresUsageAnalyticsStore} from "../../server/db/postgres/usage-analytics-store";
+import {PostgresAdminUserPresenceStore} from "../../server/db/postgres/admin-user-presence-store";
+import {registerUsageAnalyticsRoutes} from "../../server/routes/usage-analytics";
+import {registerAdminUserPresenceRoutes} from "../../server/routes/admin-user-presence";
+import {beijingToday} from "../../app/lib/usage-analytics-query";
+const root=fileURLToPath(new URL("../../",import.meta.url));
+const postgres=await startPostgresTestContainer();
+const context=new PostgresQueryContext(postgres.pool),store=new PostgresUsageAnalyticsStore(context),app=Fastify();
+const vite=await createServer({root,configFile:false,define:{"process.env":"{}"},plugins:[react()],server:{host:"127.0.0.1",port:0}});
+const browser=await chromium.launch({headless:true});
+try{
+  await runPostgresMigrations(postgres.pool);
+  const organizationId=randomUUID(),userId=randomUUID(),peerId=randomUUID(),sessionId=randomUUID(),now=new Date().toISOString();
+  const user={id:userId,organizationId,email:"usage-smoke@example.test",displayName:"林晓",role:"admin" as const,status:"active" as const,createdAt:now,updatedAt:now};
+  for(const [id,name] of [[userId,"林晓"],[peerId,"周宁"]]){
+    await postgres.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,$4,'admin','active',$5,$5)",[id,organizationId,id+"@example.test",name,now]);
+    await postgres.pool.query("INSERT INTO auth_identities(provider,corp_id,subject_id,user_id,created_at,last_login_at) VALUES('dingtalk',$1,$2,$2,$3,$3)",[organizationId,id,now]);
+  }
+  await postgres.pool.query("INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5)",[sessionId,userId,"b".repeat(64),now,new Date(Date.now()+86400000).toISOString()]);
+  app.decorateRequest("authPrincipal",null);app.addHook("preHandler",async request=>{request.authPrincipal={kind:"user",organizationId,userId,sessionId,role:"admin",email:user.email}});
+  registerAdminUserPresenceRoutes(app,new PostgresAdminUserPresenceStore(context),()=>new Date(),{canView:async()=>true},store);
+  registerUsageAnalyticsRoutes(app,store,{canView:async()=>true});
+  await vite.listen();const address=vite.httpServer!.address();assert.ok(address&&typeof address!=="string");
+  const origin="http://127.0.0.1:"+address.port,page=await browser.newPage({viewport:{width:1440,height:1050}});
+  const errors:string[]=[],activity:number[]=[];page.on("pageerror",e=>errors.push(e.message));
+  await page.route("**/api/agent/**",async route=>{
+    const url=new URL(route.request().url()),path=url.pathname.replace("/api/agent","")+url.search;
+    if(path==="/v1/auth/session")return route.fulfill({json:{authenticated:true,user,sessionIdentity:"A".repeat(43),canViewUserPresence:true}});
+    if(path.startsWith("/v1/auth/dingtalk"))return route.fulfill({status:404,json:{error:{code:"NOT_FOUND",message:"fixture"}}});
+    const body=route.request().postData()??undefined;
+    if(path==="/v1/auth/activity")activity.push(Date.now());
+    const response=await app.inject({method:route.request().method() as "GET"|"POST",url:path,headers:body?{"content-type":"application/json"}:{},payload:body});
+    return route.fulfill({status:response.statusCode,contentType:"application/json",body:response.body});
+  });
+  await page.goto(origin+"/tests/fixtures/usage-analytics/index.html");
+  await page.getByRole("heading",{name:"用户与使用统计",exact:true}).waitFor();
+  await page.getByRole('table',{name:'人员列表',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'登录记录',exact:true}).count(),2);
+  await page.getByRole('searchbox',{name:'搜索人员'}).fill('周宁');
+  await page.waitForFunction(()=>document.querySelectorAll('button[aria-expanded]').length===1);
+  await page.getByRole('searchbox',{name:'搜索人员'}).fill('');
+  await page.waitForFunction(()=>document.querySelectorAll('button[aria-expanded]').length===2);
+  await page.getByRole("button",{name:"使用统计",exact:true}).click();
+  await page.getByRole("button",{name:"林晓",exact:true}).waitFor();
+  for(const [label,period] of [["周","week"],["月","month"],["日","day"]]){
+    const loaded=page.waitForResponse(r=>r.url().includes("/v1/admin/usage?")&&new URL(r.url()).searchParams.get("period")===period&&r.status()===200);
+    await page.getByRole("button",{name:label,exact:true}).click();await loaded;
+  }
+  const search=page.getByRole("combobox",{name:"搜索钉钉人员姓名或标识"});
+  await search.fill("林");
+  await page.getByRole("option").filter({hasText:"林晓"}).waitFor();
+  assert.equal(await page.locator("mark").first().innerText(),"林");
+  await mkdir(root+"/.superpowers/sdd",{recursive:true});
+  await page.screenshot({path:root+"/.superpowers/sdd/usage-search-live.png",fullPage:true});
+  await search.press("ArrowDown");await search.press("Enter");
+  await page.waitForFunction(()=>!document.querySelector('button[role="option"]'));
+  assert.equal(await page.getByRole("button",{name:"周宁",exact:true}).count(),0);
+  await search.fill("不存在");
+  await page.getByText("未找到匹配人员，请更换关键词。").waitFor();
+  await search.press("Escape");assert.equal(await search.inputValue(),"林晓");
+  await page.getByRole("button",{name:"清空人员筛选"}).click();await page.getByRole("button",{name:"周宁",exact:true}).waitFor();
+  await search.press("Escape");
+  await page.getByLabel("选择统计年月日").fill("2025-08-12");await page.getByText(/所选日期尚未开始采集/).waitFor();
+  await page.getByLabel("选择统计年月日").fill(beijingToday());await page.getByRole("button",{name:"林晓",exact:true}).click();
+  await page.getByRole("heading",{name:"林晓 · 页面明细"}).waitFor();
+  await page.getByRole("button",{name:"收起明细"}).click();
+  await page.waitForTimeout(3200);
+  const flushed=page.waitForResponse(r=>r.url().endsWith("/v1/auth/activity")&&r.status()===200);
+  await page.evaluate('Object.defineProperty(document,"visibilityState",{configurable:true,get:()=>"hidden"});document.dispatchEvent(new Event("visibilitychange"))');
+  await flushed;
+  const report=await store.report(organizationId,{period:"day",date:beijingToday()},new Date().toISOString());
+  assert.ok(report.totals.visits>=2);assert.ok(report.totals.visibleMs>0);assert.ok(activity.length<=3);
+  await page.evaluate('Object.defineProperty(document,"visibilityState",{configurable:true,get:()=>"visible"});document.dispatchEvent(new Event("visibilitychange"))');
+  await page.getByRole("button",{name:"刷新",exact:true}).click();
+  await page.screenshot({path:root+"/.superpowers/sdd/usage-page-live.png",fullPage:true});
+  await page.setViewportSize({width:390,height:850});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.deepEqual(errors,[]);
+  const queueChecks=await page.evaluate(`(async()=>{
+    const {UsageQueue}=await import('/app/lib/usage-analytics-queue.ts');
+    const a=new UsageQueue('queue-fixture-a'),same=new UsageQueue('queue-fixture-a'),b=new UsageQueue('queue-fixture-b');
+    const event={eventId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',kind:'visit',pageKey:'overview',at:new Date().toISOString()};
+    await a.append([event]);
+    const isolated=(await b.read()).length===0,shared=(await same.read()).length===1;
+    const now=Date.now(),claims=await Promise.all([a.claim(now,600000),same.claim(now,600000)]);
+    await same.ack([event.eventId]);await a.ack([event.eventId]);
+    const acknowledged=(await a.read()).length===0;
+    await a.append([{...event,at:new Date(now-86400001).toISOString()}]);
+    const expired=(await a.read(now)).length===0;
+    return {isolated,shared,singleSender:claims.filter(Boolean).length===1,acknowledged,expired};
+  })()`);
+  assert.deepEqual(queueChecks,{isolated:true,shared:true,singleSender:true,acknowledged:true,expired:true});
+  // Representative 100-user batch replay, with at most 10 simultaneous writes.
+  const loadOrg=randomUUID(),rows=Array.from({length:100},(_,i)=>({id:randomUUID(),session:randomUUID(),name:"Load "+i}));
+  await postgres.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) SELECT x.id,$1,x.id||'@load.test',x.name,'member','active',$2,$2 FROM jsonb_to_recordset($3::jsonb) x(id text,name text)",[loadOrg,now,JSON.stringify(rows)]);
+  await postgres.pool.query("INSERT INTO auth_identities(provider,corp_id,subject_id,user_id,created_at,last_login_at) SELECT 'dingtalk',$1,x.id,x.id,$2,$2 FROM jsonb_to_recordset($3::jsonb) x(id text)",[loadOrg,now,JSON.stringify(rows)]);
+  await postgres.pool.query("INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at) SELECT x.session,x.id,repeat(x.id,2),$1,$2 FROM jsonb_to_recordset($3::jsonb) x(id text,session text)",[now,new Date(Date.now()+86400000).toISOString(),JSON.stringify(rows)]);
+  const baselineStart=performance.now();for(let i=0;i<20;i++)await postgres.pool.query("SELECT 1");const baselineMs=(performance.now()-baselineStart)/20;
+  const latencies:number[]=[],loadStart=performance.now();
+  for(let offset=0;offset<100;offset+=10)await Promise.all(rows.slice(offset,offset+10).map(async r=>{
+    const start=performance.now(),end=Date.now(),events=Array.from({length:40},(_,i)=>({eventId:randomUUID(),kind:"duration" as const,pageKey:"overview" as const,metric:"active" as const,startedAt:new Date(end-(40-i)*15000).toISOString(),endedAt:new Date(end-(39-i)*15000).toISOString()}));
+    await store.ingest({organizationId:loadOrg,userId:r.id,sessionId:r.session},{version:1,tabId:randomUUID(),accountKey:JSON.stringify([loadOrg,r.id]),observedAt:new Date(end).toISOString(),events},new Date().toISOString());latencies.push(performance.now()-start);
+  }));
+  latencies.sort((a,b)=>a-b);
+  console.log(JSON.stringify({status:"PASS",checks:["real browser -> authenticated routes -> isolated PostgreSQL","person search/highlight/clear","calendar/history/details","hidden flush and duplicate suppression","390px layout"],load:{users:100,events:4000,concurrency:10,elapsedMs:Math.round(performance.now()-loadStart),p95Ms:Math.round(latencies[94]),baselineQueryMs:Number(baselineMs.toFixed(2)),failures:0}},null,2));
+}finally{await browser.close();await vite.close();await app.close();await postgres.close()}

@@ -1,0 +1,68 @@
+/* Shape-only adaptations of the supplied query, dashboard and report layout. */
+.market-shape-reference { display: grid; gap: 20px; min-width: 0; }
+.market-shape-reference > * { min-width: 0; }
+.market-shape-reference .ss-market-query { padding: 16px 18px; }
+.market-shape-reference .market-shape-query-months { margin: 10px 0; gap: 14px; font-size: 12px; }
+.market-shape-reference .market-shape-query-months > span { width: 82px; color: #64748b; }
+.market-shape-reference .market-shape-query-months label { display: inline-flex; align-items: center; gap: 6px; }
+.market-shape-reference .market-shape-query-months input { min-height: 30px; padding: 4px 6px; font-size: 12px; }
+.market-shape-reference .market-shape-query-options { font-size: 12px; margin: 8px 0 0 96px; }
+.market-shape-reference .market-shape-query-options summary,
+.market-shape-reference .market-shape-query-footer summary,
+.market-shape-reference .market-shape-task-details summary { cursor: pointer; color: #60708a; }
+.market-shape-reference .market-shape-query-options > label { display: grid; gap: 6px; margin-top: 10px; }
+.market-shape-reference .market-shape-query-options .market-shape-pool-size { display: flex; align-items: center; gap: 10px; }
+.market-shape-reference .market-shape-pool-size input { width: 70px; }
+.market-shape-reference .market-shape-query-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; font-size: 12px; }
+.market-shape-reference .market-shape-query-footer details { margin: 0; }
+.market-shape-reference .market-shape-query-footer details[open] { flex-basis: 100%; }
+.market-shape-reference .market-shape-query-footer .ghost-btn { padding: 5px 9px; font-size: 12px; }
+.market-shape-reference .market-shape-revision-controls { padding: 14px 18px; }
+.market-shape-reference .market-shape-revision-controls h3 { margin: 0 0 8px; font-size: 14px; }
+.market-shape-reference .market-shape-task-details { font-size: 12px; margin: 0; }
+.market-shape-reference .market-shape-task-details p { margin: 8px 0; }
+.market-shape-reference .market-shape-revision-controls .market-theme-actions { margin: 10px 0 6px; }
+.market-shape-reference .market-shape-revision-controls .market-theme-actions label { display: inline-flex; gap: 7px; align-items: center; font-size: 12px; }
+.market-shape-reference .market-shape-revision-controls .market-theme-actions input { min-height: 32px; padding: 5px 8px; width: 150px; }
+.market-shape-reference .market-shape-revision-controls .market-research-note { margin: 6px 0 0; }
+.market-shape-reference .market-theme-version { margin: 0; justify-content: flex-end; font-size: 12px; }
+.market-shape-reference-report .market-shape-report-summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 2px; }
+.market-shape-reference-report .market-shape-report-summary h3 { margin: 0 0 5px; font-size: 15px; }
+.market-shape-reference-report .market-shape-report-summary p { margin: 0; font-size: 12px; color: #64748b; }
+.market-shape-reference-report .market-shape-report-coverage { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: #475569; }
+.market-shape-reference-report .market-shape-report-evidence { background: #f8fafd; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-wrap: anywhere; }
+.market-shape-reference-report .market-shape-report-evidence summary { cursor: pointer; font-weight: 600; color: #536780; }
+.market-shape-reference-report .market-shape-source-policy { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafd; font-size: 12px; }
+.market-shape-reference-report .market-shape-source-policy p { margin: 5px 0; }
+.market-shape-reference .market-shape-structure { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.market-shape-reference .market-shape-structure > * { min-width: 0; }
+.market-shape-reference .market-shape-structure > h3 { margin: 0; font-size: 15px; }
+.market-shape-reference .market-shape-structure > p { margin: 0; font-size: 12px; color: #64748b; }
+.market-shape-reference .market-shape-structure > label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.market-shape-reference .market-shape-structure > label select { padding: 5px 8px; border: 1px solid #dbe3ef; border-radius: 5px; }
+.market-shape-reference .market-shape-structure-source { font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+ .market-shape-reference .market-shape-query-months { gap: 8px; }
+ .market-shape-reference .market-shape-query-months > span { width: 100%; }
+ .market-shape-reference .market-shape-query-options { margin-left: 0; }
+ .market-shape-reference .market-shape-revision-controls .market-theme-actions label { flex-wrap: wrap; }
+ .market-shape-reference-report .market-shape-report-summary { align-items: flex-start; }
+ .market-shape-reference-report .market-shape-report-coverage { gap: 6px; }
+}
+
+/* Saved prose occupies the original conclusion cards; no client scoring colours. */
+.market-shape-reference .market-shape-saved-conclusion { font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.market-shape-reference .market-shape-saved-conclusion h5 { margin: 8px 0; font-size: 12px; }
+.market-shape-reference .market-shape-saved-conclusion ul { margin: 6px 0; padding-left: 20px; }
+.market-shape-reference .market-structure-dimension-card { min-width: 0; overflow-wrap: anywhere; }
+.market-shape-reference .market-structure-dimension-card > p { font-size: 12px; line-height: 1.65; }
+.market-shape-reference .market-structure-synthesis-extra h5 { margin: 0 0 8px; }
+.market-shape-reference .market-shape-structure .launch-section { margin: 0; }
+
+/* Leave room to reach evidence and row actions after scrolling on a phone. */
+@media (max-width: 640px) {
+ .market-shape-reference .market-shape-table [data-column-id="product-1"] {
+  position: static !important;
+  left: auto !important;
+ }
+}

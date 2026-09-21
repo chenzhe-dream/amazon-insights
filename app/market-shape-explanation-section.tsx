@@ -1,9 +1,11 @@
 'use client';
+import { browserRequestId } from "./lib/browser-request-id";
 import {useEffect,useState,useRef} from 'react';
 import type {z} from 'zod';
 import type {MarketShapeExplanationLinkSchema} from '../shared/market-shape-public-contracts';
 import type {MarketShapeExplanationRunResponseSchema} from '../shared/market-shape-explanation-public-contracts';
 import {readShapeRevisionAnalysis,readShapeExplanation,retryShapeSteps,cancelShapeRun} from './lib/market-shape-browser';
+import type { MarketShapeExplanationPresentation } from '../shared/market-shape-explanation-presentation';
 import {MarketShapeExplanationReport} from './market-shape-explanation-report';
 
 type Link=z.infer<typeof MarketShapeExplanationLinkSchema>;
@@ -14,7 +16,7 @@ const active=(run:Run)=>run.status!=='cancelled'&&run.steps.some(s=>s.current&&[
 
 /** Parent/revision changes remount this owner; old responses cannot populate a
  * different revision. Reading this region never starts or retries an analysis. */
-export function MarketShapeExplanationSection({parentRunId,revisionId,paused=false,unavailableReason=null}:{parentRunId:string;revisionId:string;paused?:boolean;unavailableReason?:string|null}){
+export function MarketShapeExplanationSection({parentRunId,revisionId,paused=false,unavailableReason=null,onPresentation}:{onPresentation?:(value:MarketShapeExplanationPresentation|null)=>void;parentRunId:string;revisionId:string;paused?:boolean;unavailableReason?:string|null}){
  const [links,setLinks]=useState<Link[]|null>(null),[selected,setSelected]=useState(''),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
  useEffect(()=>{if(paused)return;const abort=new AbortController();void readShapeRevisionAnalysis(parentRunId,revisionId,abort.signal).then(result=>{
   if(abort.signal.aborted)return;const next=result.explanations??[];setLinks(next);setSelected(current=>next.some(l=>l.moduleRunId===current)?current:next[0]?.moduleRunId??'');setReadError(null);
@@ -27,12 +29,14 @@ export function MarketShapeExplanationSection({parentRunId,revisionId,paused=fal
   <div className="market-theme-actions">{links&&links.length>1&&<label>分析记录 <select aria-label="形态解释分析记录" value={selected} onChange={e=>setSelected(e.target.value)}>{links.map(l=><option key={l.moduleRunId} value={l.moduleRunId}>{l.createdAt.replace('T',' ').replace(/\.\d+Z$|Z$/,' UTC')}</option>)}</select></label>}<button className="ghost-btn" onClick={refresh} disabled={paused}>刷新解释状态</button></div>
   {!links&&!readError&&<p role="status">正在读取此版本的分析记录…</p>}
   {links?.length===0&&<p>{unavailableReason??'此版本尚未创建解释分析，已保存统计仍可查看。'}</p>}
-  {selected&&<ExplanationRun key={`${parentRunId}/${revisionId}/${selected}`} id={selected} revisionId={revisionId} reload={reload} paused={paused||!!readError}/>}
+  {selected&&<ExplanationRun key={`${parentRunId}/${revisionId}/${selected}`} id={selected} revisionId={revisionId} reload={reload} paused={paused||!!readError} onPresentation={onPresentation}/>}
  </section>;
 }
 
-function ExplanationRun({id,revisionId,reload,paused}:{id:string;revisionId:string;reload:number;paused:boolean}){
+function ExplanationRun({id,revisionId,reload,paused,onPresentation}:{onPresentation?:(value:MarketShapeExplanationPresentation|null)=>void;id:string;revisionId:string;reload:number;paused:boolean}){
  const [run,setRun]=useState<Run|null>(null),[readError,setReadError]=useState<string|null>(null),[actionError,setActionError]=useState<string|null>(null),[busy,setBusy]=useState(false),[refresh,setRefresh]=useState(0);
+ useEffect(()=>{onPresentation?.(run?.presentation??null)},[run?.presentation,onPresentation]);
+ useEffect(()=>()=>{onPresentation?.(null)},[onPresentation]);
  const owner=useRef<AbortController|null>(null);
  useEffect(()=>{const abort=new AbortController();owner.current=abort;return()=>{abort.abort();owner.current=null}},[]);
  useEffect(()=>{if(paused)return;const abort=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
@@ -40,7 +44,7 @@ function ExplanationRun({id,revisionId,reload,paused}:{id:string;revisionId:stri
   void read();return()=>{abort.abort();if(timer)clearTimeout(timer)};
  },[id,revisionId,reload,refresh,paused]);
  async function action(kind:'retry'|'cancel',step?:Run['steps'][number]){const signal=owner.current?.signal;if(!signal||busy||readError||paused)return;setBusy(true);setActionError(null);
-  try{if(kind==='retry'&&step?.latestAttemptId)await retryShapeSteps(id,[{stepId:step.id,failedAttemptId:step.latestAttemptId}],crypto.randomUUID(),signal);else if(kind==='cancel')await cancelShapeRun(id,crypto.randomUUID(),signal);
+  try{if(kind==='retry'&&step?.latestAttemptId)await retryShapeSteps(id,[{stepId:step.id,failedAttemptId:step.latestAttemptId}],browserRequestId(),signal);else if(kind==='cancel')await cancelShapeRun(id,browserRequestId(),signal);
    signal.throwIfAborted();setRefresh(n=>n+1);
   }catch(e){if(!signal.aborted)setActionError(e instanceof Error?e.message:'操作失败，已保存数据保留')}
   finally{if(!signal.aborted)setBusy(false)}

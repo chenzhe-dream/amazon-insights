@@ -9,6 +9,8 @@ import type { MarketAnalysisScope } from "../../shared/market-analysis-contracts
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { performance } from "node:perf_hooks";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
+import { createRemoteMcpConnector } from '../../server/connectors/remote-mcp-connector';
+import { ConnectorError } from '../../server/connectors/connector-contract';
 
 test("market module execution persists independent runs and database-clock fenced leases", { timeout: 90_000 }, async t => {
   const pg = await startPostgresTestContainer(); t.after(() => pg.close());
@@ -26,6 +28,41 @@ test("market module execution persists independent runs and database-clock fence
   const sourceInput = (tag=randomUUID()) => ({scope,provider:"sorftime",operation:"product_customers_say",requestIdentity:{marketplace:"US"},responseIdentityPaths:{},payload:{tag,data:{details:[]}},fetchedAt:new Date().toISOString(),observationPeriod:{kind:"unknown",reason:"fixture window unknown"},units:{},coverage:{receivedCount:0,expectedCount:null,truncation:{status:"unknown",reason:"fixture"}}});
   const inputSnapshot = () => ({scope,kind:"products",sourceVersion:"fixture/v1",ruleVersion:"rules/v1",collectedAt:new Date().toISOString(),expectedRecordIds:["B000000001"],records:[{id:"B000000001",scope,data:{units:0}}]});
   const success = {status:"succeeded" as const,output:{observed:0}};
+
+  await t.test('ambiguous dispatched connector timeout stops durable automatic retries but permits explicit retry', async () => {
+    let dispatches=0;
+    const connector=createRemoteMcpConnector({id:'sellerSprite',physicalGovernance:'transport-dispatch',resolveCredential:async()=> 'fixture',clock:()=>new Date(),sleep:async()=>assert.fail('no immediate retry'),
+      policy:{timeoutMs:1000,maxAttempts:2,retryDelayMs:0,maxConcurrent:1,maxQueue:1},probeTransport:async()=>({}),
+      transport:async()=>{dispatches++;throw Object.assign(new Error('ambiguous transport'),{kind:'timeout',doNotRetry:true});}});
+    let failure:ConnectorError|undefined;
+    try { await connector.execute({operation:'fixture',input:{},sessionScope:'market',governorScope:{organizationId:actor.organizationId,jobId:'fixture'}}); }
+    catch(error) { assert.ok(error instanceof ConnectorError); failure=error; }
+    assert.ok(failure);assert.equal(failure.code,'timeout');assert.equal(failure.retryable,false);assert.equal(dispatches,1);
+    const run=(await store.createModuleRun({...request(),initialSteps:[step('ambiguous-timeout')]})).run;
+    const active=await claim(run.id);assert.ok(active);
+    await store.settleAndEnqueue({claim:active,outcome:{status:'failed',error:{code:'timeout',retryable:failure.retryable}}});
+    assert.equal(await claim(run.id),null);
+    await store.retryFailedSteps({actor,moduleRunId:run.id,steps:[{stepId:active.stepId,failedAttemptId:active.attemptId}],idempotencyKey:randomUUID()});
+    const manual=await claim(run.id);assert.ok(manual);await store.settleAndEnqueue({claim:manual,outcome:success});
+  });
+
+  await t.test('local cooldown is durable, refunds failure budget, rechecks once and cancels safely',async()=>{
+    const run=(await store.createModuleRun({...request(),initialSteps:[step('waiting'),step('sibling')]})).run;
+    const first=await claim(run.id);assert.ok(first);
+    const sibling=await claim(run.id);assert.ok(sibling);await store.settleAndEnqueue({claim:sibling,outcome:success});
+    for(let round=0;round<4;round++){
+      const active=round===0?first:await claim(run.id);assert.ok(active);
+      const retryAt=new Date(Date.now()+60000).toISOString();
+      await store.settleAndEnqueue({claim:active,outcome:{status:'failed',error:{code:'local-admission',retryable:true,admission:{reason:'rolling-window',retryAt}}}});
+      const view=await store.findModuleRun({actor,moduleRunId:run.id});assert.equal(view!.steps.find(s=>s.id===first.stepId)!.status,'queued');
+      assert.ok(Date.parse(view!.steps.find(s=>s.id===first.stepId)!.nextAttemptAt!)>=Date.parse(retryAt));
+      assert.equal(view!.steps.find(s=>s.id===sibling.stepId)!.attemptCount,1);
+      assert.equal(await claim(run.id),null);
+      const row: {round_attempt_count:number}=(await pg.pool.query('SELECT round_attempt_count FROM market_analysis_steps WHERE id=$1',[first.stepId])).rows[0];assert.equal(row.round_attempt_count,0);
+      await pg.pool.query("UPDATE market_analysis_steps SET next_attempt_at=clock_timestamp() WHERE id=$1",[first.stepId]);
+    }
+    await store.cancelModuleRun({actor,moduleRunId:run.id,idempotencyKey:randomUUID()});assert.equal(await claim(run.id),null);
+  });
 
   await t.test('flow-specific consumers skip legacy jobs while still claiming unrelated step kinds',async()=>{
     const legacy={stepKey:'legacy-reconcile',kind:'reconcile' as const,subject:{},input:{task:'legacy-task'},inputRefs:[]};

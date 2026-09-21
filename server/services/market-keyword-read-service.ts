@@ -34,8 +34,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
     const { flow: _flow, ...params } = MarketKeywordFlowParamsSchema.parse(view.run.params);
     void _flow;
     // Cancellation stops execution, not access to the last durable input/result.
-    const readable = view.run.status === 'cancelled' ? { ...view, run: { ...view.run, status: 'partial' as const } } : view;
-    const current = new Set(inspectMarketKeywordContinuation(readable, new Date().toISOString()).currentStepKeys);
+    const current = new Set(inspectMarketKeywordContinuation(view, new Date().toISOString(), { readCancelled: true }).currentStepKeys);
     const readScope = { actor, studyId: view.run.scope.researchId, moduleRunId: id };
     const receipts = new Map((await context.query<{ id: string; receipt_json: unknown }>(
       'SELECT id,receipt_json FROM market_analysis_step_attempts WHERE organization_id=$1 AND run_id=$2', [actor.organizationId, id])).rows.map(r => [r.id, obj(r.receipt_json)]));
@@ -73,7 +72,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
       for(const step of view.steps.filter(s=>current.has(s.stepKey)&&s.kind==='collect-keyword-aba')){
         const input=z.object({members:z.array(z.object({keywordId:z.string(),keyword:z.string()})),referenceMonth:z.string()}).parse(step.input);
         const attempt=view.attempts.find(a=>a.id===step.latestAttemptId&&a.stepId===step.id);
-        let base:Omit<NonNullable<MarketKeywordFacts['members'][number]['aba']>,'member'>={status:step.status==='failed'?'failed':step.status==='cancelled'||view.run.status==='cancelled'?'cancelled':'pending',stepId:step.id,attemptId:attempt?.id??null,
+        let base:Omit<NonNullable<MarketKeywordFacts['members'][number]['aba']>,'member'>={status:step.status==='failed'?(view.run.scope.marketplace!=='US'?'unsupported':'failed'):step.status==='cancelled'||view.run.status==='cancelled'?'cancelled':'pending',stepId:step.id,attemptId:attempt?.id??null,
           inputSnapshotId:null,sourceRef:null,fetchedAt:null,referenceMonth:input.referenceMonth,sourceScope:'exact-keyword-marketplace',nodeBinding:'not-provided'};
         let checked:ReturnType<typeof readMarketKeywordAbaEvidence>|undefined;
         if(successful(step.status)){
@@ -156,7 +155,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
     }
     return MarketKeywordRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, params, facts,
       steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status,
-        latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled',
-        asin: null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
+        latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled' && !(s.kind==='collect-keyword-aba'&&view.run.scope.marketplace!=='US'),
+        asin: null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? s.kind==='collect-keyword-aba'&&view.run.scope.marketplace!=='US'?'unsupported-marketplace':obj(a?.error).code ?? 'internal' : null }; }) } });
   });
 }

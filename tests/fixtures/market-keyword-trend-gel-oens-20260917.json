@@ -1,0 +1,106 @@
+{
+  "request": {
+    "operation": "keyword_trend",
+    "input": {
+      "keyword": "gel oens",
+      "keyword_support_site": "US"
+    }
+  },
+  "result": {
+    "data": {
+      "doc": {
+        "keyword": "The queried keyword text.",
+        "search_volume_trend": "Array of monthly search-volume trend; each element is a text of \"yyyy-MM search volume N\" arranged by month.",
+        "search_rank_trend": "Array of monthly search-rank trend; each element is a text of \"yyyy-MM search rank N\" arranged by month.",
+        "recommended_bid_trend": "Array of recommended-bid trend; each element is a text of \"yyyy-MM CPC recommended bid N\" arranged by month."
+      },
+      "data": {
+        "keyword": "gel oens",
+        "search_volume_trend": [
+          "2024-09 search volume 668",
+          "2024-10 search volume 682",
+          "2024-11 search volume 1494",
+          "2024-12 search volume 5212",
+          "2025-01 search volume 1816",
+          "2025-02 search volume 1157",
+          "2025-03 search volume 879",
+          "2025-04 search volume 1056",
+          "2025-05 search volume 802",
+          "2025-06 search volume 761",
+          "2025-07 search volume 3904",
+          "2025-08 search volume 4061",
+          "2025-09 search volume 1046",
+          "2025-10 search volume 1015",
+          "2025-11 search volume 4772",
+          "2025-12 search volume 10624",
+          "2026-01 search volume 3943",
+          "2026-02 search volume 2379",
+          "2026-03 search volume 1412",
+          "2026-04 search volume 1414",
+          "2026-05 search volume 961",
+          "2026-06 search volume 1359",
+          "2026-07 search volume 4047",
+          "2026-08 search volume 6553"
+        ],
+        "search_rank_trend": [
+          "2024-09 search rank 666023",
+          "2024-10 search rank 657540",
+          "2024-11 search rank 515162",
+          "2024-12 search rank 376414",
+          "2025-01 search rank 491857",
+          "2025-02 search rank 535168",
+          "2025-03 search rank 587628",
+          "2025-04 search rank 565162",
+          "2025-05 search rank 597387",
+          "2025-06 search rank 621378",
+          "2025-07 search rank 428967",
+          "2025-08 search rank 409723",
+          "2025-09 search rank 574335",
+          "2025-10 search rank 583757",
+          "2025-11 search rank 431308",
+          "2025-12 search rank 301033",
+          "2026-01 search rank 406485",
+          "2026-02 search rank 455067",
+          "2026-03 search rank 519487",
+          "2026-04 search rank 519187",
+          "2026-05 search rank 576576",
+          "2026-06 search rank 523295",
+          "2026-07 search rank 397765",
+          "2026-08 search rank 337092"
+        ],
+        "recommended_bid_trend": [
+          "2024-10 CPC recommended bid 0.62",
+          "2024-11 CPC recommended bid -1.00",
+          "2024-12 CPC recommended bid -1.00",
+          "2025-01 CPC recommended bid -1.00",
+          "2025-02 CPC recommended bid -1.00",
+          "2025-03 CPC recommended bid -1.00",
+          "2025-04 CPC recommended bid -1.00",
+          "2025-05 CPC recommended bid -1.00",
+          "2025-06 CPC recommended bid -1.00",
+          "2025-07 CPC recommended bid -1.00",
+          "2025-08 CPC recommended bid -1.00",
+          "2025-09 CPC recommended bid -1.00",
+          "2025-10 CPC recommended bid 0.62",
+          "2025-11 CPC recommended bid 0.44",
+          "2025-12 CPC recommended bid 0.75",
+          "2026-01 CPC recommended bid -1.00",
+          "2026-02 CPC recommended bid -1.00",
+          "2026-03 CPC recommended bid 0.63",
+          "2026-04 CPC recommended bid -1.00",
+          "2026-05 CPC recommended bid -1.00",
+          "2026-06 CPC recommended bid -1.00",
+          "2026-07 CPC recommended bid -1.00",
+          "2026-07 CPC recommended bid -1.00",
+          "2026-08 CPC recommended bid -1.00"
+        ]
+      }
+    },
+    "source": {
+      "connectorId": "sorftime",
+      "operation": "keyword_trend",
+      "fetchedAt": "2026-09-17T01:23:04.554Z",
+      "attemptCount": 1
+    }
+  }
+}

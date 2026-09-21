@@ -1,0 +1,9 @@
+.listingImageActions_actions { margin-top: 6px; position: relative; text-align: left; }
+.listingImageActions_trigger { padding: 4px 8px; font-size: 11px; line-height: 1.4; color: #2868b5; background: #f5f9ff; border: 1px solid #c8dbf6; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.listingImageActions_trigger:hover:not(:disabled) { background: #eaf2ff; border-color: #8bb5f1; }
+.listingImageActions_trigger:disabled { opacity: .55; cursor: default; }
+.listingImageActions_trigger:focus-visible, .listingImageActions_options button:focus-visible { outline: 2px solid #3684ff; outline-offset: 2px; }
+.listingImageActions_options { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding: 4px; border: 1px solid #d9e4f3; border-radius: 6px; background: white; min-width: 110px; }
+.listingImageActions_options button { border: 0; background: transparent; color: #29445f; text-align: left; padding: 6px 4px; font-size: 11px; cursor: pointer; border-radius: 4px; }
+.listingImageActions_options button:hover { background: #edf4ff; }
+.listingImageActions_message { display: block; max-width: 150px; margin-top: 5px; font-size: 10px; line-height: 1.5; color: #627692; font-weight: normal; }

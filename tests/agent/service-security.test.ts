@@ -480,7 +480,7 @@ test("Web preflight readiness stays degraded without an exact trusted formal ori
     requestUrl: `${preflightOrigin}/api/health`,
     fetchImplementation: async () => {
       malformedFetches += 1;
-      return Response.json(readyReadiness());
+      throw new Error("Malformed readiness origin must not dispatch");
     },
   });
 

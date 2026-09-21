@@ -1,3 +1,6 @@
+import type {PresenceQuery} from '../../shared/admin-user-presence-query';
+import type {AdminUserPresenceResponse} from '../../shared/agent-contracts';
+
 export type AdminUserPresenceHeartbeatResult =
   | "recorded"
   | "throttled"
@@ -11,6 +14,7 @@ export type AdminUserPresenceRecentLoginFact = Readonly<{
 }>;
 
 export type AdminUserPresenceUserFact = Readonly<{
+  source?: 'dingtalk' | 'local';
   account: string;
   displayName: string;
   role: "admin" | "member";
@@ -25,11 +29,14 @@ export type AdminUserPresenceUserFact = Readonly<{
 }>;
 
 export type AdminUserPresenceReadInput = Readonly<{
+  query?: PresenceQuery;
   organizationId: string;
   asOf: string;
 }>;
 
 export type AdminUserPresenceReadResult = Readonly<{
+  pagination?: AdminUserPresenceResponse['pagination'];
+  summary?: AdminUserPresenceResponse['summary'];
   users: readonly AdminUserPresenceUserFact[];
 }>;
 

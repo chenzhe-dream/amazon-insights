@@ -176,7 +176,7 @@ test("trend requested month gaps stay missing instead of borrowing latest source
   assert.equal(result.months[1].yoyGrowth.reason, "missing-current");
 });
 
-test("identical duplicate month is explicit; conflicting duplicate rejects the response", async () => {
+test("identical duplicate month is explicit; conflicting duplicate invalidates only its metric month", async () => {
   const payload = trend(); payload.data.recommended_bid_trend.push("2026-08 CPC recommended bid 1.25");
   const same = await collectMarketKeywordTrend(trendInput(mock(payload).connector), now);
   assert.equal(same.status, "partial");
@@ -184,11 +184,11 @@ test("identical duplicate month is explicit; conflicting duplicate rejects the r
   assert.ok(same.issues.some(issue => issue.code === "duplicate-month"));
   payload.data.recommended_bid_trend.push("2026-08 CPC recommended bid 2.25");
   const different = await collectMarketKeywordTrend(trendInput(mock(payload).connector), now);
-  assert.equal(different.status, "failed");
-  if (different.status === "failed") {
-    assert.ok(different.issues.some(issue => issue.code === "conflicting-month"));
-    assert.deepEqual(different.rawPayload, payload);
-  }
+  assert.equal(different.status, "partial");
+  assert.ok(different.issues.some(issue => issue.code === "conflicting-month"));
+  assert.deepEqual(different.evidence.payload, payload);
+  assert.equal(different.months[0].recommendedBid.value, null);
+  assert.equal(different.months[0].searchVolume.value, 180);
 });
 
 test("trend rejects malformed month, wrong label, negative/fractional/unsafe counts and trailing text", async () => {

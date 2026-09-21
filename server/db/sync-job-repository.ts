@@ -23,6 +23,7 @@ export interface SyncJobStageRecord {
   readonly completedAt?: string | null;
   readonly catalogProviderPlan?: CatalogProviderPlan;
   readonly repairAsins?: string[];
+  readonly imageAction?: "refresh" | "analyze";
   readonly repairParentJobId?: string;
   readonly repairXydcAsins?: string[];
 }

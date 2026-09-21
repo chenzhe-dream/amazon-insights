@@ -609,7 +609,24 @@ test("validation telemetry records each invalid output attempt without raw value
     logged.map((entry) => (entry as { attemptKind: unknown }).attemptKind),
     ["initial", "format-repair"],
   );
+  assert.deepEqual(logged.map(entry => Reflect.get(entry as object, 'diagnostic')),
+    [{stage:'schema',code:'contract_mismatch'},{stage:'schema',code:'contract_mismatch'}]);
   assert.doesNotMatch(JSON.stringify(logged), new RegExp(rawSentinel));
+});
+
+test('semantic diagnostics retain safe rule and field without changing the repair limit', async () => {
+  const provider=new FakeProvider();const logged: unknown[]=[];
+  const runner=await createRunnerWithOptions(provider,{validationLogger:(entry:unknown)=>logged.push(entry)} as never);
+  await assert.rejects(runSkill(runner,executionRequest({outputContract:{
+    name:'VocPositioningOutput@1.0.0',schema:outputSchema,
+    canonicalizeOutput:()=>{throw new z.ZodError([{code:'custom',path:['summary'],message:'PRIVATE_SOURCE_TEXT',params:{ruleId:'market-span-out-of-range'}}]);},
+  }})),(error:unknown)=>error instanceof SkillRuntimeError&&error.code==='MODEL_OUTPUT_ERROR');
+  assert.equal(provider.requests.length,2);
+  for(const entry of logged){
+    assert.deepEqual(Reflect.get(entry as object,'diagnostic'),{stage:'semantic',code:'evidence_mismatch'});
+    assert.deepEqual(Reflect.get(entry as object,'issues'),[{path:['summary'],code:'custom',ruleId:'market-span-out-of-range'}]);
+  }
+  assert.equal(logged.length,2);assert.doesNotMatch(JSON.stringify(logged),/PRIVATE_SOURCE_TEXT/);
 });
 
 test("validation telemetry keeps provider diagnostics bounded and raw-free", async () => {
@@ -1141,6 +1158,7 @@ test("second invalid output has no durable validation diagnostics", async () => 
 
 test("OpenAI raw JSON failures settle usage and receive exactly one runner format repair", async () => {
   const requests: Array<{ instructions?: string }> = [];
+  const diagnostics: unknown[] = [];
   const provider = new OpenAIProvider({
     client: {
       responses: {
@@ -1192,6 +1210,7 @@ test("OpenAI raw JSON failures settle usage and receive exactly one runner forma
     registry,
     provider,
     providerName: "openai",
+    validationLogger: entry => diagnostics.push(entry),
     budgetCoordinator: new FakeBudgetCoordinator(),
     sleep: async () => {},
   });
@@ -1199,6 +1218,7 @@ test("OpenAI raw JSON failures settle usage and receive exactly one runner forma
   const result = await runSkill(runner, executionRequest());
 
   assert.equal(requests.length, 2);
+  assert.deepEqual(diagnostics, [{event:"model_validation_failed",attemptKind:"initial",issueCount:0,issues:[],diagnostic:{stage:"json",code:"invalid_json"}}]);
   assert.doesNotMatch(requests[0].instructions ?? "", /repair/i);
   assert.match(requests[1].instructions ?? "", /repair/i);
   assert.equal(result.record.attemptCount, 2);

@@ -147,7 +147,8 @@ export function evaluateAnalysisAgentCandidate(input: Readonly<{
   const evalCase = input.case;
   const observationParse = ObservationSchema.safeParse(input.observation);
   const observation = observationParse.success ? observationParse.data : null;
-  const blocked = evalCase.snapshot.input.kind === "dependency-blocked-input";
+  const snapshotInput = evalCase.snapshot.input;
+  const blocked = snapshotInput.kind === "dependency-blocked-input";
   const structuralRuleIds = blocked
     ? []
     : structuralValidationRuleIds(input.candidate);
@@ -160,8 +161,8 @@ export function evaluateAnalysisAgentCandidate(input: Readonly<{
       input.candidate === undefined &&
       observation.providerDispatched === false &&
       observation.terminalStatus === "waiting-input" &&
-      evalCase.snapshot.input.missingDependencies.includes("voc") &&
-      evalCase.snapshot.input.missingDependencies.includes("keywords")
+      snapshotInput.missingDependencies.includes("voc") &&
+      snapshotInput.missingDependencies.includes("keywords")
     : true;
   const fallbackEffective = observation !== null && (blocked
     ? observation.selectedFallbackResult === true &&

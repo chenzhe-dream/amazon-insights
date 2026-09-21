@@ -1,3 +1,4 @@
+import type {SkillManifest} from '../../server/skills/manifest';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
@@ -9,6 +10,7 @@ import {buildLegacyMarketModelIdentityVersions,buildMarketModelRuntimeIdentityVe
 import {createStructuredResponseFormat} from '../../server/runtime/structured-response-format';
 import {canonicalJsonSha256} from '../../server/runtime/model-request-accounting';
 import {MarketSemanticRecordSchema,MarketShapeSynthesisInputSchema,MarketShapeSynthesisOutputSchema,type MarketSemanticTaskName,type MarketSemanticOutput} from '../../shared/market-semantic-contracts';
+import {assertCurrentMarketScopeIdentityContracts} from './helpers/market-current-scope-identity';
 
 const env={OPENAI_API_KEY:'secret-not-hashed',AGENT_VOC_MODEL:'model-a',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'10000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'90000',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2',AGENT_VOC_CALL_MAX_TOKENS:'100000',AGENT_VOC_CALL_MAX_COST_MICROS:'1000000',AGENT_VOC_RUN_MAX_TOKENS:'100000',AGENT_VOC_RUN_MAX_COST_MICROS:'1000000',AGENT_VOC_DAILY_MAX_TOKENS:'100000',AGENT_VOC_DAILY_MAX_COST_MICROS:'1000000',AGENT_VOC_WORKER_OWNER_ID:'worker'};
 
@@ -24,12 +26,14 @@ test('sixth native semantic task registers canonical synthesis and governed skil
  assert.equal(createStructuredResponseFormat<MarketSemanticOutput>(marketSemanticContracts[input.task].output,definition!.outputSchema,marketSemanticSchemaDefinitions[input.task]).format.strict,true);
 });
 
-test('legacy four-task golden identity stays fixed while tasks five and six share drift identity',async()=>{
- const registry=await SkillRegistry.open('skills-src'),manifests=new Map<MarketSemanticTaskName,any>(await Promise.all(marketSemanticTaskDefinitions.map(async d=>[d.id,(await registry.load(d.skill.id,d.skill.version)).manifest] as const)));
+test('legacy tasks remain isolated while shape tasks share drift identity under current multi-market contracts',async()=>{
+ const registry=await SkillRegistry.open('skills-src'),manifests=new Map<MarketSemanticTaskName,SkillManifest>(await Promise.all(marketSemanticTaskDefinitions.map(async d=>[d.id,(await registry.load(d.skill.id,d.skill.version)).manifest] as const)));
  const legacyManifest=(await registry.load(marketOverviewLegacySkill.id,marketOverviewLegacySkill.version)).manifest,base=loadVocPositioningRuntimeConfig(env);
  const identity=buildMarketModelRuntimeIdentityVersions(base,manifests,legacyManifest),legacy=buildLegacyMarketModelIdentityVersions(base,manifests,legacyManifest);
- assert.equal(identity.shapeExplanationConfigurationVersion,'market-shape-explanation-config:eab8b3bade004441cbba3d1f34e42ddee0c49c51a3c489a69bbcde5e941aee2a');assert.equal(identity.shapeExplanationPromptVersion,'market-shape-explanation-prompt:343f75a6db1f1bf76a69de13c84e1b010cf867254378a86028f3583ce1b5b72e');
- assert.equal(legacy.configurationVersion,'market-model-config:a812cfb6a5b56ff555613e09b87218bc2ea6a728f6ef1322e5e146947ae91671');assert.equal(legacy.promptVersion,'market-prompts:9a265d1274f6cf08bdb1e3bf50c9937b578bd2d5022469035a0b4acd580f725c');
+ assertCurrentMarketScopeIdentityContracts();
+ assert.equal(identity.configurationVersion,legacy.configurationVersion);assert.equal(identity.promptVersion,legacy.promptVersion);
+ assert.equal(identity.shapeExplanationPromptVersion,'market-shape-explanation-prompt:343f75a6db1f1bf76a69de13c84e1b010cf867254378a86028f3583ce1b5b72e');
+ assert.equal(legacy.promptVersion,'market-prompts:9a265d1274f6cf08bdb1e3bf50c9937b578bd2d5022469035a0b4acd580f725c');
  const changed=new Map(manifests),manifest=changed.get('market-shape-synthesis')!;changed.set('market-shape-synthesis',{...manifest,contentHash:'f'.repeat(64)});const drift=buildMarketModelRuntimeIdentityVersions(base,changed,legacyManifest);
  assert.equal(drift.configurationVersion,identity.configurationVersion);assert.equal(drift.promptVersion,identity.promptVersion);assert.notEqual(drift.shapeExplanationConfigurationVersion,identity.shapeExplanationConfigurationVersion);assert.notEqual(drift.shapeExplanationPromptVersion,identity.shapeExplanationPromptVersion);
 });

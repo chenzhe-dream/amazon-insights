@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdir,writeFile,readFile,access} from 'node:fs/promises';
+import {overviewRun,overviewRunId,overviewDistributionDetails} from './helpers/market-overview-page-fixture';
+import {chromium} from 'playwright';
+import {createServer} from 'vite';
+import react from '@vitejs/plugin-react';
+const reference=process.env.MARKET_UI_REFERENCE_ROOT?.replaceAll('\\','/') ?? 'C:/Users/EDY/.codex/project-notes/amazon-insights/ui-parity-20260914/reference';
+test('supplied frontend and candidate render at identical viewport with scoped reference styles',{timeout:180000},async t=>{
+ try{await access(reference+'/app/sellersprite-market-overview-section.tsx');}catch{t.skip('Set MARKET_UI_REFERENCE_ROOT to the extracted supplied frontend');return;}
+ const root=process.cwd().replaceAll('\\','/');const out='test-results/market-ui-parity';await mkdir(out,{recursive:true});
+ const server=await createServer({configFile:false,cacheDir:out+'/vite',define:{'process.env':'{}'},optimizeDeps:{noDiscovery:true,include:['react','react-dom/client','react/jsx-runtime']},plugins:[{name:'reference-css-runtime',enforce:'pre',async load(id){if(id.startsWith(reference)&&id.endsWith('/globals.css'))return (await readFile(id,'utf8')).replace('@import \"tailwindcss\";','');}},react()],resolve:{dedupe:['react','react-dom']},server:{host:'127.0.0.1',port:0,hmr:false,fs:{allow:[root,reference]},forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});const origin=server.resolvedUrls!.local[0].replace(/\/$/,'');
+ const modules=[['overview','sellersprite-market-overview-section','SellerSpriteMarketOverviewSection'],['shapes','sellersprite-market-structure-section','SellerSpriteMarketStructureSection'],['keywords','market-traffic-keyword-section','MarketTrafficKeywordSection'],['themes','market-category-review-insight-section','MarketCategoryReviewInsightSection']];
+ const observations:Array<{mode:string;view:string;errors:string[];query:{padding:string;borderRadius:string;width:number}}>=[];
+ for(const [view,file,component] of modules){
+  for(const mode of ['reference','candidate']){
+   const page=await browser.newPage({viewport:{width:1440,height:1050}});page.setDefaultTimeout(30000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+   let sourceReady=false;
+   const metrics={sampleProducts:20,brands:4,sellers:5,totalUnits:100,totalRevenue:2000,avgPrice:20,avgUnits:5,avgRatings:null,avgRating:4.5,productConcentrationRaw:null,brandConcentrationRaw:null,sellerConcentrationRaw:null,newCount:2,newAvgPrice:null,newAvgUnits:null};
+   const sourceJob={id:'80000000-0000-4000-8000-000000000001',scope:{marketplace:'US',nodeQuery:'123:456',month:'2026-08',headTopN:10,newProductMonths:6},status:'succeeded',attempts:1,createdAt:'2026-09-12T00:00:00.000Z',updatedAt:'2026-09-12T00:00:00.000Z',error:null,report:{schemaVersion:'market-overview/v1',scope:{marketplace:'US',nodeQuery:'123:456',month:'2026-08',headTopN:10,newProductMonths:6},nodeId:'456',nodeIdPath:'123:456',categoryName:'Lamps',currency:'USD',collectedAt:'2026-09-12T00:00:00.000Z',metrics,evidence:[],issues:[],boundaries:[]}};
+   const entry=mode==='reference'?`import React from 'react';import {createRoot} from 'react-dom/client';import {${component}} from '/@fs/${reference}/app/${file}.tsx';import '/@fs/${reference}/app/globals.css';import '/@fs/${reference}/app/warm-theme.css';import '/@fs/${reference}/app/comparison-layout.css';createRoot(document.getElementById('root')).render(React.createElement('div',{className:'launch-page market-research-page'},React.createElement(${component},{marketplace:'US'})));`:`import React from 'react';import {createRoot} from 'react-dom/client';import {MarketResearchSection} from '/app/market-research-section.tsx';import '/app/globals.css';import '/app/warm-theme.css';import '/app/comparison-layout.css';import '/app/market-research.css';createRoot(document.getElementById('root')).render(React.createElement(MarketResearchSection,{sessionIdentity:'parity-fixture'}));`;
+   const entryPath=`${out}/${mode}-${view}.jsx`;await writeFile(entryPath,entry);
+   await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body style="margin:0;padding:24px;background:#f4f7fb"><div id="root"></div><script type="module" src="/${entryPath}"></script></body></html>`)});if(url.pathname==='/api/sellersprite-market')return route.fulfill({json:{niche:{...metrics,marketplace:'US',nodeId:'456',nodeIdPath:'123:456',categoryName:'Lamps',categoryNameLocale:'灯具',categoryPath:'Lamps',categoryPathLocale:'灯具',fetchedAt:'2026-09-12T00:00:00.000Z',currency:'USD',topImages:[]}}});if(url.pathname.endsWith('/market-research/jobs')){if(req.method()==='POST'){sourceReady=true;assert.equal(req.postDataJSON().nodeQuery,'123:456');return route.fulfill({json:{job:sourceJob}});}return route.fulfill({json:{jobs:sourceReady?[sourceJob]:[]}});}if(url.pathname.includes('/reports/'))return route.fulfill({json:overviewDistributionDetails()});if(url.pathname.endsWith('/overview'))return route.fulfill({json:overviewRun()});if(url.pathname.startsWith('/api/'))return route.fulfill({status:404,json:{error:'This comparison fixture has no response for this source'}});return route.continue();});
+   await page.goto(origin+'/?themeView='+view,{waitUntil:'domcontentloaded',timeout:30000});await page.locator('.ss-market-query').waitFor();
+   await page.screenshot({path:`${out}/${mode}-${view}-desktop.png`,fullPage:true});
+   observations.push({mode,view,errors,query:await page.locator('.ss-market-query').evaluate(el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect();return {padding:s.padding,borderRadius:s.borderRadius,width:r.width};})});
+   if(view==='overview'){
+    await page.locator('.ss-market-node-field input').fill('123:456');await page.getByRole('button',{name:'筛选市场',exact:true}).click();await page.locator('.ss-niche-table tbody tr').waitFor();
+    await page.locator('.ss-niche-table-wrap').screenshot({path:`${out}/${mode}-overview-result-table.png`});
+    assert.equal(await page.locator('.ss-niche-table thead th').count(),15);
+    if(mode==='candidate'){await page.getByRole('button',{name:'查看指标详情',exact:true}).click();assert.equal(await page.getByText('完整基础指标与原始比例',{exact:true}).evaluate(e=>(e.parentElement as HTMLDetailsElement).open),true);await page.goto(origin+'/?overviewRun='+overviewRunId,{waitUntil:'domcontentloaded'});await page.locator('.ss-dist-chart').first().waitFor();await page.screenshot({path:`${out}/candidate-overview-results-desktop.png`,fullPage:true});}
+   }
+   if(mode==='candidate'){await page.setViewportSize({width:390,height:844});await page.screenshot({path:`${out}/${mode}-${view}-mobile.png`,fullPage:true});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'no mobile viewport overflow: '+view);}
+   await page.close();
+  }
+ }
+ await writeFile(out+'/observations.json',JSON.stringify(observations,null,2));
+ for(const o of observations)assert.deepEqual(o.errors,[],o.mode+' '+o.view);
+ for(const [view] of modules){const a=observations.find(o=>o.view===view&&o.mode==='reference')!,b=observations.find(o=>o.view===view&&o.mode==='candidate')!;assert.deepEqual(b.query,a.query,view+' query card geometry');}
+});

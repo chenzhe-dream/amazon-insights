@@ -12,10 +12,16 @@ import {MarketSemanticBatchPreparationService} from '../../server/runtime/market
 import { registerMarketModuleRoutes } from '../../server/routes/market-modules';
 import { createMarketModelRuntime } from '../../server/runtime/market-model-runtime';
 import { MarketKeywordRunResponseSchema } from '../../shared/market-keyword-public-contracts';
+import {MarketKeywordRevisionEntrySchema} from '../../shared/market-keyword-revision-contracts';
+import {assertKeywordScoreInputAuditBinding} from '../../shared/market-keyword-score-input-audit-contracts';
 import { ConnectorError, type RemoteMcpConnector } from '../../server/connectors/connector-contract';
 import type { OpenAIProviderOptions } from '../../server/runtime/openai-provider';
 import { canonicalJsonSha256 as digest } from '../../server/runtime/model-request-accounting';
 import { startPostgresTestContainer } from './helpers/postgres-test-container';
+import {buildAgentApp} from '../../server/app';
+import {createAgentServiceClient} from '../../app/lib/agent-service-client';
+import {proxyAgentRequest} from '../../app/api/agent/[...path]/route';
+import type {AuthenticationService} from '../../server/auth/authentication-service';
 
 test('public keyword start and read bind source months and native audited batches without GET side effects', { timeout: 120000 }, async t => {
   const pg = await startPostgresTestContainer(); t.after(() => pg.close()); await runPostgresMigrations(pg.pool);
@@ -32,7 +38,7 @@ test('public keyword start and read bind source months and native audited batche
         search_rank_trend: [], recommended_bid_trend: ['2026-08 CPC recommended bid 2.5'] } };
     return { data, source: { connectorId: 'sorftime', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
   } };
-  const base = loadVocPositioningRuntimeConfig({ OPENAI_API_KEY: 'synthetic-key', AGENT_VOC_MODEL: 'synthetic-model',
+  const base = loadVocPositioningRuntimeConfig({ OPENAI_API_KEY: 'synthetic-key', AGENT_VOC_MODEL: 'gpt-5.6',
     AGENT_VOC_ESTIMATED_INPUT_TOKENS: '10000', AGENT_VOC_MAX_OUTPUT_TOKENS: '4000', AGENT_VOC_TIMEOUT_MS: '90000',
     AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: '1', AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: '2', AGENT_VOC_CALL_MAX_TOKENS: '100000',
     AGENT_VOC_CALL_MAX_COST_MICROS: '1000000', AGENT_VOC_RUN_MAX_TOKENS: '100000', AGENT_VOC_RUN_MAX_COST_MICROS: '1000000',
@@ -62,7 +68,7 @@ test('public keyword start and read bind source months and native audited batche
   http.addHook('preHandler', async req => { req.authPrincipal = { kind: 'user', ...principal, role: 'member', email: 'native@example.test', sessionId: randomUUID() }; });
   registerMarketModuleRoutes(http, service);
   const browser=await import('../../app/lib/market-keyword-browser');
-  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const browserFetch=t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     assert.equal(typeof input,'string');assert.ok(String(input).startsWith('/api/agent/v1/market-analysis/'));
     const response=await http.inject({method:(init?.method??'GET') as 'GET'|'POST',url:String(input).replace('/api/agent',''),headers:Object.fromEntries(new Headers(init?.headers)),payload:typeof init?.body==='string'?init.body:undefined});
     return new Response(response.body,{status:response.statusCode,headers:{'content-type':'application/json'}});
@@ -77,6 +83,12 @@ test('public keyword start and read bind source months and native audited batche
   const read = async () => { const response = await http.inject({ method: 'GET', url: path }); assert.equal(response.statusCode, 200, response.body); return MarketKeywordRunResponseSchema.parse(response.json()); };
   await drain();
   const first = await read(), facts = first.run.facts!; assert.ok(facts, JSON.stringify(first.run.steps));
+  assert.ok(first.run.ruleReport);assert.ok(first.run.scoreInputAudit,'Public read exposes versioned saved-input audit');
+  assertKeywordScoreInputAuditBinding(first.run.scoreInputAudit,facts,first.run.ruleReport);
+  assert.equal(first.run.scoreInputAudit.members[0].pageRecommendedBid.value,1.25);
+  assert.equal(first.run.scoreInputAudit.members[0].pageRecommendedBid.referenceMonth,null);
+  assert.equal(first.run.scoreInputAudit.members[0].trendRecommendedBid.value,2.5);
+  assert.equal(first.run.scoreInputAudit.members[0].trendRecommendedBid.currency,null);
   assert.deepEqual(await browser.readKeywordRun(initial.run.id),first.run);
   assert.equal(facts.pool.collectionCoverage, 'partial'); assert.equal(facts.pool.exhaustive, false); assert.equal(facts.members.length, 1);
   assert.equal(facts.members[0].pageMetrics.monthlySearchVolume.value, 999);
@@ -95,6 +107,9 @@ test('public keyword start and read bind source months and native audited batche
   const save = { method: 'POST' as const, url: revisionPath, payload: revisionBody, headers: { 'idempotency-key': randomUUID() } };
   const saved = await http.inject(save); assert.equal(saved.statusCode, 201, saved.body);
   const revision = saved.json().revision, revisionId = revision.catalog.revision.revisionId;
+  const checkedRevision=MarketKeywordRevisionEntrySchema.parse(revision);assert.ok(checkedRevision.scoreInputAudit);assert.ok(checkedRevision.ruleReport);
+  assertKeywordScoreInputAuditBinding(checkedRevision.scoreInputAudit,checkedRevision.catalog.facts,checkedRevision.ruleReport);
+  assert.equal(checkedRevision.scoreInputAudit.clusters[0].inputs.find(input=>input.field==='suggestedBid')!.value,null);
   assert.ok(revision.ruleReport,'Saved human revision exposes its frozen-basis W5 and PVS report');
   assert.equal(revision.ruleReport.factsId,facts.factsId);assert.equal(revision.ruleReport.classification.identity,revisionId);
   assert.equal(revision.ruleReport.keywords[0].w5.yoyGrowth.value,-1,'A saved full-history baseline outside the research window must remain usable');
@@ -112,11 +127,14 @@ test('public keyword start and read bind source months and native audited batche
   assert.equal((await read()).run.history!.length, 2);
   const original = await http.inject({ method: 'GET', url: `${revisionPath}/${revisionId}` });
   assert.equal(original.statusCode, 200, original.body); assert.deepEqual(original.json().revision, revision);
+  assert.equal(original.json().revision.scoreInputAudit.auditId,revision.scoreInputAudit.auditId,'History retains the same facts/report-bound audit');
   await assert.rejects(pg.pool.query('UPDATE market_keyword_revisions SET catalog_hash=$1 WHERE revision_id=$2', ['0'.repeat(64), revisionId]), /immutable/);
   const beforeCalls = { calls, modelCalls }, beforeCommands = (await pg.pool.query('SELECT count(*) FROM market_analysis_commands')).rows[0].count;
   assert.deepEqual((await read()).run.facts, facts);
   const unconfigured = new MarketModuleService({ context: new PostgresQueryContext(pg.pool), modelIdentity: () => null });
   assert.deepEqual((await unconfigured.findKeywords(actor, initial.run.id)).run.facts, facts);
+  assert.deepEqual((await unconfigured.keywordRevision(actor,initial.run.id,revisionId)).revision.scoreInputAudit,revision.scoreInputAudit);
+  assert.deepEqual((await browser.readKeywordRevision(initial.run.id,revisionId)).scoreInputAudit,revision.scoreInputAudit);
   assert.deepEqual({ calls, modelCalls }, beforeCalls); assert.equal((await pg.pool.query('SELECT count(*) FROM market_analysis_commands')).rows[0].count, beforeCommands);
   principal = { ...actor, organizationId: randomUUID() };
   assert.equal((await http.inject({ method: 'GET', url: path })).statusCode, 404);
@@ -209,7 +227,7 @@ test('public keyword start and read bind source months and native audited batche
   const evaluated=globalView!.attempts.find(a=>(a.output as any)?.version==='keyword-reconciliation-evaluation/v1');
   assert.ok(evaluated,JSON.stringify(globalView!.attempts));assert.equal((evaluated.output as any).status,'partial');
   const failedGlobal=(await globalService.findKeywords(actor,global.run.id)).run;
-  assert.equal(failedGlobal.facts!.semantics.batches.length,2,'Global batches must not become initial discovery facts');
+  assert.equal(failedGlobal.facts!.semantics.batches.flatMap(b=>b.output.keywords).length,2,'Only the two initial discovery members appear in facts regardless of token-based batch packing');
   assert.equal(failedGlobal.reconciliation!.status,'partial');assert.ok(failedGlobal.reconciliation!.decisions.some(k=>k.W1.status==='unavailable'));
   const retrySteps=failedGlobal.steps.filter(s=>s.current&&s.canRetry);assert.ok(retrySteps.length);
   const savedGlobalFacts=failedGlobal.facts!.factsId,sourceCallsBeforeRetry=calls;failGlobal=false;
@@ -222,6 +240,31 @@ test('public keyword start and read bind source months and native audited batche
   const countBeforeRead={calls,modelCalls};assert.deepEqual((await globalService.findKeywords(actor,global.run.id)).run.reconciliation,reconciled.reconciliation);assert.deepEqual({calls,modelCalls},countBeforeRead);
   assert.deepEqual((await service.keywordRevision(actor,initial.run.id,revisionId)).revision,revision,'Global flow preserves manual history');
   const globalParams={...body,analysisMode:'global-reconciliation/v1',catalog:{...body.catalog,discoveryMode:'labels-and-clusters/v1'}};
+  await t.test('cancellation before reconciliation starts preserves facts and remains readable without network calls',async()=>{
+    failDiscovery=true;
+    const started=await globalService.startKeywords(actor,study.study.id,{...globalParams,catalog:{...globalParams.catalog,dictionaryVersion:'cancel-fixture/v1'},plannedPages:[{seed:'lamp',page:1}]},randomUUID());
+    let pending=false;
+    for(let i=0;i<50;i++){
+      await runtime.tick();
+      const view=(await steps.findModuleRun({actor,moduleRunId:started.run.id}))!;
+      pending=view.steps.some(s=>s.kind==='reconcile'&&s.status==='queued'&&s.latestAttemptId===null);
+      if(pending)break;
+    }
+    assert.ok(pending,'Must reach an unclaimed reconciliation step after the initial model failure');
+    const before=(await globalService.findKeywords(actor,started.run.id)).run;
+    const key=randomUUID(),counts={calls,modelCalls};
+    await globalService.cancel(actor,started.run.id,{},key);
+    const cancelled=(await globalService.findKeywords(actor,started.run.id)).run;
+    assert.equal(cancelled.status,'cancelled');assert.equal(cancelled.reconciliation!.status,'cancelled');
+    assert.deepEqual(cancelled.facts!.pool,before.facts!.pool);assert.deepEqual(cancelled.facts!.semantics,before.facts!.semantics);
+    assert.deepEqual(cancelled.facts!.members,before.facts!.members.map(m=>({...m,trend:{...m.trend,status:'cancelled'}})));
+    assert.equal(cancelled.steps.some(s=>s.canRetry),false);
+    assert.ok(cancelled.steps.some(s=>s.kind==='reconcile'&&s.current&&s.status==='cancelled'));
+    await globalService.cancel(actor,started.run.id,{},key);
+    assert.deepEqual((await globalService.findKeywords(actor,started.run.id)).run,cancelled);
+    await assert.rejects(globalService.findKeywords({...actor,organizationId:randomUUID()},started.run.id));
+    assert.deepEqual({calls,modelCalls},counts);failDiscovery=false;
+  });
   const emptyGlobal=await globalService.startKeywords(actor,study.study.id,{...globalParams,plannedPages:[{seed:'empty',page:1}]},randomUUID());await drain();
   assert.equal((await globalService.findKeywords(actor,emptyGlobal.run.id)).run.reconciliation!.status,'empty');
   const failedPreparation=await globalService.startKeywords(actor,study.study.id,{...globalParams,plannedPages:[{seed:'lamp',page:1}]},randomUUID());
@@ -240,4 +283,46 @@ test('public keyword start and read bind source months and native audited batche
   assert.equal(explicitRead.ruleReport.keywords.length,explicitRead.facts!.members.length);
   const explicitView=await steps.findModuleRun({actor,moduleRunId:explicit.run.id});assert.equal(explicitView!.run.versions.configuration,runtime.keywordExplicitConfigurationVersion);
   assert.deepEqual((await globalService.findKeywords(actor,global.run.id)).run.reconciliation,reconciled.reconciliation,'Existing v1 results remain replayable after v2 execution');
+  await t.test('secured app and actual same-origin proxy support all keyword routes including encoded revision history',async()=>{
+    // Previous browser checks deliberately bypassed the proxy. Restore native
+    // fetch here so this boundary test actually reaches the secured HTTP app.
+    browserFetch.mock.restore();
+    const token='K'.repeat(43),origin='http://keyword-proxy.test',proxyToken='synthetic-keyword-proxy-token';
+    let securedPrincipal:{kind:'user';organizationId:string;userId:string;role:'member';email:string;sessionId:string}|null={kind:'user',...actor,role:'member',email:'keyword@example.test',sessionId:randomUUID()};
+    const app=buildAgentApp({repository:{marketExecutionContext:context} as NonNullable<NonNullable<Parameters<typeof buildAgentApp>[0]>['repository']>,marketModuleService:service,userPresenceAccess:null,
+      env:{AGENT_SERVICE_PROXY_TOKEN:proxyToken,AGENT_SERVICE_TRUSTED_ORIGINS:origin},authConfig:{mode:'authenticated',cookie:{name:'agent_session',secure:false,maxAgeSeconds:3600},sessionTtlMs:3600000,loginLimiter:{windowMs:60000,maxFailures:5,maxEntries:100}},
+      authService:{authenticate:async(value:string|null)=>value===token?securedPrincipal:null} as AuthenticationService});
+    t.after(()=>app.close());
+    const address=await app.listen({host:'127.0.0.1',port:0}),agentClient=createAgentServiceClient({env:{AGENT_SERVICE_INTERNAL_URL:address,AGENT_SERVICE_PROXY_TOKEN:proxyToken}});
+    async function proxy(method:string,routePath:string,payload?:unknown,key=randomUUID(),cookie=true,encodedParams=false){
+      return proxyAgentRequest(new Request(`${origin}/api/agent${routePath}`,{method,headers:{'content-type':'application/json','idempotency-key':key,...(cookie?{cookie:`agent_session=${token}`}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})}),
+        {params:Promise.resolve({path:routePath.slice(1).split('/').map(part=>encodedParams?part:decodeURIComponent(part))})},agentClient);
+    }
+    const proxyBody={...body,catalog:{...body.catalog,dictionaryVersion:'synthetic-proxy/v1'}},createPath=`/v1/market-analysis/studies/${study.study.id}/keywords`,createKey=randomUUID(),beforeStart={calls,modelCalls};
+    const started=await proxy('POST',createPath,proxyBody,createKey);assert.equal(started.status,201,await started.clone().text());
+    const startedRun=MarketKeywordRunResponseSchema.parse(await started.json()).run,runPath=`/v1/market-analysis/runs/${startedRun.id}/keywords`;
+    assert.equal(startedRun.facts,null);assert.deepEqual({calls,modelCalls},beforeStart,'Starting only persists work; requests never execute supplier or model calls inline');
+    const startReplay=await proxy('POST',createPath,proxyBody,createKey);assert.equal(startReplay.status,200,await startReplay.clone().text());assert.equal((await startReplay.json()).run.id,startedRun.id);
+    await drain();
+    const beforeReads={calls,modelCalls},current=await proxy('GET',runPath);assert.equal(current.status,200,await current.clone().text());
+    const run=MarketKeywordRunResponseSchema.parse(await current.json()).run;assert.ok(run.facts);assert.ok(run.scoreInputAudit);
+    const manual={factsId:run.facts.factsId,expectedParentRevisionId:null,...classification,assignments:run.facts.members.map(m=>({keywordId:m.keywordId,W1:['lamp'],W2:[],W3:[],W4:[],clusterId:'corner'})),note:'经真实代理保存人工分类'};
+    const revisionsPath=`${runPath}/revisions`,revisionKey=randomUUID(),written=await proxy('POST',revisionsPath,manual,revisionKey);assert.equal(written.status,201,await written.clone().text());
+    const entry=MarketKeywordRevisionEntrySchema.parse((await written.json()).revision),id=entry.catalog.revision.revisionId,historyPath=`${revisionsPath}/${encodeURIComponent(id)}`;
+    assert.ok(historyPath.includes('%3A'),'Historical IDs exercise URI-encoded colon characters');
+    assert.equal((await proxy('POST',revisionsPath,manual,revisionKey)).status,200);
+    for(const encodedParams of [false,true]){
+      const history=await proxy('GET',historyPath,undefined,randomUUID(),true,encodedParams);assert.equal(history.status,200,await history.clone().text());
+      assert.deepEqual(MarketKeywordRevisionEntrySchema.parse((await history.json()).revision),entry);
+    }
+    const countRows=async()=> (await pg.pool.query('SELECT (SELECT count(*) FROM market_analysis_module_runs) runs,(SELECT count(*) FROM market_keyword_revisions) revisions')).rows[0],beforeRejected=await countRows();
+    for(const [method,routePath,payload] of [['POST',createPath,proxyBody],['GET',runPath,undefined],['POST',revisionsPath,manual],['GET',historyPath,undefined]] as const){
+      const denied=await proxy(method,routePath,payload,randomUUID(),false);assert.equal(denied.status,401,await denied.clone().text());
+    }
+    assert.equal((await proxy('POST',createPath,{...proxyBody,authorId:randomUUID()})).status,400);
+    assert.equal((await proxy('POST',revisionsPath,{...manual,authorId:randomUUID()})).status,400);
+    securedPrincipal={...securedPrincipal!,organizationId:randomUUID()};
+    assert.equal((await proxy('GET',runPath)).status,404);assert.equal((await proxy('GET',historyPath)).status,404);
+    assert.deepEqual(await countRows(),beforeRejected);assert.deepEqual({calls,modelCalls},beforeReads,'Reads, revision writes and rejected requests do not recollect or call a model');
+  });
 });

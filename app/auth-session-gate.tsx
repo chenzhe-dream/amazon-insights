@@ -4,14 +4,18 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { createPortal } from "react-dom";
 import { useModalInteraction } from "./lib/use-modal-interaction";
 import Link from "next/link";
+import {isModuleVisible,type ModuleKey} from '../shared/module-visibility-contracts';
 import type { DingTalkPublicConfigResponse, User } from "../shared/agent-contracts";
-import { createBrowserActivityHeartbeatController } from "./lib/activity-heartbeat";
+import { createUsageAnalyticsController,flushUsageBeforeLogout } from "./lib/usage-analytics-browser";
 import { AuthSessionController } from "./lib/auth-session-controller";
 import { subscribeToAuthenticationRequired } from "./lib/local-agent-browser";
 import { DingTalkBrowserError, DingTalkWorkbenchAttempt, isDingTalkContainer, requestDingTalkWorkbenchCode, sanitizeDingTalkReturnPath } from "./lib/dingtalk-browser";
 import { WebAuthError, changeWebPassword, type AuthSessionState, loginAndReadWebSession, loginWithDingTalkWorkbenchCode, logoutWebSession, readDingTalkPublicConfig, readWebSession } from "./lib/web-auth-session";
 
 export type AuthenticatedWebSession = Readonly<{
+  visibleModules?: ModuleKey[];
+  isSystemOwner?: boolean;
+  canManageModuleVisibility?: boolean;
   user: User;
   sessionIdentity: string;
   canViewUserPresence: boolean;
@@ -134,12 +138,12 @@ function CheckingShell() {
   return <main className="auth-session-shell" aria-live="polite"><p>正在检查登录状态</p></main>;
 }
 
-function AuthenticatedActivityHeartbeat({ sessionIdentity }: { sessionIdentity: string }) {
+function AuthenticatedActivityHeartbeat({ sessionIdentity,user }: { sessionIdentity: string;user:User }) {
   useEffect(() => {
-    const controller = createBrowserActivityHeartbeatController();
+    const controller = createUsageAnalyticsController({userId:user.id,organizationId:user.organizationId});
     controller.start();
     return () => controller.stop();
-  }, [sessionIdentity]);
+  }, [sessionIdentity,user.id,user.organizationId]);
   return null;
 }
 
@@ -230,8 +234,9 @@ export function AuthIdentityControl({ session }: { session: AuthenticatedWebSess
   return (
     <div className="auth-identity-control">
       <span className="auth-identity-name">{user.displayName || user.email}</span>
-      <span className="auth-identity-role">{user.role}</span>
-      {session.canViewUserPresence === true ? <Link className="ghost-btn" href="/admin/users">用户状态</Link> : null}
+        <span className="auth-identity-role">{session.isSystemOwner?'系统所有者':user.role}</span>
+      {session.canViewUserPresence === true && isModuleVisible(session.visibleModules,'admin-users') ? <Link className="ghost-btn" href="/admin/users">用户与使用统计</Link> : null}
+      {session.canManageModuleVisibility===true&&!isModuleVisible(session.visibleModules,'admin-users')?<Link className="ghost-btn" href="/admin/users?view=visibility">模块可见性</Link>:null}
       <PasswordChangeControl />
       <button type="button" className="ghost-btn" disabled={logoutPending} onClick={() => void logout()}>
         {logoutPending ? "退出中…" : "退出登录"}
@@ -367,6 +372,7 @@ export function AuthSessionGate({ children }: {
   }, [controller, state]);
 
   const logout = useCallback(async () => {
+    await flushUsageBeforeLogout();
     const pending = controller.logout();
     setLogoutPending(controller.logoutPending);
     setLogoutError(controller.logoutError);
@@ -396,11 +402,14 @@ export function AuthSessionGate({ children }: {
     return <main className="auth-session-shell"><section className="auth-login-card"><p className="auth-login-status" role="status">{state.message}</p><button className="auth-login-submit" type="button" onClick={() => void bootstrap(true)}>重试</button></section></main>;
   }
   if (state.status === "authenticated") return <>
-    <AuthenticatedActivityHeartbeat sessionIdentity={state.sessionIdentity} />
+    <AuthenticatedActivityHeartbeat sessionIdentity={state.sessionIdentity} user={state.user} />
     {children({
       user: state.user,
       sessionIdentity: state.sessionIdentity,
       canViewUserPresence: state.canViewUserPresence,
+      visibleModules: state.visibleModules,
+      isSystemOwner: state.isSystemOwner,
+      canManageModuleVisibility: state.canManageModuleVisibility,
       revokeUserPresenceAccess,
       logout,
       logoutPending,

@@ -38,11 +38,11 @@ import {
   type TrafficAnalysisOutput,
 } from "../../server/domain/traffic/traffic-analysis-contracts";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
-import type { VocPositioningOutput } from "../../server/domain/voc/voc-positioning-contracts";
+import type { AmazonVocInsightOutput } from "../../server/domain/voc/amazon-voc-insight-contracts";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
-  validVocPositioningOutput,
+  validAmazonVocInsightOutput,
 } from "./helpers/voc-positioning-fixture";
 import {
   startPostgresTestContainer,
@@ -335,7 +335,7 @@ async function seedExecution<Result extends Record<string, unknown>>(
   };
 }
 
-function vocPublishInput(seed: SeededExecution<VocPositioningOutput>) {
+function vocPublishInput(seed: SeededExecution<AmazonVocInsightOutput>) {
   return {
     id: randomUUID(),
     actorId: seed.target.actorId,
@@ -407,7 +407,7 @@ test("PostgreSQL reports publish VOC, traffic, and product artifacts with replay
   const repository = await freshRepository();
   const target = await seedTarget(repository);
   const facts = preprocessVocSnapshot(target.vocSnapshot);
-  const vocResult = validVocPositioningOutput(facts);
+  const vocResult = validAmazonVocInsightOutput(facts);
   const voc = await seedExecution(repository, target, {
     stage: "voc-positioning",
     snapshotIds: [target.vocSnapshot.id],
@@ -508,7 +508,7 @@ test("PostgreSQL reports reject lease, lineage, dependency, replay drift, and st
   const voc = await seedExecution(repository, target, {
     stage: "voc-positioning",
     snapshotIds: [target.vocSnapshot.id],
-    result: validVocPositioningOutput(facts),
+    result: validAmazonVocInsightOutput(facts),
     responseId: "response-voc-fence",
     skillId: "define-amazon-voc-positioning",
   });
@@ -537,7 +537,7 @@ test("PostgreSQL reports reject lease, lineage, dependency, replay drift, and st
   await assert.rejects(
     repository.reports.publishVocPositioningReport({
       ...vocPublishInput(voc),
-      result: { ...voc.result, status: "partial" },
+      result: { ...voc.result, positioningProjection: { ...voc.result.positioningProjection, status: "partial" } },
     }),
     AnalysisReportConflictError,
   );
@@ -634,7 +634,7 @@ test("PostgreSQL product dependency reconciliation creates one job with an appli
   const voc = await seedExecution(repository, target, {
     stage: "voc-positioning",
     snapshotIds: [target.vocSnapshot.id],
-    result: validVocPositioningOutput(facts),
+    result: validAmazonVocInsightOutput(facts),
     responseId: "response-voc-product-dependency",
     skillId: "define-amazon-voc-positioning",
   });

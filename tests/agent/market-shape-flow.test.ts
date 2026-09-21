@@ -1,3 +1,4 @@
+import {MarketShapeSuggestionInputSchema} from '../../shared/market-semantic-contracts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -23,18 +24,18 @@ test('shape flow freezes members, collects their history and audits suggestions 
     const calls: string[] = [];
     let modelCalls = 0, failHistory = false, emitEcho=true;
     const connector: RemoteMcpConnector = { id: 'sellerSprite', probe: async () => { throw Error('unused'); }, execute: async (r) => {
-            const q = r.input.request as any;
+            const q = r.input.request as {month:string};
             calls.push(q.month);
             if (failHistory && q.month === '202607')
                 throw new ConnectorError('sellerSprite', 'upstream-permanent', false);
             return { data: { code: 'OK', ...(emitEcho?{marketplace: 'US', currency: 'USD', nodeIdPath: f.scope.nodeIdPath, month: q.month}:{}), data: [{ asin: 'B000000001', title: 'Shelf lamp', brand: 'Fixture', price: 20, totalUnits: 10, totalRevenue: 200, ranking: 1, rating: 4, ratings: 10, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-01' }] }, source: { connectorId: 'sellerSprite', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
         } };
     const base = loadVocPositioningRuntimeConfig({ OPENAI_API_KEY: 'synthetic-key', AGENT_VOC_MODEL: 'synthetic-model', AGENT_VOC_ESTIMATED_INPUT_TOKENS: '12000', AGENT_VOC_MAX_OUTPUT_TOKENS: '4000', AGENT_VOC_TIMEOUT_MS: '60000', AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: '1', AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: '2', AGENT_VOC_CALL_MAX_TOKENS: '1000000', AGENT_VOC_CALL_MAX_COST_MICROS: '10000000', AGENT_VOC_RUN_MAX_TOKENS: '1000000', AGENT_VOC_RUN_MAX_COST_MICROS: '10000000', AGENT_VOC_DAILY_MAX_TOKENS: '1000000', AGENT_VOC_DAILY_MAX_COST_MICROS: '10000000', AGENT_VOC_WORKER_OWNER_ID: 'synthetic-shape-worker' });
-    const client = { responses: { create: async (body: any) => {
+    const client = { responses: { create: async (body: {input:string}) => {
                 modelCalls++;
-                const input = JSON.parse(body.input);
+                const input = MarketShapeSuggestionInputSchema.parse(JSON.parse(body.input));
                 assert.equal(input.task, 'market-product-shape-suggestion');
-                const output = { schemaVersion: input.schemaVersion, task: input.task, batchId: input.batchId, inputDigest: input.inputDigest, products: input.products.map((p: any) => ({ productId: p.productId, decision: { status: 'supported', candidates: [{ labelId: 'shelf', evidence: [{ refId: p.title.value.refId, start: 0, end: 5, quote: 'Shelf' }] }], requiresManualConfirmation: true } })) };
+                const output = { schemaVersion: input.schemaVersion, task: input.task, batchId: input.batchId, inputDigest: input.inputDigest, products: input.products.map(p => { assert.ok(p.title.state==='known'); return ({ productId: p.productId, decision: { status: 'supported', candidates: [{ labelId: 'shelf', evidence: [{ refId: p.title.value.refId, start: 0, end: 5, quote: 'Shelf' }] }], requiresManualConfirmation: true } }); }) };
                 return { id: 'synthetic-shape-' + modelCalls, status: 'completed', usage: { input_tokens: 300, output_tokens: 150, total_tokens: 450 }, output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify(output) }] }] };
             } } } as unknown as OpenAIProviderOptions['client'];
     const create = () => createMarketModelRuntime(f.context, base, { client, connectors: { sellerSprite: connector, sorftime: connector } });
@@ -56,12 +57,21 @@ test('shape flow freezes members, collects their history and audits suggestions 
     const service = new MarketModuleService({ context: f.context, modelIdentity: () => ({ configurationVersion: runtime.configurationVersion, promptVersion: runtime.promptVersion }) });
     const publicView = await service.findShapes(f.actor, run.id);
     assert.equal(publicView.run.source!.products[0].title, 'Shelf lamp');
+    const metadata=publicView.run.source!.products[0].metadata!;
+    assert.equal(metadata.revenue.value,200);
+    assert.equal(metadata.rating.value,4);
+    assert.equal(metadata.ratingCount.value,10);
+    assert.equal(metadata.sellerName.value,'Fixture');
+    assert.equal(metadata.sellerType.value,'FBA');
+    assert.equal(metadata.listedAt.value,'2025-01-01');
+    assert.deepEqual(metadata.revenue.evidence.payloadPath,['data',0,'totalRevenue']);
+    assert.equal(metadata.revenue.evidence.inputSnapshotId,publicView.run.source!.referenceSnapshotId);
     assert.equal(publicView.run.suggestions.status, 'complete');
     assert.equal(publicView.run.suggestions.items[0].decision.status, 'supported');
     assert.equal(publicView.run.latestRevision, null);
     const revisions = new PostgresMarketShapePriceRevisionStore(f.context);
     assert.equal(await revisions.find({ actor: f.actor, moduleRunId: run.id }), null);
-    const source = (month: string) => view.attempts.find(a => view.steps.some(s => s.id === a.stepId && s.kind === 'collect-product-month' && (s.input as any).month === month))!;
+    const source = (month: string) => view.attempts.find(a => view.steps.some(s => s.id === a.stepId && s.kind === 'collect-product-month' && (s.input as {month:string}).month === month))!;
     const saved = await revisions.save({ actor: f.actor, moduleRunId: run.id, idempotencyKey: randomUUID(), request: { referenceAttemptId: source('2026-08').id, historyAttemptIds: [source('2026-07').id], expectedParentRevisionId: null, selectedAsins: ['B000000001'], taxonomyVersion: 'test-shapes/v1', labels, assignments: [], bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }] } });
     assert.equal(saved.catalog.products[0].shape, null);
     assert.equal(saved.catalog.products[0].classificationBasis, 'unclassified');
@@ -77,14 +87,18 @@ test('shape flow freezes members, collects their history and audits suggestions 
     assert.equal(modelCalls, 1);
     assert.equal(calls.length, 2);
     await t.test('HTTP reads are scoped and explicit revision writes keep the saved version', async () => {
+        const callsBeforeReads={source:calls.length,model:modelCalls};
         const app = Fastify();
         t.after(() => app.close());
         app.addHook('preHandler', async (req) => { if (req.headers['x-test-auth'] === 'yes')
-            req.authPrincipal = { kind: 'user', ...f.actor } as any; });
+            req.authPrincipal = { kind: 'user', ...f.actor } as NonNullable<typeof req.authPrincipal>; });
         registerMarketModuleRoutes(app, service);
         const url = `/v1/market-analysis/runs/${run.id}/shape-price`;
         assert.equal((await app.inject({ url })).statusCode, 401);
-        assert.equal((await app.inject({ url, headers: { 'x-test-auth': 'yes' } })).statusCode, 200);
+        const publicRead=await app.inject({ url, headers: { 'x-test-auth': 'yes' } });
+        assert.equal(publicRead.statusCode, 200);
+        assert.equal(publicRead.json().run.source.products[0].metadata.revenue.value,200);
+        assert.equal(publicRead.json().run.latestRevision.periodProjection.basisCatalogId,saved.catalog.catalogId);
         assert.equal((await app.inject({ url: `/v1/market-analysis/runs/${randomUUID()}/shape-price`, headers: { 'x-test-auth': 'yes' } })).statusCode, 404);
         const revise = { referenceAttemptId: source('2026-08').id, historyAttemptIds: [source('2026-07').id], expectedParentRevisionId: saved.catalog.revision.revisionId, selectedAsins: ['B000000001'], taxonomyVersion: 'test-shapes/v1', labels, assignments: [{ asin: 'B000000001', labelId: 'shelf' }], bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }] }, key = randomUUID();
         const send = () => app.inject({ method: 'POST', url: url + '/revisions', headers: { 'x-test-auth': 'yes', 'idempotency-key': key }, payload: revise });
@@ -95,6 +109,8 @@ test('shape flow freezes members, collects their history and audits suggestions 
         const old = await app.inject({ url: url + '/revisions/' + encodeURIComponent(saved.catalog.revision.revisionId), headers: { 'x-test-auth': 'yes' } });
         assert.equal(old.statusCode, 200);
         assert.equal(old.json().revision.groups[0].labelId, null);
+        assert.equal(old.json().revision.periodProjection.basisCatalogId,saved.catalog.catalogId);
+        assert.deepEqual({source:calls.length,model:modelCalls},callsBeforeReads);
     });
     await t.test('missing model configuration does not block collection, manual statistics or a failed-month retry', async () => {
         const offline = new MarketModuleService({ context: f.context, modelIdentity: () => null });

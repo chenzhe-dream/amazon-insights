@@ -104,8 +104,8 @@ test("standard image governance admits four physical dispatches and bounds the f
     ownerId: "image-four-worker-owner",
   });
   let providerDispatches = 0;
-  let releaseProvider = () => undefined;
-  let markFourEntered = () => undefined;
+  let releaseProvider: () => void = () => undefined;
+  let markFourEntered: () => void = () => undefined;
   const providerGate = new Promise<void>((resolve) => {
     releaseProvider = resolve;
   });
@@ -287,7 +287,16 @@ test("governor cancellation stops queued admission before record or operation", 
   });
   await new Promise(resolve => setTimeout(resolve, 20));
   queuedController.abort();
-  await assert.rejects(queued, ResourceGovernorAdmissionError);
+  await assert.rejects(queued, error => error instanceof ResourceGovernorAdmissionError && error.reason === 'cancelled');
+  assert.equal(queuedOperations, 0);
+
+  const scriptController = new AbortController();
+  const scriptGovernor = createPostgresResourceGovernor({ pool: postgres.createPool(), ownerId: 'script-cancelled-owner' });
+  const scriptQueued = scriptGovernor.run({ organizationId, resource: 'sif', jobId: 'script-cancelled-job', attemptKind: 'initial',
+    signal: scriptController.signal, maxWaitMs: 1000, operation: async () => { queuedOperations++; } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  scriptController.abort();
+  await assert.rejects(scriptQueued, error => error instanceof ScriptResourceGovernorAdmissionError && error.reason === 'cancelled');
   assert.equal(queuedOperations, 0);
 
   const preAbortedController = new AbortController();
@@ -994,3 +1003,18 @@ function sqlText(query: unknown): string {
   }
   return "";
 }
+test('TS and script rolling cooldown share database admission, scoped release and concurrent recheck',async()=>{
+ const {first}=createStores();const organizationId=randomUUID();const sibling=randomUUID();
+ const input={organizationId,resource:'sellerSprite' as const,jobId:'cooldown',attemptKind:'initial' as const};
+ for(let i=0;i<30;i++)await first.recordPhysicalAttempt(input);
+ const script=createPostgresResourceGovernor({pool:postgres.pool,ownerId:'cooldown-script'});let calls=0;
+ let cooldown='';
+ await assert.rejects(first.recordPhysicalAttempt(input),e=>{assert.equal((e as any).reason,'rolling-window');cooldown=(e as any).retryAt;assert.ok(Date.parse(cooldown)>Date.now());return true;});
+ await assert.rejects(script.run({...input,operation:async()=>{calls++;}}),e=>{assert.equal((e as any).reason,'rolling-window');assert.equal((e as any).retryAt,cooldown);return true;});assert.equal(calls,0);
+ await script.run({...input,organizationId:sibling,operation:async()=>{calls++;}});assert.equal(calls,1);
+ await postgres.pool.query("UPDATE concurrency_physical_attempts SET recorded_at=clock_timestamp()-interval '61 seconds' WHERE id=(SELECT id FROM concurrency_physical_attempts WHERE organization_id=$1 ORDER BY recorded_at LIMIT 1)",[organizationId]);
+ const results=await Promise.allSettled([first.recordPhysicalAttempt(input),first.recordPhysicalAttempt(input)]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ await postgres.pool.query("INSERT INTO concurrency_resource_circuits(organization_id,resource,manual_hold,auto_paused,reason,updated_at) VALUES($1,'sellerSprite',false,true,'quota-exhausted',clock_timestamp())",[sibling]);
+ await assert.rejects(script.run({...input,organizationId:sibling,operation:async()=>{calls++;}}),e=>{assert.equal((e as any).reason,'paused');assert.equal((e as any).retryAt,null);return true;});assert.equal(calls,1);
+});
+

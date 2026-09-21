@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
+import {isModuleVisible} from '../../../shared/module-visibility-contracts';
 
 import type {
   AdminUserPresenceResponse,
@@ -33,7 +34,7 @@ export type AdminUserPresenceClassNames = Readonly<{
 }>;
 
 const PRESENCE_LABELS: Record<PresenceStatus, string> = {
-  "recently-online": "近期在线",
+  "recently-online": "近期有活动",
   "valid-session-idle": "会话有效但近期无活动",
   "never-logged-in": "从未登录",
   "session-expired": "会话已失效",
@@ -219,14 +220,14 @@ export function AdminUsersAuthenticatedPage({
   classes: AdminUserPresenceClassNames;
   session: AuthenticatedWebSession;
 }) {
-  const canView = session.canViewUserPresence === true;
+  const canView = session.canManageModuleVisibility===true || (session.canViewUserPresence===true&&isModuleVisible(session.visibleModules,'admin-users'));
   return (
     <main className={classes.page}>
       <div className={classes.shell}>
         <header className={classes.header}>
           <div className={classes.title}>
             <p>管理</p>
-            <h1>用户活动状态</h1>
+            <h1>用户与使用统计</h1>
           </div>
           <div className={classes.actions}>
             <Link className={classes.returnLink} href="/">返回主应用</Link>

@@ -164,7 +164,7 @@ test("an import response can update only the ASIN captured by the submission", (
     record: { asin: ASIN_A },
   }), true);
   assert.equal(isAlexaVocWriteResponseForSubmission(submission, {
-    disposition: "pending",
+    ...{ disposition: "pending" },
     normalization: { asin: ASIN_A },
     record: null,
   }), true);

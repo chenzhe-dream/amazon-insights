@@ -12,6 +12,7 @@ import {
 import {
   checklistSourceLabels,
   parseTableCellOptions,
+  type LaunchChecklistEntry,
   type LaunchChecklistGroup,
   type LaunchChecklistResearchContext,
   type LaunchChecklistStructuredTable,
@@ -148,7 +149,7 @@ function buildTableBlocks(
 }
 
 function buildEntryParagraph(group: LaunchChecklistGroup, input: ChecklistExportInput) {
-  const entries =
+  const entries: LaunchChecklistEntry[] =
     group.entries ??
     group.items.map((label, index) => ({
       id: `${group.id}-${index}`,
@@ -228,7 +229,7 @@ export function exportChecklistMarkdown(input: ChecklistExportInput): string {
         lines.push("");
       }
 
-      const entries =
+      const entries: LaunchChecklistEntry[] =
         group.entries ??
         group.items.map((label, index) => ({
           id: `${group.id}-${index}`,

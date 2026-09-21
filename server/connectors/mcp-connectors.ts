@@ -1,6 +1,7 @@
 import { readServerConnectorSecret } from "../config/connector-secrets.mjs";
 import {
   callSellerSpriteMcpTool,
+  createSellerSpriteSessionPool,
   requestSellerSpriteMcp,
 } from "../../scripts/lib/sellersprite-mcp-client.mjs";
 import {
@@ -107,13 +108,13 @@ export function createSifConnector(
     input,
     (request, signal, credential, env, fetchImpl) =>
       callSifTool(request.operation, request.input, {
-        env: { ...env, SIF_MCP_SECRET: credential } as NodeJS.ProcessEnv,
+        env: { ...env, SIF_MCP_SECRET: credential },
         fetchImpl,
         signal,
       }),
     (signal, credential, env, fetchImpl) =>
       requestSifMcp("tools/list", {}, {
-        env: { ...env, SIF_MCP_SECRET: credential } as NodeJS.ProcessEnv,
+        env: { ...env, SIF_MCP_SECRET: credential },
         fetchImpl,
         signal,
       }),
@@ -147,7 +148,8 @@ export function createSellerSpriteConnector(
   input: McpConnectorDependencies = {},
 ): RemoteMcpConnector {
   const resolved = dependencies(input);
-  return createRemoteMcpConnector({
+  const sessionPool = createSellerSpriteSessionPool();
+  const result = createRemoteMcpConnector({
     id: "sellerSprite",
     physicalGovernance: "transport-dispatch",
     resolveCredential: (scope) =>
@@ -158,6 +160,8 @@ export function createSellerSpriteConnector(
         request.operation,
         request.input,
         {
+          sessionPool,
+          sessionScope: request.sessionScope,
           fetchImpl: resolved.fetchImpl,
           signal,
           resourceGovernor: context.resourceGovernor ?? undefined,
@@ -168,7 +172,7 @@ export function createSellerSpriteConnector(
             ...resolved.env,
             AGENT_EXECUTION_ORGANIZATION_ID: undefined,
             AGENT_SYNC_JOB_ID: undefined,
-          } as unknown as NodeJS.ProcessEnv,
+          },
           timeoutMs: context.timeoutMs,
         },
       ),
@@ -188,7 +192,7 @@ export function createSellerSpriteConnector(
             ...resolved.env,
             AGENT_EXECUTION_ORGANIZATION_ID: undefined,
             AGENT_SYNC_JOB_ID: undefined,
-          } as unknown as NodeJS.ProcessEnv,
+          },
           timeoutMs: context.timeoutMs,
         },
       ),
@@ -197,6 +201,7 @@ export function createSellerSpriteConnector(
     policy: resolved.policy,
     resourceGovernor: resolved.resourceGovernor,
   });
+  return { ...result, close: () => sessionPool.close() };
 }
 
 export function createRemoteMcpConnectors(

@@ -10,6 +10,8 @@ import {
 } from "./connector-contract";
 import {
   ResourceGovernorAdmissionError,
+  LOCAL_ADMISSION_REASONS,
+  type LocalAdmission,
   type GovernedAttemptKind,
   type GovernedResource,
   type ResourceGovernor,
@@ -89,7 +91,7 @@ class BoundedConnectorLimiter {
     }
     if (this.#queue.length >= this.#maxQueue) {
       return Promise.reject(
-        new ConnectorError(this.#connectorId, "rate-limit", true),
+        new ConnectorError(this.#connectorId, "local-admission", true, {reason:"concurrency",retryAt:null}),
       );
     }
     return new Promise(resolve => this.#queue.push(resolve));
@@ -136,7 +138,10 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
     error instanceof ResourceGovernorAdmissionError ||
     (error instanceof Error && error.name === "ResourceGovernorAdmissionError")
   ) {
-    return new ConnectorError(connectorId, "rate-limit", true);
+    const candidate = error as Partial<LocalAdmission>;
+    const reason = LOCAL_ADMISSION_REASONS.includes(candidate.reason as LocalAdmission['reason']) ? candidate.reason! : 'unavailable';
+    const retryAt = reason === 'rolling-window' && typeof candidate.retryAt === 'string' && Number.isFinite(Date.parse(candidate.retryAt)) ? new Date(candidate.retryAt).toISOString() : null;
+    return new ConnectorError(connectorId, "local-admission", reason === 'rolling-window' || reason === 'concurrency', {reason,retryAt});
   }
 
   const structural =
@@ -198,7 +203,11 @@ async function runWithTimeout<T>(
     return await Promise.race([running, timeout, parent]);
   } catch (error) {
     if (settleAfterAbort && controller.signal.aborted) {
-      await running.catch(() => undefined);
+      await running.catch(settled => {
+        if (error instanceof Error && settled && typeof settled==='object' && 'doNotRetry' in settled && settled.doNotRetry===true) {
+          Object.assign(error,{doNotRetry:true});
+        }
+      });
     }
     throw error;
   } finally {
@@ -257,8 +266,12 @@ async function executeAttempts(
       }
       return { data, attemptCount: attempt };
     } catch (error) {
-      const classified = classifyError(options.id, error);
-      if (!classified.retryable || attempt === options.policy.maxAttempts) {
+      const original = classifyError(options.id, error);
+      // The fence must survive the public error boundary as well: the durable
+      // source scheduler must not replay an ambiguously dispatched operation.
+      const classified = error && typeof error === 'object' && 'doNotRetry' in error && error.doNotRetry === true
+        ? new ConnectorError(options.id, original.code, false, original.admission) : original;
+      if ((error && typeof error === "object" && "doNotRetry" in error && error.doNotRetry === true) || classified.code === "local-admission" || !classified.retryable || attempt === options.policy.maxAttempts) {
         throw classified;
       }
       await options.sleep(options.policy.retryDelayMs);

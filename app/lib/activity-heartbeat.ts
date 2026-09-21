@@ -1,5 +1,6 @@
 import { ActivityResponseSchema } from "../../shared/agent-contracts";
 import { localAgentFetch } from "./local-agent-browser";
+import { USAGE_REPORT_INTERVAL_MS } from "../../shared/usage-analytics-contracts";
 
 export type ActivityHeartbeatFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -20,7 +21,7 @@ export type ActivityHeartbeatControllerDependencies = Readonly<{
   intervalMs?: number;
 }>;
 
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const HEARTBEAT_INTERVAL_MS = USAGE_REPORT_INTERVAL_MS;
 
 export async function sendActivityHeartbeat(
   signal: AbortSignal,

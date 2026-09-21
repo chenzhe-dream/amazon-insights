@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { User } from "../../shared/agent-contracts";
 import { isPrimaryAdministrator } from "../lib/primary-admin";
 import { FeedbackImageInput } from "./feedback-image-input";
+import { FeedbackAttachmentGallery } from "./feedback-attachment-gallery";
+import { FeedbackReporter } from "./feedback-reporter";
 import { HelpManual } from "./help-manual";
 import {
   createHelpFeedbackClient,
@@ -76,9 +78,10 @@ const tabLabels: Record<FeedbackDrawerTab, string> = {
   admin: "反馈管理",
 };
 
-function FeedbackList({ items, onOpen }: {
+function FeedbackList({ items, onOpen, showReporter = false }: {
   items: readonly FeedbackListItem[];
   onOpen: (item: FeedbackListItem) => void;
+  showReporter?: boolean;
 }) {
   if (items.length === 0) return <p className="feedback-empty">暂无反馈</p>;
   return <div className="feedback-list">
@@ -90,6 +93,7 @@ function FeedbackList({ items, onOpen }: {
     >
       <span>
         <b>{item.title}</b>
+        {showReporter ? <FeedbackReporter item={item} /> : null}
         <small>{new Date(item.createdAt).toLocaleString("zh-CN")} · {item.attachmentCount} 张图片</small>
       </span>
       <em data-status={item.status}>{statusLabels[item.status]}</em>
@@ -139,21 +143,11 @@ function FeedbackDetailPanel({
   return <section className="feedback-detail">
     <button type="button" className="feedback-back-button" onClick={onBack}>返回列表</button>
     <div className="feedback-detail-heading">
-      <div><h3>{detail.title}</h3><p>{detail.description}</p></div>
+      <div><h3>{detail.title}</h3>{admin ? <FeedbackReporter item={detail} showAccount /> : null}<p>{detail.description}</p></div>
       <em data-status={detail.status}>{statusLabels[detail.status]}</em>
     </div>
-    {detail.attachments.length > 0 ? <div className="feedback-attachments">
-      {detail.attachments.map((attachment) => <button
-        type="button"
-        key={attachment.id}
-        onClick={() => {
-          void client.openAttachment(`${attachmentPrefix}/attachments/${attachment.id}`)
-            .catch(() => setStatusMessage("图片打开失败，请重试"));
-        }}
-      >
-        {attachment.fileName}<small>{Math.ceil(attachment.byteSize / 1024)} KB</small>
-      </button>)}
-    </div> : null}
+    {detail.attachments.length > 0 ? <FeedbackAttachmentGallery
+      key={attachmentPrefix} attachments={detail.attachments} attachmentPrefix={attachmentPrefix}/> : null}
     {admin ? <div className="feedback-status-editor">
       <select aria-label="反馈状态" value={status} onChange={(event) => setStatus(event.target.value as FeedbackStatus)}>
         {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -371,7 +365,7 @@ export function HelpFeedbackDrawer({ user }: { user: User }) {
                     setItems((current) => current.map((item) => item.id === next.id ? next : item));
                   }}
                 />
-              : <FeedbackList items={items} onOpen={(item) => void openItem(item)} />}
+              : <FeedbackList items={items} onOpen={(item) => void openItem(item)} showReporter />}
           </> : null}
           {loading ? <p className="feedback-message" role="status">正在加载…</p> : null}
           {message ? <p className="feedback-message" role="status">{message}</p> : null}

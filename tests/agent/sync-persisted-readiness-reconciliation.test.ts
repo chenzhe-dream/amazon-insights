@@ -264,7 +264,8 @@ test("PostgreSQL repair blocks resume while mirror-pending and finalizes only un
       if (/SET TRANSACTION ISOLATION LEVEL/.test(text)) return { rows: [], rowCount: 0 };
       if (/pg_advisory_xact_lock/.test(text)) return { rows: [], rowCount: 1 };
       if (/WITH running_capacity/.test(text)) {
-        const pending = row.error.persistedReadinessRepair?.state === "mirror-pending";
+        const marker = row.error?.persistedReadinessRepair;
+        const pending = !!marker && typeof marker === "object" && "state" in marker && marker.state === "mirror-pending";
         const excludesPending = /persistedReadinessRepair[\s\S]+mirror-pending/.test(text);
         if (pending && excludesPending) return { rows: [], rowCount: 0 };
         row = { ...row, status: "running", leased_by: String(values?.[2]) };
@@ -336,6 +337,7 @@ test("PostgreSQL repair blocks resume while mirror-pending and finalizes only un
   assert.equal(modules.get(`${ASINS[0]}\0listing`)?.status, "ready");
   assert.match(sql[0], /WHERE job_id = \$1[\s\S]+organization_id = \$2[\s\S]+FOR UPDATE/);
 
+  assert.ok(row.error);
   const pendingMarker = structuredClone(row.error.persistedReadinessRepair);
   await assert.rejects(
     store.resume({
@@ -355,7 +357,9 @@ test("PostgreSQL repair blocks resume while mirror-pending and finalizes only un
     finalizedAt: "2026-08-25T10:02:00.000Z",
   });
   assert.equal(finalized?.disposition, "applied");
-  assert.equal(row.error.persistedReadinessRepair.state, "applied");
+  const appliedMarker = row.error?.persistedReadinessRepair;
+  assert.ok(appliedMarker && typeof appliedMarker === "object" && "state" in appliedMarker);
+  assert.equal(appliedMarker.state, "applied");
 
   row = {
     ...row,

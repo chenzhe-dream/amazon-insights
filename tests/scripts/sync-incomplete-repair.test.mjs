@@ -63,3 +63,20 @@ test("Xiyou repair retains full job authority while collecting only the missing 
   });
   assert.deepEqual(result, { succeeded: true, repairStatuses: { [asins[2]]: "ready" } });
 });
+
+test("explicit image actions preserve repair scope and distinguish gallery refresh from analysis",()=>{
+  const refresh={stages:[{id:"listing",repairAsins:[asins[0]],imageAction:"refresh"},{id:"image_remarks",repairAsins:[asins[0]],imageAction:"refresh"}]};
+  assert.equal(repairProviderEnvironment(refresh,"listing").AGENT_SYNC_IMAGE_ACTION,"refresh");
+  assert.equal(repairProviderEnvironment(refresh,"image_remarks").AGENT_SYNC_IMAGE_ACTION,"refresh");
+  assert.equal(repairProviderEnvironment(refresh,"listing").AGENT_SYNC_REPAIR_INCOMPLETE,"1");
+  assert.deepEqual(imageRemarkRunAsins({...refresh,asinProgress:{[asins[0]]:{image_remarks:{status:"ready"},listing:{status:"ready"}}}},asins),[asins[0]]);
+});
+
+test("refresh must finish fetching before any AI reanalysis, while analyze uses current images",()=>{
+  for(const status of ["pending","connector-failed","upstream-empty"]){
+    const job={stages:[{id:"image_remarks",repairAsins:[asins[0]],imageAction:"refresh"}],asinProgress:{[asins[0]]:{listing:{status},image_remarks:{status:"pending"}}}};
+    assert.deepEqual(imageRemarkRunAsins(job,asins),[]);
+    job.stages[0].imageAction="analyze";
+    assert.deepEqual(imageRemarkRunAsins(job,asins),[asins[0]]);
+  }
+});

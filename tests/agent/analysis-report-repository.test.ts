@@ -16,11 +16,11 @@ import {
   type SqliteAgentRepository,
 } from "../../server/db/sqlite-repository";
 import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
-import type { VocPositioningOutput } from "../../server/domain/voc/voc-positioning-contracts";
+import type { AmazonVocInsightOutput } from "../../server/domain/voc/amazon-voc-insight-contracts";
 import {
   SCOOTER_ASINS,
   realVocSnapshot,
-  validVocPositioningOutput,
+  validAmazonVocInsightOutput,
 } from "./helpers/voc-positioning-fixture";
 
 const CUTOFF = "2026-08-15T23:59:59.999Z";
@@ -48,7 +48,7 @@ function skillVersionInput(): RegisterSkillVersionInput {
       entry: "SKILL.md",
       allowedReferences: ["references/priority-rules.md"],
       inputSchema: "VocPositioningInput@1.0.0",
-      outputSchema: "VocPositioningOutput@1.0.0",
+      outputSchema: "AmazonVocInsightOutput@1.0.0",
       fixtures: ["voc-three-tables-complete-v1"],
       contentHash,
     },
@@ -148,7 +148,7 @@ async function seedSucceededVocAgentRun(repository: SqliteAgentRepository) {
     candidate: snapshotCandidate,
   });
   const facts = preprocessVocSnapshot(snapshot.snapshot);
-  const result = validVocPositioningOutput(facts);
+  const result = validAmazonVocInsightOutput(facts);
   const logicalExecutionLineage = "c".repeat(64);
   const skill = await repository.registerSkillVersion(skillVersionInput());
   const agentRun = await repository.beginAgentRun({
@@ -445,9 +445,9 @@ test("same AgentRun with changed immutable result conflicts", async (t) => {
   const seeded = await seedSucceededVocAgentRun(repository);
   const reports = repository as AnalysisReportRepository;
   await reports.publishVocPositioningReport(publishInput(seeded));
-  const changed = structuredClone(seeded.result) as VocPositioningOutput;
-  changed.coreConclusion.strategy =
-    changed.coreConclusion.strategy === "retain-verified-value"
+  const changed = structuredClone(seeded.result) as AmazonVocInsightOutput;
+  changed.positioningProjection.coreConclusion.strategy =
+    changed.positioningProjection.coreConclusion.strategy === "retain-verified-value"
       ? "validate-differentiation"
       : "retain-verified-value";
 

@@ -301,8 +301,9 @@ test("SellerSprite attempt deadline cancels queued governor admission before ret
   let fetchDispatches = 0;
   const observedSignals: Array<AbortSignal | undefined> = [];
   const governor: ResourceGovernor = {
-    async run<T>(input: Parameters<ResourceGovernor["run"]>[0] & {
+    async run<T>(input: Omit<Parameters<ResourceGovernor["run"]>[0], "operation"> & {
       readonly signal?: AbortSignal;
+      readonly operation: () => Promise<T>;
     }): Promise<T> {
       observedSignals.push(input.signal);
       if (activeAdmissionKinds.some((kind) => kind !== input.attemptKind)) {
@@ -514,7 +515,7 @@ test("SIF and Sorftime retain one outer governance record per attempt", async ()
   } as const;
   const sif = createSifConnector({
     ...common,
-    env: { SIF_MCP_SECRET: "sif-secret" },
+    env: { NODE_ENV: "test", SIF_MCP_SECRET: "sif-secret" },
   });
   const sorftime = createSorftimeConnector({
     ...common,
@@ -640,7 +641,7 @@ test("child MCP request paths pass through the resource governor before fetch", 
     },
   });
   await requestSifMcp("tools/call", {}, {
-    env: { SIF_MCP_SECRET: "sif-secret" },
+    env: { NODE_ENV: "test", SIF_MCP_SECRET: "sif-secret" },
     fetchImpl,
     resourceGovernor: governor,
     organizationId,
@@ -696,6 +697,7 @@ test("default child PostgreSQL governor lifecycle closes every owned pool during
       governExternalRequest({
         requireResourceGovernor: true,
         env: {
+          NODE_ENV: "test",
           AGENT_DATABASE_URL: "postgresql://postgres:secret@127.0.0.1:1/app",
         },
         organizationId,
@@ -732,6 +734,7 @@ test("default child PostgreSQL governor lifecycle closes an owned pool when admi
     governExternalRequest({
       requireResourceGovernor: true,
       env: {
+        NODE_ENV: "test",
         AGENT_DATABASE_URL: "postgresql://postgres:secret@127.0.0.1:1/app",
       },
       organizationId: "",
@@ -790,7 +793,7 @@ test("OpenAI SDK calls are governed per physical model attempt", async () => {
       attemptKind: "initial",
     },
     responseFormat: {
-      type: "json_schema",
+      digest: "a".repeat(64),
       format: {
         type: "json_schema",
         name: "Result",
@@ -840,7 +843,7 @@ test("OpenAI SDK calls fail closed before provider call when governed request sc
       maxOutputTokens: 20,
       timeoutMs: 1_000,
       responseFormat: {
-        type: "json_schema",
+        digest: "a".repeat(64),
         format: {
           type: "json_schema",
           name: "Result",
@@ -867,7 +870,7 @@ test("OpenAI SDK calls fail closed before provider call when governed request sc
 test("image remark workers are governed once per item and timeout does not duplicate work", async () => {
   const governor = new CapturingGovernor();
   let workerCalls = 0;
-  const results = await runImageRemarkQueue(["slow"], async (_item, { signal }) => {
+  const results = await runImageRemarkQueue(["slow"], async (_item: string, { signal }: { signal: AbortSignal }) => {
     workerCalls += 1;
     await new Promise<void>((resolve) => {
       signal.addEventListener("abort", () => resolve(), { once: true });
@@ -881,7 +884,7 @@ test("image remark workers are governed once per item and timeout does not dupli
   });
 
   assert.equal(workerCalls, 1);
-  assert.deepEqual(results, [{ status: "timeout", reason: "图片分析超过 120 秒" }]);
+  assert.deepEqual(results, [{ status: "timeout", reason: "图片分析超过 120 秒", attemptJobId: safeJobId }]);
   assert.deepEqual(governor.attempts.map((attempt) => [
     attempt.resource,
     attempt.attemptKind,
@@ -891,13 +894,13 @@ test("image remark workers are governed once per item and timeout does not dupli
 class CapturingGovernor implements ResourceGovernor {
   readonly attempts: Array<{
     resource: GovernedResource;
-    attemptKind: GovernedAttemptKind;
+    attemptKind: GovernedAttemptKind | 'transient-retry';
     jobId: string;
   }> = [];
 
   async run<T>(input: {
     resource: GovernedResource;
-    attemptKind: GovernedAttemptKind;
+    attemptKind: GovernedAttemptKind | 'transient-retry';
     organizationId: string;
     jobId: string;
     operation: () => Promise<T>;

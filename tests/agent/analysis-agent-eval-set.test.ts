@@ -156,7 +156,7 @@ test("safety P0 case protects non-downgradable safety themes", () => {
 
   assert.equal(theme.priority.level, "P0");
   assert.notEqual(theme.priority.safetyRule, null);
-  assert.equal(theme.priority.cannotDowngradeReason?.length > 0, true);
+  assert.equal((theme.priority.cannotDowngradeReason?.length ?? 0) > 0, true);
   assert.deepEqual(expected, {
     dimension: dimension.key,
     themeKey: theme.key,

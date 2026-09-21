@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {MarketSiteSchema,MarketCurrencySchema,marketSiteCurrencyMatches} from './market-sites';
 
 export type MarketJsonValue = null | boolean | number | string | MarketJsonValue[] | { [key: string]: MarketJsonValue };
 
@@ -46,12 +47,12 @@ const identifier = z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0
 export const MarketAnalysisScopeSchema = z.object({
   organizationId: identifier,
   researchId: z.string().uuid(),
-  marketplace: z.literal("US"),
+  marketplace: MarketSiteSchema,
   nodeIdPath: z.string().regex(/^\d+(?::\d+)*$/).max(240),
   fromMonth: month,
   toMonth: month,
-  currency: z.literal("USD"),
-}).strict().refine(value => value.fromMonth <= value.toMonth, "Research period is reversed");
+  currency: MarketCurrencySchema,
+}).strict().refine(value => value.fromMonth <= value.toMonth, "Research period is reversed").refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
 export type MarketAnalysisScope = z.infer<typeof MarketAnalysisScopeSchema>;
 
 export const MarketInputRecordSchema = z.object({

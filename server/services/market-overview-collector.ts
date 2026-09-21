@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import {marketSiteCurrency,normalizeMarketSite} from '../../shared/market-sites';
 import { MarketOverviewReportSchema, type MarketOverviewReport, type MarketResearchIssue, type MarketResearchScope } from "../../shared/market-research-contracts";
 import { ConnectorError, type ConnectorResult, type RemoteMcpConnector } from "../connectors/connector-contract";
 
@@ -17,7 +18,7 @@ function issue(dataset: Dataset, code: MarketResearchIssue["code"], retryable=fa
 }
 export function marketResearchFailure(error: unknown, dataset: Dataset="research"): MarketResearchIssue {
   if(error instanceof MarketResearchCollectionError) return error.issue;
-  if(error instanceof ConnectorError) return issue(dataset,error.code,error.retryable);
+  if(error instanceof ConnectorError) return issue(dataset,error.code === 'local-admission' ? 'rate-limit' : error.code,error.retryable);
   if(error instanceof Error && ["TimeoutError","AbortError"].includes(error.name)) return issue(dataset,"timeout",true);
   return issue(dataset,"malformed-response");
 }
@@ -35,11 +36,11 @@ function number(value: unknown): number|null {
   const parsed=Number(value);
   return Number.isFinite(parsed) && parsed>=0 ? parsed : null;
 }
-function assertScope(row: Record<string,unknown>, nodeId:string, nodeIdPath:string, month:string, dataset:Dataset) {
+function assertScope(row: Record<string,unknown>, nodeId:string, nodeIdPath:string, month:string, dataset:Dataset, scope:MarketResearchScope) {
   if((row.nodeId!==undefined && String(row.nodeId)!==nodeId) ||
     (row.nodeIdPath!==undefined && String(row.nodeIdPath)!==nodeIdPath) ||
-    (row.marketplace!==undefined && row.marketplace!=="US") ||
-    (row.currency!==undefined && row.currency!=="USD") ||
+    (row.marketplace!==undefined && normalizeMarketSite(String(row.marketplace))!==scope.marketplace) ||
+    (row.currency!==undefined && row.currency!==marketSiteCurrency(scope.marketplace)) ||
     (row.month!==undefined && String(row.month).replaceAll("-","")!==month.replaceAll("-",""))) {
     throw new MarketResearchCollectionError(issue(dataset,"scope-mismatch"));
   }
@@ -114,7 +115,7 @@ export async function collectMarketOverview(input: {
         selected=matches[0];
       } else { selected=payload; }
       if(!Object.keys(selected).length) throw new MarketResearchCollectionError(issue(dataset,"empty"));
-      assertScope(selected,nodeId,nodeIdPath,scope.month,dataset);
+      assertScope(selected,nodeId,nodeIdPath,scope.month,dataset,scope);
       const sourceMetrics=dataset==="research"?readMetrics(selected,{},scope):readMetrics({},selected,scope);
       if(Object.values(sourceMetrics).every(value=>value===null)) {
         throw new MarketResearchCollectionError(issue(dataset,"malformed-response"));
@@ -128,7 +129,7 @@ export async function collectMarketOverview(input: {
   const metrics=readMetrics(research,statistics,scope);
   if(Object.values(metrics).every(value=>value===null)) throw new MarketResearchCollectionError(issues[0]??issue("research","empty"));
   return MarketOverviewReportSchema.parse({schemaVersion:"market-overview/v1",scope,nodeId,nodeIdPath,
-    categoryName:String(research.nodeLabelName??research.nodeLabelPath??categoryName).slice(0,300),currency:"USD",
+    categoryName:String(research.nodeLabelName??research.nodeLabelPath??categoryName).slice(0,300),currency:marketSiteCurrency(scope.marketplace),
     collectedAt:(input.now?.()??new Date()).toISOString(),metrics,evidence,issues,boundaries:[
       "指标基于数据源返回的类目样本，样本商品数不等于全市场商品数。",
       `头部口径 CR${scope.headTopN} 与新品窗口 ${scope.newProductMonths} 个月分别计算。集中度暂保留上游原值，单位确认前不换算百分比。`,

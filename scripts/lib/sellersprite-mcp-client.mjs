@@ -1,3 +1,4 @@
+export { createSellerSpriteSessionPool } from './sellersprite-session-pool.mjs';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -10,15 +11,34 @@ import { governExternalRequest } from "./postgres-resource-governor.mjs";
 import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
 
+/** @param {Readonly<Record<string, string | undefined>>} [env] */
 export function readSellerSpriteSecretKey(env = process.env) {
   return readServerConnectorSecret("sellerSprite", env);
 }
 
+/**
+ * @typedef {object} SellerSpriteMcpOptions
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AbortSignal} [signal]
+ * @property {import('../../server/db/concurrency-control-repository').ResourceGovernor} [resourceGovernor]
+ * @property {boolean} [requireResourceGovernor]
+ * @property {string | null} [organizationId]
+ * @property {string | null} [jobId]
+ * @property {import('../../server/db/concurrency-control-repository').GovernedAttemptKind} [attemptKind]
+ * @property {'market'} [sessionScope]
+ * @property {ReturnType<import('./sellersprite-session-pool.mjs').createSellerSpriteSessionPool>} [sessionPool]
+ * @property {number} [timeoutMs]
+ */
+
+/** @param {SellerSpriteMcpOptions} [options] */
 export async function requestSellerSpriteMcp(
   secretKey,
   method,
   params,
-  {
+  options = {},
+) {
+  const {
     fetchImpl = fetch,
     signal,
     resourceGovernor,
@@ -28,8 +48,7 @@ export async function requestSellerSpriteMcp(
     attemptKind = "initial",
     env = process.env,
     timeoutMs = 15_000,
-  } = {},
-) {
+  } = options;
   if (typeof secretKey !== "string" || secretKey.trim().length === 0) {
     throw new Error("SellerSprite server credential is not configured");
   }
@@ -42,6 +61,9 @@ export async function requestSellerSpriteMcp(
     operation,
     env,
   }, async () => {
+    if (options.sessionPool && options.sessionScope === 'market' && organizationId && jobId) {
+      return await options.sessionPool.request(secretKey, providerEndpoint('sellerSprite', env), method, params, options);
+    }
     const lifecycleSignal = signal
       ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs);
@@ -133,6 +155,7 @@ function createSellerSpriteGovernedFetch({
   });
 }
 
+/** @param {SellerSpriteMcpOptions} [options] */
 export async function callSellerSpriteMcpTool(secretKey, toolName, args, options = {}) {
   const env = options.env ?? process.env;
   return await runWithProviderDiagnostics({

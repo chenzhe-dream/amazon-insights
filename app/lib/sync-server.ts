@@ -22,6 +22,7 @@ export type AsinModuleStatus = {
 
 export type SyncStage = {
   repairAsins?: string[];
+  imageAction?: "refresh" | "analyze";
   repairParentJobId?: string;
   repairXydcAsins?: string[];
   id: string;

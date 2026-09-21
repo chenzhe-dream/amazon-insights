@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import { queryProjectLibrary } from "../services/project-library-query";
+import { createAnalysisProjectFavoriteStore } from "../services/analysis-project-favorite-store";
 import { z } from "zod";
 import { TrafficListingCollectionSchema } from '../../shared/traffic-listing-contract';
 import { TrafficDetailRecoveryError, type TrafficDetailRecoveryService } from '../services/traffic-detail-recovery-service';
@@ -43,12 +45,12 @@ import {
   TrafficSnapshotReadResponseSchema,
   type ApiErrorCode,
   type TrafficSnapshotReadResponse,
-  type SyncLegacyRepairResponse,
 } from "../../shared/agent-contracts";
 import { ContractRouteError } from "./analysis-runs";
 import type { RequestPrincipal } from "../auth/authorization";
 import type { AuthenticationService } from "../auth/authentication-service";
 import type { RuntimeAgentRepository } from "../db/repository";
+import type { ProjectLatestAnalystRepository } from "../db/project-latest-analyst-repository";
 import { SyncJobRunConflictError } from "../db/sync-job-repository";
 import {
   isSyncJobAdmissionLimitError,
@@ -76,6 +78,8 @@ export type StartAsinSyncResult = Awaited<ReturnType<SyncJobService["start"]>>;
 export type ResumeAsinSyncResult = Awaited<ReturnType<SyncJobService["resume"]>>;
 
 export type LocalDataBridgeDeps = {
+  listLatestProjectAnalysts?: ProjectLatestAnalystRepository["listLatestProjectAnalysts"];
+  listFavoriteProjectIds?(organizationId: string): string[];
   fetchProjects(options?: { kind?: ProjectKind }): Promise<AnalysisProject[]>;
   fetchProject(id: string): Promise<AnalysisProject | null>;
   createAnalysisProject(input: Record<string, unknown>): Promise<AnalysisProject>;
@@ -91,7 +95,7 @@ export type LocalDataBridgeDeps = {
     projectId: string;
     runId: string;
     jobId: string;
-    stage: "keywords" | "reviews" | "sales_trend" | "fba" | "listing" | "category" | "traffic";
+    stage: Parameters<SyncJobService["readStageOutput"]>[0]["stage"];
   }): Promise<unknown | null>;
   readPublicationView?(jobId: string, organizationId: string): Promise<PersistedPublicationView | null>;
   readPublication?(jobId: string, currentView: PersistedPublicationView | null): Promise<SyncPublication>;
@@ -99,12 +103,12 @@ export type LocalDataBridgeDeps = {
   previewLegacyStatusRepair?(input: {
     jobId: string;
     organizationId: string;
-  }): Promise<SyncLegacyRepairResponse | null>;
+  }): ReturnType<SyncLegacyStatusRepairService["preview"]>;
   applyLegacyStatusRepair?(input: {
     jobId: string;
     organizationId: string;
     version: string;
-  }): Promise<SyncLegacyRepairResponse | null>;
+  }): ReturnType<SyncLegacyStatusRepairService["apply"]>;
   readTrafficSnapshot?(input: {
     organizationId: string;
     runId: string;
@@ -146,7 +150,10 @@ export function createDefaultLocalDataBridgeDeps(
     ? new SyncLegacyStatusRepairService({ repository: repository.syncJobs })
     : null;
   const publicationStatusService = new SyncPublicationStatusService();
+  const favorites = createAnalysisProjectFavoriteStore({ env: options.env });
   return {
+    listLatestProjectAnalysts: repository?.listLatestProjectAnalysts?.bind(repository),
+    listFavoriteProjectIds: organizationId => favorites.list(organizationId),
     fetchProjects,
     fetchProject,
     createAnalysisProject,
@@ -355,12 +362,32 @@ export function registerLocalDataRoutes(
   deps: LocalDataBridgeDeps = createDefaultLocalDataBridgeDeps(),
   authService: AuthenticationService | null = null,
 ) {
+  async function withLatestAnalysts(projects: AnalysisProject[], principal: RequestPrincipal | null) {
+    const records = principal?.kind === "user" && deps.listLatestProjectAnalysts
+      ? await deps.listLatestProjectAnalysts({ organizationId: principal.organizationId, projectIds: projects.map(project => project.id) })
+      : [];
+    const names = new Map(records.map(record => [record.projectId, record.displayName]));
+    // Never trust editable local JSON, the viewer, or a source project's actor.
+    return projects.map(project => ({ ...project, latestAnalystName: names.get(project.id) ?? null }));
+  }
+  async function validateSourceProject(principal:RequestPrincipal|null,input:{sourceProjectId?:string|null;kind?:string;marketplace?:string;asins?:string[]}) {
+    if(!input.sourceProjectId)return;
+    const scope=principal?await deps.authorizeSyncScope?.(principal,{projectId:input.sourceProjectId}):null;
+    if(!scope||scope.projectId!==input.sourceProjectId)return missing('Source analysis project not found');
+    const source=await deps.fetchProject(input.sourceProjectId);
+    if(!source||source.kind!=='analysis')return missing('Source analysis project not found');
+    if((input.kind??'analysis')==='analysis'||source.marketplace!==(input.marketplace??'US')||!input.asins?.every(asin=>source.asins.includes(asin)))return validation('Source project marketplace or ASIN scope does not match');
+  }
   app.get("/v1/local-data/projects", async (request) => {
     const query = parseContract(LocalDataProjectListQuerySchema, request.query);
     try {
-      return LocalDataProjectsResponseSchema.parse({
-        projects: await deps.fetchProjects(query.kind ? { kind: query.kind } : undefined),
-      });
+      const projects = await withLatestAnalysts(await deps.fetchProjects(query.kind ? { kind: query.kind } : undefined), request.authPrincipal);
+      if (query.page !== undefined || query.pageSize !== undefined || query.view || query.search || query.category || query.sort) {
+        const principal = request.authPrincipal;
+        const favorites = principal?.kind === "user" ? deps.listFavoriteProjectIds?.(principal.organizationId) ?? [] : [];
+        return LocalDataProjectsResponseSchema.parse(queryProjectLibrary(projects, query, favorites));
+      }
+      return LocalDataProjectsResponseSchema.parse({ projects });
     } catch (error) {
       rethrowLegacyError(error);
     }
@@ -369,11 +396,13 @@ export function registerLocalDataRoutes(
   app.post("/v1/local-data/projects", async (request, reply) => {
     const body = parseContract(LocalDataCreateProjectRequestSchema, request.body);
     try {
+      await validateSourceProject(request.authPrincipal,body);
       reply.status(201);
       return LocalDataProjectResponseSchema.parse({
-        project: await deps.createAnalysisProject(body),
+        project: (await withLatestAnalysts([await deps.createAnalysisProject(body)], request.authPrincipal))[0],
       });
     } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
     }
   });
@@ -383,7 +412,7 @@ export function registerLocalDataRoutes(
     try {
       const project = await deps.fetchProject(id);
       if (!project) return missing("Project not found");
-      return LocalDataProjectResponseSchema.parse({ project });
+      return LocalDataProjectResponseSchema.parse({ project: (await withLatestAnalysts([project], request.authPrincipal))[0] });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
@@ -394,9 +423,12 @@ export function registerLocalDataRoutes(
     const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
     const body = parseContract(LocalDataUpdateProjectRequestSchema, request.body);
     try {
+      const existing=await deps.fetchProject(id);
+      if(!existing)return missing('Project not found');
+      await validateSourceProject(request.authPrincipal,{...existing,...body});
       const project = await deps.updateAnalysisProject(id, body);
       if (!project) return missing("Project not found");
-      return LocalDataProjectResponseSchema.parse({ project });
+      return LocalDataProjectResponseSchema.parse({ project: (await withLatestAnalysts([project], request.authPrincipal))[0] });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
@@ -455,7 +487,7 @@ export function registerLocalDataRoutes(
         ...scope,
         asins,
         marketplace: body.marketplace ?? "US",
-        ...(body.mode ? { mode: body.mode, parentJobId: body.parentJobId } : {}),
+        ...(body.mode ? { mode: body.mode, parentJobId: body.parentJobId, ...(body.imageAction ? { imageAction: body.imageAction } : {}) } : {}),
       });
       if ("noWork" in result) return LocalDataSyncStartResponseSchema.parse(result);
       reply.status(202);

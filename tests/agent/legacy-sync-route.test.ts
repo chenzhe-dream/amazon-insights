@@ -14,15 +14,15 @@ test("the legacy Web sync endpoint delegates an unscoped start to the authentica
   if (!delegate) return;
 
   let calls = 0;
-  let delegated: { method: string; path: string; body: string | undefined } | null = null;
+  const delegatedRequests: Array<{ method: string; path: string; body: BodyInit | null | undefined }> = [];
   const agent: AgentServiceClient = async request => {
     calls += 1;
-    delegated = { method: request.method, path: request.path, body: request.body };
+    delegatedRequests.push({ method: request.method, path: request.path, body: request.body });
     return {
       status: 202,
       headers: new Headers({ "content-type": "application/json" }),
       body: {
-        jobId: "job-1", status: "queued", message: "Queued", mcpAsinsPending: [],
+        jobId: "job-1", scope: { projectId: null, runId: null }, status: "queued", message: "Queued", mcpAsinsPending: [],
         estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0, stages: [], reused: false,
       },
     };
@@ -39,10 +39,10 @@ test("the legacy Web sync endpoint delegates an unscoped start to the authentica
 
   assert.equal(response.status, 202);
   assert.equal(calls, 1);
-  assert.deepEqual(delegated, {
+  assert.deepEqual(delegatedRequests[0], {
     method: "POST",
     path: "/v1/local-data/sync-asins",
     body: JSON.stringify({ asins, marketplace: "US" }),
   });
-  assert.equal((delegated?.body ?? "").includes("organizationId"), false);
+  assert.equal(String(delegatedRequests[0]?.body ?? "").includes("organizationId"), false);
 });

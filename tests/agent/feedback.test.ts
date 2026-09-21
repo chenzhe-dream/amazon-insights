@@ -137,12 +137,15 @@ test("SQLite feedback aggregates are atomic, metadata-only, tenant scoped, and C
   const ownList = await repository.listOwnFeedback({ organizationId: ORG_ID, actorUserId: USER_ID });
   assert.equal(ownList.length, 1);
   assert.equal(ownList[0]?.attachmentCount, 1);
+  assert.equal(ownList[0]?.actorDisplayName, "Admin");
+  assert.equal(ownList[0]?.actorEmail, "admin@example.test");
   assert.equal("imageContent" in ownList[0]!, false);
   assert.deepEqual(await repository.listOwnFeedback({ organizationId: ORG_ID, actorUserId: OTHER_USER_ID }), []);
   assert.deepEqual(await repository.listOwnFeedback({ organizationId: "20000000-0000-4000-8000-000000000099", actorUserId: USER_ID }), []);
 
   const ownDetail = await repository.getOwnFeedbackDetail({ organizationId: ORG_ID, actorUserId: USER_ID, feedbackId });
   assert.equal(ownDetail?.status, "new");
+  assert.equal(ownDetail?.actorDisplayName, "Admin");
   assert.equal(ownDetail?.workflowVersion, 1);
   assert.equal(ownDetail?.attachments[0]?.id, attachmentId);
   assert.equal("imageContent" in ownDetail!.attachments[0]!, false);

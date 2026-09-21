@@ -1,3 +1,4 @@
+import { MarketThemeSelectionStore } from '../../server/db/postgres/market-theme-selection-store';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import Fastify from 'fastify';
@@ -420,6 +421,13 @@ test('collected source projection feeds the native model queue in isolated Postg
     await assert.rejects(reports.readEvidence({actor:f.actor,moduleRunId:run.id,attemptId:entry.attemptId,query:{sourceThemeId:'outside-report'}}));
     assert.equal(await reports.readDetails({actor:{...f.actor,organizationId:randomUUID()},moduleRunId:run.id,attemptId:entry.attemptId,query:{section:'groups'}}),null);
     assert.equal(sourceCalls,beforeSources+2);assert.equal(modelCalls,beforeModels+savedModels.length);
+    const selectionStore=new MarketThemeSelectionStore(f.context),selectionIdentity={actor:f.actor,moduleRunId:run.id,attemptId:entry.attemptId};
+    const baseSelection=await selectionStore.read(selectionIdentity);assert.ok(baseSelection);assert.equal(baseSelection.baseline.totals!.mention,26);
+    const selectionCommand={...selectionIdentity,idempotencyKey:randomUUID(),request:{baseReportHash:entry.report.reportHash,expectedParentRevisionId:null,excludedAsins:entry.report.selectedAsins}};
+    const excludedSelection=await selectionStore.save(selectionCommand);assert.equal(excludedSelection.view.revision!.result.status,'no-data');
+    const restoredSelection=await selectionStore.save({...selectionCommand,idempotencyKey:randomUUID(),request:{...selectionCommand.request,expectedParentRevisionId:excludedSelection.view.latestRevisionId,excludedAsins:[]}});
+    assert.deepEqual(restoredSelection.view.revision!.result,baseSelection.baseline);assert.equal(sourceCalls,beforeSources+2);assert.equal(modelCalls,beforeModels+savedModels.length);
+    assert.equal((await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport!.report.reportHash,entry.report.reportHash);
     // A final report must validate its saved prior-round receipt too, even when
     // its own snapshot and final receipt remain unchanged.
     const priorOutput=finalView.attempts.find(a=>a.id===prior[0])!.output;
@@ -434,6 +442,8 @@ test('collected source projection feeds the native model queue in isolated Postg
     await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:run.id,idempotencyKey:randomUUID()});
     const historical=await reports.readEvidence({actor:f.actor,moduleRunId:run.id,attemptId:entry.attemptId,query:{sourceThemeId:memberId}});
     assert.equal(historical!.report.current,false);assert.equal(historical!.report.report.reportHash,entry.report.reportHash);assert.deepEqual(historical!.evidence,evidence!.evidence);
+    assert.equal((await selectionStore.save(selectionCommand)).created,false);assert.equal((await selectionStore.read({...selectionIdentity,revisionId:excludedSelection.view.latestRevisionId!}))!.revision!.result.status,'no-data');
+    await assert.rejects(selectionStore.save({...selectionCommand,idempotencyKey:randomUUID(),request:{...selectionCommand.request,expectedParentRevisionId:restoredSelection.view.latestRevisionId}}));
   });
   await t.test('v2 failed reconciliation retry preserves successful batches and the complete old report evidence',async sub=>{
     themePoolMode=false;fullFlowMode=false;emptyAnchor=false;mappedThemeOutput=true;multiRoundThemeMode=true;failOneReconciliationBatch=true;failedReconciliationDigest=null;
@@ -453,6 +463,9 @@ test('collected source projection feeds the native model queue in isolated Postg
     const unavailable=members!.page.items.find(i=>i.kind==='member'&&i.decision.status==='unavailable');assert.ok(unavailable&&unavailable.kind==='member');
     const original=await reports.readEvidence({actor:f.actor,moduleRunId:run.id,attemptId:first.attemptId,query:{sourceThemeId:unavailable.sourceThemeId}});
     assert.equal(original!.evidence.analysis,null);
+    const priorSelectionStore=new MarketThemeSelectionStore(f.context),priorSelectionIdentity={actor:f.actor,moduleRunId:run.id,attemptId:first.attemptId};
+    const priorSelection=await priorSelectionStore.save({...priorSelectionIdentity,idempotencyKey:randomUUID(),request:{baseReportHash:first.report.reportHash,expectedParentRevisionId:null,excludedAsins:[]}});
+    const priorSelectionJson=JSON.stringify(priorSelection.view);
     const sourceCount=sourceCalls,succeeded=before.steps.filter(s=>s.kind==='model-batch'&&s.status==='succeeded');
     failOneReconciliationBatch=false;
     await f.stores.steps.retryFailedSteps({actor:f.actor,moduleRunId:run.id,steps:[{stepId:failed[0].id,failedAttemptId:failed[0].latestAttemptId!}],idempotencyKey:randomUUID()});
@@ -466,6 +479,7 @@ test('collected source projection feeds the native model queue in isolated Postg
     assert.equal(old!.report.current,false);assert.deepEqual(old!.evidence,original!.evidence);
     const recovered=await reports.readEvidence({actor:f.actor,moduleRunId:run.id,attemptId:latest.currentReport!.attemptId,query:{sourceThemeId:unavailable.sourceThemeId}});
     assert.equal(recovered!.evidence.analysis!.status,'mapped');
+    const modelsAfterRetry=modelCalls;assert.equal(JSON.stringify(await priorSelectionStore.read(priorSelectionIdentity)),priorSelectionJson);assert.equal(modelCalls,modelsAfterRetry);assert.equal(sourceCalls,sourceCount);
   });
   await t.test('durable theme flow resumes after restart and retries only the failed ASIN without a synthetic planner bridge', async () => {
     themePoolMode = true;

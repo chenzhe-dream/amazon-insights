@@ -3,6 +3,7 @@
  * 对齐 Skill：define-amazon-voc-positioning
  */
 
+import type { AnalysisRuleTrace } from "../shared/product-structure-rules";
 import type { ProductFamily } from "./lib/product-family";
 import type {
   NegativePriorityRow,
@@ -26,6 +27,8 @@ export type VocPositioningRole =
 export type VocPriorityLevel = "P0" | "P1" | "P2" | "P3" | "待验证";
 
 export type VocMergedThemeRow = {
+  ruleDecisionIds?: string[];
+  sourceDecisionIds?: Partial<Record<"positives" | "negatives" | "unmet", string[]>>;
   theme: string;
   lovePct: string;
   negPct: string;
@@ -36,6 +39,7 @@ export type VocMergedThemeRow = {
 };
 
 export type VocPositioningDimensionRow = {
+  ruleDecisionIds?: string[];
   dimension: string;
   conclusion: string;
   evidence: string;
@@ -44,6 +48,7 @@ export type VocPositioningDimensionRow = {
 };
 
 export type VocOptimizePriorityRow = {
+  ruleDecisionIds?: string[];
   priority: VocPriorityLevel;
   direction: string;
   source: string;
@@ -55,12 +60,15 @@ export type VocOptimizePriorityRow = {
 };
 
 export type VocPositioningConclusion = {
+  ruleTrace?: AnalysisRuleTrace;
   oneLiner: string;
   rationale: string[];
   dimensionRows: VocPositioningDimensionRow[];
   /** 8 格要点：与 dimensionRows 同源，供新品定义页直接引用 */
   directionCards: VocDirectionCard[];
   mergedThemes: VocMergedThemeRow[];
+  /** Original per-ASIN decisions for labels consumed by downstream features. */
+  themeDecisionIds?: Record<string, string[]>;
   optimizeRows: VocOptimizePriorityRow[];
   mustKeep: string[];
   mustAvoid: string[];
@@ -131,6 +139,8 @@ type ThemeBucket = {
   loveAction: string | null;
   negAction: string | null;
   unmetAction: string | null;
+  ruleDecisionIds: string[];
+  sourceDecisionIds: Record<"positives" | "negatives" | "unmet", string[]>;
 };
 
 const DATA_BOUNDARY =
@@ -254,7 +264,9 @@ function classifyRole(love: number | null, neg: number | null, unmet: number | n
 }
 
 function matchBucket(label: string, family: ProductFamily) {
-  return themeDefsFor(family).find(def => def.pattern.test(label)) ?? null;
+  // An unfamiliar category still has usable VOC. Preserve its actual theme,
+  // instead of silently dropping it because no family template recognizes it.
+  return themeDefsFor(family).find(def => def.pattern.test(label)) ?? {id:`source:${label}`,label,pattern:/$a/};
 }
 
 function buildBuckets(
@@ -281,6 +293,8 @@ function buildBuckets(
       loveAction: null,
       negAction: null,
       unmetAction: null,
+      ruleDecisionIds: [],
+      sourceDecisionIds: { positives: [], negatives: [], unmet: [] },
     };
     map.set(def.id, created);
     return created;
@@ -291,6 +305,8 @@ function buildBuckets(
     const def = matchBucket(row.theme, family);
     if (!def) return;
     const bucket = ensure(def);
+    bucket.ruleDecisionIds.push(...(row.ruleDecisionIds ?? []));
+    bucket.sourceDecisionIds.positives.push(...(row.ruleDecisionIds ?? []));
     const pct = parsePct(row.frequency);
     if (pct !== null && (bucket.lovePct === null || pct > bucket.lovePct)) {
       bucket.lovePct = pct;
@@ -304,6 +320,8 @@ function buildBuckets(
     const def = matchBucket(row.issue, family);
     if (!def) return;
     const bucket = ensure(def);
+    bucket.ruleDecisionIds.push(...(row.ruleDecisionIds ?? []));
+    bucket.sourceDecisionIds.negatives.push(...(row.ruleDecisionIds ?? []));
     const pct = parsePct(row.frequency);
     if (pct !== null && (bucket.negPct === null || pct > bucket.negPct)) {
       bucket.negPct = pct;
@@ -317,6 +335,8 @@ function buildBuckets(
     const def = matchBucket(row.need, family);
     if (!def) return;
     const bucket = ensure(def);
+    bucket.ruleDecisionIds.push(...(row.ruleDecisionIds ?? []));
+    bucket.sourceDecisionIds.unmet.push(...(row.ruleDecisionIds ?? []));
     const fromMarket = parsePct(row.marketValue);
     if (fromMarket !== null && (bucket.unmetPct === null || fromMarket > bucket.unmetPct)) {
       bucket.unmetPct = fromMarket;
@@ -364,6 +384,8 @@ export function buildVocPositioningConclusion(args: {
       }
       return {
         theme: bucket.label,
+        ruleDecisionIds: [...new Set(bucket.ruleDecisionIds)],
+        sourceDecisionIds: bucket.sourceDecisionIds,
         lovePct: formatPctOrDash(bucket.lovePct),
         negPct: formatPctOrDash(bucket.negPct),
         unmetPct: formatPctOrDash(bucket.unmetPct),
@@ -404,7 +426,7 @@ export function buildVocPositioningConclusion(args: {
             ? "建议建立：层板静载/灯杆晃动循环、连接件防松、承重标注一致性"
             : family === "scooter"
               ? "建议建立：连接件载荷/循环松动、跌落抽检、承重标注一致性"
-              : "建议建立：承力结构循环载荷、连接件防松、规格标注一致性"
+              : "建议建立：按各 ASIN 原反馈复现失效，比较改进前后故障频次、使用时长及问题出现条件；专项指标须对应实际失效部位"
           : bucket.id === "steer"
             ? "建议建立：初学档阻尼可调范围、限位角、安装教学完成率与差评「转向难」下降"
             : bucket.id === "assembly"
@@ -427,6 +449,7 @@ export function buildVocPositioningConclusion(args: {
             : "中：影响局部体验或便利性";
 
       const row: VocOptimizePriorityRow = {
+        ruleDecisionIds: [...new Set(bucket.ruleDecisionIds)],
         priority,
         direction: bucket.label,
         source: classified.role,
@@ -476,7 +499,7 @@ export function buildVocPositioningConclusion(args: {
   const coreLove = loveTop[0] ?? (family === "scooter" ? "易装与稳定体验" : "高频好评主题");
   const diffFeature = unmetTop[0] ?? (family === "scooter" ? "可维护备件与低龄转向友好" : "未满足需求主题");
   const priceText = priceBand?.trim() ? `对标竞品价格带 ${priceBand} 的中端升级档` : "中端升级档（具体售价待成本与竞品价带验证）";
-  const formName = family === "scooter" ? "三轮倾斜转向入门滑板车" : categoryLabel;
+  const formName = categoryLabel;
 
   const oneLiner = `为【${audience}】在【${scenario}】下，解决【${corePain}】，提供一款以【${formName}】为基础、保留并强化【${coreLove}】、重点解决【${negTop.slice(0, 2).join("、") || "高频差评"}】并通过【${diffFeature}】形成竞争力的【${priceText}】产品。`;
 
@@ -520,7 +543,7 @@ export function buildVocPositioningConclusion(args: {
     },
     {
       dimension: "产品形态",
-      conclusion: family === "scooter" ? `${categoryLabel} · 三轮倾斜转向入门款` : categoryLabel,
+      conclusion: categoryLabel,
       evidence: "类目竞品形态共识 + VOC 场景",
       priority: "P0",
       action: family === "scooter" ? "首代不做全新转向专利平台，优先在成熟形态上重做体验" : "首代在成熟形态上兑现 VOC 保留项与避坑项，不跨形态混装",
@@ -611,12 +634,21 @@ export function buildVocPositioningConclusion(args: {
   const mustAvoidList = mustAvoid.length ? mustAvoid : ["数据不足"];
   const mustValidateList = mustValidate.length ? mustValidate : ["数据不足"];
 
+  const themeDecisionIds: Record<string, string[]> = {};
+  for (const [label, ids] of [
+    ...positives.map(row => [`positives:${row.theme}`, row.ruleDecisionIds] as const),
+    ...negatives.map(row => [`negatives:${row.issue}`, row.ruleDecisionIds] as const),
+    ...unmets.map(row => [`unmet:${row.need}`, row.ruleDecisionIds] as const),
+    ...mergedThemes.map(row => [row.theme, row.ruleDecisionIds] as const),
+  ]) themeDecisionIds[label] = [...new Set([...(themeDecisionIds[label] ?? []), ...(ids ?? [])])];
+
   return {
     oneLiner,
     rationale,
     dimensionRows,
     directionCards: buildVocDirectionCards(dimensionRows, mustAvoidList),
     mergedThemes,
+    themeDecisionIds,
     optimizeRows,
     mustKeep: mustKeepList,
     mustAvoid: mustAvoidList,

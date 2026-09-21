@@ -7,6 +7,7 @@ import {
   type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
 import { LaunchSection, LaunchTable } from "./launch-section";
+import { AnalysisRuleExplanation, RuleDecisionExplanation } from "./analysis-rule-explanation";
 import { ActionStepsCell } from "./action-steps-cell";
 
 type PositioningProduct = {
@@ -42,6 +43,12 @@ function roleChipClass(role: string) {
 
 function RoleChip({ role }: { role: string }) {
   return <span className={roleChipClass(role)}>{role}</span>;
+}
+
+function rowDecisionIds(row: unknown): string[] | undefined {
+  if (!row || typeof row !== "object" || !("ruleDecisionIds" in row)) return undefined;
+  const value = (row as { ruleDecisionIds?: unknown }).ruleDecisionIds;
+  return Array.isArray(value) && value.every(item => typeof item === "string") ? value : undefined;
 }
 
 export function VocPositioningSection({ products, sources }: {
@@ -80,6 +87,8 @@ export function VocPositioningSection({ products, sources }: {
         </div>
       </section>
 
+      <AnalysisRuleExplanation trace={analysis.ruleTrace} resultAvailable={ready} />
+
       {!ready ? (
         <section className="card launch-block">
           <div className="pending-box">
@@ -109,6 +118,7 @@ export function VocPositioningSection({ products, sources }: {
                   <th>数据依据</th>
                   <th>优先级</th>
                   <th>产品动作</th>
+                  <th>判定依据</th>
                 </tr>
               </thead>
               <tbody>
@@ -121,6 +131,7 @@ export function VocPositioningSection({ products, sources }: {
                       <PriorityChip priority={row.priority} />
                     </td>
                     <td className="launch-muted">{row.action}</td>
+                    <td><RuleDecisionExplanation trace={analysis.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -170,6 +181,7 @@ export function VocPositioningSection({ products, sources }: {
                   <th>产品动作</th>
                   <th>验收标准</th>
                   <th>风险/待验证</th>
+                  <th>判定依据</th>
                 </tr>
               </thead>
               <tbody>
@@ -187,6 +199,7 @@ export function VocPositioningSection({ products, sources }: {
                     </td>
                     <td className="launch-muted">{row.acceptance}</td>
                     <td className="launch-muted">{row.risk}</td>
+                    <td><RuleDecisionExplanation trace={analysis.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                   </tr>
                 ))}
               </tbody>

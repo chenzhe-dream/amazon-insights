@@ -1,6 +1,7 @@
 import {MarketOverviewSynthesisInputSchema as OverviewSynthesisGraphInputSchema,MarketOverviewSynthesisOutputSchema as OverviewSynthesisGraphOutputSchema,type MarketOverviewSynthesisChild} from './market-overview-reduction-contracts';
 import type {MarketOverviewSynthesisBasis} from './market-overview-synthesis-contracts';
 import { z } from "zod";
+import {MarketSiteSchema,MarketCurrencySchema,marketSiteCurrencyMatches} from './market-sites';
 import {MarketOverviewAnalysisBriefSchema,MarketOverviewAnalysisSchema,MarketOverviewCompleteBriefSchema} from './market-overview-analysis-contracts';
 import type { MarketAnalysisScope, MarketInputSnapshot } from "./market-analysis-contracts";
 import type { MarketSourceEvidence } from "./market-source-contracts";
@@ -55,9 +56,9 @@ export const MarketSemanticUnknownSchema = z.object({
 const commonInput = {
   schemaVersion: z.literal("1.0.0"), task: MarketSemanticTaskNameSchema, batchId: uuid,
   inputDigest: hash, scopeDigest: hash,
-  scope: z.object({ researchId: z.string().uuid(), marketplace: z.literal("US"),
+  scope: z.object({ researchId: z.string().uuid(), marketplace: MarketSiteSchema,
     nodeIdPath: z.string().max(240).regex(/^\d+(?::\d+)*$/), fromMonth: month, toMonth: month,
-    currency: z.literal("USD") }).strict(),
+    currency: MarketCurrencySchema }).strict().refine(marketSiteCurrencyMatches,'Market currency differs from marketplace'),
   contentSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/),
   selectionRevision: id, batchKey: id, dataCutoffAt: timestamp, sourceRefs: ids(2_000),
 };

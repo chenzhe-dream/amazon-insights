@@ -9,10 +9,19 @@ import {marketSemanticExecutionDefinition,marketSemanticOutputContract} from '..
 import {marketSemanticWire} from '../../server/runtime/market-semantic-wire';
 const digest=(s:z.ZodType)=>createHash('sha256').update(JSON.stringify(z.toJSONSchema(s))).digest('hex');
 const fixture=async()=>JSON.parse(await readFile('skills-src/market-classify-keyword-demand-v1.1.0/fixtures/market-classify-keyword-demand-discovery-synthetic-v1.json','utf8'));
-test('old keyword wire schema identities stay frozen through explicit protocol addition',()=>{
- assert.equal(digest(c.MarketKeywordSemanticsLegacyInputSchema),'38fd3a836c09a2b564ae4f2cb20f78d94f0129b53c68c4adce16f7423bc56284');
- assert.equal(digest(c.MarketKeywordSemanticsDiscoveryInputSchema),'7dd47d8906800943e4900345245f35121c7f528f067e00eb1ff93f8ee0cb251e');
- assert.equal(digest(c.MarketKeywordSemanticsReconciliationInputSchema),'c54627ac160fe209e6cb7877f60a1a656141387f5b60eb4675437b43b118fe06');
+test('old keyword wire identities stay frozen apart from the supported marketplace expansion',()=>{
+ // Only the two explicitly expanded country/currency fields may differ from
+ // the US-only baseline; preserve the original hash check for every other field.
+ const legacySiteDigest=(schema:z.ZodType)=>{
+  const json=z.toJSONSchema(schema);
+  const scope=(json.properties!.scope as {properties:Record<string,unknown>}).properties;
+  scope.marketplace={type:'string',const:'US'};
+  scope.currency={type:'string',const:'USD'};
+  return createHash('sha256').update(JSON.stringify(json)).digest('hex');
+ };
+ assert.equal(legacySiteDigest(c.MarketKeywordSemanticsLegacyInputSchema),'38fd3a836c09a2b564ae4f2cb20f78d94f0129b53c68c4adce16f7423bc56284');
+ assert.equal(legacySiteDigest(c.MarketKeywordSemanticsDiscoveryInputSchema),'7dd47d8906800943e4900345245f35121c7f528f067e00eb1ff93f8ee0cb251e');
+ assert.equal(legacySiteDigest(c.MarketKeywordSemanticsReconciliationInputSchema),'c54627ac160fe209e6cb7877f60a1a656141387f5b60eb4675437b43b118fe06');
 });
 test('explicit shape selects immutable skill and keeps the same strict output contract',async()=>{
  const {input}=await fixture(), registry=await SkillRegistry.open('skills-src');

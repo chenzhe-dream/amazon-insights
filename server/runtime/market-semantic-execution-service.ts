@@ -1,3 +1,5 @@
+import {normalizeLiveMarketShapeSpans, marketShapeSpanRepairGuidance, MARKET_SHAPE_SPAN_NORMALIZATION_VERSION} from '../domain/market-research/shape-span-normalization';
+import type {MarketShapeSpanNormalization} from '../../shared/agent-contracts';
 import {loadMarketOverviewSynthesisEvidence} from '../services/market-overview-synthesis-input-service';
 import {loadMarketShapeSynthesisEvidence} from '../services/market-shape-synthesis-input-service';
 import {loadMarketShapeExplanationCatalog} from '../services/market-shape-explanation-input-service';
@@ -7,7 +9,7 @@ import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
 import { inspectMarketContinuation, isMarketAutomaticFlow } from '../domain/market-research/module-flow';
 import { MarketExecutionSubjectSchema, type MarketModelExecutionAuthority } from '../../shared/market-execution-subject';
-import { MarketSemanticTaskNameSchema, type MarketSemanticInput, type MarketSemanticOutput, type MarketSemanticRecord, type MarketSemanticValidationBinding } from '../../shared/market-semantic-contracts';
+import { MarketSemanticTaskNameSchema, type MarketSemanticOutput, type MarketSemanticRecord, type MarketSemanticValidationBinding } from '../../shared/market-semantic-contracts';
 import type { FinalizeAgentRunOutcome } from '../db/agent-run-repository';
 import { MarketAgentRunConflictError, type MarketAgentRunRecord } from '../db/market-agent-run-repository';
 import type { MarketStepClaim, MarketStepError, MarketStepOutcome } from '../db/market-module-execution-repository';
@@ -147,15 +149,26 @@ export class MarketSemanticExecutionService {
       const runner = createMarketSemanticSkillRunner(this.context, this.registry, configuration);
       const contracts = marketSemanticContracts[batch.task];
       const outputContract=marketSemanticOutputContract(input),wire=marketSemanticWire(input),inputSchema=wire.inputSchema??contracts.input;
+      let spanNormalizations: MarketShapeSpanNormalization[] = [];
       const prepared = await runner.prepare<unknown, MarketSemanticOutput>({ skill: definition.skill,
         inputContract: { name: definition.inputSchema, schema: inputSchema, allowedFields: Object.keys(inputSchema.shape) },
         outputContract: { name: definition.outputSchema, schema: outputContract.output, schemaDefinitions: wire.responseSchema?wire.responseSchemaDefinitions:outputContract.schemaDefinitions, responseSchema:wire.responseSchema,
-          canonicalizeOutput: candidate => outputValidators[batch.task](input, wire.decode(candidate), binding) },
+          ...(input.task==='market-product-shape-suggestion'?{repairGuidance:marketShapeSpanRepairGuidance}:{}),
+          canonicalizeOutput: candidate => {
+            spanNormalizations=[];
+            const decoded=wire.decode(candidate);
+            if(input.task!=='market-product-shape-suggestion')return outputValidators[batch.task](input,decoded,binding);
+            const normalized=normalizeLiveMarketShapeSpans(input,decoded);
+            const validated=validation.validateMarketShapeSuggestions(input,normalized.output,binding);
+            spanNormalizations=normalized.provenance;
+            return validated;
+          } },
         input:wire.input, snapshotIds: [saved.id], model: configuration.model, signal: controller.signal });
       const fingerprint = digest({ subject, bindingId: saved.id, inputDigest: saved.inputDigest, skill: prepared.skill,
         inputSchemaDigest: prepared.inputContract.schemaDigest, outputSchemaDigest: prepared.outputContract.schemaDigest,...(wire.encoding==='canonical/v1'?{}:{referenceEncoding:wire.encoding}),
         provider: prepared.providerName, model: prepared.model, configurationVersion: configuration.configurationVersion,
         versions: view.run.versions, transport: configuration.transport, schemaPromptMode: 'native',
+        ...(input.task==='market-product-shape-suggestion'?{spanNormalizationPolicy:MARKET_SHAPE_SPAN_NORMALIZATION_VERSION}:{}),
         estimationVersion: MARKET_REQUEST_ESTIMATION_VERSION, batchMs, stageMs, deadlineAt });
       const replay = (record: MarketAgentRunRecord): MarketSemanticExecutionResult => {
         if (record.executionFingerprint !== fingerprint || record.attemptId !== claim.attemptId || record.bindingId !== saved.id || !record.outcome) throw new MarketAgentRunConflictError();
@@ -207,7 +220,7 @@ export class MarketSemanticExecutionService {
           error: { ...normalized.error, ...(timeoutMessage ? { message: timeoutMessage } : {}), retryable: false }, terminalMetadata: normalized.terminalMetadata };
       };
       const outcome: FinalizeAgentRunOutcome = error || !execution ? failed(error) : { ...accounting, terminalStatus: 'succeeded', validationStatus: 'passed',
-        output: execution.value as unknown as Record<string, unknown>, error: null, terminalMetadata: { kind: 'succeeded' } };
+        output: execution.value as unknown as Record<string, unknown>, error: null, terminalMetadata: { kind: 'succeeded', ...(spanNormalizations.length?{marketShapeSpanNormalizations:spanNormalizations}:{}) } };
       await stop();
       const finish = (terminal: FinalizeAgentRunOutcome) => this.context.transaction(async () => {
         if (terminal.terminalStatus === 'succeeded') ensure();
@@ -224,7 +237,14 @@ export class MarketSemanticExecutionService {
       });
       let record: MarketAgentRunRecord;
       try { record = await finish(outcome); }
-      catch (caught) { if (caught instanceof MarketDeadlineError && outcome.terminalStatus === 'succeeded') record = await finish(failed(caught)); else throw caught; }
+      catch (caught) {
+        // Cancellation commits its own terminal audit while revoking the step
+        // lease. Observe that exact immutable result; never publish a late output.
+        const cancelled=await this.#audit.findAgentRun({...readScope,agentRunId:authority!.agentRunId});
+        if(cancelled?.terminalStatus==='cancelled'&&cancelled.claim.token===authority!.claimToken&&cancelled.claim.ownerId===authority!.leaseOwnerId&&cancelled.claim.generation===authority!.leaseGeneration)record=cancelled;
+        else if (caught instanceof MarketDeadlineError && outcome.terminalStatus === 'succeeded') record = await finish(failed(caught));
+        else throw caught;
+      }
       return { status: record.terminalStatus === 'succeeded' ? 'succeeded' : 'failed', value: record.terminalStatus === 'succeeded' ? execution!.value : null, agentRun: record, replayed: false };
     } finally { await stop(); signal?.removeEventListener('abort', externalAbort); }
   }

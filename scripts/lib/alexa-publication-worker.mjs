@@ -25,17 +25,32 @@ function scheduleLegacyWakeup(options) {
   return true;
 }
 
-export function startAlexaPublicationWorker({
-  worktree,
-  env = process.env,
-  spawn = spawnChild,
-  token = randomUUID(),
-  schedule = setTimeout,
-  legacyRetryMs = 30_000,
-  legacyWakeAttempts = 3,
-  legacyWakeAttempt = 0,
-  onWakeError = (error) => console.error("Alexa publication legacy handoff retry failed", error),
-} = {}) {
+/**
+ * @typedef {object} AlexaPublicationWorkerOptions
+ * @property {string} [worktree]
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ * @property {typeof spawnChild} [spawn]
+ * @property {string} [token]
+ * @property {(callback: () => void, delay: number) => { unref?: () => unknown } | undefined} [schedule]
+ * @property {number} [legacyRetryMs]
+ * @property {number} [legacyWakeAttempts]
+ * @property {number} [legacyWakeAttempt]
+ * @property {(error: unknown) => void} [onWakeError]
+ */
+
+/** @param {AlexaPublicationWorkerOptions} [options] */
+export function startAlexaPublicationWorker(options = {}) {
+  const {
+    worktree,
+    env = process.env,
+    spawn = spawnChild,
+    token = randomUUID(),
+    schedule = setTimeout,
+    legacyRetryMs = 30_000,
+    legacyWakeAttempts = 3,
+    legacyWakeAttempt = 0,
+    onWakeError = (error) => console.error("Alexa publication legacy handoff retry failed", error),
+  } = options;
   if (
     !Number.isSafeInteger(legacyRetryMs) || legacyRetryMs < 1
     || !Number.isSafeInteger(legacyWakeAttempts) || legacyWakeAttempts < 0 || legacyWakeAttempts > 10
@@ -88,6 +103,7 @@ export function startAlexaPublicationWorker({
   return Object.freeze({ started: true, message: "已启动后台构建与正式页面发布", generation: claim.generation });
 }
 
+/** @param {AlexaPublicationWorkerOptions} [options] */
 export function recoverAlexaPublicationWorkerOnStartup(options = {}) {
   const state = readAlexaPublicationState(options.worktree);
   if (!state.dirty) return Object.freeze({ started: false, dirty: false });

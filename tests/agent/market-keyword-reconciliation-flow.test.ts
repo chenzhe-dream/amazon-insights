@@ -13,6 +13,14 @@ function save(v:MarketModuleRunView,d:MarketStepDefinition,output:any={},status:
  const id=randomUUID(),aid=randomUUID(); const s:MarketExecutionStep={...d,id,inputHash:digest(d),status,attemptCount:1,retryRound:0,latestAttemptId:aid}; v.steps.push(s);v.attempts.push({id:aid,stepId:id,attemptNumber:1,retryRound:0,leaseGeneration:1,status,output,error:null});return s;
 }
 function addPage(v:MarketModuleRunView,d:MarketStepDefinition,p:any){const built=page(p,(d.input as any).offset);const s=save(v,d,built.output);for(const c of built.children){const batchKey=randomUUID(),bindingId=randomUUID();save(v,c,{task:'market-keyword-semantics',inputSnapshotId:(c.input as any).inputSnapshotId,batches:[{batchKey,bindingId,inputDigest:hash}]});save(v,{stepKey:`model/${batchKey}`,kind:'model-batch',subject:{task:'market-keyword-semantics'},input:{task:'market-keyword-semantics',bindingId,inputDigest:hash},inputRefs:c.inputRefs});}return s;}
+test('cancelled runs retain an unstarted reconciliation frontier without accepting forged history',()=>{
+ const v=view(),d=definition(anchor,[]);v.run.status='cancelled';
+ v.steps.push({...d,id:randomUUID(),inputHash:digest(d),status:'cancelled',attemptCount:0,retryRound:0,latestAttemptId:null});
+ const read=inspect(v,anchor,new Set());assert.deepEqual(read.children,[]);assert.deepEqual(read.currentStepKeys,[d.stepKey]);
+ for(const mutate of [(x:MarketModuleRunView)=>{x.run.status='running';},(x:MarketModuleRunView)=>{x.steps[0].attemptCount=1;},(x:MarketModuleRunView)=>{x.steps[0].inputHash=hash;},(x:MarketModuleRunView)=>{x.steps[0].inputRefs=[];},(x:MarketModuleRunView)=>{x.steps[0].latestAttemptId=randomUUID();}]){
+  const bad=structuredClone(v);mutate(bad);assert.throws(()=>inspect(bad,anchor,new Set()));
+ }
+});
 test('page materializes exactly the selected four snapshots once and never touches other windows',()=>{const p=plan();const b=page(p.value,0);assert.equal(p.materialized,4);assert.equal(b.inputs.length,4);assert.equal(b.output.nextOffset,4);assert.equal(b.children.length,4);assert.throws(()=>page(p.value,1));});
 test('page keys bind every prior authority including previous-page attempt',()=>{const a=definition(anchor,[],{offset:4,planHash:hash,previousPageAttemptId:randomUUID()});const b=definition(anchor,[],{offset:4,planHash:hash,previousPageAttemptId:randomUUID()});assert.notEqual(a.stepKey,b.stepKey);assert.throws(()=>definition({...anchor,modelAttemptIds:[anchor.modelAttemptIds[0],anchor.modelAttemptIds[0]]},[]));});
 test('waiting and terminal planner outputs need no model or evaluation child',()=>{for(const status of ['waiting-initial-models','ready','partial']){const v=view(),p=plan(0).value;p.status=status;p.result=status==='waiting-initial-models'?null:{resultHash:hash};const d=definition(anchor,[]),b=page(p,0);save(v,d,b.output);const r=inspect(v,anchor,new Set());assert.equal(r.status,status);assert.deepEqual(r.children,[]);}});

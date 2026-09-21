@@ -11,6 +11,7 @@ import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 import { readXydcOrderDisplaySnapshot } from "../../scripts/lib/xydc-order-display-cache";
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
+import { readXydcTranslatedAttribute } from "../../scripts/lib/xydc-label-translation";
 import type { XydcOrderSnapshot, XydcOrderWindow } from "../../shared/xydc-order-contract";
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import { XydcVariantFamilySchema, type XydcVariantFamily } from "../../shared/xydc-variant-contract";
@@ -113,7 +114,12 @@ function readScopedXydcVariantFamilies(asins: readonly string[], country: string
       const expectedInputAsin = inputAsin.trim().toUpperCase();
       const cached = JSON.parse(fs.readFileSync(xydcVariantCachePath(dataRoot, country, inputAsin), "utf8"));
       const parsed = XydcVariantFamilySchema.safeParse(cached);
-      return parsed.success && parsed.data.inputAsin === expectedInputAsin && parsed.data.country === expectedCountry ? [parsed.data] : [];
+      return parsed.success && parsed.data.inputAsin === expectedInputAsin && parsed.data.country === expectedCountry ? [{
+        ...parsed.data,
+        children: parsed.data.children.map(child => ({ ...child,
+          attributes: child.attributes.map(attribute => readXydcTranslatedAttribute(dataRoot, attribute)),
+        })),
+      }] : [];
     } catch {
       return [];
     }

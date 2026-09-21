@@ -63,6 +63,7 @@ function deps(read: LocalDataBridgeDeps["readTrafficSnapshot"]): LocalDataBridge
     async createAnalysisProject() { throw new Error("unused"); }, async updateAnalysisProject() { return null; },
     async deleteAnalysisProject() { return false; }, async normalizeAsins() { return null; },
     async fetchAsinDataStatus() { return []; }, async startAsinSyncJob() { throw new Error("unused"); },
+    async resumeAsinSyncJob() { throw new Error("unused"); },
     async readJob() { return null; }, readTrafficSnapshot: read,
   };
 }

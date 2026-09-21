@@ -304,7 +304,8 @@ test("bounded admission queues one call FIFO and fails fast when the queue is fu
   const thirdError = await captureConnectorError(
     connector.execute({ operation: "queue", input: { sequence: 3 } }),
   );
-  assert.equal(thirdError.code, "rate-limit");
+  assert.equal(thirdError.code, "local-admission");
+  assert.deepEqual(thirdError.admission,{reason:"concurrency",retryAt:null});
   assert.equal(thirdError.retryable, true);
   assert.deepEqual(entered, [1]);
 

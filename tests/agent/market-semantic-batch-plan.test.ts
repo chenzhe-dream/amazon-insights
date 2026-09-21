@@ -41,7 +41,7 @@ function fixture(task: Exclude<MarketSemanticTaskName,'market-shape-structure-ex
 
 test('batch preparation keeps complete membership, deterministic identity and registered member caps for all tasks', async () => {
   for (const [task, count, cap] of [
-    ['market-overview-explanation', 1, 1], ['market-product-shape-suggestion', 23, 10],
+    ['market-overview-explanation', 1, 1], ['market-product-shape-suggestion', 23, 1],
     ['market-keyword-semantics', 43, 20], ['market-customer-theme-mapping', 27, 12],
   ] as const) {
     const input = fixture(task, count, true);
@@ -58,6 +58,26 @@ test('batch preparation keeps complete membership, deterministic identity and re
     assert.notEqual(changed.batches[0].input.batchId, plan.batches[0].input.batchId);
     assert.notEqual(changed.basisHash, plan.basisHash);
   }
+});
+
+test('shape single-product policy changes only shape planner identity and retains complete evidence', async () => {
+  const shape = fixture('market-product-shape-suggestion', 10);
+  const plan = await planMarketSemanticBatches(shape, async () => true);
+  assert.equal(plan.plannerVersion, 'market-semantic-batches/shape-single-product-v2');
+  const oldBasis = digest({ planner: 'market-semantic-batches/v1', task: shape.task, moduleRunId: shape.moduleRunId,
+    snapshotId: shape.snapshot.snapshotId, selectionRevision: shape.selectionRevision,
+    configurationVersion: shape.configurationVersion, dataCutoffAt: shape.dataCutoffAt });
+  assert.notEqual(plan.basisHash, oldBasis);
+  assert.equal(plan.batches.length, 10);
+  for (const batch of plan.batches) {
+    assert.equal(batch.memberRefs.length, 1);
+    assert.equal(batch.input.task, 'market-product-shape-suggestion');
+    assert.deepEqual(batch.validationBinding.sourceEvidenceByRef, shape.sources);
+    validateMarketSemanticInput(batch.input, batch.validationBinding);
+  }
+  const themes = await planMarketSemanticBatches(fixture('market-customer-theme-mapping', 25), async () => true);
+  assert.equal(themes.plannerVersion, 'market-semantic-batches/v1');
+  assert.deepEqual(themes.batches.map(batch => batch.memberRefs.length), [12, 12, 1]);
 });
 test('input size splits at exact accepted boundary and oversized members remain explicit gaps', async () => {
   const input = fixture('market-keyword-semantics', 7);
@@ -104,7 +124,10 @@ test('overview preserves explicit unknown periods for source values but rejects 
     collectedAt: original.collectedAt, expectedRecordIds: original.expectedRecordIds, records: [record] });
   let calls = 0;
   const planned=await planMarketSemanticBatches(input,async()=>{calls++;return true;});assert.equal(planned.batches.length,1);
-  assert.equal((planned.batches[0].input as any).metrics[0].period.kind,'unknown');
+  const plannedInput=planned.batches[0].input;
+  assert.equal(plannedInput.task,'market-overview-explanation');
+  if(plannedInput.task!=='market-overview-explanation')throw Error('Unexpected task');
+  assert.equal(plannedInput.metrics[0].period.kind,'unknown');
   record.data.semantic.facts[0].kind='trend';
   input.snapshot=createMarketInputSnapshot({scope:original.scope,kind:original.kind,sourceVersion:original.sourceVersion,ruleVersion:original.ruleVersion,collectedAt:original.collectedAt,expectedRecordIds:original.expectedRecordIds,records:[record]});calls=0;
   await assert.rejects(() => planMarketSemanticBatches(input, async () => { calls++; return true; }), /invalid_period/);

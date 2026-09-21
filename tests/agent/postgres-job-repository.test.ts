@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 
-import type { Pool } from "pg";
+import type { Pool, QueryResultRow } from "pg";
 
 import {
   VOC_SOURCE_REFERENCES,
@@ -625,4 +625,48 @@ test("PostgreSQL report-only failure persists durable publication retry state", 
   assert.equal(failedAgain.reportPublicationInitialDelayMs, 100);
   assert.equal(failedAgain.reportPublicationMaxDelayMs, 400);
   assert.ok(failedAgain.reportPublicationRetryAt);
+});
+
+
+test("PostgreSQL completion and VOC replacement serialize without lock inversion", { timeout: 15000 }, async (t) => {
+  const { firstPool, secondPool } = await createSchema();
+  const seed = await seedQueuedJob(firstPool, randomUUID());
+  const completeContext = new PostgresQueryContext(firstPool);
+  const replaceContext = new PostgresQueryContext(secondPool);
+  const completion = new PostgresJobStore(completeContext), replacement = new PostgresJobStore(replaceContext);
+  const claimed = await completion.claimNextJob({ ownerId: "race", claimedAt: NOW, leaseDurationMs: 600000 });
+  function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { resolve, promise }; }
+  const firstLocked = deferred(), replacementLocked = deferred(), proceed = deferred();
+  t.after(() => proceed.resolve());
+  let replacementPid: number | undefined;
+  const originalComplete = completeContext.query.bind(completeContext);
+  completeContext.query = async <Row extends QueryResultRow = QueryResultRow>(sql: string, values?: unknown[]) => {
+    const result = await originalComplete<Row>(sql, values);
+    if (sql.includes("SET status = 'succeeded', leased_by")) { firstLocked.resolve(); await proceed.promise; }
+    return result;
+  };
+  const originalReplace = replaceContext.query.bind(replaceContext);
+  replaceContext.query = async <Row extends QueryResultRow = QueryResultRow>(sql: string, values?: unknown[]) => {
+    if (sql.includes("FOR UPDATE OF ar, rs")) replacementPid = Number((await originalReplace("SELECT pg_backend_pid() AS pid")).rows[0].pid);
+    const result = await originalReplace<Row>(sql, values);
+    if (sql.includes("FOR UPDATE OF ar, rs")) replacementLocked.resolve();
+    return result;
+  };
+  const done = completion.completeJob({ jobId: seed.jobId, ownerId: "race", leaseGeneration: claimed!.leaseGeneration, completedAt: NOW });
+  await firstLocked.promise;
+  const replace = replacement.enqueueJob({ id: randomUUID(), stageId: seed.stageId, attemptNumber: 2, maxAttempts: 4, createdAt: NOW, availableAt: NOW, supersedeVocPredecessors: true });
+  const outcomes = Promise.allSettled([done, replace]);
+  try {
+    await Promise.race([replacementLocked.promise, (async () => {
+      for (let i = 0; i < 200; i++) {
+        if (replacementPid && Number((await postgres.pool.query("SELECT cardinality(pg_blocking_pids($1)) AS count", [replacementPid])).rows[0].count) > 0) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error("race barrier timed out");
+    })()]);
+  } finally { proceed.resolve(); }
+  const results = await outcomes;
+  assert.ok(results.every(result => result.status === "fulfilled"), "completion and replacement must serialize without deadlock");
+  const attempts = await replacement.listJobAttempts(seed.stageId);
+  assert.deepEqual(attempts.map(attempt => attempt.status), ["succeeded", "queued"]);
 });

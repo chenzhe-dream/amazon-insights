@@ -10,7 +10,7 @@ export interface KeywordMetricEvidence {
   readonly sourceVersion: string;
   readonly recordIds: readonly string[];
   readonly metric: string;
-  readonly unit: "count" | "fraction" | "ratio" | "USD" | "label";
+  readonly unit: "count" | "fraction" | "ratio" | "USD" | "GBP" | "EUR" | "JPY" | "CAD" | "label";
   readonly method: string;
   readonly methodVersion: string;
 }

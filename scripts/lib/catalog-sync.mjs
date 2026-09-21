@@ -105,6 +105,7 @@ export function buildCatalogEntryFromSellerSprite(detail, trendPoints) {
     launch: formatLaunch(detail.availableDate ?? detail.createdTime),
     format: detail.skuList?.length ? detail.skuList.join(" · ") : "—",
     variants: detail.variations ? `${detail.variations}个变体` : "—",
+    listingBullets: features,
     sellingPoints: localizeSellingPoints(features, {
       family,
       title: detail.title || "",
@@ -131,12 +132,12 @@ export function buildCatalogEntryFromSellerSprite(detail, trendPoints) {
   };
 }
 
-export function ensureCatalogProductFamilies() {
-  if (!fs.existsSync(catalogPath)) return [];
-  const catalog = readCachedArrayExport(catalogPath, "refreshedCatalog");
+export function ensureCatalogProductFamilies(filePath = catalogPath) {
+  if (!fs.existsSync(filePath)) return [];
+  const catalog = readCachedArrayExport(filePath, "refreshedCatalog");
   if (!Array.isArray(catalog) || !catalog.length) return catalog ?? [];
 
-  let source = fs.readFileSync(catalogPath, "utf8");
+  let source = fs.readFileSync(filePath, "utf8");
   let changed = false;
   const next = catalog.map(item => {
     const family = detectProductFamily({
@@ -147,7 +148,16 @@ export function ensureCatalogProductFamilies() {
     const marker = `"asin": "${item.asin}"`;
     const start = source.indexOf(marker);
     if (start < 0) return { ...item, productFamily: family };
-    const windowEnd = Math.min(source.length, start + 500);
+    // Scan to this JSON object's closing brace, ignoring braces inside strings.
+    // Long titles can put productFamily well past the former 500-character window.
+    let windowEnd=source.length,depth=0,quoted=false,escaped=false;
+    for(let i=start;i<source.length;i++){
+      const char=source[i];
+      if(quoted){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')quoted=false;continue}
+      if(char==='"')quoted=true;
+      else if(char==='{')depth++;
+      else if(char==='}'){if(depth===0){windowEnd=i+1;break}depth--}
+    }
     const window = source.slice(start, windowEnd);
     if (new RegExp(`"productFamily":\\s*"${family}"`).test(window)) {
       return { ...item, productFamily: family };
@@ -163,7 +173,7 @@ export function ensureCatalogProductFamilies() {
     return { ...item, productFamily: family };
   });
 
-  if (changed) fs.writeFileSync(catalogPath, source, "utf8");
+  if (changed) fs.writeFileSync(filePath, source, "utf8");
   return next;
 }
 

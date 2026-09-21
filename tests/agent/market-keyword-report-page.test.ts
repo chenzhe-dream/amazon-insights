@@ -25,7 +25,7 @@ test('facts and saved manual report browse all 45 keywords without changing the 
   if(url.pathname==='/__keyword_report_fixture')return route.fulfill({json:catalog});if(url.pathname.startsWith('/api/')){unexpected.push(url.pathname);return route.abort();}return route.continue();
  });
  await page.goto(origin);
- const source=page.getByRole('region',{name:'关键词来源事实报告',exact:true}),manual=page.getByRole('region',{name:'关键词人工修订报告',exact:true});await source.waitFor();await manual.waitFor();
+ const source=page.getByRole('region',{name:'关键词来源事实报告',exact:true}),manual=page.getByRole('region',{name:'关键词人工修订报告',exact:true});await source.waitFor();await manual.waitFor();await source.getByRole('button',{name:'关键词',exact:true}).click();
  const factsRows=source.getByRole('region',{name:'关键词参考月指标'}).locator('tbody > tr'),manualRows=manual.getByRole('region',{name:'人工关键词归属表'}).locator('tbody > tr');
  assert.equal(await factsRows.count(),20);assert.equal(await manualRows.count(),20);
  const denominator=manual.locator('.market-research-metrics > div').filter({has:page.getByText('词池分母（参考月总搜索量）',{exact:true})}).locator('dd');assert.equal(await denominator.innerText(),'440');
@@ -36,6 +36,11 @@ test('facts and saved manual report browse all 45 keywords without changing the 
  await source.getByRole('button',{name:'关键词事实明细上一页',exact:true}).click();await source.getByRole('rowheader',{name:'term-20',exact:true}).waitFor();
  await source.getByRole('button',{name:'关键词事实明细首页',exact:true}).click();await source.getByRole('rowheader',{name:'term-00',exact:true}).waitFor();assert.equal(await factsRows.count(),20);
  await manual.getByRole('button',{name:'人工关键词归属首页',exact:true}).click();await manual.getByRole('rowheader',{name:'term-00',exact:true}).waitFor();assert.equal(await denominator.innerText(),'440');
+ await source.getByRole('button',{name:'月搜索量',exact:true}).click();assert.equal(await factsRows.first().getByRole('rowheader').innerText(),'term-01');
+ await source.getByRole('combobox',{name:'关键词每页条数'}).selectOption('50');assert.equal(await factsRows.count(),45);assert.equal(await factsRows.last().getByRole('rowheader').innerText(),'term-00');
+ await source.getByRole('searchbox',{name:'模糊搜索关键词'}).fill('term-44');assert.equal(await factsRows.count(),1);assert.equal(await factsRows.first().getByRole('rowheader').innerText(),'term-44');assert.equal(await denominator.innerText(),'440');
+ await source.getByRole('searchbox',{name:'模糊搜索关键词'}).fill('nothing-matches');await source.getByText('未匹配到「nothing-matches」，请换关键词或清除搜索。',{exact:true}).waitFor();
+ await source.getByRole('button',{name:'清除搜索'}).click();assert.equal(await factsRows.count(),45);
  const output='test-results/market-research-goal/T17';await mkdir(output,{recursive:true});await page.screenshot({path:`${output}/keyword-report-desktop.png`,fullPage:true});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/keyword-report-mobile.png`,fullPage:true});
  assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);assert.equal(digest(catalog),before);

@@ -18,7 +18,7 @@ test("the legacy Web job-read endpoint delegates same-org, missing, and foreign 
   if (!read) return;
 
   const calls: string[] = [];
-  const missing = { error: { code: "NOT_FOUND", message: "Sync job not found", requestId: "request-1" } };
+  const missing = { error: { code: "NOT_FOUND" as const, message: "Sync job not found", requestId: "request-1" } };
   const agent: AgentServiceClient = async request => {
     calls.push(request.path);
     if (request.path.endsWith("/same")) {

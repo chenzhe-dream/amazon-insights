@@ -33,7 +33,7 @@ test("market report keeps missing values unknown and unconfirmed ratios raw", ()
 test("market overview can render without ASINs and does not start a job on rendering", () => {
   const html = renderToStaticMarkup(<MarketResearchSection sessionIdentity="session-one" />);
   assert.match(html, /类目节点/);
-  assert.match(html, /开始采集/);
+  assert.match(html, /筛选市场/);
   assert.match(html, /采集历史/);
   assert.doesNotMatch(html, /输入 3|自动开始/);
   for (const label of ["市场总览", "商品形态及价格带", "类目关键词洞察", "类目买家评论见解"]) assert.ok(html.includes(label));
@@ -74,7 +74,7 @@ test("browser client uses authenticated same-origin API and an explicit idempote
 test("browser client rejects malformed responses and responses after the session request is aborted", async () => {
   const originalFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async () => Response.json({ jobs: [{ ...job, scope: { ...scope, marketplace: "UK" } }] });
+    globalThis.fetch = async () => Response.json({ jobs: [{ ...job, scope: { ...scope, marketplace: "ZZ" } }] });
     await assert.rejects(listMarketResearchJobs(), /格式/);
     const controller = new AbortController();
     globalThis.fetch = async () => { controller.abort(); return Response.json({ jobs: [job] }); };

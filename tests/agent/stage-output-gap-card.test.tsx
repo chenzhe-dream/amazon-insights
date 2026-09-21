@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { StageOutputSnapshot } from "../../app/lib/stage-output-browser";
+import type { StageOutputEntry, StageOutputSnapshot } from "../../app/lib/stage-output-browser";
 import { StageOutputGapCard } from "../../app/stage-output-gap-card";
 
 test("missing output renders the bounded-retry gap", () => {
@@ -33,7 +33,7 @@ test("partial gaps disclose the failed ASIN and its bounded precise reason", () 
       }] },
       jobId: "job", projectId: "10000000-0000-4000-8000-000000000001", runId: "10000000-0000-4000-8000-000000000002",
       jobVersion: 1, outputVersion: 1, contentHash: "a".repeat(64), updatedAt: "2026-09-02T00:00:00.000Z",
-    }),
+    } satisfies StageOutputEntry),
   });
   const html = JSON.stringify(StageOutputGapCard({ snapshot, stage: "keywords" }));
   assert.match(html, /B0SCHEMA01/);

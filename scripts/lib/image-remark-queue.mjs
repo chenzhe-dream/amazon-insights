@@ -58,16 +58,36 @@ async function runOne(item, worker, timeoutMs, governorContext) {
   }
 }
 
-export async function runImageRemarkQueue(items, worker, {
-  concurrency = IMAGE_REMARK_CONCURRENCY,
-  timeoutMs = IMAGE_REMARK_TIMEOUT_MS,
-  onSettled = () => undefined,
-  resourceGovernor,
-  requireResourceGovernor,
-  organizationId,
-  jobId,
-  env = process.env,
-} = {}) {
+/**
+ * @typedef {object} ImageRemarkQueueOptions
+ * @property {number} [concurrency]
+ * @property {number} [timeoutMs]
+ * @property {(progress: Readonly<{completed: number, total: number, status: import('./image-remark-outcome.mjs').ImageRemarkOutcome['status']}>, index: number) => void | Promise<void>} [onSettled]
+ * @property {import('./postgres-resource-governor.mjs').ScriptResourceGovernor} [resourceGovernor]
+ * @property {boolean} [requireResourceGovernor]
+ * @property {string | null} [organizationId]
+ * @property {string | null} [jobId]
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ */
+
+/**
+ * @template T
+ * @param {readonly T[]} items
+ * @param {(item: T, context: { signal: AbortSignal }) => Promise<{ status?: unknown } | null | undefined>} worker
+ * @param {ImageRemarkQueueOptions} [options]
+ * @returns {Promise<import('./image-remark-outcome.mjs').ImageRemarkOutcome[]>}
+ */
+export async function runImageRemarkQueue(items, worker, options = {}) {
+  const {
+    concurrency = IMAGE_REMARK_CONCURRENCY,
+    timeoutMs = IMAGE_REMARK_TIMEOUT_MS,
+    onSettled = () => undefined,
+    resourceGovernor,
+    requireResourceGovernor,
+    organizationId,
+    jobId,
+    env = process.env,
+  } = options;
   const results = new Array(items.length);
   let nextIndex = 0;
   let completed = 0;

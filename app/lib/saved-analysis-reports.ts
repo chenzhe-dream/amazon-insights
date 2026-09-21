@@ -19,7 +19,7 @@ export const ANALYSIS_REPORT_STAGES = [
 export type SavedAnalysisReportSelection = Partial<Record<StageName, string>>;
 
 export type SavedAnalysisReportSlot = Readonly<{
-  stage: StageName;
+  stage: typeof ANALYSIS_REPORT_STAGES[number];
   history: readonly AnalysisReport[];
   selected: AnalysisReport | null;
 }>;

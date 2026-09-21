@@ -113,6 +113,49 @@ async function fixture(mode: DetailMode | "none" = "full", width = 1280) {
   return { page, state, pending, open, close, recover: () => { recovered = true; } };
 }
 
+test('market sidebar alone selects all four modules and retains category scope', async () => {
+  const f = await fixture();
+  try {
+    await f.open();
+    // This Vite harness supplies router contexts, but has no Next navigation server.
+    await f.page.evaluate(() => {
+      document.addEventListener('click', event => {
+        const link = (event.target as Element).closest<HTMLAnchorElement>('#sidebar-flyout a');
+        if (!link) return;
+        event.preventDefault();
+        window.navigateTrafficFixture?.(new URL(link.href).search.slice(1));
+      }, true);
+    });
+    const trigger = f.page.locator('.nav-group-trigger[data-dim="market-group"]');
+    const flyout = f.page.locator('#sidebar-flyout');
+    const labels = ['市场总览', '商品形态及价格带', '类目关键词洞察', '类目买家评论见解'];
+    await trigger.hover();
+    assert.deepEqual(await flyout.locator('a b').allTextContents(), labels);
+    for (const label of labels) {
+      await trigger.hover();
+      await flyout.getByRole('link', { name: label }).click();
+      await f.page.waitForFunction(label => document.querySelector('.topbar h1')?.textContent === '市场调研 · ' + label, label);
+      assert.equal(await f.page.getByRole('navigation', { name: '市场调研模块' }).count(), 0);
+      await trigger.hover();
+      assert.equal(await flyout.locator('[aria-current="page"] b').textContent(), label);
+      assert.equal(await flyout.locator('.active').count(), 1);
+    }
+    await trigger.hover();
+    await flyout.getByRole('link', { name: '市场总览' }).click();
+    await f.page.keyboard.press('Escape');
+    await f.page.evaluate(() => window.history.replaceState(null, '', '/?tab=market-overview'));
+    const node = f.page.getByRole('textbox', { name: '类目节点或路径', exact: true });
+    await node.fill('123:456');
+    await trigger.hover();
+    await flyout.getByRole('link', { name: '商品形态及价格带' }).click();
+    await f.page.waitForFunction(() => document.querySelector('.topbar h1')?.textContent === '市场调研 · 商品形态及价格带');
+    await trigger.hover();
+    assert.equal(await flyout.locator('[aria-current="page"] b').textContent(), '商品形态及价格带');
+    await flyout.getByRole('link', { name: '市场总览' }).click();
+    assert.equal(await node.inputValue(), '123:456');
+  } finally { await f.close(); }
+});
+
 for (const width of [1280, 1920]) test(`sidebar stays visible while the desktop document scrolls at ${width}px`, async () => {
   const f = await fixture('full', width);
   try {
@@ -135,7 +178,8 @@ for (const width of [1280, 1920]) test(`sidebar stays visible while the desktop 
     await flyout.locator('a').first().click({ trial: true });
     const panel = await flyout.boundingBox();
     assert.ok(panel && panel.x >= rail.width - 1 && panel.y >= 0 && panel.y + panel.height <= 1001, JSON.stringify({ panel, rail }));
-    assert.match((await flyout.locator('a').first().getAttribute('href'))!, /^\/p\/traffic-fixture\?/);
+    // The first group is the organization-level market module, independent of project ASINs.
+    assert.equal(await flyout.locator('a').first().getAttribute('href'), '/?tab=market-overview');
     await f.page.keyboard.press('Escape');
     await f.page.waitForFunction(() => document.querySelector('#sidebar-flyout')?.getAttribute('aria-hidden') === 'true');
   } finally { await f.close(); }

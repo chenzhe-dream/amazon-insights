@@ -346,7 +346,7 @@ function sourceScopedConflictExpectation(
 function protectedThemeExpectation(input: z.infer<typeof VocPositioningInputSchema>) {
   const dimension = input.dimensions.find((item) => item.key === "negatives");
   const theme = dimension?.themes.find((item) => item.label === "耐用性 / 结构强度");
-  if (!dimension || !theme || theme.priority.level !== "P0" || !theme.priority.safetyRule) {
+  if (!dimension || !theme || theme.priority.level !== "P0" || !theme.priority.safetyRule || !theme.priority.cannotDowngradeReason) {
     throw new TypeError("Missing safety P0 fixture theme");
   }
   return {

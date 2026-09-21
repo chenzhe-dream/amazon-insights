@@ -126,6 +126,7 @@ function trustedAvailableStatus(lease: SyncJobLease): ConnectorStatusRecord {
 }
 
 class MemorySyncJobs implements SyncJobRepository {
+  async readStageOutput() { return null; }
   admit(): Promise<never> { throw new Error("not used"); }
   findById(): Promise<null> { return Promise.resolve(null); }
   resume(): Promise<null> { return Promise.resolve(null); }

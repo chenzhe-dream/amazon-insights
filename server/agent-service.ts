@@ -2,14 +2,18 @@ import { MarketResearchService, MarketResearchWorker } from "./services/market-r
 import { MarketModuleService } from './services/market-module-service';
 import { collectMarketOverview } from "./services/market-overview-collector";
 import { createMarketModelRuntime, type MarketModelRuntime } from './runtime/market-model-runtime';
-import { MarketModuleStepWorker } from './runtime/market-module-step-worker';
+import { loadMarketModelRuntimeConfig } from './runtime/market-model-config';
+import { MarketModuleStepWorker, type MarketStepHandler } from './runtime/market-module-step-worker';
+import { MarketModelBatchWorker, MarketModelConfigurationUnavailableError } from './runtime/market-model-batch-worker';
+import { PostgresMarketAgentRunStore } from './db/postgres/market-agent-run-store';
+import { createMarketOverviewSynthesisReportStep } from './runtime/market-overview-synthesis-report-step';
 import { createMarketSourceStepHandlers } from './runtime/market-source-step-handlers';
 import {createMarketShapeSelectionStep} from './runtime/market-shape-selection-step';
 import {MARKET_SHAPE_FLOW_VERSION} from './domain/market-research/shape-price-flow';
 import {MARKET_KEYWORD_FLOW_VERSION} from './domain/market-research/keyword-flow';
 import {createMarketKeywordPoolStep} from './runtime/market-keyword-pool-step';
 import {createMarketOverviewCatalogStep} from './runtime/market-overview-catalog-step';
-import {MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION} from './domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION} from './domain/market-research/overview-flow';
 import {createMarketOverviewWindowsStep} from './runtime/market-overview-windows-step';
 import {createMarketOverviewReportStep} from './runtime/market-overview-report-step';
 import { PostgresMarketModuleExecutionStore } from './db/postgres/market-module-execution-store';
@@ -120,10 +124,12 @@ type StoppableRuntime = Readonly<{ stop(): Promise<void> }>;
 export async function stopAgentServiceResources({
   runtimes,
   closeApp,
+  closeConnectors,
   closeOwnedRepository,
 }: {
   runtimes: readonly (StoppableRuntime | null | undefined)[];
   closeApp: () => Promise<void>;
+  closeConnectors?: () => Promise<void>;
   closeOwnedRepository: () => Promise<void>;
 }): Promise<void> {
   const results = [
@@ -132,6 +138,12 @@ export async function stopAgentServiceResources({
     )),
     await Promise.resolve()
       .then(closeApp)
+      .then(
+        () => ({ status: "fulfilled" as const, value: undefined }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      ),
+    await Promise.resolve()
+      .then(() => closeConnectors?.())
       .then(
         () => ({ status: "fulfilled" as const, value: undefined }),
         (reason: unknown) => ({ status: "rejected" as const, reason }),
@@ -354,8 +366,10 @@ export async function createAgentService(
     if (repository.marketExecutionContext && resolution.status === 'configured') {
       try {
         if (env.AGENT_VOC_LOCAL_FAKE === '1' && !options.marketModelClient) throw new Error('Local fixture mode requires a synthetic market client');
-        marketModelRuntime = await createMarketModelRuntime(repository.marketExecutionContext, resolution.config, {
+        marketModelRuntime = await createMarketModelRuntime(repository.marketExecutionContext, loadMarketModelRuntimeConfig(runtimeEnv), {
           skillsRoot: options.skillsRoot, client: options.marketModelClient, connectors,
+          validationLogger: options.validationLogger ?? ((entry) => app.log.warn({ component: 'market-model', ...entry }, entry.event)),
+          networkLogger: entry => app.log.info({ component: 'market-model-network', ...entry }, 'Market model network phase'),
           worker: { onEvent: event => app.log.info({ component: 'market-model', ...event }, 'Market model queue iteration') },
           stepWorker: { onEvent: event => app.log.info({ component: 'market-step', ...event }, 'Market step queue iteration') },
         });
@@ -363,16 +377,50 @@ export async function createAgentService(
     }
     // Source collection remains usable when model configuration/skills are unavailable.
     // Exactly one native collection consumer is started, either here or in the combined runtime.
+    const explainedOverviewFlows = [MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION, MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,
+      MARKET_OVERVIEW_COMPLETE_FLOW_VERSION, MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION];
+    const completeOverviewFlows = [MARKET_OVERVIEW_COMPLETE_FLOW_VERSION, MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION];
+    const modelUnavailableStep: MarketStepHandler = async ({signal}) => {
+      signal.throwIfAborted();
+      return {kind:'settlement',value:{outcome:{status:'failed',error:{code:'governance',retryable:false},diagnostic:{reason:'model-configuration-unavailable'}}}};
+    };
     const marketCollectionWorker = repository.marketExecutionContext && !marketModelRuntime ? new MarketModuleStepWorker({
       steps: new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
-      moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords']},flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION],'prepare-members':[MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_SHAPE_FLOW_VERSION],report:[MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION]},
-      handlers: {...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),'prepare-members':input=>(input.claim.step.input as {phase?:unknown})?.phase==='select-shape-members'?createMarketShapeSelectionStep(repository.marketExecutionContext!)(input):createMarketOverviewWindowsStep(repository.marketExecutionContext!,null)(input),report:createMarketOverviewReportStep(repository.marketExecutionContext),'prepare-keyword-pool':createMarketKeywordPoolStep(repository.marketExecutionContext)},
+      moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords'],'prepare-model-batches':['overview']},
+      flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows],
+        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION],report:explainedOverviewFlows,'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
+      handlers: {
+        ...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),
+        rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),
+        'prepare-members':input=>{
+          const phase=(input.claim.step.input as {phase?:unknown})?.phase;
+          if(phase==='select-shape-members')return createMarketShapeSelectionStep(repository.marketExecutionContext!)(input);
+          if(phase==='prepare-overview-synthesis')return modelUnavailableStep(input);
+          return createMarketOverviewWindowsStep(repository.marketExecutionContext!,null)(input);
+        },
+        'prepare-model-batches':modelUnavailableStep,
+        report:input=>(input.claim.step.input as {phase?:unknown})?.phase==='overview-synthesis-report'
+          ?createMarketOverviewSynthesisReportStep(repository.marketExecutionContext!)(input)
+          :createMarketOverviewReportStep(repository.marketExecutionContext!)(input),
+        'prepare-keyword-pool':createMarketKeywordPoolStep(repository.marketExecutionContext),
+      },
       onEvent: event => app.log.info({ component: 'market-source', ...event }, 'Market source queue iteration'),
+    }) : null;
+    // A configured worker must never compete with this failure-only consumer.
+    // It closes already queued overview model attempts without making model calls.
+    const marketUnavailableModelWorker = repository.marketExecutionContext && !marketModelRuntime ? new MarketModelBatchWorker({
+      steps:new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
+      audit:new PostgresMarketAgentRunStore(repository.marketExecutionContext),
+      moduleKindsByStepKind:{'model-batch':['overview']},flowVersionsByStepKind:{'model-batch':completeOverviewFlows},
+      resolveConfiguration:()=>{throw new MarketModelConfigurationUnavailableError();},
+      execution:{executeBatch:async()=>{throw new MarketModelConfigurationUnavailableError();}},
+      onEvent:event=>app.log.info({component:'market-model-unavailable',...event},'Market model unavailable queue iteration'),
     }) : null;
     const app = buildAgentApp({
       marketResearchService,
       marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
         modelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.configurationVersion, promptVersion: marketModelRuntime.promptVersion } : null,
+        overviewSynthesisModelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.overviewSynthesisConfigurationVersion, promptVersion: marketModelRuntime.overviewSynthesisPromptVersion } : null,
         keywordModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordDiscoveryConfigurationVersion,promptVersion:marketModelRuntime.keywordDiscoveryPromptVersion} : null,
         keywordReconciliationModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordReconciliationConfigurationVersion,promptVersion:marketModelRuntime.keywordReconciliationPromptVersion} : null,
         keywordExplicitModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordExplicitConfigurationVersion,promptVersion:marketModelRuntime.keywordExplicitPromptVersion} : null,
@@ -439,6 +487,7 @@ export async function createAgentService(
         marketResearchWorker?.start();
         marketModelRuntime?.start();
         marketCollectionWorker?.start();
+        marketUnavailableModelWorker?.start();
         vocQueueRuntime.start();
         manualAlexaVocRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
@@ -570,6 +619,7 @@ export async function createAgentService(
             marketResearchWorker,
             marketModelRuntime,
             marketCollectionWorker,
+            marketUnavailableModelWorker,
             vocAutomationService,
             vocQueueRuntime,
             syncJobDispatcher,
@@ -582,6 +632,11 @@ export async function createAgentService(
             sellerSpriteQuotaScheduler,
           ],
           closeApp: () => app.close(),
+          ...(options.connectors ? {} : { closeConnectors: async () => {
+            const results = await Promise.allSettled(Object.values(connectors).map(connector => connector.close?.()));
+            const failures = results.filter(result => result.status === 'rejected');
+            if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Connector shutdown failed');
+          } }),
           closeOwnedRepository,
         });
         return stopPromise;

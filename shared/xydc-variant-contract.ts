@@ -3,6 +3,7 @@ import { z } from "zod";
 export const XydcVariantAttributeSchema = z.strictObject({
   dimension: z.string().min(1),
   value: z.string().min(1),
+  labelZh: z.string().min(1).max(120).optional(),
 });
 
 export const XydcVariantChildSchema = z.strictObject({

@@ -79,7 +79,7 @@ test("matches known labels case-insensitively with surrounding and repeated whit
 test("falls back to the exact raw value for unknown or out-of-dimension labels", () => {
   assert.equal(
     orderAttributeLabel(child("B000000001", [{ dimension: "Color", value: "  Midnight Black  " }])),
-    "  Midnight Black  ",
+    "近似黑色（Midnight Black）",
   );
   assert.equal(
     orderAttributeLabel(child("B000000001", [{ dimension: "Finish", value: "Black" }])),
@@ -103,6 +103,16 @@ test("does not mutate raw child attributes or collapse distinct ASIN identity", 
   assert.equal(orderAttributeLabel(first), "砂黑色");
   assert.equal(orderAttributeLabel(second), "砂黑色");
   assert.deepEqual([first, second], before);
-  assert.notEqual(orderColorMap([first.asin, second.asin]).get(first.asin), orderColorMap([first.asin, second.asin]).get(second.asin));
+  const colors = orderColorMap([first.asin, second.asin], [first, second]);
+  assert.equal(colors.size, 2);
+  assert.equal(colors.get(first.asin), colors.get(second.asin));
+  const reordered = orderColorMap([second.asin, "B000000003", first.asin], [second, first]);
+  assert.equal(reordered.get(first.asin), colors.get(first.asin));
+  assert.equal(reordered.get(second.asin), colors.get(second.asin));
   assert.notEqual(first.asin, second.asin);
+});
+
+test("Chinese source labels win and missing children use a neutral pattern", () => {
+  assert.equal(orderAttributeLabel(child("B000000001", [{dimension: "Color", value: "Blue", labelZh: "品牌湖蓝"}])), "品牌湖蓝");
+  assert.match(orderColorMap(["B000000001"]).get("B000000001")!, /repeating-linear-gradient/);
 });

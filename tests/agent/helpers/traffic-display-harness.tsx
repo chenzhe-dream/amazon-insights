@@ -19,7 +19,7 @@ const initialSession: AuthenticatedWebSession = {
 
 declare global {
   interface Window {
-    setTrafficFixtureSession?: (patch: { sessionIdentity?: string; organizationId?: string; logoutPending?: boolean }) => void;
+    setTrafficFixtureSession?: (patch: { sessionIdentity?: string; organizationId?: string; logoutPending?: boolean; visibleModules?: AuthenticatedWebSession["visibleModules"] }) => void;
     navigateTrafficFixture?: (search: string) => void;
     remountTrafficFixture?: () => void;
   }
@@ -43,6 +43,7 @@ function Harness() {
   useEffect(() => {
     window.setTrafficFixtureSession = patch => flushSync(() => setSession(previous => ({
       ...previous, sessionIdentity: patch.sessionIdentity ?? previous.sessionIdentity,
+      ...("visibleModules" in patch ? {visibleModules:patch.visibleModules} : {}),
       logoutPending: patch.logoutPending ?? previous.logoutPending,
       user: { ...previous.user, organizationId: patch.organizationId ?? previous.user.organizationId },
     })));

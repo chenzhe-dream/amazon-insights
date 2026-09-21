@@ -1,0 +1,60 @@
+import { buildAgentApp } from '../../server/app';
+import { createAgentServiceClient } from '../../app/lib/agent-service-client';
+import { proxyAgentRequest } from '../../app/api/agent/[...path]/route';
+import type { AuthenticationService } from '../../server/auth/authentication-service';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { startPostgresTestContainer } from './helpers/postgres-test-container';
+import { runPostgresMigrations } from '../../server/db/postgres/migrations';
+import { createMarketSemanticFixture } from './helpers/market-semantic-fixture';
+import { MarketModuleService } from '../../server/services/market-module-service';
+import { MarketModuleStepWorker } from '../../server/runtime/market-module-step-worker';
+import { createMarketSourceStepHandlers } from '../../server/runtime/market-source-step-handlers';
+import { createMarketSourceProjectionStep } from '../../server/runtime/market-source-projection-step';
+import { createMarketThemeRulesStep } from '../../server/runtime/market-theme-rules-step';
+import { createMarketThemeReportStep } from '../../server/runtime/market-theme-report-step';
+import { MarketThemeSelectionStore } from '../../server/db/postgres/market-theme-selection-store';
+import type { RemoteMcpConnector } from '../../server/connectors/connector-contract';
+
+test('immutable selection revisions isolate actors, replay commands and never create paid work',{timeout:90000},async t=>{
+ const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
+ const f=await createMarketSemanticFixture(pg.pool);await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
+ const service=new MarketModuleService({context:f.context,modelIdentity:()=>({configurationVersion:'fixture/v1',promptVersion:'fixture/v1'})});
+ const started=await service.startThemes(f.actor,f.scope.researchId,{memberCount:2,poolSize:2},randomUUID());let calls=0;
+ const connector=(id:'sellerSprite'|'sorftime'):RemoteMcpConnector=>({id,probe:async()=>{throw new Error('unused');},execute:async r=>{calls++;return {data:r.operation==='market_product_concentration'?{code:'OK',data:[1,2].map(n=>({asin:`B00000000${n}`,title:`Lamp ${n}`,ranking:n+10}))}:{data:{customer_say:'Frozen overall summary',details:[{keyword:'Assembly',content:'Simple assembly',mention:10,positive:8,negative:6,update_time:'2026-08-01'}]}},source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};}});
+ const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector('sellerSprite'),sorftime:connector('sorftime')}}),'prepare-members':createMarketSourceProjectionStep(f.context),'prepare-model-batches':async()=>({kind:'settlement',value:{outcome:{status:'failed',error:{code:'internal',retryable:false}}}}),rules:createMarketThemeRulesStep(f.context),report:createMarketThemeReportStep(f.context)}});t.after(()=>worker.stop());
+ for(let i=0;i<20;i++)if(!await worker.tick())break;
+ const saved=await service.findRun(f.actor,started.run.id),base=saved.run.currentReport!;assert.ok(base,JSON.stringify(saved));const before=JSON.stringify(saved),sourceCalls=calls;
+ const store=new MarketThemeSelectionStore(f.context),identity={actor:f.actor,moduleRunId:started.run.id,attemptId:base.attemptId};
+ const initial=await store.read(identity);assert.ok(initial);assert.equal(initial.samples[0].title.value,'Lamp 1');assert.equal(initial.samples[0].sourceRank.value,11);assert.equal(initial.samples[0].customerSay.value,'Frozen overall summary',JSON.stringify({samples:initial.samples,baseline:initial.baseline,steps:(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:started.run.id}))?.attempts}));
+ const counts=async()=> (await pg.pool.query('SELECT (SELECT count(*) FROM market_analysis_steps) steps,(SELECT count(*) FROM market_agent_runs) models,(SELECT count(*) FROM market_analysis_inputs) inputs')).rows[0];const countBefore=await counts();
+ const command={...identity,idempotencyKey:randomUUID(),request:{baseReportHash:base.report.reportHash,expectedParentRevisionId:null,excludedAsins:['B000000002']}};
+ const first=await store.save(command);assert.equal(first.created,true);assert.equal(first.view.revision!.result.totals!.mention,10);
+ assert.equal((await store.save(command)).created,false);await assert.rejects(store.save({...command,request:{...command.request,excludedAsins:[]}}));
+ const parent=first.view.revision!.revisionId;
+ const racing=await Promise.allSettled([[],['B000000001','B000000002']].map(excludedAsins=>store.save({...command,idempotencyKey:randomUUID(),request:{...command.request,expectedParentRevisionId:parent,excludedAsins}})));assert.equal(racing.filter(r=>r.status==='fulfilled').length,1);
+ const latest=(await store.read(identity))!;const restored=await store.save({...command,idempotencyKey:randomUUID(),request:{...command.request,expectedParentRevisionId:latest.latestRevisionId,excludedAsins:[]}});assert.equal(restored.view.revision!.result.totals!.mention,20);
+ assert.equal((await store.read({...identity,revisionId:parent}))!.revision!.result.totals!.mention,10);
+ await assert.rejects(store.save({...command,idempotencyKey:randomUUID(),request:{...command.request,expectedParentRevisionId:restored.view.latestRevisionId,excludedAsins:['B000000003']}}));
+ assert.equal(await store.read({...identity,actor:{...f.actor,organizationId:randomUUID()}}),null);
+ await assert.rejects(pg.pool.query('UPDATE market_theme_selection_revisions SET ordinal=ordinal WHERE run_id=$1',[started.run.id]));
+ assert.equal(JSON.stringify(await service.findRun(f.actor,started.run.id)),before);assert.deepEqual(await counts(),countBefore);assert.equal(calls,sourceCalls);
+ await t.test('real secured app and same-origin proxy expose revisions with actor and schema checks',async()=>{
+  const token='B'.repeat(43),origin='http://theme-selection.test',proxyToken='synthetic-theme-selection-token';
+  let principal:{kind:'user';organizationId:string;userId:string;role:'member';email:string;sessionId:string}|null={kind:'user',...f.actor,role:'member',email:'fixture@example.test',sessionId:randomUUID()};
+  const app=buildAgentApp({repository:{marketExecutionContext:f.context} as NonNullable<NonNullable<Parameters<typeof buildAgentApp>[0]>['repository']>,marketModuleService:service,userPresenceAccess:null,
+   env:{AGENT_SERVICE_PROXY_TOKEN:proxyToken,AGENT_SERVICE_TRUSTED_ORIGINS:origin},authConfig:{mode:'authenticated',cookie:{name:'agent_session',secure:false,maxAgeSeconds:3600},sessionTtlMs:3600000,loginLimiter:{windowMs:60000,maxFailures:5,maxEntries:100}},authService:{authenticate:async(value:string|null)=>value===token?principal:null} as AuthenticationService});
+  t.after(()=>app.close());const address=await app.listen({host:'127.0.0.1',port:0}),client=createAgentServiceClient({env:{AGENT_SERVICE_INTERNAL_URL:address,AGENT_SERVICE_PROXY_TOKEN:proxyToken}});
+  const path=`/v1/market-analysis/runs/${identity.moduleRunId}/reports/${identity.attemptId}/theme-selection`;
+  async function proxy(method:string,suffix='',payload?:unknown,key=randomUUID(),cookie=true){return proxyAgentRequest(new Request(`${origin}/api/agent${path}${suffix}`,{method,headers:{'content-type':'application/json','idempotency-key':key,...(cookie?{cookie:`agent_session=${token}`}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})}),{params:Promise.resolve({path:`${path}${suffix}`.slice(1).split('/')})},client);}
+  const read=await proxy('GET');assert.equal(read.status,200,await read.clone().text());const body=await read.json();assert.equal(body.latestRevisionId,restored.view.latestRevisionId);
+  assert.equal((await proxy('GET',`/${parent}`)).status,200);assert.equal((await proxy('GET','',undefined,randomUUID(),false)).status,401);
+  const key=randomUUID(),payload={baseReportHash:base.report.reportHash,expectedParentRevisionId:body.latestRevisionId,excludedAsins:['B000000001','B000000002']};
+  const created=await proxy('POST','',payload,key);assert.equal(created.status,201,await created.clone().text());const excluded=await created.json();assert.equal(excluded.revision.result.totals,null);assert.equal(excluded.revision.result.status,'no-data');
+  assert.equal((await proxy('POST','',payload,key)).status,200);assert.equal((await proxy('POST','',{...payload,excludedAsins:[]},key)).status,409);
+  assert.equal((await proxy('POST','',{...payload,authorId:randomUUID()})).status,400);
+  principal={...principal!,organizationId:randomUUID()};assert.equal((await proxy('GET')).status,404);
+  assert.equal(calls,sourceCalls);assert.deepEqual(await counts(),countBefore);assert.equal(JSON.stringify(await service.findRun(f.actor,started.run.id)),before);
+ });
+});

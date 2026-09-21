@@ -506,7 +506,7 @@ function statusModule() {
 function allProviderStatusModule() {
   const status = statusModule();
   const item = {
-    ...status.getAsinDataStatus([])[0],
+    ...status.getAsinDataStatus()[0],
     inCatalog: false,
     keywords: "missing" as const,
     reviews: "missing" as const,
@@ -529,7 +529,7 @@ function allProviderStatusModule() {
 function keywordsMissingTrafficReadyStatusModule() {
   const status = statusModule();
   const item = {
-    ...status.getAsinDataStatus([])[0],
+    ...status.getAsinDataStatus()[0],
     reviews: "missing" as const,
   };
   return {
@@ -564,6 +564,7 @@ function syncJobs(counters: { admit: number; workerLaunch: number }): SyncJobRep
       counters.workerLaunch += 1;
       return { job: queuedJob(input), disposition: "created" };
     },
+    async readStageOutput() { return null; },
     async findById() { return null; },
     async resume() { return null; },
     async claimNext() { return null; },

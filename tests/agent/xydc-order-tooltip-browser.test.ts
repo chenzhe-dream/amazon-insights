@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {chromium} from 'playwright';
+import {createServer} from 'vite';
+import react from '@vitejs/plugin-react';
+
+test('monthly color hover shows disclosed share and works with keyboard on a narrow screen', {timeout: 60000}, async t => {
+  const cache = mkdtempSync(join(tmpdir(), 'xydc-tooltip-'));
+  const server = await createServer({configFile: false, cacheDir: cache, plugins: [react()], server: {host: '127.0.0.1', port: 0, hmr: false, forwardConsole: false}});
+  await server.listen();
+  const browser = await chromium.launch({headless: true});
+  t.after(async () => {await browser.close(); await server.close(); rmSync(cache, {recursive: true, force: true});});
+  const origin = new URL(server.resolvedUrls!.local[0]).origin;
+  const page = await browser.newPage({viewport: {width: 1280, height: 800}});
+  page.setDefaultTimeout(5000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/*', async route => {
+    if (new URL(route.request().url()).origin !== origin) return route.abort();
+    if (!route.request().isNavigationRequest()) return route.continue();
+    return route.fulfill({contentType: 'text/html', body: await server.transformIndexHtml('/', `<html><body><div id="root"></div><script type="module">
+      import React from 'react'; import {createRoot} from 'react-dom/client';
+      import {XydcOrderDetail} from '/app/xydc-order-detail.tsx'; import '/app/comparison-layout.css';
+      const asins = ['B000000001','B000000002','B000000003','B000000004'];
+      const months = ['2026-07','2026-08'];
+      const window = {startMonth: months[0], endMonth: months[1], months};
+      const children = asins.map((asin, i) => ({asin, attributes: [{dimension:'Color',value:['Blue','Green','White','Black'][i]}]}));
+      const snapshot = {version:1,source:'xydc',aggregation:'children',country:'US',parentAsin:'B000000010',childAsins:asins,window,children:asins.map((asin,i)=>({asin,trends:i===3?[]:months.map(date=>({date,orders:[300,100,0][i]}))})),fetchedAt:'2026-09-15',cacheState:'fresh'};
+      createRoot(document.getElementById('root')).render(React.createElement(XydcOrderDetail,{model:{group:{parentAsin:'B000000010',children},product:{brand:'Demo'},snapshot,window},market:{domain:'www.amazon.com',label:'美国站'},onClose:()=>{}}));
+    </script></body></html>`)});
+  });
+  await page.goto(origin);
+  const first = page.locator('[data-order-month="2026-07"] [data-order-asin="B000000001"]');
+  await first.hover();
+  const tooltip = page.getByRole('tooltip');
+  await tooltip.waitFor();
+  assert.match(await tooltip.innerText(), /2026-07/);
+  assert.match(await tooltip.innerText(), /300/);
+  assert.match(await tooltip.innerText(), /75\.00%/);
+  assert.match(await tooltip.innerText(), /所选月份披露订单/);
+  await page.locator('[data-order-month="2026-07"] [data-order-asin="B000000002"]').hover();
+  assert.match(await tooltip.innerText(), /25\.00%/);
+  await page.getByRole('button', {name:'关闭订单明细'}).hover();
+  await tooltip.waitFor({state:'hidden'});
+  await page.setViewportSize({width:390,height:844});
+  await first.focus();
+  await tooltip.waitFor();
+  assert.match(await tooltip.innerText(), /75\.00%/);
+  assert.ok(await tooltip.evaluate(el => {const r=el.getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight;}));
+  await page.getByRole('button', {name:'关闭订单明细'}).focus();
+  await tooltip.waitFor({state:'hidden'});
+  assert.deepEqual(errors, []);
+});

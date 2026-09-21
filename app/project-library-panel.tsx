@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { projectSegmentName } from "../shared/project-segment-name";
+import { localAgentFetch, localAgentErrorMessage } from "./lib/local-agent-browser";
+import { LocalDataProjectsResponseSchema } from "../shared/agent-contracts";
+import "./project-library-pagination.css";
+import { PROJECT_TIME_SORT_OPTIONS, projectTimeValues, type ProjectTimeSort } from "../shared/project-library-time";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AnalysisProjectFavorites } from "./use-analysis-project-favorites";
 import {
   AMAZON_MAJOR_CATEGORIES,
   AMAZON_MAJOR_CATEGORY_IDS,
-  amazonMajorCategoryChip,
   amazonMajorCategoryLabel,
   normalizeAmazonMajorCategory,
 } from "./amazon-major-categories";
@@ -15,6 +19,7 @@ export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "ch
 
 export type AnalysisProject = {
   id: string;
+  sourceProjectId?: string | null;
   kind?: ProjectKind;
   slug?: string | null;
   name: string;
@@ -24,6 +29,7 @@ export type AnalysisProject = {
   asins: string[];
   note: string | null;
   createdBy: string | null;
+  latestAnalystName?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -86,15 +92,12 @@ function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function normalizeSearchText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, "");
 }
 
 function parseAsinInput(raw: string) {
@@ -104,30 +107,6 @@ function parseAsinInput(raw: string) {
     .map(value => value.trim())
     .filter(value => /^[A-Z0-9]{10}$/.test(value))
     .filter((value, index, list) => list.indexOf(value) === index);
-}
-
-function projectMatchesQuery(project: AnalysisProject, query: string) {
-  const needle = normalizeSearchText(query);
-  if (!needle) return true;
-  const haystack = normalizeSearchText(
-    [
-      project.name,
-      project.majorCategory ?? "",
-      project.categoryLabel ?? "",
-      project.note ?? "",
-      project.createdBy ?? "",
-      project.marketplace,
-      project.asins.join(" "),
-    ].join(" ")
-  );
-  const tokens = query
-    .trim()
-    .toLowerCase()
-    .split(/[\s,，、/|]+/)
-    .map(token => token.replace(/\s+/g, ""))
-    .filter(Boolean);
-  if (tokens.length <= 1) return haystack.includes(needle);
-  return tokens.every(token => haystack.includes(token));
 }
 
 function readAuthor() {
@@ -202,6 +181,18 @@ export function ProjectLibraryPage({
   const [editAsinsText, setEditAsinsText] = useState("");
   const [majorFilter, setMajorFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [timeSort, setTimeSort] = useState<ProjectTimeSort>("updated_desc");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1, historyTotal: 0, favoritesTotal: 0, categories: [] as string[] });
+  const requestRef = useRef<AbortController | null>(null);
+  const favoritesVersion = favorites?.projectIds.join(",") ?? "";
+  useEffect(() => {
+    if (searchQuery === debouncedSearch) return;
+    const timer = window.setTimeout(() => { setDebouncedSearch(searchQuery); setPage(1); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, debouncedSearch]);
   const formRef = useRef<HTMLElement | null>(null);
 
   const copy = KIND_UI[kind];
@@ -223,43 +214,41 @@ export function ProjectLibraryPage({
 
   const majorCategoryOptions = useMemo(() => {
     const set = new Set<string>(AMAZON_MAJOR_CATEGORY_IDS);
-    for (const project of projects) {
-      const value = normalizeAmazonMajorCategory(project.majorCategory) ?? project.majorCategory?.trim();
+    for (const category of pagination.categories) {
+      const value = normalizeAmazonMajorCategory(category) ?? category.trim();
       if (value) set.add(value);
     }
     return Array.from(set);
-  }, [projects]);
+  }, [pagination.categories]);
 
-  const filteredProjects = useMemo(() => {
-    return projects.filter(project => {
-      if (kind === "analysis" && libraryView === "favorites" && !favorites?.projectIds.includes(project.id)) return false;
-      const projectMajor = normalizeAmazonMajorCategory(project.majorCategory) ?? project.majorCategory;
-      if (majorFilter === "__none__" && projectMajor) return false;
-      if (majorFilter !== "all" && majorFilter !== "__none__" && projectMajor !== majorFilter) {
-        return false;
-      }
-      return projectMatchesQuery(project, searchQuery);
-    });
-  }, [projects, majorFilter, searchQuery, kind, libraryView, favorites?.projectIds]);
-  const visibleTotal = kind === "analysis" && libraryView === "favorites"
-    ? projects.filter(project => favorites?.projectIds.includes(project.id)).length : projects.length;
-
+  const visibleTotal = kind === "analysis" && libraryView === "favorites" ? pagination.favoritesTotal : pagination.historyTotal;
   const hasActiveFilters = majorFilter !== "all" || Boolean(searchQuery.trim());
 
   const refresh = useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/projects?kind=${encodeURIComponent(kind)}`);
+      const query = new URLSearchParams({ kind, page: String(page), pageSize: String(pageSize),
+        sort: timeSort, search: debouncedSearch, category: majorFilter, view: kind === "analysis" ? libraryView : "history" });
+      const response = await localAgentFetch(`/v1/local-data/projects?${query}`, { signal: controller.signal, cache: "no-store" });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "加载项目失败");
-      setProjects(payload.projects ?? []);
+      if (!response.ok) throw new Error(localAgentErrorMessage(payload, "加载项目失败"));
+      const parsed = LocalDataProjectsResponseSchema.parse(payload);
+      if (!parsed.pagination) throw new Error("分页服务尚未就绪，请刷新重试");
+      if (controller.signal.aborted) return;
+      setProjects(parsed.projects);
+      setPagination(parsed.pagination);
+      if (parsed.pagination.page !== page) setPage(parsed.pagination.page);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载项目失败");
+      if (!controller.signal.aborted) { setProjects([]); setError(err instanceof Error ? err.message : "加载项目失败"); }
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
-  }, [kind]);
+  }, [kind, page, pageSize, timeSort, debouncedSearch, majorFilter, libraryView, favoritesVersion, favorites?.scope]);
+  useEffect(() => () => requestRef.current?.abort(), [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -377,6 +366,7 @@ export function ProjectLibraryPage({
         if (!response.ok) throw new Error(payload.error ?? "保存失败");
         resetForm();
         if (kind === "analysis") setLibraryView("history");
+        setPage(1);
         onProjectSaved?.(payload.project);
         await refresh();
       }
@@ -426,6 +416,7 @@ export function ProjectLibraryPage({
       onProjectDeleted?.(id);
       setNotice("已删除项目，团队历史和收藏列表已更新。");
       void favorites?.refresh();
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除失败");
     } finally {
@@ -537,13 +528,13 @@ export function ProjectLibraryPage({
         </div>
       </section>
 
-      <section className="card project-list-card">
+      <section className="card project-list-card project-library-paged">
         <div className="project-list-head">
           <div className="project-section-head project-section-head-inline">
             <h3>{kind === "analysis" && libraryView === "history" ? "历史项目" : copy.listTitle}</h3>
             <p>
               {kind === "analysis" ? "团队共享；取消收藏只移除标记，项目及分析结果仍保留。" : copy.listHint}
-              {visibleTotal > 0 ? ` · 显示 ${filteredProjects.length}/${visibleTotal}` : ""}
+              {` · 共 ${pagination.total} 个项目 · ${PROJECT_TIME_SORT_OPTIONS.find(option => option.value === timeSort)?.label}`}
             </p>
           </div>
           <button type="button" className="ghost-btn" onClick={() => { void refresh(); if (kind === "analysis") void favorites?.refresh(); }} disabled={loading || (kind === "analysis" && (favorites?.loading || favorites?.pending))}>
@@ -552,12 +543,12 @@ export function ProjectLibraryPage({
         </div>
         {kind === "analysis" ? <div className="project-major-chips" role="group" aria-label="项目列表范围">
           <button type="button" className={`project-major-chip${libraryView === "favorites" ? " active" : ""}`}
-            aria-pressed={libraryView === "favorites"} onClick={() => setLibraryView("favorites")}>
-            已收藏（{projects.filter(project => favorites?.projectIds.includes(project.id)).length}）
+            aria-pressed={libraryView === "favorites"} onClick={() => { setLibraryView("favorites"); setPage(1); }}>
+            已收藏（{pagination.favoritesTotal}）
           </button>
           <button type="button" className={`project-major-chip${libraryView === "history" ? " active" : ""}`}
-            aria-pressed={libraryView === "history"} onClick={() => setLibraryView("history")}>
-            历史项目（{projects.length}）
+            aria-pressed={libraryView === "history"} onClick={() => { setLibraryView("history"); setPage(1); }}>
+            历史项目（{pagination.historyTotal}）
           </button>
         </div> : null}
         <div className="project-filter-bar">
@@ -567,12 +558,12 @@ export function ProjectLibraryPage({
               type="search"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="搜项目名 / ASIN / 大类 / 品类 / 创建人 / 备注"
+              placeholder="搜项目名 / ASIN / 大类 / 品类 / 创建人 / 分析人 / 备注"
             />
           </label>
           <label className="project-filter-field">
             <span>亚马逊大类</span>
-            <select value={majorFilter} onChange={e => setMajorFilter(e.target.value)}>
+            <select value={majorFilter} onChange={e => { setMajorFilter(e.target.value); setPage(1); }}>
               <option value="all">全部大类</option>
               {AMAZON_MAJOR_CATEGORIES.map(option => (
                 <option key={option.id} value={option.id}>
@@ -589,11 +580,18 @@ export function ProjectLibraryPage({
               <option value="__none__">未填写大类目</option>
             </select>
           </label>
+          <label className="project-filter-field">
+            <span>时间排序</span>
+            <select aria-label="时间排序" value={timeSort} onChange={event => { setTimeSort(event.target.value as ProjectTimeSort); setPage(1); }}>
+              {PROJECT_TIME_SORT_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
           {hasActiveFilters ? (
             <button
               type="button"
               className="ghost-btn project-filter-clear"
               onClick={() => {
+                setPage(1);
                 setMajorFilter("all");
                 setSearchQuery("");
               }}
@@ -602,38 +600,18 @@ export function ProjectLibraryPage({
             </button>
           ) : null}
         </div>
-        <div className="project-major-chips" role="tablist" aria-label="按亚马逊大类快速筛选">
-          <button
-            type="button"
-            className={`project-major-chip${majorFilter === "all" ? " active" : ""}`}
-            onClick={() => setMajorFilter("all")}
-          >
-            全部
-          </button>
-          {AMAZON_MAJOR_CATEGORIES.map(option => (
-            <button
-              key={option.id}
-              type="button"
-              title={option.id}
-              className={`project-major-chip${majorFilter === option.id ? " active" : ""}`}
-              onClick={() => setMajorFilter(option.id)}
-            >
-              {amazonMajorCategoryChip(option.id)}
-            </button>
-          ))}
-        </div>
         {error ? <p className="project-panel-error">{error}</p> : null}
         {kind === "analysis" && favorites?.error ? <p role="alert" className="project-panel-error">{favorites.error}</p> : null}
         {loading ? <p className="project-panel-empty">加载中…</p> : null}
         {!loading && kind === "analysis" && libraryView === "favorites" && !favorites?.ready ? <p className="project-panel-empty">收藏列表尚未加载，请稍候或刷新重试。</p> : null}
-        {!loading && visibleTotal === 0 && (kind !== "analysis" || libraryView === "history" || favorites?.ready) ? (
+        {!loading && !error && visibleTotal === 0 && (kind !== "analysis" || libraryView === "history" || favorites?.ready) ? (
           <p className="project-panel-empty">{kind === "analysis" ? (libraryView === "favorites" ? "尚未收藏项目，请在历史项目中点击收藏。" : "暂无历史项目，开始分析或保存项目后会出现在这里。") : emptyHint}</p>
         ) : null}
-        {!loading && visibleTotal > 0 && filteredProjects.length === 0 ? (
+        {!loading && !error && visibleTotal > 0 && projects.length === 0 ? (
           <p className="project-panel-empty">没有匹配的项目，试试换个大类或搜索词。</p>
         ) : null}
         <div className="project-cards">
-          {filteredProjects.map(project => (
+          {(loading ? [] : projects).map(project => (
             <article
               key={project.id}
               className={`project-card${project.id === currentProjectId ? " current" : ""}${
@@ -641,7 +619,9 @@ export function ProjectLibraryPage({
               }`}
             >
               <div className="project-card-main">
-                <h4 className="project-card-title">{project.name}</h4>
+                <div className="project-card-heading">
+                <h4 className="project-card-title" title={project.name}>{project.name}</h4>
+                {project.id === currentProjectId ? <span className="project-current-label">当前项目</span> : null}
                 <span className="project-card-market">{project.marketplace}</span>
                 {project.majorCategory ? (
                   <span className="project-tag major" title={amazonMajorCategoryLabel(project.majorCategory)}>
@@ -649,18 +629,25 @@ export function ProjectLibraryPage({
                   </span>
                 ) : null}
                 {project.categoryLabel ? <span className="project-tag">{project.categoryLabel}</span> : null}
+                </div>
+                <div className="project-card-detail">
                 <span className="project-card-asins" title={project.asins.join(" · ")}>
-                  {project.asins.join(" · ")}
+                  {project.asins.slice(0, 3).join(" · ")}{project.asins.length > 3 ? ` 等 ${project.asins.length} 个` : ""}
                 </span>
-                {project.slug ? <span className="project-card-path">/{`p/${project.slug}`}</span> : null}
-                <span className="project-card-meta">
+                <span className="project-card-meta" title={[project.createdBy, project.note].filter(Boolean).join(" · ")}>
                   {project.asins.length} 个 ASIN
-                  {project.createdBy ? ` · ${project.createdBy}` : ""}
-                  {" · "}
-                  {formatDate(project.updatedAt)}
+                  {project.createdBy ? ` · 创建人：${project.createdBy}` : ""}
                   {project.note ? ` · ${project.note}` : ""}
                 </span>
+                <span className="project-card-times">
+                  {kind === "analysis" ? <span>最近分析人：{project.latestAnalystName || "未记录"}</span> : null}
+                  <span>开始 <time dateTime={project.createdAt}>{formatDate(project.createdAt)}</time></span>
+                  <span>{projectTimeValues(project).modified !== null
+                    ? <>修改 <time dateTime={project.updatedAt}>{formatDate(project.updatedAt)}</time></>
+                    : "未修改"}</span>
+                </span>
               </div>
+                </div>
               <div className="project-card-actions">
                 <button type="button" className="ghost-btn" onClick={() => beginEdit(project)}>
                   {copy.editBtn}
@@ -689,7 +676,12 @@ export function ProjectLibraryPage({
                 {kind === "analysis" ? <button type="button" className="ghost-btn"
                   disabled={!favorites?.ready || favorites.pending || favorites.loading}
                   aria-pressed={Boolean(favorites?.projectIds.includes(project.id))}
-                  onClick={() => void favorites?.setFavorite(project.id, !favorites.projectIds.includes(project.id))}>
+                  onClick={() => {
+                    if (!favorites?.projectIds.includes(project.id) && !projectSegmentName(project)) {
+                      beginEdit(project); setError("请先填写细分名称（项目名称）并保存，再收藏项目"); return;
+                    }
+                    void favorites?.setFavorite(project.id, !favorites.projectIds.includes(project.id));
+                  }}>
                   {favorites?.pending ? "保存收藏中…" : favorites?.projectIds.includes(project.id) ? "取消收藏" : "☆ 收藏项目"}
                 </button> : null}
                 {(kind !== "analysis" || (libraryView === "history" && canDeleteProjects)) ? <button type="button" className="ghost-btn danger" disabled={deletingId !== null} onClick={() => void removeProject(project.id)}>
@@ -699,6 +691,17 @@ export function ProjectLibraryPage({
             </article>
           ))}
         </div>
+        <nav className="project-pagination" aria-label="项目分页">
+          <span role="status">{pagination.total ? `第 ${(pagination.page - 1) * pagination.pageSize + 1}–${Math.min(pagination.page * pagination.pageSize, pagination.total)} 条，共 ${pagination.total} 条` : "共 0 条"}</span>
+          <label>每页 <select aria-label="每页项目数" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1); }}>
+            {[10, 20, 50].map(size => <option key={size} value={size}>{size} 条</option>)}
+          </select></label>
+          <button type="button" className="ghost-btn" disabled={loading || page <= 1} onClick={() => setPage(1)}>首页</button>
+          <button type="button" className="ghost-btn" disabled={loading || page <= 1} onClick={() => setPage(value => value - 1)}>上一页</button>
+          <span>{pagination.page} / {pagination.totalPages}</span>
+          <button type="button" className="ghost-btn" disabled={loading || page >= pagination.totalPages} onClick={() => setPage(value => value + 1)}>下一页</button>
+          <button type="button" className="ghost-btn" disabled={loading || page >= pagination.totalPages} onClick={() => setPage(pagination.totalPages)}>末页</button>
+        </nav>
       </section>
     </div>
   );

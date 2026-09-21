@@ -1,3 +1,7 @@
+@import "./market-ui-reference.css";
+@import "./market-overview-reference.css";
+@import "./market-shape-reference.css";
+@import "./market-insights-reference.css";
 .market-research-page { display: grid; gap: 20px; min-width: 0; color: var(--text, #263244); }
 .market-research-page .card { padding: 22px; min-width: 0; }
 .market-research-page h2, .market-research-page h3, .market-research-page h4 { margin: 0; }
@@ -87,3 +91,33 @@
 .market-keyword-editor td select { display: block; min-width: 125px; }
 .market-keyword-page table th:first-child { min-width: 130px; }
 @media (max-width: 760px) { .market-keyword-query-text, .market-keyword-catalogs { grid-template-columns: 1fr; } }
+
+/* Reference UI authority is isolated from all legacy product pages. */
+.market-ui-reference { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.market-ui-reference .market-research-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.market-ui-reference .market-research-page > * { min-width: 0; }
+.market-ui-reference .market-research-page .launch-block { padding: 0; }
+.market-ui-reference .ss-market-query fieldset { min-inline-size: 0; }
+.market-ui-reference .market-ui-metrics { margin: 12px 0; }
+.market-ui-reference .market-ui-metrics > div { padding: 14px 16px; border: 1px solid #e7e5f0; border-radius: 10px; background: #fff; min-width: 0; }
+.market-ui-reference .market-ui-metrics dt { font-size: 12px; color: #6b7280; }
+.market-ui-reference .market-ui-metrics dd { margin: 6px 0; font-size: 22px; font-weight: 700; }
+.market-ui-reference .market-theme-module-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.market-ui-reference .market-theme-module-nav button[aria-pressed=true] { border-color: #c4b5fd; background: #ddd6fe; color: #6d28d9; }
+.market-ui-reference .ss-market-chip:disabled:not(.selected) { opacity: .5; cursor: not-allowed; }
+.market-ui-reference .ss-market-query form { margin: 0; }
+.market-ui-reference .market-ui-other-month { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; }
+.market-ui-reference .market-ui-other-month input { border: 1px solid #e0e5ed; border-radius: 5px; padding: 4px 6px; color: inherit; background: #fff; }
+.market-ui-reference .ss-niche-table small { display: block; }
+.market-ui-reference .ss-niche-table-wrap { overflow-x: auto; max-width: 100%; }
+.market-ui-reference .market-research-result { min-width: 0; }
+.market-ui-reference .market-research-result-heading { margin-bottom: 12px; }
+.market-ui-reference .ss-market-query { padding: 16px 18px 18px; }
+@media(max-width:760px) { .market-ui-reference .ss-market-query-row { grid-template-columns: 1fr; } .market-ui-reference .ss-market-query-error { margin-left: 0; } .market-ui-reference .ss-market-meta-fields { flex-wrap: wrap; } }
+
+
+.market-ui-reference .market-overview-distributions { display: grid; gap: 20px; min-width: 0; }
+.market-ui-reference .market-overview-distributions > .ss-report-block { min-width: 0; }
+.market-ui-reference .ss-dist-chart .ss-crn-legend { flex-wrap: wrap; min-width: 0; }
+.market-ui-reference .ss-dist-chart .ss-market-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; height: auto; min-height: 30px; }
+.market-ui-reference .ss-dist-chart .ss-report-empty { overflow-wrap: anywhere; }

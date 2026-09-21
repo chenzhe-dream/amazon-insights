@@ -10,10 +10,12 @@ import {
   formatOrderShare,
   orderAttributeLabel,
   orderColorMap,
+  orderColorTitle,
   orderHref,
   type XydcOrderCardModel,
 } from "./xydc-order-card";
 import type { XydcVariantMarket } from "./xydc-variant-section";
+import { variantColorNote } from "./lib/variant-color";
 
 type DetailSort = "orders" | "asin";
 
@@ -45,9 +47,20 @@ export function XydcOrderDetail({
   const summary = React.useMemo(() => snapshot ? summarizeXydcOrders(snapshot) : null, [snapshot]);
   const childByAsin = React.useMemo(() => new Map(group.children.map(child => [child.asin, child])), [group.children]);
   const childAsins = snapshot?.childAsins ?? group.children.map(child => child.asin);
-  const colors = React.useMemo(() => orderColorMap(childAsins), [childAsins]);
+  const colors = React.useMemo(() => orderColorMap(childAsins, group.children), [childAsins, group.children]);
   const [sort, setSort] = React.useState<DetailSort>("orders");
   const [expanded, setExpanded] = React.useState(false);
+  const [hoveredOrder, setHoveredOrder] = React.useState<{
+    month: string; asin: string; orders: number; share: number; left: number; top: number;
+  } | null>(null);
+  const tooltipId = `xydc-order-tooltip-${React.useId().replaceAll(":", "")}`;
+  const showOrderTooltip = (element: HTMLElement, month: string, asin: string, orders: number, share: number) => {
+    const rect = element.getBoundingClientRect();
+    setHoveredOrder({month, asin, orders, share,
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - 272)),
+      top: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 180)),
+    });
+  };
   const dialogRef = React.useRef<HTMLElement>(null);
   const closeRef = React.useRef<HTMLButtonElement>(null);
   const tableRegionId = `xydc-order-annual-table-${React.useId().replaceAll(":", "")}`;
@@ -99,6 +112,7 @@ export function XydcOrderDetail({
         aria-modal="true"
         aria-labelledby="xydc-order-dialog-title"
         onMouseDown={event => event.stopPropagation()}
+        onScrollCapture={() => setHoveredOrder(null)}
       >
         <header>
           <div>
@@ -112,8 +126,9 @@ export function XydcOrderDetail({
 
         <p className="xydc-order-chart-description" id="xydc-order-chart-description">
           堆叠柱状图按月展示全部 {summary?.expectedChildren ?? group.children.length} 个子体的已披露订单；缺失月份保留为空缺，原始零值标记为未披露。
+          {variantColorNote} 未识别颜色用中性纹理表示。
         </p>
-        <div className="xydc-order-chart" aria-hidden="true">
+        <div className="xydc-order-chart" role="group" aria-label="各子体月度订单占比">
           {orderWindow.months.map(month => {
             const values = summary?.months.find(item => item.date === month)?.values
               ?? childAsins.map(asin => ({ asin, orders: null }));
@@ -128,8 +143,16 @@ export function XydcOrderDetail({
                       key={value.asin}
                       data-order-asin={value.asin}
                       data-order-color={colors.get(value.asin)}
+                      title={orderColorTitle(childByAsin.get(value.asin))}
                       style={{ height: `${height}%`, background: colors.get(value.asin) }}
-                      title={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders!.toLocaleString("en-US")}+`}
+                      tabIndex={0}
+                      role="img"
+                      aria-label={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders!.toLocaleString("en-US")}+ · 占当月已披露订单 ${formatOrderShare(height)}`}
+                      aria-describedby={hoveredOrder?.month === month && hoveredOrder.asin === value.asin ? tooltipId : undefined}
+                      onMouseEnter={event => showOrderTooltip(event.currentTarget, month, value.asin, value.orders!, height)}
+                      onMouseLeave={() => setHoveredOrder(null)}
+                      onFocus={event => showOrderTooltip(event.currentTarget, month, value.asin, value.orders!, height)}
+                      onBlur={() => setHoveredOrder(null)}
                     />
                   );
                   })}
@@ -146,6 +169,14 @@ export function XydcOrderDetail({
             </div>;
           })}
         </div>
+        {hoveredOrder && <div id={tooltipId} role="tooltip" className="xydc-order-month-tooltip"
+          style={{left: hoveredOrder.left, top: hoveredOrder.top}}>
+          <strong>{hoveredOrder.month} · {orderAttributeLabel(childByAsin.get(hoveredOrder.asin))}</strong>
+          <span><i style={{background: colors.get(hoveredOrder.asin)}} />{hoveredOrder.asin}</span>
+          <span>订单量：{hoveredOrder.orders.toLocaleString("en-US")}+</span>
+          <b>占比：{formatOrderShare(hoveredOrder.share)}</b>
+          <small>来源：西柚洞察 · 所选月份披露订单；占比不计缺失与未披露数据。</small>
+        </div>}
         <table className="xydc-order-monthly-a11y xydc-order-visually-hidden">
           <caption>逐月全部子体订单明细</caption>
           <thead><tr><th scope="col">月份</th>{childAsins.map(asin => <th scope="col" key={asin}>{asin}</th>)}</tr></thead>
@@ -162,6 +193,7 @@ export function XydcOrderDetail({
             model={model}
             asin={asin}
             dataOrderColor={colors.get(asin)}
+            title={orderColorTitle(childByAsin.get(asin))}
           ><i style={{ background: colors.get(asin) }} />{orderAttributeLabel(childByAsin.get(asin))}</XydcAnnualInspectionTrigger>)}
         </div>
 
@@ -194,7 +226,7 @@ export function XydcOrderDetail({
           </div>
         </div> : null}
         <footer>
-          来源：西柚洞察 · 子体汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}
+          来源：西柚洞察 · 按自然月披露订单汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}
           {historical
             ? <strong>历史缓存 · 当前统计区间待补齐</strong>
             : snapshot?.cacheState === "stale"

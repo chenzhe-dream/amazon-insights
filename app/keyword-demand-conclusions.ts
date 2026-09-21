@@ -1,3 +1,5 @@
+import { createProductRuleSession, keywordRuleSources } from "./lib/product-structure-analysis";
+import type { AnalysisInputScope, AnalysisRuleTrace } from "../shared/product-structure-rules";
 import {
   buildKeywordComparisonMatrix,
   resolveKeywordSearchVolume,
@@ -9,7 +11,13 @@ import {
 import type { KeywordCategory } from "./keyword-classifier";
 import { sifKeywordEnrichmentData, type KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
 
-export type LaunchConclusionItem = { label: string; value: string };
+export type LaunchConclusionItem = {
+  label: string;
+  value: string;
+  /** Only candidates accepted by the shared per-ASIN rules. */
+  acceptedValue?: string;
+  ruleDecisionIds?: string[];
+};
 
 export type LaunchConclusionSection = {
   id: string;
@@ -19,7 +27,7 @@ export type LaunchConclusionSection = {
 
 export type FunctionDemandRow = {
   keyword: string;
-  type: "基础必备" | "高关注" | "差异化" | "伪需求";
+  type: "基础必备" | "高关注" | "差异化" | "待验证" | "数据不足";
   volume: number | null;
   coverage: number;
   action: string;
@@ -41,6 +49,7 @@ export type KeywordLaunchVerdict = {
 };
 
 export type KeywordLaunchConclusions = {
+  ruleTrace?: AnalysisRuleTrace;
   headline: string;
   verdict: KeywordLaunchVerdict;
   sections: LaunchConclusionSection[];
@@ -212,15 +221,15 @@ function audienceToProductParams(audienceKw: AggregatedKeyword[], ageBands: stri
   const hints: string[] = [];
   const text = audienceKw.map(item => item.keyword).join(" ");
   if (/\btoddlers?|\bbaby|\binfant|\b1[\s-]?3\b|\b2 year/i.test(text)) {
-    hints.push("更低踏板/三轮结构/宽轮距/防侧翻或限速");
+    hints.push("存在低幼搜索需求：先核对商品适龄限制、实际尺寸与操作难度，不直接认定适合低幼");
   }
   if (/\bboys?\b|\bgirls?\b|\bniñ[oa]s?\b/i.test(text)) {
-    hints.push("分性别配色与主图模特");
+    hints.push("核对人群偏好与使用反馈，再验证配色和场景展示方案");
   }
   if (/\bkids?|\bchildren\b/i.test(text)) {
-    hints.push("可调高度手把、承重标注与适龄警示");
+    hints.push("核对儿童使用的适龄条件、尺寸与操作难度；配置需结合当前产品结构确认");
   }
-  if (ageBands.length) hints.push(`年龄区间对应尺寸：${ageBands.join("、")}`);
+  if (ageBands.length) hints.push(`搜索年龄线索：${ageBands.join("、")}；按已确认适龄范围验证实际尺寸`);
   return hints.length ? hints.join("；") : "需结合 VOC 将人群词转化为结构/安全/尺寸参数";
 }
 
@@ -234,7 +243,10 @@ function buildFunctionMatrix(functionKw: AggregatedKeyword[], readyCount: number
     let type: FunctionDemandRow["type"];
     let action: string;
 
-    if (coverage >= Math.max(2, readyCount - 1) && (volume ?? 0) >= volThreshold * 0.5) {
+    if (volume == null || !Number.isFinite(volume) || volume <= 0) {
+      type = "数据不足";
+      action = "补齐有效月搜索量，再结合 VOC 评估配置优先级";
+    } else if (coverage >= Math.max(2, readyCount - 1) && volume >= volThreshold * 0.5) {
       type = "基础必备";
       action = "必须配置并在标题/主图展示";
     } else if ((volume ?? 0) >= volThreshold) {
@@ -244,8 +256,8 @@ function buildFunctionMatrix(functionKw: AggregatedKeyword[], readyCount: number
       type = "差异化";
       action = "评估成本后作为差异化卖点或小批量测试";
     } else {
-      type = "伪需求";
-      action = "原则上不单独配置，避免增加 BOM 成本";
+      type = "待验证";
+      action = "已有搜索信号；结合 VOC、竞品实际功能及付费意愿验证配置价值";
     }
 
     return { keyword: item.keyword, type, volume, coverage, action };
@@ -436,7 +448,9 @@ function buildProductProposal(
 export function buildKeywordLaunchConclusions(
   analysis: KeywordDemandAnalysis,
   products: KeywordDemandProduct[],
+  analysisScope?: Partial<AnalysisInputScope>,
 ): KeywordLaunchConclusions {
+  const ruleSession = createProductRuleSession(products, keywordRuleSources(analysis, analysisScope));
   const dataGaps: string[] = [];
 
   if (!analysis.hasData) {
@@ -490,8 +504,38 @@ export function buildKeywordLaunchConclusions(
   const competition = assessCompetition(matrix, brandSharePct);
 
   const functionMatrix = buildFunctionMatrix(functionKw, analysis.meta.readyCount);
+  if (functionMatrix.some(row => row.type === "数据不足")) {
+    dataGaps.push("部分功能词缺少有效月搜索量，暂不能判断配置优先级");
+  }
   const keywordCombos = buildKeywordCombos(allKeywords);
   const priceBand = buildPriceBand(products);
+
+  const ruleSuggestion = (raw: string, id: string) => {
+    if (!raw || raw === "—") return { value: "—", acceptedValue: undefined, ruleDecisionIds: [] as string[] };
+    const evaluated = ruleSession.explain(raw, id);
+    const relevant = ruleSession.decisions.filter(decision => evaluated.ruleDecisionIds.includes(decision.candidateId));
+    const accepted = relevant.filter(decision => decision.outcome === "supported");
+    const acceptedValue = accepted.length
+      ? accepted.map(decision => products.length > 1 ? `【${decision.asin}】${decision.text}` : decision.text).join("；")
+      : undefined;
+    const status = acceptedValue
+      ? `已通过适用性核对：${acceptedValue}`
+      : "未进入正式产品配置；需按 ASIN 核对结构与需求依据";
+    return { value: `需求假设：${raw}（${status}）`, acceptedValue, ruleDecisionIds: evaluated.ruleDecisionIds };
+  };
+  const suggestedForm = ruleSuggestion(inferProductForm(productKw, specKw), "keyword-product-form");
+  const suggestedBase = ruleSuggestion(
+    functionMatrix.filter(item => item.type === "基础必备" || item.type === "高关注").slice(0, 5).map(item => item.keyword).join("、") || "—",
+    "keyword-base-features",
+  );
+  const suggestedDifferentiation = ruleSuggestion(
+    functionMatrix.filter(item => item.type === "差异化").map(item => item.keyword).join("、") || "—",
+    "keyword-differentiated-features",
+  );
+  const suggestedMaterial = ruleSuggestion(
+    [...specKw.slice(0, 2), ...styleKw.slice(0, 2)].map(item => item.keyword).join("、") || "—",
+    "keyword-material-spec",
+  );
 
   if (!products.some(item => item.price != null)) {
     dataGaps.push("未传入竞品售价，价格带与利润判断需补充 catalog 价格");
@@ -549,14 +593,15 @@ export function buildKeywordLaunchConclusions(
         { label: "重点年龄段", value: ageBands.length ? ageBands.join("、") : formatKeywordList(ageKw, 3) },
         {
           label: "人群→产品参数",
-          value: audienceToProductParams(audienceKw, ageBands),
+          value: ruleSession.audience(audienceToProductParams(audienceKw, ageBands)).text,
+          ruleDecisionIds: products.map(p => `keyword-audience:${p.asin}`),
         },
         { label: "主要使用场景", value: formatKeywordList(scenarioKw, 3) },
         {
           label: "核心购买动机",
           value: benefitKw.length ? formatKeywordList(benefitKw, 3) : formatKeywordList(productKw, 2),
         },
-        { label: "最关注功能", value: formatKeywordList(functionKw, 4) },
+        { label: "功能搜索信号", value: formatKeywordList(functionKw, 4) },
         { label: "最关注属性/规格", value: formatKeywordList(specKw, 3) },
         { label: "主要痛点/未满足需求", value: painKw.length ? formatKeywordList(painKw, 3) : "流量词中痛点词不明显，需交叉 VOC 差评" },
       ],
@@ -565,7 +610,7 @@ export function buildKeywordLaunchConclusions(
       id: "competition",
       title: "3. 市场供给与竞争",
       items: [
-        { label: "主流产品形态", value: inferProductForm(productKw, specKw) },
+        { label: "主流产品形态（搜索需求假设）", ...suggestedForm },
         { label: "主流价格带", value: priceBand.text },
         {
           label: "头部集中度",
@@ -588,25 +633,18 @@ export function buildKeywordLaunchConclusions(
           label: "建议产品定位",
           value: `${audienceKw[0]?.keyword ?? "目标用户"} · ${ageBands[0] ?? "适龄"} · ${scenarioKw[0]?.keyword ?? "通用场景"}`,
         },
-        { label: "建议产品形态", value: inferProductForm(productKw, specKw) },
+        { label: "建议产品形态", ...suggestedForm },
         {
           label: "基础功能清单",
-          value: functionMatrix
-            .filter(item => item.type === "基础必备" || item.type === "高关注")
-            .slice(0, 5)
-            .map(item => item.keyword)
-            .join("、") || "—",
+          ...suggestedBase,
         },
         {
           label: "差异化功能清单",
-          value: functionMatrix
-            .filter(item => item.type === "差异化")
-            .map(item => item.keyword)
-            .join("、") || "暂无明显低覆盖高关注功能，宜从 VOC 痛点升级",
+          ...suggestedDifferentiation,
         },
         {
           label: "建议材质与规格",
-          value: [...specKw.slice(0, 2), ...styleKw.slice(0, 2)].map(item => item.keyword).join("、") || "—",
+          ...suggestedMaterial,
         },
         {
           label: "建议颜色/SKU",
@@ -667,6 +705,7 @@ export function buildKeywordLaunchConclusions(
   const headline = `${verdict.gradeLabel} · ${verdict.opportunityType} · ${demandScale.split("（")[0]}`;
 
   return {
+    ruleTrace: ruleSession.trace(),
     headline,
     verdict,
     sections,

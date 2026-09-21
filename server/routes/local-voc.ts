@@ -77,7 +77,8 @@ export function registerLocalVocRoute(
       }
       throw error;
     }
-    if (!source.candidate) {
+    const candidate = source.candidate;
+    if (!candidate) {
       throw new ContractRouteError(422, "VALIDATION_ERROR", "VOC data is unavailable for the requested ASINs");
     }
     const projectId = randomUUID();
@@ -100,7 +101,7 @@ export function registerLocalVocRoute(
       });
       await scopedRepository.createAnalysisRun({
         id: runId, projectId, mode: "existing-data", status: "running", createdBy: context.actorId,
-        dataCutoffAt: source.candidate.dataCutoffAt,
+        dataCutoffAt: candidate.dataCutoffAt,
         idempotencyScope: `local-voc:${context.organizationId}:${runId}`,
         idempotencyKey: runId, createdAt: now, updatedAt: now,
       });
@@ -111,8 +112,8 @@ export function registerLocalVocRoute(
       await scopedRepository.createDataSnapshotForRun({
         actorId: context.actorId, actorOrganizationId: context.organizationId, runId,
         expectedProjectId: projectId, expectedMarketplace: "US", expectedAsins: parsed.data.asins,
-        expectedRunCutoffAt: source.candidate.dataCutoffAt, candidateId: randomUUID(), createdAt: now,
-        candidate: source.candidate,
+        expectedRunCutoffAt: candidate.dataCutoffAt, candidateId: randomUUID(), createdAt: now,
+        candidate,
       });
       await scopedRepository.enqueueJob({
         id: randomUUID(), stageId, attemptNumber: 1, maxAttempts: 3, availableAt: now, createdAt: now,

@@ -80,6 +80,7 @@ export class SyncRepairScopeError extends Error {}
 export type SyncJobStartInput = SyncJobScope & {
   asins: string[];
   marketplace: string;
+  imageAction?: { asin: string; action: "refresh" | "analyze" };
   mode?: "repair-incomplete";
   parentJobId?: string;
 };
@@ -91,6 +92,13 @@ export type SyncJobStartedResult = {
   estimatedAlexaSeconds: number;
 };
 export type SyncJobStartResult = SyncJobStartedResult | { noWork: true; message: "暂无待补抓数据" };
+
+function assertCompatibleImageAction(job: SyncJobRecord, requested: SyncJobStartInput["imageAction"]) {
+  const stage = job.stages.find(stage => stage.id === "image_remarks");
+  if (!requested && !stage?.imageAction) return;
+  if (requested && stage?.imageAction === requested.action && stage.repairAsins?.length === 1 && stage.repairAsins[0] === requested.asin) return;
+  throw new SyncRepairScopeError("当前项目正在执行其他同步任务，请等待完成后再处理此 ASIN 的图片");
+}
 
 export class SyncJobService {
   readonly #syncJobs: SyncJobRepository;
@@ -119,6 +127,7 @@ export class SyncJobService {
   async start(input: SyncJobStartInput): Promise<SyncJobStartResult> {
     const marketplace = normalizeMarketplace(input.marketplace);
     const asins = normalizeAsins(input.asins);
+    if (input.imageAction && (input.mode !== "repair-incomplete" || !asins.includes(input.imageAction.asin) || !["refresh","analyze"].includes(input.imageAction.action))) throw new SyncRepairScopeError("Invalid image repair target scope");
     if (input.mode === "repair-incomplete") {
       if (!input.projectId || !input.parentJobId || input.runId) {
         throw new SyncRepairScopeError("Repair requires a project and parent without run reuse");
@@ -128,6 +137,7 @@ export class SyncJobService {
         throw new SyncRepairScopeError("Repair parent scope does not match");
       }
       if (["queued", "running"].includes(parent.status)) {
+        assertCompatibleImageAction(parent, input.imageAction);
         return { job: toPublicSyncJob(parent), reused: true, mcpAsinsPending: [], estimatedAutoSeconds: 0, estimatedAlexaSeconds: 0 };
       }
       if (!["completed", "failed"].includes(parent.status)) throw new SyncRepairScopeError("Repair parent must be terminal");
@@ -140,12 +150,17 @@ export class SyncJobService {
     const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
     const repairTargets = input.mode === "repair-incomplete" ? repairTargetsFor(statuses) : undefined;
-    const repairXydcAsins = repairTargets ? await this.#findXydcRepairAsins(asins, marketplace) : undefined;
+    if (repairTargets && input.imageAction) {
+      for (const stage of Object.keys(repairTargets)) repairTargets[stage] = [];
+      repairTargets.image_remarks = [input.imageAction.asin];
+      if (input.imageAction.action === "refresh") repairTargets.listing = [input.imageAction.asin];
+    }
+    const repairXydcAsins = repairTargets ? input.imageAction ? [] : await this.#findXydcRepairAsins(asins, marketplace) : undefined;
     if (repairTargets && !Object.values(repairTargets).some(targets => targets.length) && !repairXydcAsins?.length) {
       return { noWork: true, message: "暂无待补抓数据" };
     }
     const vocPending = statuses.filter((item) => item.voc === "missing");
-    const automaticStages = automaticStagesNeedingSync(statuses);
+    const automaticStages = input.imageAction ? (input.imageAction.action === "refresh" ? ["listing"] : []) : automaticStagesNeedingSync(statuses);
     const readinessPlan = !this.#bypassProviderReadiness && this.#providerReadiness
       ? await this.#providerReadiness.plan({
         organizationId: input.organizationId,
@@ -183,12 +198,14 @@ export class SyncJobService {
         createdAt,
         automaticStages,
         unavailable: readinessPlan?.unavailable ?? [],
-        ...(repairTargets ? { repairTargets, repairParentJobId: input.parentJobId, repairXydcAsins } : {}),
+        ...(repairTargets ? { repairTargets, repairParentJobId: input.parentJobId, repairXydcAsins, imageAction: input.imageAction?.action } : {}),
       }),
       currentStageId: "queue",
       message: "任务已排队",
       ...(canonicalRun ? { canonicalRun } : {}),
     });
+
+    if (admitted.disposition === "deduplicated") assertCompatibleImageAction(admitted.job, input.imageAction);
 
     return {
       job: toPublicSyncJob(admitted.job),
@@ -460,6 +477,7 @@ function buildInitialStages(input: {
   createdAt: string;
   automaticStages: readonly string[];
   unavailable: readonly SyncProviderReadinessDetail[];
+  imageAction?: "refresh" | "analyze";
   repairTargets?: Record<string, string[]>;
   repairParentJobId?: string;
   repairXydcAsins?: string[];
@@ -514,6 +532,7 @@ function buildInitialStages(input: {
       startedAt: null,
       completedAt: connectorIds ? input.createdAt : null,
       ...(input.repairTargets && id in input.repairTargets ? { repairAsins: input.repairTargets[id], repairParentJobId: input.repairParentJobId } : {}),
+      ...(input.imageAction && ["listing", "image_remarks"].includes(id) ? { imageAction: input.imageAction } : {}),
       ...(input.repairTargets && id === "catalog" ? { repairXydcAsins: input.repairXydcAsins ?? [] } : {}),
       ...(id === "alexa_voc"
         ? { manualNote: "Alexa VOC 可到「竞品 VOC 汇总」页粘贴报告。" }

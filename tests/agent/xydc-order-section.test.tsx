@@ -123,7 +123,7 @@ test("renders fixed-window annual parent cards from the complete family denomina
   assert.match(html, /子体汇总/);
   assert.match(html, /5,900\+/);
   assert.match(html, /67\.80%/);
-  assert.match(html, /title="砂黑色 67\.80%"/);
+  assert.match(html, /title="砂黑色 · 原属性：Sand Black[^"\n]*67\.80%"/);
   assert.match(html, /19\.49%/);
   assert.match(html, /11\.02%/);
   assert.match(html, /查看全部 4 个子体与月度趋势/);

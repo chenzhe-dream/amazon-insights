@@ -550,10 +550,17 @@ test("a model budget worker exits with a structured failure when its barrier tim
       path,
       shared,
       { operation: "reserve", input: reservationInput(subject) },
-      { barrierTimeoutMs: 25 },
-    );
-    workers.push(worker);
-    const outcome = await awaitBudgetWorkerResult(worker, 500);
+        { barrierTimeoutMs: 25 },
+      );
+      workers.push(worker);
+      // Start the response deadline after TS loading and repository initialization.
+      // Leave the barrier closed so the worker must report its own 25 ms timeout.
+      const readyDeadline = Date.now() + 5_000;
+      while (Atomics.load(barrier, 0) < 1 && !worker.isSettled() && Date.now() < readyDeadline) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      assert.equal(Atomics.load(barrier, 0), 1, 'worker reached its barrier');
+      const outcome = await awaitBudgetWorkerResult(worker, 500);
     assert.deepEqual(outcome, {
       ok: false,
       threadId: worker.threadId,

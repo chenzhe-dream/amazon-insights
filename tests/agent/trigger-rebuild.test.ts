@@ -28,10 +28,10 @@ test("packaged Web runtime spawns the validated formal runner with formal cwd an
     const calls: Array<{ command: string; args: readonly string[]; options: Record<string, unknown> }> = [];
     const child = { pid: process.pid, once() { return child; }, unref() {} };
     const trigger = createTriggerBackgroundRebuild({
-      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_PORT: "31900" },
+      env: { NODE_ENV: "test" as const, AGENT_FORMAL_WORKTREE_ROOT: worktree, WEB_PORT: "31900" },
       cwd: artifact,
       randomOwner: () => "owned-job",
-      spawn: ((command, args, options) => {
+      spawn: ((command: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => {
         calls.push({ command, args, options: options as Record<string, unknown> });
         return child;
       }) as never,
@@ -53,7 +53,7 @@ test("packaged Web runtime spawns the validated formal runner with formal cwd an
 test("spawn failure and pre-runner exit release only the parent's owned lock", async () => {
   await withFormalWorktree(async ({ worktree }) => {
     const common = {
-      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
+      env: { NODE_ENV: "test" as const, AGENT_FORMAL_WORKTREE_ROOT: worktree },
       cwd: worktree,
       randomOwner: () => "failed-job",
     };
@@ -84,10 +84,10 @@ test("N busy requests merge into one durable generation and never spawn detached
     const child = { pid: process.pid, once() { return child; }, unref() {} };
     let sequence = 0;
     const trigger = createTriggerBackgroundRebuild({
-      env: { AGENT_FORMAL_WORKTREE_ROOT: worktree },
+      env: { NODE_ENV: "test" as const, AGENT_FORMAL_WORKTREE_ROOT: worktree },
       cwd: worktree,
       randomOwner: () => `owner-${++sequence}`,
-      spawn: ((_command, _args, options) => {
+      spawn: ((_command: string, _args: readonly string[], options: import("node:child_process").SpawnOptions) => {
         calls.push(options.env as NodeJS.ProcessEnv);
         return child;
       }) as never,

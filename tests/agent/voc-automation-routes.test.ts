@@ -6,7 +6,7 @@ import { registerVocAutomationRoutes } from '../../server/routes/voc-automation'
 import type { AgentServiceClient } from '../../app/lib/agent-service-client';
 import { proxyAgentRequest } from '../../app/api/agent/[...path]/route';
 const projectId=randomUUID(),baseSyncRunId=randomUUID(),organizationId=randomUUID(),actorId=randomUUID();
-const status={projectId,baseSyncRunId,selectedAsins:['B08Z36X6B4'],state:'waiting-voc',runId:null,message:'等待手工 VOC',updatedAt:new Date().toISOString(),startedAt:null};
+const status={projectId,baseSyncRunId,selectedAsins:['B08Z36X6B4'],state:'waiting-voc' as const,runId:null,message:'等待手工 VOC',updatedAt:new Date().toISOString(),startedAt:null};
 test('automation GET/POST pass production proxy and reject invalid scope before backend',async()=>{
  let calls=0;
  const client:AgentServiceClient=async(input)=>{calls++;assert.equal(input.path,`/v1/projects/${projectId}/voc-automation`);assert.equal(new Headers(input.headers).get('cookie'),'session=fixture');return {status:200,headers:new Headers({'content-type':'application/json'}),body:status};};

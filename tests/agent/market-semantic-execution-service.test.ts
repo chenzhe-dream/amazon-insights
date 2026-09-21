@@ -32,7 +32,7 @@ test('market semantic service commits audited outputs and step receipts together
     } } } as unknown as OpenAIProviderOptions['client'];
     const cap = { maxTokens: 100000, maxCostMicros: 1000000 };
     const configuration = { task: 'market-keyword-semantics' as const, configurationVersion: 'fixture/v1',
-      model: { name: 'synthetic-resolved', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
+      model: { name: 'gpt-5.6', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
         pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } }, providerName: 'synthetic-openai', transport: 'responses-strict' as const,
       limits: { call: cap, run: cap, organizationUtcDay: cap }, openAI: { client } };
     return { service: new MarketSemanticExecutionService(f.context, registry, options), configuration, calls: () => calls };
@@ -85,16 +85,16 @@ test('market semantic service commits audited outputs and step receipts together
     const pending = new Promise<void>(r => { release = r; }), started = new Promise<void>(r => { entered = r; });
     const s = setup(f, async () => { entered(); await pending; return f.value; }, { leaseMs: 1000, heartbeatMs: 100 });
     const execution = s.service.executeBatch(f.claim, s.configuration); await started;
-    const rejected = assert.rejects(execution);
     try {
       await f.stores.steps.cancelModuleRun({ actor: f.actor, moduleRunId: f.claim.moduleRunId, idempotencyKey: randomUUID() });
-      await rejected;
+      const cancelled=await execution;
+      assert.equal(cancelled.agentRun.terminalStatus,'cancelled');assert.equal(cancelled.value,null);
     } finally { release(); }
     await new Promise(r => setImmediate(r));
     const view = await f.stores.steps.findModuleRun({ actor: f.actor, moduleRunId: f.claim.moduleRunId });
     assert.equal(view?.run.status, 'cancelled'); assert.equal(view?.steps.find(s => s.id === f.claim.stepId)?.status, 'cancelled');
     const row = (await pg.pool.query('SELECT validation_status,output_json FROM market_agent_runs WHERE attempt_id=$1', [f.claim.attemptId])).rows[0];
-    assert.equal(row.validation_status, 'pending'); assert.equal(row.output_json, null); assert.equal(s.calls(), 1);
+    assert.equal(row.validation_status, 'failed'); assert.equal(row.output_json, null); assert.equal(s.calls(), 1);
     // Losing the execution lease must not discard provider-reported charges.
     let settled = false;
     for (let i = 0; i < 40; i++) {

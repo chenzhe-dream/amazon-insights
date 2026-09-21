@@ -14,8 +14,8 @@ for (const backend of ['SQLite', 'PostgreSQL']) test(`${backend}: VOC automation
   let reopen!: () => Promise<typeof repository>;
   if (backend === 'SQLite') {
     const directory = mkdtempSync(join(tmpdir(), 'voc-automation-'));
-    repository = openSqliteAgentRepository({ path: join(directory, 'agent.sqlite') });
-    reopen = async () => openSqliteAgentRepository({ path: join(directory, 'agent.sqlite') });
+    repository = openSqliteAgentRepository({ path: join(directory, 'agent.sqlite'), busyTimeoutMs: 5_000 });
+    reopen = async () => openSqliteAgentRepository({ path: join(directory, 'agent.sqlite'), busyTimeoutMs: 5_000 });
     t.after(async () => { await repository.close(); rmSync(directory, { recursive: true, force: true }); });
   } else {
     const postgres = await startPostgresTestContainer();

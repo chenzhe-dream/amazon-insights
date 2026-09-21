@@ -7,6 +7,7 @@ import {MarketKeywordReconciliationReportSchema} from './market-keyword-reconcil
 import {MarketKeywordRuleReportSchema} from './market-keyword-rule-report-contracts';
 import {MarketKeywordComparisonMonthsSchema} from './market-keyword-comparison-contracts';
 import {MarketKeywordAbaMemberSchema} from './market-keyword-aba-source-contracts';
+import {MarketKeywordScoreInputAuditSchema} from './market-keyword-score-input-audit-contracts';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const inputId = z.string().regex(/^market-input:[a-f0-9]{64}$/);
@@ -33,7 +34,7 @@ export const MarketKeywordFactsSchema = z.object({
     duplicateMemberCount: count, memberLimitReached: z.boolean(), selectionPolicy: z.literal('seed-page-source-order/first-observation/v1'),
   }).strict(),
   members: z.array(z.object({ keywordId: z.string(), keyword: z.string(), sourceRef, occurrences: z.array(occurrence),
-    aba:z.object({status:z.enum(['pending','failed','cancelled','ready','partial','empty']),stepId:z.string().uuid().nullable(),attemptId:z.string().uuid().nullable(),
+    aba:z.object({status:z.enum(['pending','failed','cancelled','ready','partial','empty','unsupported']),stepId:z.string().uuid().nullable(),attemptId:z.string().uuid().nullable(),
       inputSnapshotId:inputId.nullable(),sourceRef:sourceRef.nullable(),fetchedAt:z.string().datetime().nullable(),referenceMonth:month,
       sourceScope:z.literal('exact-keyword-marketplace'),nodeBinding:z.literal('not-provided'),member:MarketKeywordAbaMemberSchema.nullable()}).strict().optional(),
     pageMetrics: z.object({ monthlySearchVolume: measurement, weeklySearchVolume: measurement, weeklySearchRank: measurement,
@@ -57,6 +58,7 @@ export const MarketKeywordRunResponseSchema = z.object({ run: z.object({ id: z.s
   params: MarketKeywordStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), facts: MarketKeywordFactsSchema.nullable(),
   reconciliation:MarketKeywordReconciliationReportSchema.optional(),
   ruleReport:MarketKeywordRuleReportSchema.optional(),
+  scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional(),
   history: z.array(z.object({ revisionId: z.string().regex(/^market-keyword-revision:[a-f0-9]{64}$/),
     parentRevisionId: z.string().regex(/^market-keyword-revision:[a-f0-9]{64}$/).nullable(), ordinal: count,
     createdAt: z.string().datetime(), factsId: z.string().regex(/^market-keyword-facts:[a-f0-9]{64}$/) }).strict()).optional(),

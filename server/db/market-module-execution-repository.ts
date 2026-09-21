@@ -1,3 +1,4 @@
+import type { LocalAdmission } from './concurrency-control-repository';
 import type { MarketAnalysisScope, MarketJsonValue } from "../../shared/market-analysis-contracts";
 
 export const MARKET_MODULE_KINDS = ["overview", "shape-price", "keywords", "customer-themes"] as const;
@@ -10,12 +11,12 @@ export type MarketStepDefinition = { stepKey: string; kind: MarketStepKind; subj
 export type MarketExecutionVersions = { source: string; rule: string; mapping: string; planner: string; model: string | null; prompt: string | null; configuration: string | null };
 export type CreateMarketModuleRunInput = { actor: MarketExecutionActor; scope: MarketAnalysisScope; moduleKind: MarketModuleKind; params: MarketJsonValue; versions: MarketExecutionVersions; collectionRevision: string; idempotencyKey: string; initialSteps: MarketStepDefinition[] };
 export type MarketModuleRun = { id: string; scope: MarketAnalysisScope; moduleKind: MarketModuleKind; params: MarketJsonValue; versions: MarketExecutionVersions; collectionRevision: string; requestFingerprint: string; status: "queued" | "running" | "partial" | "succeeded" | "failed" | "cancelled"; createdBy: string; createdAt: string; planRevision: number; latestReportAttemptId: string | null };
-export type MarketExecutionStep = MarketStepDefinition & { id: string; inputHash: string; status: "queued" | "running" | "succeeded" | "empty" | "failed" | "cancelled"; attemptCount: number; retryRound: number; latestAttemptId: string | null };
+export type MarketExecutionStep = MarketStepDefinition & { id: string; inputHash: string; status: "queued" | "running" | "succeeded" | "empty" | "failed" | "cancelled"; attemptCount: number; retryRound: number; latestAttemptId: string | null; nextAttemptAt?: string | null };
 export type MarketExecutionAttempt = { id: string; stepId: string; attemptNumber: number; retryRound: number; leaseGeneration: number; status: "running" | "succeeded" | "empty" | "failed" | "cancelled" | "interrupted"; output: MarketJsonValue | null; error: MarketJsonValue | null };
 export type MarketModuleRunView = { run: MarketModuleRun; steps: MarketExecutionStep[]; attempts: MarketExecutionAttempt[] };
 export type MarketStepClaim = { organizationId: string; studyId: string; moduleRunId: string; stepId: string; attemptId: string; createdBy: string; leaseOwnerId: string; leaseGeneration: number; inputHash: string; leaseUntil: string; step: MarketStepDefinition };
-export const MARKET_STEP_ERROR_CODES = ["upstream-temporary", "timeout", "interrupted", "authentication", "governance", "invalid-data", "scope-mismatch", "cancelled", "internal"] as const;
-export type MarketStepError = { code: typeof MARKET_STEP_ERROR_CODES[number]; retryable: boolean };
+export const MARKET_STEP_ERROR_CODES = ["upstream-temporary", "timeout", "interrupted", "authentication", "local-admission", "governance", "invalid-data", "scope-mismatch", "cancelled", "internal"] as const;
+export type MarketStepError = { code: typeof MARKET_STEP_ERROR_CODES[number]; retryable: boolean; admission?: LocalAdmission };
 export type MarketStepOutcome = { status: "succeeded" | "empty"; output: MarketJsonValue } | { status: "failed"; error: MarketStepError; diagnostic?: MarketJsonValue };
 /** Source/input values are T4/T1 factory inputs, validated again by the shared T10 store. */
 export type MarketStepSettlement = { claim: MarketStepClaim; outcome: MarketStepOutcome; sources?: MarketJsonValue[]; inputs?: MarketJsonValue[]; children?: MarketStepDefinition[] };

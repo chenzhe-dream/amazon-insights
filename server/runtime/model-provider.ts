@@ -51,10 +51,32 @@ export type ModelProviderErrorKind =
   | "empty"
   | "invalid_output";
 
+export type ModelValidationDiagnostic = Readonly<
+  | { stage: 'response-envelope'; code: 'invalid_envelope' }
+  | { stage: 'json'; code: 'invalid_json' }
+  | { stage: 'schema'; code: 'contract_mismatch' }
+  | { stage: 'semantic'; code: 'evidence_mismatch' }
+  | { stage: 'sdk'; code: 'sdk_parse_failed' }
+>;
+
+export function safeModelValidationDiagnostic(value: unknown): ModelValidationDiagnostic | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const {stage,code}=value as Record<string,unknown>;
+  if ((stage==='response-envelope' && code==='invalid_envelope') ||
+      (stage==='json' && code==='invalid_json') ||
+      (stage==='schema' && code==='contract_mismatch') ||
+      (stage==='semantic' && code==='evidence_mismatch') ||
+      (stage==='sdk' && code==='sdk_parse_failed')) {
+    return Object.freeze({stage,code}) as ModelValidationDiagnostic;
+  }
+  return undefined;
+}
+
 export class ModelProviderError extends Error {
   readonly usage?: Readonly<ModelProviderUsage>;
   readonly validationIssues?: readonly SafeValidationIssue[];
   readonly reasonCode?: ModelProviderReasonCode;
+  readonly validationDiagnostic?: ModelValidationDiagnostic;
 
   constructor(
     readonly kind: ModelProviderErrorKind,
@@ -64,6 +86,7 @@ export class ModelProviderError extends Error {
       validationIssues?: readonly SafeValidationIssue[];
       validationJsonSchema?: Readonly<Record<string, unknown>>;
       reasonCode?: ModelProviderReasonCode;
+      validationDiagnostic?: ModelValidationDiagnostic;
     },
   ) {
     super(message, { cause: options?.cause });
@@ -78,5 +101,6 @@ export class ModelProviderError extends Error {
       )
       : undefined;
     this.reasonCode = options?.reasonCode;
+    this.validationDiagnostic = safeModelValidationDiagnostic(options?.validationDiagnostic);
   }
 }

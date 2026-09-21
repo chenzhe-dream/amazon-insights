@@ -294,7 +294,7 @@ test("AuthSessionController starts checking, returns the exact confirmed user, a
   assert.deepEqual(controller.state, { status: "checking", user: null, message: null, retryAfterSeconds: null });
   controller.setCredentials(user.email, "password");
   await controller.bootstrap();
-  assert.equal(controller.state.status, "unauthenticated");
+  assert.equal({ ...controller.state }.status, "unauthenticated");
   await controller.submit();
   assert.deepEqual(controller.state, { status: "authenticated", ...authenticatedWebIdentity, message: null, retryAfterSeconds: null });
   assert.equal(controller.password, "");
@@ -330,9 +330,9 @@ test("controller-owned 401 expiry cannot be undone by a late matching 403 revoca
   });
 
   assert.equal(controller.expireAuthenticatedSession(), true);
-  assert.equal(controller.state.status, "unauthenticated");
+  assert.equal({ ...controller.state }.status, "unauthenticated");
   assert.equal(controller.revokeUserPresenceAccess(sessionIdentity), false);
-  assert.equal(controller.state.status, "unauthenticated");
+  assert.equal({ ...controller.state }.status, "unauthenticated");
 });
 
 test("AuthSessionController keeps the application authenticated after logout failure and allows retry", async () => {
@@ -369,9 +369,9 @@ test("AuthSessionController decrements a valid rate limit one bounded second at 
   });
 
   await controller.bootstrap();
-  assert.equal(controller.state.status, "unavailable");
+  assert.equal({ ...controller.state }.status, "unavailable");
   await controller.bootstrap(true);
-  assert.equal(controller.state.status, "unauthenticated");
+  assert.equal({ ...controller.state }.status, "unauthenticated");
   controller.setCredentials(user.email, "password");
   await controller.submit();
   assert.equal(controller.state.retryAfterSeconds, 2);
@@ -407,7 +407,7 @@ test("AuthSessionGate and its rendered views expose only the approved unauthenti
       rendered.login.indexOf("使用钉钉登录"),
     "钉钉登录应显示在邮箱密码登录下方",
   );
-  assert.match(rendered.workbenchRetry, /<button[^>]+type="button"[^>]*>.*使用钉钉登录/s);
+  assert.match(rendered.workbenchRetry, /<button[^>]+type="button"[^>]*>[\s\S]*使用钉钉登录/);
   assert.ok(
     rendered.workbenchRetry.indexOf('name="password"') <
       rendered.workbenchRetry.indexOf("使用钉钉登录"),

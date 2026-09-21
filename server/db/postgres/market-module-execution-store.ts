@@ -1,3 +1,4 @@
+import {LOCAL_ADMISSION_REASONS} from '../concurrency-control-repository';
 import {readMarketOverviewSynthesisReport} from '../../runtime/market-overview-synthesis-report-reader';
 import {isMarketShapeExplanationFlow} from '../../domain/market-research/shape-explanation-flow';
 import {readMarketShapeExplanationReport} from '../../runtime/market-shape-explanation-report-reader';
@@ -14,6 +15,7 @@ import {
 import { canonicalJsonSha256 } from "../../runtime/model-request-accounting";
 import { PostgresQueryContext } from "./query-context";
 import { PostgresMarketAnalysisSnapshotStore } from "./market-analysis-snapshot-store";
+import { PostgresMarketAgentRunStore } from './market-agent-run-store';
 import { isMarketThemeFlow, marketThemeFlowInitialSteps, inspectMarketThemeContinuation } from '../../domain/market-research/customer-theme-flow';
 import { loadMarketThemeEvaluationHistory } from './market-theme-evaluation-history';
 import { createMarketThemeReport, MarketThemeReportStepInputSchema } from '../../domain/market-research/customer-theme-report';
@@ -35,7 +37,7 @@ const requestSchema = z.object({scope:MarketAnalysisScopeSchema,moduleKind:z.enu
 const createSchema = requestSchema.extend({actor:actorSchema,idempotencyKey:uuid4});
 const claimSchema = z.object({organizationId:uuid,studyId:uuid,moduleRunId:uuid4,stepId:uuid4,attemptId:uuid4,createdBy:uuid,leaseOwnerId:uuid4,leaseGeneration:z.number().int().positive(),inputHash:hash,leaseUntil:z.string().datetime(),step:stepSchema}).strict();
 const leaseMs = z.number().int().min(10).max(120_000);
-const errorSchema = z.object({code:z.enum(MARKET_STEP_ERROR_CODES),retryable:z.boolean()}).strict();
+const errorSchema = z.object({code:z.enum(MARKET_STEP_ERROR_CODES),retryable:z.boolean(),admission:z.object({reason:z.enum(LOCAL_ADMISSION_REASONS),retryAt:z.string().datetime().nullable()}).strict().optional()}).strict().refine(e=>e.code==='local-admission' ? !!e.admission && (e.admission.reason!=='rolling-window'||e.admission.retryAt!==null) && (e.admission.reason==='rolling-window'||e.admission.retryAt===null) : e.admission===undefined);
 const outcomeSchema = z.union([
   z.object({status:z.enum(["succeeded","empty"]),output:json}).strict(),
   z.object({status:z.literal("failed"),error:errorSchema,diagnostic:json.optional()}).strict(),
@@ -47,7 +49,7 @@ const receiptSchema = z.object({status:z.literal("committed"),attemptId:uuid4,so
 class LeaseLostError extends Error {}
 const automaticCodes = new Set(["upstream-temporary","timeout","interrupted"]);
 type RunRow={id:string;organization_id:string;study_id:string;created_by:string;request_json:unknown;request_fingerprint:string;status:MarketModuleRun["status"];created_at:Date|string;cancelled_at:Date|string|null;plan_revision:number;latest_report_attempt_id:string|null};
-type StepRow={id:string;organization_id:string;study_id:string;run_id:string;definition_json:unknown;input_hash:string;kind:MarketStepDefinition["kind"];status:MarketExecutionStep["status"];attempt_count:number;retry_round:number;round_attempt_count:number;latest_attempt_id:string|null;lease_owner_id:string|null;lease_generation:number;lease_until:Date|string|null};
+type StepRow={id:string;organization_id:string;study_id:string;run_id:string;definition_json:unknown;input_hash:string;kind:MarketStepDefinition["kind"];status:MarketExecutionStep["status"];attempt_count:number;retry_round:number;round_attempt_count:number;next_attempt_at:Date|string|null;latest_attempt_id:string|null;lease_owner_id:string|null;lease_generation:number;lease_until:Date|string|null};
 type AttemptRow={id:string;step_id:string;attempt_number:number;retry_round:number;lease_generation:number;lease_owner_id:string;input_hash:string;status:MarketExecutionAttempt["status"];output_json:MarketExecutionAttempt["output"];error_json:MarketExecutionAttempt["error"];output_hash:string|null;completion_hash:string|null;receipt_json:unknown};
 const iso=(date:Date|string)=>new Date(date).toISOString();
 function bounded(value:unknown):void {
@@ -62,7 +64,7 @@ function mapRun(row:RunRow):MarketModuleRun {
 function mapStep(row:StepRow):MarketExecutionStep {
   const definition=stepSchema.parse(row.definition_json);
   if(canonicalJsonSha256(definition)!==row.input_hash)throw new MarketExecutionConflictError();
-  return {...definition,id:row.id,inputHash:row.input_hash,status:row.status,attemptCount:row.attempt_count,retryRound:row.retry_round,latestAttemptId:row.latest_attempt_id};
+  return {...definition,id:row.id,inputHash:row.input_hash,status:row.status,attemptCount:row.attempt_count,retryRound:row.retry_round,latestAttemptId:row.latest_attempt_id,nextAttemptAt:row.next_attempt_at?iso(row.next_attempt_at):null};
 }
 function mapAttempt(row:AttemptRow):MarketExecutionAttempt {
   if(row.output_hash!==null && canonicalJsonSha256(row.output_json)!==row.output_hash)throw new MarketExecutionConflictError();
@@ -110,6 +112,15 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
       }
     }
     return ids;
+  }
+  async findCreatedModuleRunByCommand(value:unknown):Promise<MarketModuleRun|null>{
+    const {actor,idempotencyKey}=z.object({actor:actorSchema,idempotencyKey:uuid4}).strict().parse(value);
+    const found=await this.queries.query<RunRow>(`SELECT r.* FROM market_analysis_commands c
+      JOIN market_analysis_module_runs r ON r.id=c.run_id AND r.organization_id=c.organization_id
+      WHERE c.organization_id=$1 AND c.kind='create' AND c.idempotency_key=$2
+        AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$1 AND u.status='active')`,
+      [actor.organizationId,idempotencyKey,actor.userId]);
+    return found.rows[0]?mapRun(found.rows[0]):null;
   }
   async createModuleRun(value:unknown):Promise<{run:MarketModuleRun;created:boolean}>{
     bounded(value);const {actor,idempotencyKey,...request}=createSchema.parse(value);
@@ -278,7 +289,9 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
           const saved=await snapshots.saveInput({actor,studyId:claim.studyId,input:snapshot,now});inputIds.push(saved.snapshot.snapshotId);
         }
         const childStepIds=await this.insertSteps(run,accepted.children,step.id,claim.attemptId);
-        const retry=outcome.status==="failed"&&outcome.error.retryable&&automaticCodes.has(outcome.error.code)&&step.kind!=="model-batch"&&step.round_attempt_count<3;
+        const admission = outcome.status==='failed' && outcome.error.code==='local-admission' ? outcome.error.admission : undefined;
+        const localWait = step.kind.startsWith('collect-') && outcome.status==='failed' && outcome.error.retryable && !!admission && (admission.reason==='concurrency'||(admission.reason==='rolling-window'&&admission.retryAt!==null));
+        const retry=localWait || (outcome.status==="failed"&&outcome.error.retryable&&automaticCodes.has(outcome.error.code)&&step.kind!=="model-batch"&&step.round_attempt_count<3);
         if(automated){
           const current=await this.findModuleRun({actor,moduleRunId:run.id});if(!current)throw new MarketExecutionConflictError();
           current.steps=current.steps.map(s=>s.id===step.id?{...s,status:retry?'queued':outcome.status}:s);
@@ -290,7 +303,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
         const error=outcome.status==="failed"?outcome.error:null;
         const diagnostic=outcome.status==="failed"?(outcome.diagnostic??null):null;
         await this.queries.query("UPDATE market_analysis_step_attempts SET status=$2,output_json=$3::jsonb,output_hash=$4,error_json=$5::jsonb,diagnostic_json=$6::jsonb,completion_hash=$7,receipt_json=$8::jsonb,finished_at=clock_timestamp() WHERE id=$1",[claim.attemptId,outcome.status,JSON.stringify(output),outcome.status==="failed"?null:canonicalJsonSha256(output),JSON.stringify(error),JSON.stringify(diagnostic),completionHash,JSON.stringify(receipt)]);
-        await this.queries.query("UPDATE market_analysis_steps SET status=$2,lease_owner_id=NULL,lease_until=NULL,next_attempt_at=clock_timestamp()+($3*interval '1 second'),updated_at=clock_timestamp() WHERE id=$1",[step.id,retry?"queued":outcome.status,step.round_attempt_count===1?5:30]);
+        await this.queries.query("UPDATE market_analysis_steps SET status=$2,lease_owner_id=NULL,lease_until=NULL,next_attempt_at=GREATEST(clock_timestamp()+($3*interval '1 second'),COALESCE($4::timestamptz,clock_timestamp())),round_attempt_count=GREATEST(0,round_attempt_count-$5),updated_at=clock_timestamp() WHERE id=$1",[step.id,retry?"queued":outcome.status,localWait?1:step.round_attempt_count===1?5:30,localWait?admission?.retryAt??null:null,localWait?1:0]);
         if(publishReport)await this.queries.query('UPDATE market_analysis_module_runs SET latest_report_attempt_id=$2 WHERE id=$1',[run.id,claim.attemptId]);
         if(childStepIds.length)await this.queries.query("UPDATE market_analysis_module_runs SET plan_revision=plan_revision+1 WHERE id=$1",[run.id]);
         await this.refreshRun(run.id);
@@ -345,14 +358,15 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
     return this.queries.transaction(async()=>{
       const run=await this.commandRun(actor,moduleRunId);
       const previous=await this.previousCommand(actor,run.id,"cancel",idempotencyKey,digest);
-      if(previous!==undefined)return z.object({moduleRunId:uuid4,cancelled:z.literal(true)}).strict().parse(previous);
+      if(previous!==undefined)z.object({moduleRunId:uuid4,cancelled:z.literal(true)}).strict().parse(previous);
       if(run.cancelled_at===null){
         await this.queries.query("UPDATE market_analysis_step_attempts SET status='cancelled',error_json=$2::jsonb,finished_at=clock_timestamp() WHERE run_id=$1 AND status='running'",[run.id,JSON.stringify({code:"cancelled",retryable:false})]);
         await this.queries.query("UPDATE market_analysis_steps SET status='cancelled',lease_generation=lease_generation+CASE WHEN status='running' THEN 1 ELSE 0 END,lease_owner_id=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE run_id=$1 AND status IN ('queued','running')",[run.id]);
         await this.queries.query("UPDATE market_analysis_module_runs SET status='cancelled',cancelled_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1",[run.id]);
       }
+      await new PostgresMarketAgentRunStore(this.queries).cancelPendingAgentRuns({actor,studyId:run.study_id,moduleRunId:run.id});
       const receipt:MarketCancelReceipt={moduleRunId:run.id,cancelled:true};
-      await this.saveCommand(actor,run.id,"cancel",idempotencyKey,digest,receipt);return receipt;
+      if(previous===undefined)await this.saveCommand(actor,run.id,"cancel",idempotencyKey,digest,receipt);return receipt;
     });
   }
 }

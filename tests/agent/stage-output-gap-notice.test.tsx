@@ -91,3 +91,11 @@ test("page renders late-stage gap cards and supplies every late-stage fallback",
     assert.match(harnessSource, new RegExp(`createElement\\(StageOutputGapCard, \\{ snapshot: stageOutputs, stage: "${stage}" \\}\\)`));
   }
 });
+
+
+test("mixed ASIN failures use individual causes instead of labelling the entire group as timed out", () => {
+  const html = JSON.stringify(StageOutputGapNotice({ label: "评论数据", asins: ["B000000001", "B000000002"], records: {},
+    reasonCode: "CONNECT_TIMEOUT", gapItems: [{ asin: "B000000001", causeCode: "CONNECT_TIMEOUT" }, { asin: "B000000002", causeCode: "CONNECTOR_FAILED" }] }));
+  assert.match(html, /B000000001：连接超时/);
+  assert.match(html, /B000000002：连接失败/);
+});

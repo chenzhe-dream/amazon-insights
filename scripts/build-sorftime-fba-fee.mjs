@@ -111,6 +111,8 @@ export type SorftimeFbaFeeRecord = {
   statusMessage?: string;
   source: "keepa" | "sorftime" | "Sorftime";
   fbaFee: number | null;
+  sorftimeFbaFee?: number | null;
+  verifiedEmpty?: boolean;
   packageSize?: string | null;
   packageWeight?: string | null;
   note?: string;

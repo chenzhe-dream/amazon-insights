@@ -1,3 +1,4 @@
+import { safeModelValidationDiagnostic, type ModelValidationDiagnostic } from "./model-provider";
 import { z } from "zod";
 
 import type {
@@ -217,6 +218,7 @@ export interface SkillRunLogSummary {
 
 export interface ModelValidationFailureLog {
   readonly event: "model_validation_failed";
+  readonly diagnostic?: ModelValidationDiagnostic;
   readonly attemptKind: "initial" | "format-repair";
   readonly issueCount: number;
   readonly issues: readonly SafeValidationIssue[];
@@ -1084,6 +1086,7 @@ export class SkillRunner {
             validationAttemptKind(requestIdentity.kind),
             issues,
             activeResponseFormat.format.schema,
+            error.validationDiagnostic,
           );
           if (!repairAttempted) {
             formatRepairIssues = issues;
@@ -1207,6 +1210,9 @@ export class SkillRunner {
         validationAttemptKind(requestIdentity.kind),
         issues,
         responseFormat.format.schema,
+        issues.some(issue => issue.ruleId)
+          ? {stage:'semantic',code:'evidence_mismatch'}
+          : {stage:'schema',code:'contract_mismatch'},
       );
       if (!repairAttempted) {
         formatRepairIssues = issues;
@@ -1473,11 +1479,14 @@ export class SkillRunner {
     attemptKind: ModelValidationFailureLog["attemptKind"],
     issues: readonly SafeValidationIssue[],
     declaredJsonSchema: Readonly<Record<string, unknown>>,
+    diagnostic?: ModelValidationDiagnostic,
   ) {
     try {
+      const safeDiagnostic = safeModelValidationDiagnostic(diagnostic);
       const safeIssues = freezeSafeValidationIssues(issues, declaredJsonSchema);
       this.dependencies.validationLogger?.(Object.freeze({
         event: "model_validation_failed" as const,
+        ...(safeDiagnostic ? {diagnostic: safeDiagnostic} : {}),
         attemptKind,
         issueCount: safeIssues.length,
         issues: safeIssues,

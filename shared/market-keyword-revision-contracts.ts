@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { MarketKeywordFactsSchema } from './market-keyword-public-contracts';
+import {MarketKeywordRuleReportSchema} from './market-keyword-rule-report-contracts';
+import {MarketKeywordScoreInputAuditSchema} from './market-keyword-score-input-audit-contracts';
 const identity = z.string().min(1).max(240).refine(s => s.trim() === s, 'Identity must not have surrounding whitespace');
 const label = z.object({ labelId: identity, label: z.string().trim().min(1).max(240), definition: z.string().trim().min(1).max(4000) }).strict();
 const cluster = z.object({ clusterId: identity, label: z.string().trim().min(1).max(240), definition: z.string().trim().min(1).max(4000) }).strict();
@@ -27,3 +29,5 @@ export const MarketKeywordRevisionCatalogSchema = z.object({
 }).strict();
 export type MarketKeywordRevisionRequest = z.infer<typeof MarketKeywordRevisionRequestSchema>;
 export type MarketKeywordRevisionCatalog = z.infer<typeof MarketKeywordRevisionCatalogSchema>;
+/** Read response siblings never become part of the immutable revision catalog. */
+export const MarketKeywordRevisionEntrySchema=z.object({ordinal:z.number().int().min(1),catalog:MarketKeywordRevisionCatalogSchema,ruleReport:MarketKeywordRuleReportSchema.optional(),scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional()}).strict();

@@ -1,3 +1,6 @@
+import { queryProjectLibrary } from "../../server/services/project-library-query";
+import { LocalDataProjectListQuerySchema } from "../../shared/agent-contracts";
+import type { AnalysisProject } from "../../app/lib/project-server";
 import assert from "node:assert/strict";
 import { before, after, test } from "node:test";
 import react from "@vitejs/plugin-react";
@@ -5,7 +8,7 @@ import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 let server: ViteDevServer, browser: Browser, origin: string;
 const id = "10000000-0000-4000-8000-000000000001";
-const project = { id, kind: "analysis", name: "历史灯具项目", slug: "test-lamps", marketplace: "US",
+const project = { majorCategory: null, categoryLabel: null, note: null, createdBy: null as string | null, latestAnalystName: null as string | null, createdAt: "2026-09-01T00:00:00Z", id, kind: "analysis", name: "历史灯具项目", slug: "test-lamps", marketplace: "US",
   asins: ["B01E6CX34C", "B07Y4PJJR4", "B07WFC14VR"], updatedAt: "2026-09-01T00:00:00Z" };
 before(async () => {
   server = await createServer({ configFile: false, define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0 } });
@@ -13,8 +16,12 @@ before(async () => {
   origin = `http://127.0.0.1:${address.port}`; browser = await chromium.launch({ headless: true });
 });
 after(async () => { await browser?.close(); await server?.close(); });
-async function fixture(t: test.TestContext, kind = "analysis", admin = false, other = false) {
+async function fixture(t: test.TestContext, kind = "analysis", admin = false, other = false, guard = false, freezeClock = false) {
   const page = await browser.newPage(); t.after(() => page.close());
+  if (freezeClock) {
+    await page.clock.install({ time: new Date("2026-09-01T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-01T00:00:01Z"));
+  }
   page.setDefaultTimeout(10000);
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
@@ -33,21 +40,61 @@ async function fixture(t: test.TestContext, kind = "analysis", admin = false, ot
       state.favorite = method === "PUT";
       return reply({ projectId: id, favorited: state.favorite });
     }
+    if (path.endsWith(`/projects/${id}`) && method === "PATCH") {
+      return state.fail ? reply({ error: { message: "保存失败" } }, 500) : reply({ project });
+    }
     if (path === `/api/projects/${id}` && method === "DELETE") {
       if (state.fail) return reply({ error: { code: "FORBIDDEN", message: "删除失败，请重试" } }, 403);
       state.projects = []; return reply({ ok: true });
     }
-    if (path.endsWith("/projects") && method === "GET") return reply({ projects: state.projects });
+    if (path.endsWith("/projects") && method === "GET") {
+      const query = LocalDataProjectListQuerySchema.parse(Object.fromEntries(new URL(route.request().url()).searchParams));
+      return reply(queryProjectLibrary(state.projects as AnalysisProject[], query, state.favorite ? [id] : []));
+    }
     if (path.endsWith("/projects") && method === "POST") {
       const saved = { ...project, kind, id: "10000000-0000-4000-8000-000000000002", name: "新的灯具分析" };
       state.projects.push(saved); return reply({ project: saved });
     }
     return reply({}, 404);
   });
-  await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?kind=${kind}&admin=${admin}&other=${other}`);
+  await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?kind=${kind}&admin=${admin}&other=${other}&guard=${guard}`);
   await page.getByRole("button", { name: "☆ 收藏项目", exact: true }).first().waitFor();
   return { page, state };
 }
+
+test("favorite preparation blocks blank names and failed saves; saves before favorite and permits unfavorite", async t => {
+  const { page, state } = await fixture(t, "analysis", false, false, true);
+  const favorite = page.getByRole("button", { name: "☆ 收藏项目", exact: true }).first();
+  await favorite.click();
+  await page.getByText("请先填写细分名称，再收藏项目", { exact: true }).waitFor();
+  assert.deepEqual(state.writes, []);
+  await page.getByLabel("细分名称", { exact: true }).fill("融蜡灯");
+  state.fail = true;
+  await favorite.click();
+  await page.getByText("保存细分名称失败，请重试", { exact: true }).waitFor();
+  assert.equal(state.favorite, false);
+  assert.deepEqual(state.writes, [`PATCH /api/agent/v1/local-data/projects/${id}`]);
+  state.fail = false; state.writes = [];
+  await favorite.click();
+  await page.getByRole("button", { name: "★ 已收藏", exact: true }).waitFor();
+  assert.deepEqual(state.writes, [`PATCH /api/agent/v1/local-data/projects/${id}`, `PUT /api/agent/v1/local-data/projects/${id}/favorite`]);
+  await page.getByLabel("细分名称", { exact: true }).fill("");
+  await page.getByRole("button", { name: "★ 已收藏", exact: true }).click();
+  await favorite.waitFor();
+  assert.equal(state.writes.at(-1), `DELETE /api/agent/v1/local-data/projects/${id}/favorite`);
+  assert.equal(state.writes.length, 3);
+});
+
+test("history favorite prompts editing when only an automatic name exists", async t => {
+  const { page, state } = await fixture(t);
+  state.projects[0].name = "竞品分析 · US";
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("竞品分析 · US", { exact: true }).waitFor();
+  await page.locator(".project-card").getByRole("button", { name: "☆ 收藏项目", exact: true }).click();
+  await page.getByRole("heading", { name: "编辑项目", exact: true }).waitFor();
+  await page.getByText("请先填写细分名称（项目名称）并保存，再收藏项目", { exact: true }).waitFor();
+  assert.deepEqual(state.writes, []);
+});
 test("history is not implicitly favorite; explicit add/remove survives reload without deleting projects", async t => {
   const { page, state } = await fixture(t);
   await page.getByText("尚未收藏项目").waitFor();
@@ -65,6 +112,39 @@ test("history is not implicitly favorite; explicit add/remove survives reload wi
   await page.getByRole("button", { name: /^历史项目（/ }).click();
   await page.getByText("历史灯具项目", { exact: true }).waitFor();
   assert.deepEqual(state.writes, [`PUT /api/agent/v1/local-data/projects/${id}/favorite`, `DELETE /api/agent/v1/local-data/projects/${id}/favorite`]);
+});
+
+test("history shows a read-only latest analyst, searches that name, and keeps unknown separate from creator", async t => {
+  const { page, state } = await fixture(t);
+  state.projects[0].createdBy = "自由填写人";
+  state.projects[0].latestAnalystName = "可信分析人";
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("最近分析人：可信分析人", { exact: true }).waitFor();
+  const search = page.getByPlaceholder("搜项目名 / ASIN / 大类 / 品类 / 创建人 / 分析人 / 备注");
+  await search.fill("可信分析人");
+  await page.getByText("历史灯具项目", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 1);
+  await page.locator(".project-card").getByRole("button", { name: "编辑", exact: true }).click();
+  assert.equal(await page.getByRole("textbox", { name: /分析人/ }).count(), 0);
+  state.projects[0].latestAnalystName = null;
+  await search.fill("");
+  await page.getByRole("button", { name: "刷新列表" }).click();
+  await page.getByText("最近分析人：未记录", { exact: true }).waitFor();
+  assert.match(await page.locator(".project-card").innerText(), /创建人：自由填写人/);
+  assert.deepEqual(state.writes, []);
+});
+
+test("an unchanged initial search cannot reset a history page after the debounce interval", async t => {
+  const { page, state } = await fixture(t, "analysis", false, false, false, true);
+  state.projects = Array.from({ length: 11 }, (_, i) => ({ ...project, id: `10000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`, name: `快速翻页${i}`, updatedAt: new Date(Date.UTC(2026, 8, 23 - i)).toISOString() }));
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("快速翻页0", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await page.getByText("快速翻页10", { exact: true }).waitFor();
+  await page.clock.runFor(350);
+  assert.equal(await page.getByRole("button", { name: "下一页", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "上一页", exact: true }).isDisabled(), false);
+  assert.equal(await page.getByText("快速翻页10", { exact: true }).count(), 1);
 });
 test("failed favorite mutation remains unstarred with visible retryable error", async t => {
   const { page, state } = await fixture(t); state.fail = true;
@@ -140,4 +220,71 @@ test("deleting another history project keeps the current project selected", asyn
   await page.getByText(/已删除项目/).waitFor();
   assert.equal(await page.getByLabel("当前项目").textContent(), "other-project");
   assert.equal(await page.locator(".project-card").count(), 0);
+});
+
+
+test("history pages, search resets page, size changes and last-page deletion remain consistent", async t => {
+  const { page, state } = await fixture(t, "analysis", true);
+  state.projects = Array.from({ length: 23 }, (_, i) => ({ ...project, id: i === 22 ? id : `10000000-0000-4000-8000-${String(i + 10).padStart(12, "0")}`, name: `测试项目${String(i).padStart(2, "0")}`, updatedAt: new Date(Date.UTC(2026, 8, 23 - i)).toISOString() }));
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("测试项目00", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 10);
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await page.getByText("测试项目10", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 10);
+  await page.getByPlaceholder("搜项目名 / ASIN / 大类 / 品类 / 创建人 / 分析人 / 备注").fill("测试项目22");
+  await page.getByText("测试项目22", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 1);
+  assert.equal(await page.getByRole("button", { name: "上一页", exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "清除筛选" }).click();
+  await page.getByText("测试项目00", { exact: true }).waitFor();
+  await page.getByLabel("每页项目数").selectOption("20");
+  await page.getByText("测试项目19", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 20);
+  await page.getByRole("button", { name: "末页", exact: true }).click();
+  await page.getByText("测试项目22", { exact: true }).waitFor();
+  assert.equal(await page.locator(".project-card").count(), 3);
+  await page.screenshot({ path: ".superpowers/sdd/project-pagination-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: ".superpowers/sdd/project-pagination-mobile.png", fullPage: true });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  state.projects = state.projects.slice(0, 20);
+  await page.getByRole("button", { name: "刷新列表" }).click();
+  await page.getByText("测试项目00", { exact: true }).waitFor();
+  // A clamped response changes the requested page and starts its final refresh.
+  await page.waitForFunction(() => document.querySelectorAll(".project-card").length === 20);
+  assert.equal(await page.locator(".project-card").count(), 20);
+  assert.equal(await page.getByRole("button", { name: "下一页", exact: true }).isDisabled(), true);
+});
+
+
+test("time sorting resets pagination and displays creation and genuine modification separately", async t => {
+  const { page, state } = await fixture(t, "analysis");
+  state.projects = Array.from({ length: 11 }, (_, i) => ({ ...project,
+    id: `10000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`,
+    name: `时间项目${String(i).padStart(2, "0")}`,
+    createdAt: new Date(Date.UTC(2026, 8, i + 1)).toISOString(),
+    updatedAt: new Date(Date.UTC(2026, 8, 21 - i)).toISOString(),
+  }));
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("时间项目00", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await page.getByText("时间项目10", { exact: true }).waitFor();
+  const sort = page.getByLabel("时间排序");
+  for (const [value, first] of [["created_desc", "10"], ["created_asc", "00"], ["updated_asc", "10"], ["updated_desc", "00"]]) {
+    const response = page.waitForResponse(response => response.url().includes(`/local-data/projects?`) && new URL(response.url()).searchParams.get("sort") === value);
+    await sort.selectOption(value); await response;
+    await page.waitForFunction(expected => document.querySelector(".project-card-title")?.textContent === expected, `时间项目${first}`);
+    assert.equal(await page.getByRole("button", { name: "上一页", exact: true }).isDisabled(), true);
+  }
+  await sort.selectOption("created_desc");
+  await page.waitForFunction(() => document.querySelector(".project-card-title")?.textContent === "时间项目10");
+  assert.match(await page.locator(".project-card").first().innerText(), /未修改/);
+  assert.equal(await page.locator(".project-card").first().locator("time").count(), 1);
+  assert.equal(await page.locator(".project-card").nth(1).locator("time").count(), 2);
+  await page.setViewportSize({ width: 1500, height: 1000 });
+  await page.locator(".project-list-card").screenshot({ path: ".superpowers/sdd/project-time-desktop.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.locator(".project-list-card").screenshot({ path: ".superpowers/sdd/project-time-mobile.png" });
 });

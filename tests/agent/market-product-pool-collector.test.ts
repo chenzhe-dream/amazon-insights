@@ -98,10 +98,29 @@ test('empty, malformed and rejected upstream responses have different outcomes',
   assert.doesNotMatch(rejected.issues[0].message,/credential/);
 });
 
-test('returned pool size cannot silently exceed the explicitly requested bounded pool',async()=>{
-  const result=await collectMarketProductPool({...input({code:'OK',data:[row(),row('B000000002')]}),poolSize:1});
-  assert.equal(result.status,'failed');
-  assert.equal(result.issues[0].code,'malformed-response');
+test('provider topN may return 100 rows while the local pool remains ten in source order',async()=>{
+  const rows=Array.from({length:100},(_,index)=>row(`B${String(100-index).padStart(9,'0')}`));
+  const payload={code:'OK',data:rows};
+  const result=await collectMarketProductPool({...input(payload),poolSize:10});
+  assert.equal(result.status,'ready');
+  assert.deepEqual(result.products.map(p=>p.asin),rows.slice(0,10).map(r=>r.asin));
+  assert.deepEqual(result.products.map(p=>p.sourceIndex),Array.from({length:10},(_,i)=>i));
+  assert.equal(result.sampling.receivedSize,100);
+  assert.equal(result.sampling.selectedSize,10);
+  assert.equal(result.evidence?.coverage.receivedCount,100);
+  assert.deepEqual(result.rawPayload,payload);
+});
+
+test('the whole provider response retains bounded rows and validates discarded identities and scope',async()=>{
+  for(const payload of [
+    {code:'OK',data:Array.from({length:1001},(_,i)=>row(`B${String(i+1).padStart(9,'0')}`))},
+    {code:'OK',data:[row(),row('B000000002'),row('B000000002')]},
+    {code:'OK',data:[row(),{...row('B000000002'),marketplace:'DE'}]},
+  ]) {
+    const result=await collectMarketProductPool({...input(payload),poolSize:1});
+    assert.equal(result.status,'failed');
+    assert.deepEqual(result.products,[]);
+  }
 });
 
 test('bad scope and unfinished month are rejected before any upstream request',async()=>{
@@ -249,8 +268,25 @@ test('fixed member collection sends the selected pool and preserves absent membe
 test('fixed pool never accepts an unselected returned ASIN as a replacement',async()=>{
   const raw={code:'OK',data:[row('B000000003')]};
   const result=await collectMarketProductPool({...input(raw),poolSize:2,selectedAsins:['B000000001','B000000002']});
-  assert.equal(result.status,'failed'); assert.equal(result.issues[0].code,'scope-mismatch');
-  assert.equal(result.evidence,null); assert.deepEqual(result.rawPayload,raw);
+  assert.equal(result.status,'empty');
+  assert.equal(result.products.length,0);
+  assert.deepEqual(result.sampling.missingAsins,['B000000001','B000000002']);
+  assert.equal(result.sampling.receivedSize,1);
+  assert.equal(result.sampling.selectedSize,0);
+  assert.deepEqual(result.rawPayload,raw);
+});
+
+test('fixed selection filters extra rows without losing raw indexes or replacing missing members',async()=>{
+  const raw={code:'OK',data:[row('B000000003'),row('B000000002'),row('B000000004'),row('B000000001')]};
+  const result=await collectMarketProductPool({...input(raw),poolSize:3,selectedAsins:['B000000001','B000000002','B000000005']});
+  assert.equal(result.status,'partial');
+  assert.deepEqual(result.products.map(p=>[p.asin,p.sourceIndex]),[['B000000002',1],['B000000001',3]]);
+  assert.deepEqual(result.sampling.missingAsins,['B000000005']);
+  assert.equal(result.sampling.receivedSize,4);
+  assert.equal(result.sampling.selectedSize,2);
+  assert.equal(result.evidence?.coverage.receivedCount,4);
+  assert.equal(result.evidence?.coverage.expectedCount,null);
+  assert.deepEqual(result.rawPayload,raw);
 });
 
 test('fixed pool arguments must be a unique nonempty complete requested set before dispatch',async()=>{

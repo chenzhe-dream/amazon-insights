@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {mkdtempSync, mkdirSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {chromium} from "playwright";
+import {createServer} from "vite";
+import react from "@vitejs/plugin-react";
+
+test("overview expands without remounting content and restores scrolling/focus on exit", {timeout:60000}, async t => {
+  const cache=mkdtempSync(join(tmpdir(),"overview-fullscreen-"));
+  const server=await createServer({configFile:false,cacheDir:cache,plugins:[react()],server:{host:"127.0.0.1",port:0,hmr:false,forwardConsole:false}});
+  await server.listen();
+  const browser=await chromium.launch();
+  t.after(async()=>{await browser.close();await server.close();rmSync(cache,{recursive:true,force:true});});
+  const origin=new URL(server.resolvedUrls!.local[0]).origin;
+  const page=await browser.newPage({viewport:{width:1280,height:800}});
+  const errors:string[]=[];
+  page.on("pageerror",error=>errors.push(error.message));
+  await page.route("**/*",async route=>{
+    if(new URL(route.request().url()).origin!==origin)return route.abort();
+    if(!route.request().isNavigationRequest())return route.continue();
+    return route.fulfill({contentType:"text/html",body:await server.transformIndexHtml("/",`<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,'Microsoft YaHei',sans-serif;color:#24354a}.section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.section-head h3{margin:0;font-size:16px}.section-head p{font-size:12px;color:#708094}.card{border:1px solid #dbe3ed;border-radius:12px;background:#fff}</style></head><body style="margin:0;overflow:auto"><button id="outside">页面按钮</button><div style="height:500px"></div><div id="root"></div><div style="height:1000px"></div><script type="module">
+      import React from 'react';import {createRoot} from 'react-dom/client';import {ComparisonOverviewCard} from '/app/comparison-overview-card.tsx';import '/app/comparison-layout.css';
+      window.mounts=0;
+      function Content(){React.useEffect(()=>{window.mounts++},[]);return React.createElement('div',{className:'matrix-wrap'},React.createElement('table',{className:'compare-matrix'},React.createElement('thead',null,React.createElement('tr',null,React.createElement('th',null,'指标'),React.createElement('th',null,'竞品'))),React.createElement('tbody',null,Array.from({length:40},(_,i)=>React.createElement('tr',{key:i},React.createElement('th',null,'参数'+i),React.createElement('td',null,i===0?React.createElement('input',{'aria-label':'保留内容',defaultValue:'原内容'}):'参数内容'))))))}
+      const root=createRoot(document.getElementById('root'));window.removeOverview=()=>root.unmount();root.render(React.createElement(ComparisonOverviewCard,{description:'全屏功能测试',badge:'MCP 综合'},React.createElement(Content)));
+    </script></body></html>`)});
+  });
+  await page.goto(origin);
+  const open=page.getByRole("button",{name:"全屏查看"});
+  await open.waitFor();
+  await page.getByLabel("保留内容").fill("用户修改");
+  await page.locator(".matrix-wrap").evaluate(el=>{el.scrollTop=120;});
+  await open.click();
+  const dialog=page.getByRole("dialog",{name:"竞品参数总览"});
+  await dialog.waitFor();
+  assert.ok(await dialog.evaluate(el=>el.matches(":modal")));
+  assert.ok(await dialog.evaluate(el=>{const r=el.getBoundingClientRect();return r.x===0&&r.y===0&&Math.abs(r.width-innerWidth)<2&&Math.abs(r.height-innerHeight)<2;}));
+  assert.equal(await page.evaluate(()=>document.body.style.overflow),"hidden");
+  assert.equal(await page.getByLabel("保留内容").inputValue(),"用户修改");
+  assert.equal(await page.evaluate(()=>(window as typeof window & {mounts:number}).mounts),1);
+  assert.equal(await page.locator(".matrix-wrap").evaluate(el=>el.scrollTop),120);
+  mkdirSync("test-results",{recursive:true});
+  await page.screenshot({path:"test-results/comparison-overview-fullscreen-desktop.png"});
+  await page.keyboard.press("Escape");
+  await open.waitFor();
+  assert.equal(await page.evaluate(()=>document.body.style.overflow),"auto");
+  assert.ok(await open.evaluate(el=>el===document.activeElement));
+  await page.setViewportSize({width:390,height:844});
+  await open.click();
+  assert.ok(await dialog.evaluate(el=>el.getBoundingClientRect().width<=innerWidth));
+  await page.locator(".matrix-wrap").evaluate(el=>{el.scrollLeft=250;});
+  assert.ok(await dialog.locator("tbody th").first().evaluate(el=>Math.abs(el.getBoundingClientRect().left-el.closest(".matrix-wrap")!.getBoundingClientRect().left)<3));
+  await page.getByLabel("保留内容").focus();
+  await page.keyboard.press("Tab");
+  assert.ok(await dialog.evaluate(el=>el.contains(document.activeElement)));
+  await page.screenshot({path:"test-results/comparison-overview-fullscreen-mobile.png"});
+  await page.getByRole("button",{name:"退出全屏"}).click();
+  await open.waitFor();
+  assert.equal(await page.getByLabel("保留内容").inputValue(),"用户修改");
+  await open.click();
+  await page.evaluate(()=>(window as typeof window & {removeOverview:()=>void}).removeOverview());
+  assert.equal(await page.evaluate(()=>document.body.style.overflow),"auto");
+  assert.deepEqual(errors,[]);
+});

@@ -1,3 +1,4 @@
+import {initializeNewUserModuleVisibility} from './new-user-module-visibility';
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -108,6 +109,7 @@ const userFeedbackSchema = z.strictObject({
 
 const userFeedbackListSelect = `
   SELECT feedback.*, workflow.status, workflow.version AS workflow_version,
+         reporter.display_name AS actor_display_name, reporter.email AS actor_email,
          workflow.admin_seen_at,
          (SELECT COUNT(*)::int FROM user_feedback_attachments attachment
            WHERE attachment.feedback_id = feedback.id
@@ -115,7 +117,9 @@ const userFeedbackListSelect = `
     FROM user_feedback feedback
     JOIN user_feedback_workflow workflow
       ON workflow.feedback_id = feedback.id
-     AND workflow.organization_id = feedback.organization_id`;
+     AND workflow.organization_id = feedback.organization_id
+    LEFT JOIN users reporter ON reporter.id = feedback.actor_user_id
+     AND reporter.organization_id = feedback.organization_id`;
 
 const analysisRunRecordSchema = AnalysisRunSchema.extend({
   idempotencyScope: z.string().trim().min(1).max(500),
@@ -359,6 +363,7 @@ export class PostgresCoreStore
             identity.createdAt,
           ],
         );
+        await initializeNewUserModuleVisibility(this.#queries, identity.id, identity.organizationId);
         await this.#queries.query(
           `INSERT INTO auth_identities (
              provider, corp_id, subject_id, user_id, created_at, last_login_at
@@ -1785,6 +1790,8 @@ function mapUserFeedback(row: PostgresRow): UserFeedbackRecord {
 function mapFeedbackList(row: PostgresRow): FeedbackListRecord {
   return Object.freeze({
     ...mapUserFeedback(row),
+    actorDisplayName: row.actor_display_name == null ? null : requireString(row.actor_display_name),
+    actorEmail: row.actor_email == null ? null : requireString(row.actor_email),
     status: normalizeFeedbackStatus(requireString(row.status)),
     workflowVersion: Number(row.workflow_version),
     adminSeenAt: row.admin_seen_at === null ? null : mapDateTime(row.admin_seen_at),

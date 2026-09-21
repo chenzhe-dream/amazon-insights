@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import {normalizeMarketSite} from '../../../shared/market-sites';
 import { MarketInputRecordSchema, type MarketAnalysisScope, type MarketJsonValue } from "../../../shared/market-analysis-contracts";
 import {
   MARKET_SOURCE_IDENTITY_FIELDS, MarketSourceEvidenceInputSchema, MarketSourceIdentityValueSchemas,
@@ -37,6 +38,7 @@ function readOwnPath(payload: MarketJsonValue, path: MarketSourcePayloadPath): {
 }
 
 function assertResearchIdentity(field: MarketSourceIdentityField, value: string | number, scope: MarketAnalysisScope): void {
+  if(field==='marketplace'&&typeof value==='string')value=normalizeMarketSite(value);
   const expected = field === "marketplace" ? scope.marketplace
     : field === "currency" ? scope.currency
       : field === "nodeIdPath" ? scope.nodeIdPath
@@ -70,7 +72,10 @@ export function createMarketSourceEvidence(value: unknown, now: Date = new Date(
     if (requested !== undefined) assertResearchIdentity(field, requested, parsed.scope);
   }
   for (const [metric, unit] of Object.entries(parsed.units)) {
-    if (unit.status === "known" && unit.currency !== undefined && unit.currency !== parsed.scope.currency) {
+    // keyword_extends documents this specific recommendation in USD on all sites.
+    // It is not an exchange-rate conversion or a rule for other monetary metrics.
+    const documentedUsdBid=parsed.provider==='sorftime'&&parsed.operation==='keyword_extends'&&metric==='recommendedCpcUsd'&&unit.status==='known'&&unit.unit==='currency'&&unit.currency==='USD';
+    if (unit.status === "known" && unit.currency !== undefined && unit.currency !== parsed.scope.currency && !documentedUsdBid) {
       throw new TypeError(`${metric} currency conflicts with research scope`);
     }
   }
@@ -85,7 +90,7 @@ export function createMarketSourceEvidence(value: unknown, now: Date = new Date(
       if (!raw.found) { missingPaths.push([...path]); continue; }
       const checked = MarketSourceIdentityValueSchemas[field].safeParse(raw.value);
       if (!checked.success) throw new TypeError(`Invalid response ${field} identity`);
-      const actual = checked.data;
+      const actual = field==='marketplace'&&typeof checked.data==='string'?normalizeMarketSite(checked.data):checked.data;
       assertResearchIdentity(field, actual, parsed.scope);
       if (requested !== undefined && actual !== requested) throw new TypeError(`Response ${field} conflicts with request identity`);
       if (echoes.length > 0 && echoes[0].value !== actual) throw new TypeError(`Response ${field} echoes conflict with each other`);

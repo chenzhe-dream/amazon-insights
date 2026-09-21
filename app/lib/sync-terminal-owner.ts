@@ -58,7 +58,7 @@ function terminalIdentity({ organizationId, projectId, marketplace, asins }: Omi
 function readRecord(storage: SessionStorageLike | null, key: string | null, identity: string | null) {
   if (!storage || !key || !identity) return null;
   try {
-    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<TerminalRecordV3> & { version?: number };
+    const candidate = JSON.parse(storage.getItem(key) ?? "") as Partial<Omit<TerminalRecordV3, "version">> & { version?: TerminalRecord["version"] };
     if (
       (candidate.version !== 1 && candidate.version !== 2 && candidate.version !== 3) ||
       candidate.identity !== identity ||

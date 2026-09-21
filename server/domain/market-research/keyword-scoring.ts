@@ -21,7 +21,7 @@ const evidenceSchema = z.object({
   sourceVersion: identity,
   recordIds: ids.min(1),
   metric: identity,
-  unit: z.enum(["count", "fraction", "ratio", "USD", "label"]),
+  unit: z.enum(["count", "fraction", "ratio", "USD", "GBP", "EUR", "JPY", "CAD", "label"]),
   method: identity,
   methodVersion: identity,
 }).strict();
@@ -110,7 +110,7 @@ function validateInput(value: unknown): ParsedInput {
   for (const cluster of input.clusterMetrics) {
     unique(cluster.memberIds, "cluster member ID");
     cluster.memberIds.sort(compareIds);
-    for (const field of ["threeMonthGrowth", "supplyDemandRatio", "spr", "suggestedBid", "averagePrice"] as const) validateMetric(cluster[field], input, specs[field]);
+    for (const field of ["threeMonthGrowth", "supplyDemandRatio", "spr", "suggestedBid", "averagePrice"] as const) validateMetric(cluster[field], input, field==="averagePrice"?["average-selling-price",input.scope.currency,"mapped-product-mean",0]:specs[field]);
     validateMetric(cluster.abaTop3Share, input, [input.abaShareKind, "fraction", "source-top3-share", 0, false, 1]);
     if (cluster.w5.diagnosis === null ? cluster.w5.missingReason === null : cluster.w5.evidence === null || cluster.w5.missingReason !== null) throw new TypeError("W5 requires either a sourced diagnosis or an explicit missing reason");
     if (cluster.w5.evidence) validateEvidence(cluster.w5.evidence, input, "w5-diagnosis", "label", "evidence-backed-diagnosis");

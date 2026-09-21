@@ -50,8 +50,8 @@ test("Xiyou readiness uses the CLI default data root and preserves unavailable c
     for (const [index, reasonCode] of (["TIMEOUT", "RPC_ERROR", "NOT_FOUND"] as const).entries()) {
       await writeXydcVariantFamily(path.join(codeRoot, "data"), "US", { inputAsin: asins[index]!, parentAsin: asins[index]!, country: "US", dimensions: [], children: [], sourceUpdatedAt: null, fetchedAt: now.toISOString(), status: "unavailable", reasonCode, cacheState: "fresh" });
     }
-    assert.deepEqual(await asinsNeedingXydcRepair(asins, "US", { codeRoot, env: {}, now }), asins);
-    assert.deepEqual(await readXydcRepairStatuses(asins, "US", { codeRoot, env: {}, now }), [
+    assert.deepEqual(await asinsNeedingXydcRepair(asins, "US", { codeRoot, env: { NODE_ENV: "test" }, now }), asins);
+    assert.deepEqual(await readXydcRepairStatuses(asins, "US", { codeRoot, env: { NODE_ENV: "test" }, now }), [
       { asin: asins[0], status: "timeout" }, { asin: asins[1], status: "connector-failed" }, { asin: asins[2], status: "upstream-empty" },
     ]);
   } finally { await rm(codeRoot, { recursive: true, force: true }); }

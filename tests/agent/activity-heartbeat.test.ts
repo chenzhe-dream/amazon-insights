@@ -145,7 +145,7 @@ test("activity helper reuses localAgentFetch authentication-required notificatio
   assert.equal(calls[0]?.init?.body, undefined);
 });
 
-test("visible controller attempts immediately and once per completed 60-second cycle", async () => {
+test("visible controller attempts immediately and once per completed 600-second cycle", async () => {
   const scheduler = new FakeScheduler();
   const visibility = new FakeVisibility(true);
   let attempts = 0;
@@ -159,12 +159,12 @@ test("visible controller attempts immediately and once per completed 60-second c
   assert.equal(attempts, 1);
   assert.equal(scheduler.pendingCount, 1);
   await flushMicrotasks();
-  scheduler.advanceBy(59_999);
+  scheduler.advanceBy(599_999);
   assert.equal(attempts, 1);
   scheduler.advanceBy(1);
   assert.equal(attempts, 2);
   await flushMicrotasks();
-  scheduler.advanceBy(60_000);
+  scheduler.advanceBy(600_000);
   assert.equal(attempts, 3);
 });
 
@@ -196,7 +196,7 @@ test("hidden controller waits; hide aborts and clears; resume attempts immediate
   visibility.setVisible(true);
   assert.equal(signals.length, 2);
   await flushMicrotasks();
-  scheduler.advanceBy(59_999);
+  scheduler.advanceBy(599_999);
   assert.equal(signals.length, 2);
   scheduler.advanceBy(1);
   assert.equal(signals.length, 3);
@@ -219,11 +219,11 @@ test("single-flight suppresses overlap and allows a later cycle after settlement
   });
 
   controller.start();
-  scheduler.advanceBy(60_000);
+  scheduler.advanceBy(600_000);
   assert.equal(attempts, 1);
   first.resolve();
   await flushMicrotasks();
-  scheduler.advanceBy(60_000);
+  scheduler.advanceBy(600_000);
   assert.equal(attempts, 2);
 });
 
@@ -243,7 +243,7 @@ test("temporary failure is swallowed and retried only on the next eligible cycle
   controller.start();
   await flushMicrotasks();
   assert.equal(attempts, 1);
-  scheduler.advanceBy(59_999);
+  scheduler.advanceBy(599_999);
   assert.equal(attempts, 1);
   scheduler.advanceBy(1);
   assert.equal(attempts, 2);
@@ -286,19 +286,29 @@ test("identity replacement and unmount abort old work, detach listeners, and pre
   await flushMicrotasks();
   oldVisibility.setVisible(false);
   oldVisibility.setVisible(true);
-  oldScheduler.advanceBy(180_000);
+  oldScheduler.advanceBy(1800_000);
   assert.equal(oldAttempts, 1);
 
   newController.stop();
-  newScheduler.advanceBy(180_000);
+  newScheduler.advanceBy(1800_000);
   assert.equal(newAttempts, 1);
   assert.equal(newVisibility.listenerCount, 0);
   assert.equal(newScheduler.pendingCount, 0);
 });
 
-test("AuthSessionGate keys the heartbeat mount only to authenticated sessionIdentity", async () => {
+test("AuthSessionGate scopes usage collection to the authenticated session and account", async () => {
   const source = await readFile(new URL("../../app/auth-session-gate.tsx", import.meta.url), "utf8");
   assert.match(source, /state\.status === "authenticated"[\s\S]*?<AuthenticatedActivityHeartbeat sessionIdentity=\{state\.sessionIdentity\}/);
-  assert.match(source, /useEffect\(\(\) => \{[\s\S]*?controller\.start\(\)[\s\S]*?controller\.stop\(\)[\s\S]*?\}, \[sessionIdentity\]\)/);
-  assert.doesNotMatch(source, /AuthenticatedActivityHeartbeat[^\n]*user\.id|AuthenticatedActivityHeartbeat[^\n]*organizationId/);
+  assert.ok(source.includes("[sessionIdentity,user.id,user.organizationId]"));
+  assert.ok(source.includes("createUsageAnalyticsController({userId:user.id,organizationId:user.organizationId})"));
+});
+
+test("100 stable clients produce 600 periodic requests per hour and none at one minute",async()=>{
+  let total=0;const schedulers:FakeScheduler[]=[];
+  for(let i=0;i<100;i++){const scheduler=new FakeScheduler();schedulers.push(scheduler);new ActivityHeartbeatController({scheduler,visibility:new FakeVisibility(true),send:async()=>{total++}}).start()}
+  await flushMicrotasks();assert.equal(total,100);
+  for(const scheduler of schedulers)scheduler.advanceBy(60_000);
+  assert.equal(total,100);
+  for(let minute=1;minute<60;minute++){for(const scheduler of schedulers)scheduler.advanceBy(60_000);await flushMicrotasks()}
+  assert.equal(total-100,600);
 });

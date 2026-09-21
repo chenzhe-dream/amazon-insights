@@ -19,6 +19,7 @@
     "auth:seed-test-users": "tsx server/cli/seed-test-users.ts",
     "db:migrate:sqlite-to-postgres": "tsx server/cli/migrate-sqlite-to-postgres.ts",
     "build": "node ./scripts/run-stable-build.mjs",
+    "typecheck": "tsc --noEmit --incremental false",
     "start": "node ./scripts/team-prod-server.mjs",
     "serve:team": "npm run build && npm run start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
@@ -78,6 +79,7 @@
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "fastify": "^5.12.0",
+    "js-tiktoken": "1.0.21",
     "next": "16.2.6",
     "openai": "^7.4.0",
     "pg": "^8.23.0",
@@ -89,6 +91,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/pg": "^8.21.0",

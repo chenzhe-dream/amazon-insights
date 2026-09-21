@@ -3,8 +3,8 @@ import test from 'node:test';
 import { runPostgresMigrations } from '../../server/db/postgres/migrations';
 import { PostgresMarketModelBudgetStore } from '../../server/db/postgres/market-model-budget-store';
 import { createMarketSemanticSkillRunner } from '../../server/runtime/market-semantic-runner';
-import { estimateMarketRequestInput, type MarketModelTransport } from '../../server/runtime/market-request-admission';
-import type { OpenAIProviderOptions } from '../../server/runtime/openai-provider';
+import { estimateMarketRequestInput, measureMarketRequestInput, type MarketModelTransport } from '../../server/runtime/market-request-admission';
+import { createRelayJsonSchemaInstruction, type OpenAIProviderOptions } from '../../server/runtime/openai-provider';
 import { marketSemanticContracts, marketSemanticSchemaDefinitions } from '../../server/skills/market-semantic-task-definitions';
 import { SkillRegistry } from '../../server/skills/registry';
 import { validateMarketKeywordSemantics } from '../../server/domain/market-research/semantic-validation';
@@ -12,7 +12,7 @@ import type { MarketSemanticRecord } from '../../shared/market-semantic-contract
 import { createMarketSemanticFixture } from './helpers/market-semantic-fixture';
 import { startPostgresTestContainer } from './helpers/postgres-test-container';
 
-test('native factory uses the real OpenAI adapter, compact schema and shared persistent budget without duplicate schema prompts', { timeout: 120000 }, async t => {
+test('market factory uses explicit and native schema contracts with a shared persistent budget', { timeout: 120000 }, async t => {
   const pg = await startPostgresTestContainer(); t.after(() => pg.close());
   await runPostgresMigrations(pg.pool);
   const registry = await SkillRegistry.open('skills-src');
@@ -32,7 +32,9 @@ test('native factory uses the real OpenAI adapter, compact schema and shared per
         : { id: `synthetic-${sent.length}`, usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }, choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text } }] };
     };
     const client = { responses: { create: invoke }, chat: { completions: { create: invoke } } } as unknown as OpenAIProviderOptions['client'];
-    const model = { name: 'synthetic-resolved-model', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
+    // The transport remains injected; use a recognized model to exercise the
+    // same token policy as production, rather than unknown-alias byte fallback.
+    const model = { name: 'gpt-5.6', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
       pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } };
     const cap = { maxTokens: 100000, maxCostMicros: 1000000 };
     const runner = createMarketSemanticSkillRunner(f.context, registry, { task: f.binding.task, model, providerName: 'synthetic-openai', transport,
@@ -49,13 +51,18 @@ test('native factory uses the real OpenAI adapter, compact schema and shared per
     const result = await runner.runPrepared(prepared, f.subject, f.authority);
     assert.deepEqual(result.value, value); assert.equal(sent.length, 2);
     for (const body of sent) {
-      assert.ok(Buffer.byteLength(JSON.stringify(body)) + 512 <= model.estimatedInputTokens);
-      if (transport === 'relay-chat-json') { assert.equal(body.messages.length, 2); assert.equal(body.messages[0].role, 'system'); assert.equal(body.messages[1].role, 'user'); }
+      const schemaInstruction=createRelayJsonSchemaInstruction(prepared.responseFormat.format);
+      if (transport === 'relay-chat-json') {
+        assert.equal(body.messages.length, 3); assert.equal(body.messages[0].role, 'system');
+        assert.equal(body.messages[1].role, 'system');assert.equal(body.messages[2].role, 'user');
+        assert.deepEqual(JSON.parse(body.messages[1].content).schema,prepared.responseFormat.format.schema);
+      }else assert.ok(body.instructions.endsWith(`\n\n${schemaInstruction}`));
       const format = transport === 'responses-strict' ? body.text.format : body.response_format.json_schema;
       assert.deepEqual(format.schema, prepared.responseFormat.format.schema); assert.equal(format.strict, true);
-      const reconstructed = { model: body.model, instructions: transport === 'responses-strict' ? body.instructions : body.messages[0].content,
+      const reconstructed = { model: body.model, instructions: transport === 'responses-strict' ? body.instructions.slice(0,-(`\n\n${schemaInstruction}`).length) : body.messages[0].content,
         input: f.inputProjection, outputSchema: contracts.output, responseFormat: prepared.responseFormat, maxOutputTokens: 4000, timeoutMs: 90000 };
-      assert.equal(estimateMarketRequestInput(reconstructed, transport), Buffer.byteLength(JSON.stringify(body)) + 512);
+      assert.equal(measureMarketRequestInput(reconstructed, transport).serializedBytes, Buffer.byteLength(JSON.stringify(body)));
+      assert.ok(estimateMarketRequestInput(reconstructed, transport) <= model.estimatedInputTokens);
     }
     const ledger = await new PostgresMarketModelBudgetStore(f.context).getAgentUsage(f.authority);
     assert.equal(ledger.reservationCount, 2); assert.equal(ledger.usageCompleteness, 'complete');

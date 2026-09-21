@@ -147,10 +147,44 @@ function localizeLampBullet(raw, lower, body) {
   return null;
 }
 
-function localizeOneBullet(text, family) {
+function isCandleWarmer(text) {
+  return /candl[e]?\s*(?:\+|\s)*(?:warmer|lamp)|wax warmer|candle\s*\+\s*warmer|融蜡灯/i.test(text);
+}
+
+function localizeCandleWarmerBullet(raw) {
+  const heading = raw.match(/^【([^】]+)】/)?.[1] ?? (raw.includes(":") ? raw.split(":")[0] : raw.slice(0, 90));
+  if (/height|adjustable pole/i.test(heading) || /adapt.*jar candle sizes/i.test(raw)) {
+    const range = raw.match(/(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*inches/i);
+    const maxHeight = raw.match(/no taller than\s*(\d+(?:\.\d+)?)/i)?.[1];
+    const maxWidth = raw.match(/no wider than\s*(\d+(?:\.\d+)?)/i)?.[1];
+    return `灯罩高度可调，适配不同尺寸的香薰蜡烛${range ? `，调节范围约 ${range[1]}–${range[2]} 英寸` : ""}${maxHeight && maxWidth ? `；蜡烛高度不超过 ${maxHeight} 英寸、宽度不超过 ${maxWidth} 英寸` : ""}`;
+  }
+  if (/dimm|brightness|tim(?:er|ing)|auto shutoff/i.test(heading)) {
+    const parts = [];
+    if (/four brightness|4[ -](?:level|brightness)|four.*brightness|4 graded brightness/i.test(raw)) parts.push("支持四档亮度调节，通过调节热量控制融蜡速度与香气浓度");
+    else if (/dimm|brightness/i.test(raw)) parts.push("支持亮度调节，可控制融蜡速度");
+    if (/tim(?:er|ing)/i.test(raw)) {
+      const hours = /2\s*[,/]\s*4\s*[,/]\s*(?:and\s*)?8\s*hours/i.test(raw);
+      parts.push(hours ? "支持 2、4、8 小时定时" : /24[ -]hour cycle/i.test(raw) ? "支持 24 小时循环定时" : "支持定时功能");
+    }
+    if (/auto(?:matic)?[ -]*(?:shutoff|shut.off)/i.test(raw)) parts.push("到时自动关闭");
+    return parts.join("；");
+  }
+  if (/flame.free|flameless|no\s*(?:open\s*)flame|zero flame|safety and environmental|melts more easily/i.test(raw)) {
+    return "通过灯泡热量融化香薰蜡烛，无明火、无烟灰，释放香气，适合室内使用";
+  }
+  if (/glass.*shade|metal base|sleek design/i.test(raw)) {
+    return `${/metal base/i.test(raw) ? "金属底座搭配" : "采用"}玻璃灯罩，兼具室内装饰与照明用途`;
+  }
+  if (/gift/i.test(raw)) return "适合作为生日或节日礼物，用于家居装饰与香薰体验";
+  return null;
+}
+
+function localizeOneBullet(text, family, candleWarmer = false) {
   const raw = String(text ?? "").trim();
   if (!raw) return raw;
   if (isMostlyChinese(raw)) return trimSummary(raw);
+  if (candleWarmer) return localizeCandleWarmerBullet(raw) ?? "此条卖点尚待中文翻译";
 
   const lower = raw.toLowerCase();
   const body = raw.includes(":") ? raw.split(":").slice(1).join(":").trim() : raw;
@@ -182,5 +216,16 @@ export function localizeSellingPoints(features, context = {}) {
           category: context.category ?? "",
           features: list,
         });
-  return list.slice(0, 4).map(item => localizeOneBullet(item, family));
+  const candleWarmer = isCandleWarmer(`${context.title ?? ""} ${context.category ?? ""} ${list.join(" ")}`);
+  return list.slice(0, 4).map(item => localizeOneBullet(item, family, candleWarmer));
+}
+
+/** Repair previously truncated candle copy using the retained original listing bullets.
+ * No stored evidence is modified; unrelated product families keep their current display. */
+export function localizeCatalogSellingPoints(product) {
+  const current = product.sellingPoints ?? [];
+  if (!isCandleWarmer(`${product.title ?? ""} ${product.subRankCategory ?? ""}`)) return current;
+  const original = (product.strengths ?? []).filter(point => /[a-z]{3}/i.test(point) && !/同步中|待.*分析/.test(point));
+  const candidates = original.length ? [...original, ...current.slice(original.length).filter(point => !isMostlyChinese(point))] : current;
+  return localizeSellingPoints(candidates, { family: "lighting", title: product.title });
 }

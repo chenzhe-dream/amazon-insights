@@ -14,7 +14,7 @@ type SqliteRow = Record<string, string | number | bigint | Uint8Array | null>;
 type Serialize = <Result>(operation: () => Result | Promise<Result>) => Promise<Result>;
 type WriteTransaction = <Result>(operation: () => Result) => Promise<Result>;
 
-const RECENT_ACTIVITY_WINDOW_MS = 300_000;
+import {RECENT_ACTIVITY_WINDOW_MS} from "../../../shared/usage-analytics-contracts";
 const HEARTBEAT_THROTTLE_MS = 60_000;
 
 export class SqliteAdminUserPresenceStore
@@ -97,7 +97,7 @@ export class SqliteAdminUserPresenceStore
            LEFT JOIN ranked_logins
              ON ranked_logins.user_id = u.id
             AND ranked_logins.recent_rank <= 10
-          WHERE u.organization_id = ?
+          WHERE u.organization_id = ? AND u.archived_at IS NULL
           ORDER BY lower(trim(u.email)) ASC,
                    ranked_logins.created_at DESC,
                    ranked_logins.session_sort_id ASC`,

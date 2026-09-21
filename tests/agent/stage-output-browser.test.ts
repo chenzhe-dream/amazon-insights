@@ -131,7 +131,7 @@ test("owner exposes a verified fixed gap until successful data arrives", () => {
   owner.observeJob(job(2, { category: "partial" }));
   assert.equal(owner.accept("category", gap).kind, "applied");
   const visibleGap = owner.snapshot().category;
-  assert.ok(visibleGap && visibleGap.stageStatus !== "done");
+  assert.ok(visibleGap && visibleGap.stageStatus === "partial");
   assert.deepEqual(visibleGap.gap, gapBranch);
   owner.observeJob(job(3, { category: "done" }));
   assert.equal(owner.accept("category", projection("category", 3, 2, { node1: { status: "ready" } })).kind, "applied");

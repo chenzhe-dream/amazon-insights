@@ -58,3 +58,8 @@ next-env.d.ts
 /data/tmp-images/
 /data/tmp-floorlamp-jobid.txt
 /data/.rebuild-lock.json
+
+# Local investigation artifacts, browser results and exported skill bundles
+/.superpowers/
+/test-results/
+/market-*.zip

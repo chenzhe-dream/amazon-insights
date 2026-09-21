@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {mkdtempSync, mkdirSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {chromium} from "playwright";
+import {createServer} from "vite";
+import react from "@vitejs/plugin-react";
+
+test("real cards and monthly charts share attribute colors with readable percentages and unchanged ASINs", {timeout:60000}, async t => {
+  const cache = mkdtempSync(join(tmpdir(), "variant-colors-"));
+  const server = await createServer({configFile:false, cacheDir:cache, plugins:[react()], server:{host:"127.0.0.1",port:0,hmr:false,forwardConsole:false}});
+  await server.listen();
+  const browser = await chromium.launch({headless:true});
+  t.after(async () => {await browser.close();await server.close();rmSync(cache,{recursive:true,force:true});});
+  const origin = new URL(server.resolvedUrls!.local[0]).origin;
+  const page = await browser.newPage({viewport:{width:1280,height:960}});
+  const errors:string[] = [], external:string[] = [];
+  page.on("pageerror",error=>errors.push(error.message));
+  await page.route("**/*",route=>{if(new URL(route.request().url()).origin===origin)return route.continue();external.push(route.request().url());return route.abort();});
+  await page.goto(origin + "/tests/fixtures/variant-colors.html");
+  const segments = page.locator(".xydc-order-share-segment");
+  await segments.first().waitFor();
+  assert.equal(await segments.count(),10);
+  assert.match(await page.locator(".xydc-order-metric-row strong").innerText(), /12,000/);
+  const swatches = await segments.evaluateAll(elements=>elements.map(element=>({asin:element.getAttribute("data-order-asin"),bg:(element as HTMLElement).style.background,color:getComputedStyle(element).color,border:getComputedStyle(element).boxShadow,text:element.textContent})));
+  assert.equal(swatches[1]!.bg,"rgb(0, 0, 0)");
+  assert.equal(swatches[2]!.bg,"rgb(255, 255, 255)");
+  assert.equal(swatches[2]!.color,"rgb(0, 0, 0)");
+  assert.equal(swatches[1]!.color,"rgb(255, 255, 255)");
+  assert.notEqual(swatches[2]!.border,"none");
+  assert.equal(swatches[1]!.bg,swatches[9]!.bg);
+  assert.match(swatches[5]!.bg,/linear-gradient/);
+  assert.match(swatches[7]!.bg,/repeating-linear-gradient/);
+  assert.ok(swatches.every(swatch=>swatch.text==="10.00%"));
+  assert.equal(await segments.nth(5).locator(".xydc-order-share-label-backed").count(),1);
+  assert.match(await page.locator(".xydc-order-legend").innerText(),/水蓝色/);
+  assert.match(await page.locator(".xydc-order-legend").innerText(),/近似.*After the Storm/);
+  mkdirSync("test-results",{recursive:true});
+  await page.screenshot({path:"test-results/variant-colors-desktop.png",fullPage:true});
+  await page.getByRole("button",{name:"查看全部 10 个子体与月度趋势"}).click();
+  const dialog=page.getByRole("dialog");
+  await dialog.getByRole("button",{name:"展开年度明细"}).click();
+  for(const swatch of swatches){
+    const monthly=dialog.locator(`.xydc-order-month-bar [data-order-asin='${swatch.asin}']`).first();
+    assert.equal(await monthly.evaluate(el=>(el as HTMLElement).style.background),swatch.bg);
+    assert.equal(await dialog.locator(`.xydc-order-dialog-legend [data-order-asin='${swatch.asin}'] i`).evaluate(el=>(el as HTMLElement).style.background),swatch.bg);
+  }
+  await dialog.getByLabel("订单明细排序").selectOption("asin");
+  assert.equal(await dialog.locator(".xydc-order-detail-table tbody tr").count(),10);
+  await page.screenshot({path:"test-results/variant-colors-monthly.png",fullPage:true});
+  await dialog.getByRole("button",{name:"关闭订单明细"}).click();
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.ok(await segments.evaluateAll(elements=>elements.every(element=>{
+    const label=element.firstElementChild!;
+    return getComputedStyle(label).visibility==="hidden" || label.getBoundingClientRect().width<=element.getBoundingClientRect().width;
+  })), "visible percentage text fits each mobile segment");
+  await page.screenshot({path:"test-results/variant-colors-mobile.png",fullPage:true});
+  assert.deepEqual(errors,[]);
+  assert.deepEqual(external,[]);
+});

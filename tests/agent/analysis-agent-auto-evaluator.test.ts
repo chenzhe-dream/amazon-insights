@@ -32,7 +32,7 @@ type ReportSnapshot = Readonly<{
   contentDigest: string;
 }>;
 
-function completeInput(caseId = "scooter-complete"): VocPositioningInput {
+function completeInput(caseId: keyof ReturnType<typeof buildAnalysisAgentEvaluationSet>["casesById"] = "scooter-complete"): VocPositioningInput {
   const input = buildAnalysisAgentEvaluationSet().casesById[caseId].snapshot.input;
   assert.equal(input.kind, "voc-positioning-input");
   return input;
@@ -49,6 +49,7 @@ function validOutput(input = completeInput()): VocPositioningOutput {
       dimension.themes.map((theme) => ({ dimension: dimension.key, theme })),
     )[0];
   assert.ok(fallback);
+  if (requiredThemes.length === 0) requiredThemes.push(fallback);
   const firstEvidence = fallback.theme.evidenceIds[0];
   assert.ok(firstEvidence);
 

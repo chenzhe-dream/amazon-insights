@@ -40,6 +40,7 @@ type AgentServiceRouteRequest =
     }
   | { method: "POST"; path: "/v1/auth/password" | "/v1/feedback" }
   | { method: "POST"; path: "/v1/projects" }
+  | { method: "POST"; path: `/v1/projects/${string}/selling-point-translations/${string}` }
   | { method: "GET"; path: `/v1/projects/${string}` }
   | { method: "POST"; path: `/v1/projects/${string}/runs` }
   | { method: "GET"; path: `/v1/runs/${string}` }
@@ -413,6 +414,11 @@ export function createAgentServiceClient(
             );
       }
 
+      if (upstream.status === 204 && request.method === "DELETE" && /^\/v1\/market-research\/favorites\/[a-f0-9-]+$/i.test(new URL(request.path,"http://local").pathname)) {
+        const headers=copyResponseHeaders(upstream.headers,requestId,secrets);
+        headers.delete("content-type");
+        return {status:204,headers,body:undefined};
+      }
       if (
         !/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i.test(
           upstream.headers.get("content-type") ?? "",

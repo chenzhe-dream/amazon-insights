@@ -66,7 +66,7 @@ export const sifKeywordFieldGlossary = {
 export type SifKeywordFieldKey = keyof typeof sifKeywordFieldGlossary;
 
 export function sifKeywordFieldTitle(key: SifKeywordFieldKey, extra?: string) {
-  const tip = sifKeywordFieldGlossary[key];
+  const tip: SifKeywordFieldTip = sifKeywordFieldGlossary[key];
   const head = tip.sifName && tip.sifName !== tip.label ? `${tip.label}（SIF：${tip.sifName}）` : tip.label;
   return extra ? `${head}\n${tip.meaning}\n\n${extra}` : `${head}\n${tip.meaning}`;
 }

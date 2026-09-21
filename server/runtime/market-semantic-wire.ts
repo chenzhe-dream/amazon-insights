@@ -1,6 +1,7 @@
 import {createMarketOverviewSynthesisModelWire,MarketOverviewSynthesisModelInputSchema} from './market-overview-synthesis-wire';
 import {MarketOverviewSynthesisInputSchema,MarketOverviewSynthesisOutputSchema} from '../../shared/market-semantic-contracts';
 import {z} from 'zod';
+import {marketSiteCurrencyMatches} from '../../shared/market-sites';
 import {MarketShapeSynthesisInputSchema,MarketShapeSynthesisOutputSchema,MarketKeywordSemanticsLegacyInputSchema,MarketKeywordSemanticsDiscoveryInputSchema,MarketKeywordSemanticsReconciliationInputSchema,MarketKeywordSemanticsInputSchema,type MarketSemanticInput} from '../../shared/market-semantic-contracts';
 import {marketOverviewWire} from './market-overview-wire';
 import {createMarketShapeSynthesisModelWire,MarketShapeSynthesisModelSchemaDefinitions,MarketShapeSynthesisModelInputSchema} from './market-shape-synthesis-wire';
@@ -9,7 +10,11 @@ import {createMarketShapeSynthesisModelWire,MarketShapeSynthesisModelSchemaDefin
 // evidence for the model; the inner node retains the complete evidence graph.
 export const MarketShapeSynthesisTransportInputSchema=MarketShapeSynthesisInputSchema.omit({scopeDigest:true,contentSnapshotId:true,selectionRevision:true,batchKey:true,sourceRefs:true}).extend({synthesis:MarketShapeSynthesisModelInputSchema.omit({version:true,encoding:true})});
 
-export const MarketOverviewSynthesisTransportInputSchema=MarketOverviewSynthesisInputSchema.omit({scopeDigest:true,contentSnapshotId:true,selectionRevision:true,batchKey:true,sourceRefs:true}).extend({scope:MarketOverviewSynthesisInputSchema.shape.scope.omit({researchId:true}),synthesis:MarketOverviewSynthesisModelInputSchema.omit({encoding:true})});
+// Project the fields before adding the scope refinement: Zod cannot omit fields
+// from a refined object. Keep the country/currency check on the model projection.
+const {researchId: _researchIdSchema, ...overviewTransportScopeFields} = MarketOverviewSynthesisInputSchema.shape.scope.shape;
+const overviewTransportScope = z.object(overviewTransportScopeFields).strict().refine(marketSiteCurrencyMatches, 'Market currency differs from marketplace');
+export const MarketOverviewSynthesisTransportInputSchema=MarketOverviewSynthesisInputSchema.omit({scopeDigest:true,contentSnapshotId:true,selectionRevision:true,batchKey:true,sourceRefs:true}).extend({scope:overviewTransportScope,synthesis:MarketOverviewSynthesisModelInputSchema.omit({encoding:true})});
 
 /** One transport projection for both budget metering and provider execution.
  * responseSchema describes aliases; the normal output schema validates decoded data. */

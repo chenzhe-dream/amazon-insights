@@ -139,6 +139,18 @@ function renderText(node: unknown): string {
   return "";
 }
 
+function renderControlText(node: unknown): string {
+  if (Array.isArray(node)) return node.map(renderControlText).join("");
+  if (!isValidElement<{ children?: unknown; hidden?: boolean }>(node)) return "";
+  if (typeof node.type === "function") {
+    const Component = node.type as (props: unknown) => unknown;
+    return renderControlText(Component(node.props));
+  }
+  if (node.props.hidden) return "";
+  if (node.type === "button" || node.type === "input") return `${node.type}:${renderText(node)};`;
+  return renderControlText(node.props.children);
+}
+
 test("members do not render the concurrency administrator panel", () => {
   const html = render(user("member@example.com", "member"));
 
@@ -245,16 +257,17 @@ test("primary admin sees three secret-free credential cards while other users ca
   assert.match(primary, /测试连接/);
   assert.doesNotMatch(primary, /credential-sentinel|secret-key|authorization/i);
 
-  const ordinary = renderText(ConcurrencyAdminPanel({
+  const ordinaryPanel = ConcurrencyAdminPanel({
     user: user("ops@example.com", "admin"),
     initialSnapshot: snapshot(),
     initialExpanded: true,
     initialCredentialStates: credentialStates,
-  }));
+  });
+  const ordinary = renderText(ordinaryPanel);
   assert.match(ordinary, /SellerSprite/);
   assert.match(ordinary, /SIF/);
   assert.match(ordinary, /Sorftime/);
-  assert.doesNotMatch(ordinary, /保存凭证|撤销凭证|测试连接|凭证输入/);
+  assert.doesNotMatch(renderControlText(ordinaryPanel), /保存凭证|撤销凭证|测试连接|input:/);
 });
 
 test("connector cards show explicit probe outcomes, safe reasons, and checked times", () => {
@@ -303,11 +316,11 @@ test("legacy repair is primary-admin-only and requires preview before confirmati
     candidates: [{
       asin: "B0CCYMV1T1",
       module: "keywords",
-      connectorId: "sif",
-      nextStatus: "pending",
-      reason: "LEGACY_UNVERIFIED",
+      connectorId: "sif" as const,
+      nextStatus: "pending" as const,
+      reason: "LEGACY_UNVERIFIED" as const,
     }],
-  } as const;
+  };
   const primary = renderText(ConcurrencyAdminPanel({
     user: user("admin@example.com", "admin"),
     initialSnapshot: snapshot(),

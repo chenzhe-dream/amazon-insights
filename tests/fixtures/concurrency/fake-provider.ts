@@ -78,6 +78,7 @@ export function createFakeSyncRunner(
     model: 0,
     image: 0,
   };
+  if (!repository.concurrencyControl) throw new Error("Fake runner requires concurrency control");
   const governor = new PostgresResourceGovernor(
     repository.concurrencyControl,
     `${agentId}-resource-governor`,

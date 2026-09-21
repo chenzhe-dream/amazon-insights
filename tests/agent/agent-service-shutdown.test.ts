@@ -48,6 +48,17 @@ test("Agent Service stop drains workers, app, and owned repository before report
   assert.deepEqual(calls, ["worker-a", "worker-b", "app", "repository"]);
 });
 
+test('Agent Service closes owned connector sessions after draining and before closing storage even on failure', async () => {
+  const calls: string[] = [];
+  await assert.rejects(stopAgentServiceResources({
+    runtimes: [{ stop: async () => { calls.push('worker'); } }],
+    closeApp: async () => { calls.push('app'); },
+    closeConnectors: async () => { calls.push('connectors'); throw new Error('close failed'); },
+    closeOwnedRepository: async () => { calls.push('repository'); },
+  }), /failed to stop cleanly/);
+  assert.deepEqual(calls, ['worker', 'app', 'connectors', 'repository']);
+});
+
 test("SellerSprite quota scheduler starts only for explicit complete config and stops one bounded timer", async () => {
   const refreshCalls: Array<{ organizationId: string; actorUserId: string | null }> = [];
   const intervals: Array<{ callback: () => void; ms: number }> = [];

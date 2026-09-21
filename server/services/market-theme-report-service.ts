@@ -28,7 +28,7 @@ export class MarketThemeReportService {
     return this.context.transaction(async()=>{const resolved=await this.resolveReport(input);if(!resolved)return null;
       return MarketThemeEvidenceResponseSchema.parse({report:resolved.entry,evidence:await readMarketThemeEvidence(this.context,input.actor,resolved.view,resolved.snapshot,query.sourceThemeId,resolved.entry.report.basis==='empty-selection',resolved.priorEvaluations)});});
   }
-  private async resolveReport(input:{actor:MarketExecutionActor;moduleRunId:string;attemptId:string}) {
+  async resolveReport(input:{actor:MarketExecutionActor;moduleRunId:string;attemptId:string}) {
     const moduleRunId = MarketModuleIdSchema.parse(input.moduleRunId), attemptId = MarketModuleIdSchema.parse(input.attemptId);
     return this.context.transaction(async () => {
       const locked = await this.context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2

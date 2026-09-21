@@ -504,36 +504,38 @@ if (webServerArgument >= 0) {
     const ownItem = member.page.locator(".feedback-list-item").filter({ hasText: feedbackTitle });
     await ownItem.waitFor();
     assert.match(await ownItem.textContent() ?? "", /3 张图片/);
+    const thumbnailResponsePromise = member.page.waitForResponse((response) =>
+      response.request().method() === "GET" && response.url().includes("/attachments/"));
     await ownItem.click();
     await member.page.locator(".feedback-detail h3").filter({ hasText: feedbackTitle }).waitFor();
     assert.equal(await member.page.locator(".feedback-attachments button").count(), 3);
     assert.equal(await member.page.locator(".feedback-history li").count(), 1);
 
-    await member.page.evaluate(() => {
-      window.open = (url) => {
-        const previous = document.querySelector("#feedback-attachment-render-probe");
-        previous?.remove();
-        const image = document.createElement("img");
-        image.id = "feedback-attachment-render-probe";
-        image.alt = "feedback attachment render probe";
-        image.src = String(url);
-        document.body.append(image);
-        return null;
-      };
-    });
-    const attachmentResponsePromise = member.page.waitForResponse((response) =>
-      response.request().method() === "GET" && response.url().includes("/attachments/"));
-    await member.page.locator(".feedback-attachments button").first().click();
-    const attachmentResponse = await attachmentResponsePromise;
+    const attachmentResponse = await thumbnailResponsePromise;
     assert.equal(attachmentResponse.status(), 200);
     assert.equal(attachmentResponse.headers()["content-type"], "image/png");
     await member.page.waitForFunction(() => {
-      const image = document.querySelector("#feedback-attachment-render-probe");
-      return image instanceof HTMLImageElement
+      const images = [...document.querySelectorAll(".feedback-attachments img")];
+      return images.length === 3 && images.every(image => image instanceof HTMLImageElement
         && image.complete
         && image.naturalWidth === 1
-        && image.naturalHeight === 1;
+        && image.naturalHeight === 1);
     });
+    const pagesBefore = member.context.pages().length;
+    const thumbnail = member.page.locator(".feedback-attachments button").first();
+    await thumbnail.click();
+    await member.page.getByRole("dialog", {name:/图片预览/}).waitFor();
+    assert.equal(member.context.pages().length,pagesBefore);
+    await member.page.keyboard.press("Escape");
+    await member.page.getByRole("dialog", {name:/图片预览/}).waitFor({state:"hidden"});
+    assert.equal(await member.page.locator(".feedback-detail").isVisible(),true);
+    assert.equal(await thumbnail.evaluate(el=>el===document.activeElement),true);
+    await member.page.setViewportSize({width:390,height:844});
+    await thumbnail.click();
+    await member.page.getByRole("dialog", {name:/图片预览/}).waitFor();
+    assert.ok(await member.page.getByRole("dialog", {name:/图片预览/}).evaluate(el=>el.getBoundingClientRect().width<=window.innerWidth));
+    await member.page.getByRole("button",{name:"关闭图片预览",exact:true}).click();
+    await member.page.setViewportSize({width:1280,height:800});
 
     await member.page.getByRole("button", { name: "关闭帮助与反馈", exact: true }).click();
     for (const action of [

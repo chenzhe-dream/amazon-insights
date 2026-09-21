@@ -22,19 +22,32 @@ test('representative A2 windows execute through native preparation, SkillRunner 
   const configurationVersion = 'shape-native-execution/v1', promptVersion = 'shape-native-prompt/v1';
   const linked = await new PostgresMarketShapeExplanationRunStore(f.context).saveRevisionAndEnsureExplanation({ actor: f.actor, parentRunId: f.parentRunId, request: f.request, idempotencyKey: randomUUID(), identity: { configurationVersion, promptVersion } });
   const catalog = await loadMarketShapeExplanationCatalog(f.context, f.actor, linked.childRun.id);
-  const windows = (await buildMarketShapeExplanationWindows(catalog, async () => true)).filter(window => window.rows.length > 0).slice(0, 2);
-  assert.ok(windows.length >= 1); // Representative execution only; final six-dimension synthesis is a later flow step.
-  const snapshotInput = { scope: f.scope, kind: 'overview' as const, sourceVersion: catalog.source.catalogVersion,
-    ruleVersion: catalog.version, collectedAt: catalog.source.dataCutoffAt, expectedRecordIds: windows.map(window => window.windowId),
-    records: windows.map(window => ({ id: window.windowId, scope: f.scope, data: { semantic: { task: 'market-shape-structure-explanation' as const, window, sourceRefs: catalog.source.sourceRefs } } })) };
-  const snapshot = createMarketInputSnapshot(snapshotInput);
+  const allWindows = await buildMarketShapeExplanationWindows(catalog, async () => true);
+  const windows = allWindows.filter(window => window.rows.length > 0).slice(0, 2);
+  assert.ok(windows.length >= 1); // Execute representative windows while preserving the complete continuation manifest.
+  const inputs = allWindows.map(window => ({ scope: f.scope, kind: 'overview' as const, sourceVersion: catalog.version,
+    ruleVersion: 'shape-explanation/v1', collectedAt: catalog.source.dataCutoffAt, expectedRecordIds: [window.windowId],
+    records: [{ id: window.windowId, scope: f.scope, data: { semantic: { task: 'market-shape-structure-explanation' as const, window, sourceRefs: catalog.source.sourceRefs } } }] }));
+  const snapshots = inputs.map(input => createMarketInputSnapshot(input));
   const anchor = await f.steps.claimStep({ moduleRunId: linked.childRun.id, kinds: ['prepare-members'], leaseOwnerId: randomUUID(), leaseMs: 120_000 }); assert.ok(anchor);
-  const settled = await f.steps.settleAndEnqueue({ claim: anchor, outcome: { status: 'succeeded', output: { inputSnapshotId: snapshot.snapshotId, representativeWindowCount: windows.length } }, inputs: [snapshotInput], children: [{
-    stepKey: `prepare-shape-model/${snapshot.snapshotId}`, kind: 'prepare-model-batches', subject: { task: 'market-shape-structure-explanation' },
+  const settled = await f.steps.settleAndEnqueue({ claim: anchor, outcome: { status: 'succeeded', output: {
+    manifestVersion: 'shape-explanation-windows/v2', sourceRefs: catalog.source.sourceRefs,
+    explanationCatalogId: catalog.explanationCatalogId, revisionId: catalog.revisionId, windows: allWindows,
+  } }, inputs, children: snapshots.map(snapshot => ({
+    stepKey: `shape-explanation/model-input/${snapshot.snapshotId}`, kind: 'prepare-model-batches', subject: { task: 'market-shape-structure-explanation' },
     input: { task: 'market-shape-structure-explanation', inputSnapshotId: snapshot.snapshotId, selectionRevision: catalog.revisionId, dataCutoffAt: catalog.source.dataCutoffAt }, inputRefs: [{ kind: 'input', id: snapshot.snapshotId }],
-  }] });
-  assert.equal(settled.status, 'committed'); assert.deepEqual(settled.inputIds, [snapshot.snapshotId]);
-  const prepareClaim = await f.steps.claimStep({ moduleRunId: linked.childRun.id, kinds: ['prepare-model-batches'], leaseOwnerId: randomUUID(), leaseMs: 120_000 }); assert.ok(prepareClaim);
+  })) });
+  assert.equal(settled.status, 'committed'); assert.deepEqual(new Set(settled.inputIds), new Set(snapshots.map(snapshot => snapshot.snapshotId)));
+  const selectedSnapshotIds = new Set(windows.map(window => snapshots[allWindows.indexOf(window)].snapshotId));
+  const prepareClaims = [];
+  for (const _window of allWindows) {
+    const claim = await f.steps.claimStep({ moduleRunId: linked.childRun.id, kinds: ['prepare-model-batches'], leaseOwnerId: randomUUID(), leaseMs: 120_000 }); assert.ok(claim);
+    const input = claim.step.input;
+    assert.ok(input && typeof input === 'object' && !Array.isArray(input));
+    assert.equal(typeof input.inputSnapshotId, 'string');
+    if (selectedSnapshotIds.has(String(input.inputSnapshotId))) prepareClaims.push(claim);
+  }
+  assert.equal(prepareClaims.length, windows.length);
   let requests = 0;
   const server = await startFakeOpenAIResponsesServer(body => {
     requests++;
@@ -56,8 +69,10 @@ test('representative A2 windows execute through native preparation, SkillRunner 
   const configuration = { task: 'market-shape-structure-explanation' as const, configurationVersion, providerName: 'local-fake-openai', transport: 'responses-strict' as const,
     model: { name: 'shape-fixture-model', estimatedInputTokens: 12_000, maxOutputTokens: 4_000, timeoutMs: 60_000, pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } },
     limits: { call: cap, run: cap, organizationUtcDay: cap }, openAI: { apiKey: 'test-key', baseUrl: server.baseUrl } };
-  const prepared = await new MarketSemanticBatchPreparationService(f.context, registry).prepareBatches(prepareClaim, configuration);
-  const manifest = prepared.manifest as { batches: Array<{ bindingId: string }> }; assert.equal(manifest.batches.length, windows.length);
+  for (const prepareClaim of prepareClaims) {
+    const prepared = await new MarketSemanticBatchPreparationService(f.context, registry).prepareBatches(prepareClaim, configuration);
+    const manifest = prepared.manifest as { batches: Array<{ bindingId: string }> }; assert.equal(manifest.batches.length, 1);
+  }
   const audit = new PostgresMarketAgentRunStore(f.context), execution = new MarketSemanticExecutionService(f.context, registry);
   let succeeded = 0, failed = 0;
   for (const _expected of windows) {

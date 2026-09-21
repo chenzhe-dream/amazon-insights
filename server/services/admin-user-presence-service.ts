@@ -15,6 +15,7 @@ export type {
 } from "../db/admin-user-presence-repository";
 
 const RECENT_LOGIN_LIMIT = 10;
+import {RECENT_ACTIVITY_WINDOW_MS} from "../../shared/usage-analytics-contracts";
 
 export class AdminUserPresenceService {
   readonly #asOf: () => Date;
@@ -23,15 +24,15 @@ export class AdminUserPresenceService {
     this.#asOf = options.asOf;
   }
 
-  list(users: readonly AdminUserPresenceUserFact[]): AdminUserPresenceResponse {
+  list(users: readonly AdminUserPresenceUserFact[], preserveOrder=false): AdminUserPresenceResponse {
     const asOf = this.#asOf();
     const asOfEpoch = asOf.getTime();
 
     return AdminUserPresenceResponseSchema.parse({
       asOf: asOf.toISOString(),
-      recentActivityWindowSeconds: 300,
+      recentActivityWindowSeconds: RECENT_ACTIVITY_WINDOW_MS / 1000,
       users: [...users]
-        .sort((left, right) => compareNormalizedAccount(left.account, right.account))
+        .sort((left, right) => preserveOrder ? 0 : compareNormalizedAccount(left.account, right.account))
         .map((user) => summarizeUser(user, asOfEpoch)),
     });
   }
@@ -39,6 +40,7 @@ export class AdminUserPresenceService {
 
 function summarizeUser(user: AdminUserPresenceUserFact, asOfEpoch: number) {
   return {
+    ...(user.source ? {source:user.source} : {}),
     account: user.account,
     displayName: user.displayName,
     role: user.role,

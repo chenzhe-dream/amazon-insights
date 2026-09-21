@@ -13,6 +13,7 @@ import {
   PUT,
   proxyAgentRequest,
 } from "../../app/api/agent/[...path]/route";
+import { VocEvidenceInventorySchema } from "../../shared/voc-evidence-contracts";
 import { ApiErrorResponseSchema } from "../../shared/agent-contracts";
 
 const internalUrl = "http://10.0.0.8:3100";
@@ -30,7 +31,7 @@ test("VOC inventory passes the production proxy with scoped query and session", 
       reviewSupplementDimensions: [], conflictDimensions: [] }],
     keywords: { state: "missing", source: null },
   };
-  const inventory = { manual: manifest, fallback: { ...manifest, sourcePolicy: "manual-with-review-fallback" } };
+  const inventory = VocEvidenceInventorySchema.parse({ manual: manifest, fallback: { ...manifest, sourcePolicy: "manual-with-review-fallback" } });
   let calls = 0;
   const client: AgentServiceClient = async request => {
     calls++;

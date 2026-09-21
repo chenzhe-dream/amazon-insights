@@ -15,6 +15,8 @@ const failed=(code:string,retryable=false)=>({status:'failed' as const,failure:{
 export async function collectMarketKeywordAba(input:Input,now?:Date){
  const request=requestSchema.safeParse({scope:input.scope,keywords:input.keywords,referenceMonth:input.referenceMonth,jobId:input.jobId,timeoutMs:input.timeoutMs});
  if(!request.success||input.connector.id!=='sif')return failed('invalid-request');
+ // Other sites have not yet been verified for this supplementary operation.
+ if(request.data.scope.marketplace!=='US')return failed('unsupported-marketplace');
  const observedNow=now??new Date();if(request.data.referenceMonth>=observedNow.toISOString().slice(0,7))return failed('invalid-request');
  try{
   const response=await executeOnce(input.connector,{operation:'market_get_keyword_history',input:{country:'US',granularity:'month',keywords:request.data.keywords},

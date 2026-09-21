@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from 'node:fs';
+import { MarketShapeSuggestionOutputSchema } from '../../shared/market-semantic-contracts';
 
 import OpenAI from "openai";
 import { z } from "zod";
@@ -116,6 +118,65 @@ function validationIssueRequest() {
     ),
   };
 }
+
+test('opt-in market output limit enforcement retains actual usage and rejects both transport violations without another request',async()=>{
+  for(const transport of ['responses-strict','relay-chat-json'] as const){
+    let calls=0;
+    const usage={inputTokens:40,outputTokens:8491};
+    const invoke=async()=>{calls++;return transport==='responses-strict'
+      ? completedResponse({usage:{input_tokens:usage.inputTokens,output_tokens:usage.outputTokens,total_tokens:8531}})
+      : completedChat({usage:{prompt_tokens:usage.inputTokens,completion_tokens:usage.outputTokens,total_tokens:8531}});};
+    const client={responses:{create:invoke},chat:{completions:{create:invoke}}} as unknown as NonNullable<ConstructorParameters<typeof OpenAIProvider>[0]['client']>;
+    const provider=new OpenAIProvider({client,transport,enforceOutputTokenLimit:true});
+    await assert.rejects(provider.generateStructured(request()),(error:unknown)=>{
+      assert.ok(error instanceof ModelProviderError);assert.equal(error.kind,'permanent');
+      assert.equal(error.reasonCode,'OUTPUT_LIMIT_EXCEEDED');assert.equal(error.usage?.outputTokens,8491);return true;
+    });
+    assert.equal(calls,1);
+  }
+});
+
+test('market Responses reasoning controls are explicit and opt-in',async()=>{
+  let sent:Record<string,unknown>|undefined;
+  const client={responses:{create:async(body:Record<string,unknown>)=>{sent=body;return completedResponse();}}} as unknown as NonNullable<ConstructorParameters<typeof OpenAIProvider>[0]['client']>;
+  await new OpenAIProvider({client,responsesLowReasoning:true}).generateStructured(request());
+  assert.deepEqual(sent?.reasoning,{effort:'low'});
+  assert.equal((sent?.text as {verbosity:string}).verbosity,'low');
+  await new OpenAIProvider({client}).generateStructured(request());
+  assert.equal(sent?.reasoning,undefined);
+  assert.equal((sent?.text as {verbosity?:string}).verbosity,undefined);
+});
+
+test('format failures expose closed stages without raw response contents', async () => {
+  const sentinel='PRIVATE_RAW_RESPONSE';
+  for (const transport of ['responses-strict','relay-chat-json'] as const) {
+    for (const [text, expected] of [
+      [`{${sentinel}`, {stage:'json',code:'invalid_json'}],
+      [JSON.stringify({summary:42}), {stage:'schema',code:'contract_mismatch'}],
+    ] as const) {
+      const invoke=async()=>transport==='responses-strict'
+        ? completedResponse({output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]})
+        : completedChat({choice:{message:{content:text}}});
+      const provider=new OpenAIProvider({transport,client:{responses:{create:invoke},chat:{completions:{create:invoke}}} as never});
+      await assert.rejects(provider.generateStructured(request()),(error:unknown)=>{
+        assert.ok(error instanceof ModelProviderError);
+        assert.deepEqual(Reflect.get(error,'validationDiagnostic'),expected);
+        assert.equal(error.usage?.outputTokens,10);
+        assert.doesNotMatch(JSON.stringify(error),new RegExp(sentinel));return true;
+      });
+    }
+  }
+  const provider=new OpenAIProvider({transport:'relay-chat-json',client:{chat:{completions:{create:async()=>completedChat({choice:{finish_reason:'length'}})}}} as never});
+  await assert.rejects(provider.generateStructured(request()),(error:unknown)=>{
+    assert.ok(error instanceof ModelProviderError);
+    assert.deepEqual(Reflect.get(error,'validationDiagnostic'),{stage:'response-envelope',code:'invalid_envelope'});return true;
+  });
+  const unsafe=new ModelProviderError('invalid_output','safe',{validationDiagnostic:{stage:sentinel,code:sentinel}} as never);
+  assert.equal(Reflect.get(unsafe,'validationDiagnostic'),undefined);
+  const sdkFailure=classifyOpenAIError(new SyntaxError(sentinel));
+  assert.deepEqual(sdkFailure.validationDiagnostic,{stage:'sdk',code:'sdk_parse_failed'});
+  assert.doesNotMatch(JSON.stringify(sdkFailure),new RegExp(sentinel));
+});
 
 test("Responses and relay retain declared nested validation paths", async () => {
   const rawSentinel = "RAW_NESTED_VALIDATION_VALUE";
@@ -862,4 +923,52 @@ test("native schema mode sends the schema once and still validates output",async
  let body: {messages:unknown[];response_format:{json_schema:{schema:unknown}}};
  const provider=new OpenAIProvider({transport:'relay-chat-json',schemaPromptMode:'native',client:{chat:{completions:{create:async(b:unknown)=>{body=b as typeof body;return completedChat();}}}} as never});
  const r=await provider.generateStructured(request());assert.equal(r.value.summary,'structured result');assert.equal(body!.messages.length,2);assert.deepEqual(body!.response_format.json_schema.schema,request().responseFormat.format.schema);
+});
+
+test('market prompt-and-native mode sends the exact schema in Responses instructions while preserving legacy modes', async () => {
+  const shapeRequest = { ...request(), outputSchema: MarketShapeSuggestionOutputSchema,
+    responseFormat: createStructuredResponseFormat(MarketShapeSuggestionOutputSchema, 'MarketShapeSuggestionOutput@1.0.0') };
+  for (const mode of ['prompt-and-native', 'native', 'duplicated'] as const) {
+    let body: Record<string, unknown> = {};
+    const provider = new OpenAIProvider({ schemaPromptMode: mode, deferOutputValidation: true,
+      client: { responses: { create: async (value: unknown) => { body = value as typeof body; return completedResponse(); } } } as never });
+    await provider.generateStructured(shapeRequest);
+    assert.deepEqual((body.text as { format: unknown }).format, shapeRequest.responseFormat.format);
+    if (mode === 'prompt-and-native') {
+      const instructions = body.instructions as string;
+      assert.ok(instructions.startsWith(`${shapeRequest.instructions}\n\n`));
+      const appendix = JSON.parse(instructions.slice(shapeRequest.instructions.length + 2));
+      assert.deepEqual(appendix.schema, shapeRequest.responseFormat.format.schema);
+      assert.ok(appendix.schema.properties.products);
+    } else assert.equal(body.instructions, shapeRequest.instructions);
+  }
+});
+
+test('market single-fence opt-in accepts only an entire fenced JSON object and retains schema validation', async () => {
+  const invoke = async (text: string, allowSingleJsonFence: boolean) => {
+    const response = completedResponse(); response.output[0].content[0].text = text;
+    return new OpenAIProvider({ allowSingleJsonFence, client: { responses: { create: async () => response } } as never }).generateStructured(request());
+  };
+  for (const text of ['```json\n{"summary":"ok"}\n```', ' \n```\n{"summary":"ok"}\n```\n ']) {
+    assert.equal((await invoke(text, true)).value.summary, 'ok');
+    await assert.rejects(invoke(text, false), ModelProviderError);
+  }
+  for (const text of ['Here:\n```json\n{"summary":"ok"}\n```', '```json\n{"summary":"ok"}\n```\nDone',
+    '```json\n{"summary":"ok"}\n```\n```json\n{}\n```', '```json\n[]\n```', '```json\nnull\n```',
+    '```javascript\n{"summary":"ok"}\n```', '```json\n{"wrong":"ok"}\n```']) {
+    await assert.rejects(invoke(text, true), ModelProviderError);
+  }
+});
+
+test('saved real relay result remains invalid after fence unwrap; never map results to products', async () => {
+  const fixture = JSON.parse(readFileSync('tests/fixtures/market-shape-relay-wrong-schema-20260917.json', 'utf8')) as { outputText: string };
+  const response = completedResponse(); response.output[0].content[0].text = fixture.outputText;
+  const provider = new OpenAIProvider({ allowSingleJsonFence: true, client: { responses: { create: async () => response } } as never });
+  await assert.rejects(provider.generateStructured({ ...request(), outputSchema: MarketShapeSuggestionOutputSchema,
+    responseFormat: createStructuredResponseFormat(MarketShapeSuggestionOutputSchema, 'MarketShapeSuggestionOutput@1.0.0') }), error => {
+      assert.ok(error instanceof ModelProviderError);
+      assert.equal(error.kind, 'invalid_output');
+      assert.ok(error.validationIssues?.some(issue => issue.path?.[0] === 'products' && issue.code === 'invalid_type'));
+      return true;
+    });
 });

@@ -1,0 +1,20 @@
+import { z } from 'zod';
+import { MarketModuleIdSchema, MarketThemeReportEntrySchema } from './market-module-contracts';
+import { MarketThemeDetailItemSchema, MarketThemeTotalsSchema } from './market-theme-detail-contracts';
+const hash=z.string().regex(/^[a-f0-9]{64}$/),asin=z.string().regex(/^[A-Z0-9]{10}$/),count=z.number().int().nonnegative().safe();
+export const MarketThemeSelectionRevisionIdSchema=z.string().regex(/^market-theme-selection-revision:[a-f0-9]{64}$/);
+const evidence=z.object({sourceRef:z.string().regex(/^market-source:[a-f0-9]{64}$/),inputSnapshotId:z.string().regex(/^market-input:[a-f0-9]{64}$/),path:z.array(z.union([z.string(),count])).max(12)}).strict();
+const field=<T extends z.ZodType>(value:T)=>z.object({value:value.nullable(),evidence:evidence.nullable(),missingReason:z.string().max(240).nullable(),truncated:z.boolean()}).strict();
+export const MarketThemeSampleMetadataSchema=z.object({asin,sourceOrder:count.min(1),title:field(z.string().max(300)),sourceRank:field(count.min(1)),imageUrl:field(z.string().url().max(2048)),customerSay:field(z.string().max(1000))}).strict().superRefine((sample,context)=>{for(const name of ['title','sourceRank','imageUrl','customerSay'] as const){const field=sample[name];if(field.value===null?field.missingReason===null||field.evidence!==null:field.evidence===null||field.missingReason!==null)context.addIssue({code:'custom',path:[name],message:'Metadata needs evidence or a missing reason'});}});
+export const MarketThemeSelectionRequestSchema=z.object({baseReportHash:hash,expectedParentRevisionId:MarketThemeSelectionRevisionIdSchema.nullable(),excludedAsins:z.array(asin).max(20),note:z.string().trim().max(500).default('')}).strict().refine(v=>new Set(v.excludedAsins).size===v.excludedAsins.length);
+export const MarketThemeSelectionResultSchema=z.object({selectedAsins:z.array(asin).max(20),excludedAsins:z.array(asin).max(20),status:z.enum(['complete','partial','no-data']),totals:MarketThemeTotalsSchema.nullable(),
+ metricKind:z.literal('customers_say_topic_share'),sentimentOverlap:z.literal('not_assumed_disjoint'),reviewDeduplication:z.literal('unavailable'),mappingBasis:z.literal('inherited-from-base-report'),baseSelectionShortfall:z.boolean(),reconciliationRequired:z.boolean(),unknownCount:count,unavailableCount:count,
+ sentimentGroupCounts:z.object({positive:count,negative:count}).strict(),previewOmittedGroupCount:count,groups:z.array(MarketThemeDetailItemSchema.options[0]).max(24),asins:z.array(MarketThemeDetailItemSchema.options[2]).max(20),
+ evidence:z.array(z.object({index:count,members:z.array(MarketThemeDetailItemSchema.options[1]).max(3),topAsins:z.array(z.object({asin,mention:count}).strict()).max(3)}).strict()).max(24),
+ display:z.object({topN:count.nullable(),totalGroupCount:count,displayedGroupCount:count,omittedGroupCount:count}).strict()}).strict();
+export const MarketThemeSelectionRevisionSchema=z.object({revisionId:MarketThemeSelectionRevisionIdSchema,parentRevisionId:MarketThemeSelectionRevisionIdSchema.nullable(),ordinal:count.min(1),authorId:z.string().uuid(),createdAt:z.string().datetime(),baseReportAttemptId:MarketModuleIdSchema,baseReportHash:hash,note:z.string().max(500),result:MarketThemeSelectionResultSchema,resultHash:hash}).strict();
+export const MarketThemeSelectionResponseSchema=z.object({version:z.literal('market-theme-selection-view/v1'),base:MarketThemeReportEntrySchema,samples:z.array(MarketThemeSampleMetadataSchema).max(20),baseline:MarketThemeSelectionResultSchema,
+ latestRevisionId:MarketThemeSelectionRevisionIdSchema.nullable(),revision:MarketThemeSelectionRevisionSchema.nullable(),history:z.array(MarketThemeSelectionRevisionSchema.pick({revisionId:true,ordinal:true,createdAt:true,resultHash:true})).max(1000)}).strict();
+export type MarketThemeSampleMetadata=z.infer<typeof MarketThemeSampleMetadataSchema>;
+export type MarketThemeSelectionResult=z.infer<typeof MarketThemeSelectionResultSchema>;
+export type MarketThemeSelectionResponse=z.infer<typeof MarketThemeSelectionResponseSchema>;

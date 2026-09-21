@@ -36,10 +36,10 @@ export function marketKeywordFlowInitialSteps(request: Request): MarketStepDefin
 /** Only the source/model frontier: no rules, human revisions or final report.
  * Failed pages remain current retry targets; their new attempts invalidate the
  * old pool and every descendant. Existing handlers publish children atomically. */
-export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now: string): { children: MarketStepDefinition[]; currentStepKeys: string[] } {
+export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now: string, options: { readCancelled?: boolean } = {}): { children: MarketStepDefinition[]; currentStepKeys: string[] } {
   const current = new Set<string>();
-  const result = (children: MarketStepDefinition[] = []) => ({ children, currentStepKeys: [...current] });
-  if (!isMarketKeywordFlow(view.run) || view.run.status === 'cancelled') return result();
+  const result = (children: MarketStepDefinition[] = []) => ({ children: view.run.status === 'cancelled' ? [] : children, currentStepKeys: [...current] });
+  if (!isMarketKeywordFlow(view.run) || view.run.status === 'cancelled' && !options.readCancelled) return result();
   const p = params(view.run);
   z.string().datetime().parse(now);
   function find(definition: MarketStepDefinition, required = false) {

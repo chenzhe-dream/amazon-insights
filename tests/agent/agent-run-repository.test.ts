@@ -16,7 +16,7 @@ import {
   type AgentRunRepository,
   type RegisterSkillVersionInput,
 } from "../../server/db/agent-run-repository";
-import type { ModelBudgetLedgerRepository } from "../../server/db/model-budget-repository";
+import { ModelBudgetExecutionAuthorityLostError, type ModelBudgetLedgerRepository } from "../../server/db/model-budget-repository";
 import {
   openSqliteAgentRepository as openSqliteAgentRepositoryBase,
   registerVocSnapshotIntegrityFunction,
@@ -2603,12 +2603,82 @@ test("response id boundary permits settle assignment once and rejects tampering"
   }
 });
 
+test("recovered job sees prior AgentRun usage and fences obsolete budget authority", async (t) => {
+  const temporary = temporaryDatabase();
+  let clock = now;
+  const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000, nowProvider: () => new Date(clock) });
+  t.after(() => {
+    sqlite.close();
+    rmSync(temporary.directory, { recursive: true, force: true });
+  });
+  const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await sqlite.registerSkillVersion(skillVersionInput());
+  const originalInput = beginInput(subject, skill.id, { logicalExecutionLineage: "8".repeat(64) });
+  const original = await sqlite.beginAgentRun(originalInput);
+  const oldAuthority = {
+    agentRunId: original.record.id, organizationId: subject.organizationId,
+    jobAttemptId: subject.jobAttemptId, leaseOwnerId,
+    leaseGeneration: subject.leaseGeneration, claimToken,
+  };
+  const limit = { maxTokens: 10_000, maxCostMicros: 10_000 };
+  const request = {
+    id: randomUUID(), idempotencyKey: "recovery:0", requestFingerprint: "1".repeat(64),
+    runId: subject.runId, projectId: subject.projectId,
+    projected: { inputTokens: 100, outputTokens: 20, costMicros: 300 },
+    limits: { call: limit, run: limit, organizationUtcDay: limit },
+    reservedAt: now, leaseExpiresAt: "2026-08-15T08:01:00.000Z",
+    jobAttemptId: subject.jobAttemptId, requestOrdinal: 0,
+    attemptKind: "initial" as const, transientRetryCount: 0, formatRepair: false,
+    executionAuthority: oldAuthority,
+  };
+  const initial = await sqlite.reserveModelBudget(request);
+  await sqlite.dispatchModelBudget({ reservationId: initial.reservation.id, transitionedAt: now, executionAuthority: oldAuthority });
+
+  clock = "2026-08-15T08:01:01.000Z";
+  const successor = await sqlite.claimNextJob({ ownerId: "worker-recovery", claimedAt: clock, leaseDurationMs: 60_000 });
+  assert.ok(successor);
+  const recoveredInput = {
+    ...originalInput, id: randomUUID(), jobAttemptId: successor.id,
+    leaseOwnerId: "worker-recovery", leaseGeneration: successor.leaseGeneration,
+    claimToken: randomUUID(), claimAcquiredAt: clock, claimExpiresAt: "2026-08-15T08:02:00.000Z",
+  };
+  const recovered = await sqlite.beginAgentRun(recoveredInput);
+  assert.equal(recovered.record.id, original.record.id);
+  const usageScope = { agentRunId: original.record.id, organizationId: subject.organizationId, runId: subject.runId, jobAttemptId: successor.id };
+  const priorUsage = await sqlite.getJobAttemptModelUsage(usageScope);
+  assert.equal(priorUsage.inputTokens, 100, "prior dispatched work must be visible before recovery considers another model call");
+  assert.equal(priorUsage.usageCompleteness, "partial");
+  assert.equal(priorUsage.attempts.length, 1);
+  for (const invalid of [
+    { ...usageScope, organizationId: randomUUID() },
+    { ...usageScope, runId: randomUUID() },
+    { ...usageScope, jobAttemptId: subject.jobAttemptId },
+  ]) assert.deepEqual((await sqlite.getJobAttemptModelUsage(invalid)).attempts, []);
+  const authority = { ...oldAuthority, jobAttemptId: successor.id, leaseOwnerId: recoveredInput.leaseOwnerId, leaseGeneration: successor.leaseGeneration, claimToken: recoveredInput.claimToken };
+  await assert.rejects(sqlite.dispatchModelBudget({ reservationId: initial.reservation.id, transitionedAt: clock, executionAuthority: oldAuthority }), ModelBudgetExecutionAuthorityLostError);
+  await assert.rejects(sqlite.reserveModelBudget({ ...request, id: randomUUID(), idempotencyKey: "stale", reservedAt: clock, leaseExpiresAt: "2026-08-15T08:02:00.000Z" }), ModelBudgetExecutionAuthorityLostError);
+  await sqlite.settleModelBudget({ reservationId: initial.reservation.id, transitionedAt: clock, actual: { inputTokens: 80, outputTokens: 12, costMicros: 240 }, executionAuthority: authority });
+  const retry = await sqlite.reserveModelBudget({
+    ...request, id: randomUUID(), idempotencyKey: "recovery:1", requestFingerprint: "2".repeat(64),
+    jobAttemptId: successor.id, requestOrdinal: 1, attemptKind: "transient-retry", transientRetryCount: 1,
+    reservedAt: clock, leaseExpiresAt: "2026-08-15T08:02:00.000Z", executionAuthority: authority,
+  });
+  await sqlite.dispatchModelBudget({ reservationId: retry.reservation.id, transitionedAt: clock, executionAuthority: authority });
+  const usage = await sqlite.getJobAttemptModelUsage(usageScope);
+  assert.equal(usage.inputTokens, 180);
+  assert.equal(usage.usageCompleteness, "partial");
+  assert.deepEqual(usage.attempts.map(attempt => attempt.ordinal), [0, 1]);
+});
+
 test("job attempt usage preserves request identity and conservative partial accounting", async (t) => {
   const temporary = temporaryDatabase();
   const sqlite = openSqliteAgentRepository({ path: temporary.path, busyTimeoutMs: 5_000 });
   const agentRuns = asAgentRunRepository(sqlite);
   const budget = sqlite as unknown as ModelBudgetLedgerRepository;
   const subject = await seedActiveAttempt(sqlite, temporary.path);
+  const skill = await agentRuns.registerSkillVersion(skillVersionInput());
+  const pending = await agentRuns.beginAgentRun(beginInput(subject, skill.id));
+  const executionAuthority = {agentRunId:pending.record.id,organizationId:subject.organizationId,jobAttemptId:subject.jobAttemptId,leaseOwnerId,leaseGeneration:subject.leaseGeneration,claimToken};
   t.after(() => {
     sqlite.close();
     rmSync(temporary.directory, { recursive: true, force: true });
@@ -2622,6 +2692,7 @@ test("job attempt usage preserves request identity and conservative partial acco
   const initial = await budget.reserveModelBudget({
     id: randomUUID(),
     idempotencyKey: "agent-run-audit:0",
+    executionAuthority,
     requestFingerprint: "1".repeat(64),
     runId: subject.runId,
     projectId: subject.projectId,
@@ -2637,10 +2708,12 @@ test("job attempt usage preserves request identity and conservative partial acco
   });
   await budget.dispatchModelBudget({
     reservationId: initial.reservation.id,
+    executionAuthority,
     transitionedAt: "2026-08-15T08:00:00.100Z",
   });
   await budget.settleModelBudget({
     reservationId: initial.reservation.id,
+    executionAuthority,
     transitionedAt: "2026-08-15T08:00:00.200Z",
     actual: { inputTokens: 80, outputTokens: 12, costMicros: 240 },
   });
@@ -2648,6 +2721,7 @@ test("job attempt usage preserves request identity and conservative partial acco
   const retry = await budget.reserveModelBudget({
     id: randomUUID(),
     idempotencyKey: "agent-run-audit:1",
+    executionAuthority,
     requestFingerprint: "2".repeat(64),
     runId: subject.runId,
     projectId: subject.projectId,
@@ -2663,11 +2737,13 @@ test("job attempt usage preserves request identity and conservative partial acco
   });
   await budget.dispatchModelBudget({
     reservationId: retry.reservation.id,
+    executionAuthority,
     transitionedAt: "2026-08-15T08:00:00.400Z",
   });
 
   assert.deepEqual(
     await agentRuns.getJobAttemptModelUsage({
+      agentRunId: pending.record.id,
       organizationId: subject.organizationId,
       runId: subject.runId,
       jobAttemptId: subject.jobAttemptId,

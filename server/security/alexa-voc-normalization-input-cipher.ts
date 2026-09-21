@@ -165,7 +165,7 @@ export function createAlexaVocNormalizationInputCipher(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): AlexaVocNormalizationInputCipher {
   const keyring = parseKeyring(env);
-  return Object.freeze({
+  return Object.freeze<AlexaVocNormalizationInputCipher>({
     activeKeyId: keyring.activeKeyId,
     encrypt({ identity, plaintext }) {
       const aad = canonicalAad(identity);

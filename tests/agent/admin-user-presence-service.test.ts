@@ -120,7 +120,7 @@ test("presence service consumes all-history aggregates with only bounded recent-
   assert.equal(aggregate.recentLogins[1]?.invalidationReason, "expired");
   assert.equal(aggregate.recentLogins[2]?.invalidationReason, "revoked");
   assert.equal(output.asOf, asOf);
-  assert.equal(output.recentActivityWindowSeconds, 300);
+  assert.equal(output.recentActivityWindowSeconds, 900);
 });
 
 test("presence service makes disabled status override expiry facts and strips internal extras", () => {

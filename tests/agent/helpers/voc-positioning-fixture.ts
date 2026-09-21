@@ -122,6 +122,7 @@ export function createRepositoryVocSourceReaderFixture() {
             asin: input.asin,
             marketplace: "US" as const,
             revision: "1",
+            contentHash: canonicalJsonSha256(normalizedRecord),
             normalizedRecord,
             source: "legacy-static-stale" as const,
             generation: "1",

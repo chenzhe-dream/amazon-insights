@@ -2,12 +2,13 @@ import {z} from 'zod';
 import {MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema} from '../../shared/market-module-contracts';
 import {MarketKeywordStartRequestSchema} from '../../shared/market-keyword-flow-contracts';
 import {MarketKeywordRunResponseSchema, type MarketKeywordFacts, type MarketKeywordRunResponse} from '../../shared/market-keyword-public-contracts';
-import {MarketKeywordRevisionCatalogSchema, MarketKeywordRevisionIdSchema, MarketKeywordRevisionRequestSchema} from '../../shared/market-keyword-revision-contracts';
-import {MarketKeywordRuleReportSchema,type MarketKeywordRuleReport} from '../../shared/market-keyword-rule-report-contracts';
+import {MarketKeywordRevisionEntrySchema, MarketKeywordRevisionIdSchema, MarketKeywordRevisionRequestSchema} from '../../shared/market-keyword-revision-contracts';
+import {type MarketKeywordRuleReport} from '../../shared/market-keyword-rule-report-contracts';
+import {assertKeywordScoreInputAuditBinding} from '../../shared/market-keyword-score-input-audit-contracts';
 import {localAgentFetch, localAgentErrorMessage} from './local-agent-browser';
 export {retryThemeSteps as retryKeywordSteps, cancelThemeRun as cancelKeywordRun} from './market-theme-browser';
 
-const revisionEntry = z.object({ordinal:z.number().int().min(1),catalog:MarketKeywordRevisionCatalogSchema,ruleReport:MarketKeywordRuleReportSchema.optional()}).strict();
+const revisionEntry = MarketKeywordRevisionEntrySchema;
 const readRevision = z.object({revision:revisionEntry}).strict();
 async function request<T>(path:string,schema:z.ZodType<T>,init:RequestInit={}){
  init.signal?.throwIfAborted();
@@ -32,6 +33,7 @@ function checkRun(run:MarketKeywordRunResponse['run']){
  if(run.reconciliation&&(run.reconciliation.moduleRunId!==run.id||run.reconciliation.inputSnapshotId!==(run.facts?.pool.semanticInputSnapshotId??null)))throw new Error('归并结果与当前词池不一致，未加载该结果。');
  if(run.facts){checkFacts(run.facts,run.id);if(!same(run.scope,run.facts.scope))throw new Error('事实与任务研究范围不一致，未加载该结果。');}
  if(run.ruleReport){if(!run.facts)throw new Error('规则报告缺少事实基线，未加载该结果。');checkRules(run.ruleReport,run.facts,run.reconciliation?'global':'none',run.reconciliation?.resultHash??null);}
+ if(run.scoreInputAudit){if(!run.facts||!run.ruleReport)throw new Error('输入核对缺少事实或规则报告，未加载该结果。');assertKeywordScoreInputAuditBinding(run.scoreInputAudit,run.facts,run.ruleReport);}
  return run;
 }
 function checkRules(report:MarketKeywordRuleReport,facts:MarketKeywordFacts,kind:'none'|'manual'|'global',identity:string|null){
@@ -60,6 +62,7 @@ export async function saveKeywordRevision(id:string,body:unknown,key:string,sign
  const {revision}=await request(`runs/${runId}/keywords/revisions`,readRevision,post(params,key,signal));
  const {catalog}=revision;checkFacts(catalog.facts,runId);
  if(revision.ruleReport)checkRules(revision.ruleReport,catalog.facts,'manual',catalog.revision.revisionId);
+ if(revision.scoreInputAudit){if(!revision.ruleReport)throw new Error('输入核对缺少规则报告，未加载该结果。');assertKeywordScoreInputAuditBinding(revision.scoreInputAudit,catalog.facts,revision.ruleReport);}
  if(catalog.facts.factsId!==params.factsId||catalog.revision.parentRevisionId!==params.expectedParentRevisionId||catalog.revision.note!==params.note||!same(catalog.classification,{labels:params.labels,clusters:params.clusters,assignments:params.assignments}))throw new Error('保存版本与事实基线或人工选择不一致，未加载该结果。');
  return revision;
 }
@@ -68,5 +71,6 @@ export async function readKeywordRevision(id:string,revisionId:string,signal?:Ab
  const {revision}=await request(`runs/${runId}/keywords/revisions/${encodeURIComponent(selected)}`,readRevision,{signal});
  checkFacts(revision.catalog.facts,runId);if(revision.catalog.revision.revisionId!==selected)throw new Error('报告版本不一致，未加载该结果。');
  if(revision.ruleReport)checkRules(revision.ruleReport,revision.catalog.facts,'manual',selected);
+ if(revision.scoreInputAudit){if(!revision.ruleReport)throw new Error('输入核对缺少规则报告，未加载该结果。');assertKeywordScoreInputAuditBinding(revision.scoreInputAudit,revision.catalog.facts,revision.ruleReport);}
  return revision;
 }

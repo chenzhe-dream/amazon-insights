@@ -1,5 +1,6 @@
 import {MarketOverviewDistributionOperationSchema,MarketOverviewDistributionSchema,MARKET_OVERVIEW_DISTRIBUTION_VERSION,type MarketOverviewDistribution,type MarketOverviewDistributionOperation} from '../../../shared/market-overview-distribution-contracts';
 import {MarketInputRecordSchema} from '../../../shared/market-analysis-contracts';
+import type {MarketCurrency} from '../../../shared/market-sites';
 
 const contentLabels=['有A+有视频','有A+无视频','无A+有视频','无A+无视频'];
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
@@ -9,7 +10,7 @@ const share=(value:number|null,total:number|null)=>value!==null&&total!==null&&t
 
 /** Shares are recomputed over this response's declared disjoint rows only.
  * Upstream *Ratio fields are retained, never guessed to mean ratio or percent. */
-export function normalizeMarketOverviewDistribution(operation:MarketOverviewDistributionOperation,payload:unknown,options:{currency?:'USD'}={}):MarketOverviewDistribution{
+export function normalizeMarketOverviewDistribution(operation:MarketOverviewDistributionOperation,payload:unknown,options:{currency?:MarketCurrency}={}):MarketOverviewDistribution{
   operation=MarketOverviewDistributionOperationSchema.parse(operation);const envelope=obj(payload);
   if(envelope.isError===true||envelope.code!==undefined&&envelope.code!=='OK'||!Array.isArray(envelope.data)||envelope.data.length>2000)throw new TypeError('Invalid distribution response');
   const brand=operation==='market_brand_concentration',seller=operation==='market_seller_concentration',type=operation==='market_seller_type_concentration',content=operation==='market_ebc_distribution';
@@ -23,7 +24,7 @@ export function normalizeMarketOverviewDistribution(operation:MarketOverviewDist
     let products=number(r[type?'asinNum':'products'],true);const units=number(r[unitsField],true),reportedRevenue=number(r[revenueField]);
     if(type&&r.productNum!==undefined&&number(r.productNum,true)!==products){products=null;issues.push('conflicting-product-count');}
     if(products===null)issues.push('invalid-products');if(units===null)issues.push('invalid-units');
-    const revenue=options.currency==='USD'?reportedRevenue:null;
+    const revenue=options.currency?reportedRevenue:null;
     if(r[revenueField]!==undefined&&r[revenueField]!==null&&(reportedRevenue===null||!options.currency))issues.push(reportedRevenue===null?'invalid-revenue':'revenue-currency-unverified');
     let asins:string[]=[];
     if(!content&&!type){if(!Array.isArray(r.asins)||r.asins.some(a=>typeof a!=='string'||!/^[A-Z0-9]{10}$/.test(a)))issues.push('invalid-membership');else asins=r.asins;

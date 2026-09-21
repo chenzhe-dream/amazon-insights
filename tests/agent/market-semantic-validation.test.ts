@@ -248,7 +248,7 @@ test("A2 reversed model order is normalized to fixed input order", () => {
 });
 test("A2 own-member spans, allowed labels, unique labels and manual confirmation enforced", () => {
   for (const [path, value, code] of [
-    [["candidates", 0, "evidence"], [span(B, "title")], "foreign_span"],
+    [["candidates", 0, "evidence"], [span(B, "title")], "span_unknown_or_foreign_reference"],
     [["candidates", 0, "labelId"], "invented", "unknown_label"],
     [["requiresManualConfirmation"], false, "invalid_schema"],
   ] as const) { const f = make(tasks[1]); put(f.output, ["products", 0, "decision", ...path], value); rejects(f, code); }
@@ -259,6 +259,7 @@ test("A2 missing-source is allowed for a missing field; it cannot invent a missi
   const f = make(tasks[1]); put(f.output, ["products", 0, "decision"], { status: "unknown", reason: "missing-source", evidence: [] });
   check(f); // parameters really are missing, even though title is present.
   const g = make(tasks[2]); put(g.output, ["keywords", 0, "W1"], { status: "unknown", reason: "missing-source", evidence: [] }); rejects(g, "source_not_missing");
+  assert.throws(()=>check(g),error=>{assert.ok(error instanceof z.ZodError);assert.deepEqual(error.issues[0].path,['keywords',0,'W1','reason']);return true;});
 });
 test("span validation rejects wrong quote, whitespace, bounds, duplicates and split UTF-16 pairs", () => {
   for (const evidence of [[{ ...span(A, "title"), quote: "fake" }], [{ ...span(A, "title"), start: 4, end: 5, quote: " " }],
@@ -267,7 +268,7 @@ test("span validation rejects wrong quote, whitespace, bounds, duplicates and sp
   }
   const f = make(tasks[1]); put(f.input, ["products", 0, "title", "value", "text"], "💡lamp");
   saveInputChange(f, A, ["product", "title", "value", "text"], "💡lamp");
-  put(f.output, ["products", 0, "decision", "candidates", 0, "evidence"], [{ refId: `${A}-title`, start: 0, end: 1, quote: "\ud83d" }]); rejects(f, "invalid_span");
+  put(f.output, ["products", 0, "decision", "candidates", 0, "evidence"], [{ refId: `${A}-title`, start: 0, end: 1, quote: "\ud83d" }]); rejects(f, "span_surrogate_boundary");
 });
 test("source field role cannot substitute parameter for title and productId cannot alias ASIN", () => {
   const f = make(tasks[1]); put(f.input, ["products", 0, "title", "value", "field"], "parameter");
@@ -294,7 +295,7 @@ test("A3 keeps dimensions separate and references one valid existing/proposed cl
 test("A3 proposal refs belong to assigned members; valid proposals retain temporary IDs", () => {
   const f = make(tasks[2]); put(f.output, ["keywords", 0, "cluster"], { status: "proposed", proposalId: "p", evidence: [span("k1")] });
   f.output.proposals = [{ proposalId: "p", labelZh: "灯具", definition: "灯具需求", evidence: [span("k1")] }]; check(f);
-  put(f.output, ["proposals", 0, "evidence"], [span("k2")]); rejects(f, "foreign_span");
+  put(f.output, ["proposals", 0, "evidence"], [span("k2")]); rejects(f, "span_unknown_or_foreign_reference");
 });
 test("A3 synonyms need both endpoints, no self-loop or duplicate undirected relation", () => {
   const f = make(tasks[2]); put(f.output, ["synonymRelations", 0, "evidence"], [span("k1")]); rejects(f, "endpoint_evidence_missing");
@@ -305,7 +306,7 @@ test("A4 rejects review IDs, fabricated quotes and every numeric-count field", (
   for (const key of ["reviewId", "reviewQuote", "mention", "positive", "negative", "userCount", "percent", "uniqueCount"]) {
     const f = make(tasks[3]); put(f.output, ["themes", 0, "decision", key], 99); rejects(f, "invalid_schema");
   }
-  const f = make(tasks[3]); put(f.output, ["themes", 0, "decision", "evidence", 0, "quote"], "a fabricated review"); rejects(f, "invalid_span");
+  const f = make(tasks[3]); put(f.output, ["themes", 0, "decision", "evidence", 0, "quote"], "a fabricated review"); rejects(f, "span_quote_mismatch");
 });
 test("A4 preserves selected empty ASIN and rejects themes outside fixed TOP20 selection", () => {
   const f = make(tasks[3]); check(f); assert.deepEqual(f.input.selectedAsins, [A, B]);
@@ -313,7 +314,7 @@ test("A4 preserves selected empty ASIN and rejects themes outside fixed TOP20 se
 });
 test("A4 rejects multi-mapping, foreign theme citations and unused proposals", () => {
   const f = make(tasks[3]); (f.output.themes as unknown[]).push(clone(read(f.output, "themes", 0))); rejects(f, "member_partition_mismatch");
-  const g = make(tasks[3]); put(g.output, ["themes", 0, "decision", "evidence"], [span("t2")]); rejects(g, "foreign_span");
+  const g = make(tasks[3]); put(g.output, ["themes", 0, "decision", "evidence"], [span("t2")]); rejects(g, "span_unknown_or_foreign_reference");
   const h = make(tasks[3]); h.output.proposals = [{ proposalId: "p", labelZh: "灯具", definition: "灯具需求", evidence: [span("t1")] }]; rejects(h, "unused_proposal");
 });
 
@@ -332,4 +333,45 @@ test('A4 catalog-only mode binds the frozen source projection and rejects new pr
 test("bounded input text and invalid JSON values are rejected, not silently truncated", () => {
   const f = make(tasks[2]); put(f.input, ["keywords", 0, "text", "text"], "x".repeat(2_001)); rejects(f, "invalid_schema");
   for (const value of [Infinity, NaN, undefined, new Date(), new Map()]) { const g = make(tasks[0]); g.output.extra = value; rejects(g, "unsafe_json"); }
+});
+
+
+test("theme citation diagnostics preserve a bounded rule identifier without relaxing validation", () => {
+  const f = make(tasks[3]);
+  put(f.output, ['themes', 0, 'decision', 'evidence', 0, 'quote'], 'RAW_INVALID_QUOTE');
+  assert.throws(() => check(f), (error: unknown) => {
+    assert.ok(error instanceof z.ZodError);
+    assert.equal(error.issues[0].code, 'custom');
+    assert.equal((error.issues[0] as { params?: { ruleId?: string } }).params?.ruleId, 'market-span-quote-mismatch');
+    return true;
+  });
+});
+
+
+test("shape schema diagnostics distinguish wrong products type without exposing its value", () => {
+  const f = make(tasks[1]); f.output.products = 'RAW_PRODUCTS_SENTINEL';
+  assert.throws(() => check(f), (error: unknown) => {
+    assert.ok(error instanceof z.ZodError);
+    assert.equal(error.issues[0].code, 'invalid_type');
+    assert.deepEqual(error.issues[0].path, ['products']);
+    assert.equal((error.issues[0] as { expected?: string }).expected, 'array');
+    assert.equal(error.issues[0].message, 'invalid_schema');
+    assert.doesNotMatch(error.message, /RAW_PRODUCTS_SENTINEL/);
+    return true;
+  });
+});
+
+test('shape span diagnostics retain full indexed path without quote text; historical validator remains strict',()=>{
+ const f=make('market-product-shape-suggestion');
+ put(f.output,['products',1,'decision','candidates',0,'evidence',0,'start'],1);
+ assert.throws(()=>validateMarketShapeSuggestions(f.input,f.output,f.binding),(e:unknown)=>{
+  assert.ok(e instanceof z.ZodError);assert.deepEqual(e.issues[0].path,['products',1,'decision','candidates',0,'evidence',0]);
+  assert.equal(e.issues[0].message,'span_quote_mismatch');assert.equal(JSON.stringify(e.issues).includes('lamp'),false);return true;
+ });
+});
+
+test('theme and keyword citation diagnostics retain their complete evidence path',()=>{
+ for(const [task,path] of [[tasks[2],['keywords',1,'W1','evidence',0]],[tasks[3],['themes',1,'decision','evidence',0]]] as const){
+  const f=make(task);put(f.output,[...path,'start'],1);assert.throws(()=>check(f),(e:unknown)=>{assert.ok(e instanceof z.ZodError);assert.deepEqual(e.issues[0].path,path);return true;});
+ }
 });

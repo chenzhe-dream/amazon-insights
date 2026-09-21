@@ -16,11 +16,15 @@ export type MarketKeywordReconciliationFlowInspection = {children:MarketStepDefi
 /** Pure scheduler: native handlers independently audit saved snapshot contents. */
 export function inspectMarketKeywordReconciliationFlow(view:MarketModuleRunView, initialAnchor:MarketKeywordReconciliationAnchor, current:Set<string>):MarketKeywordReconciliationFlowInspection {
   const anchor=MarketKeywordReconciliationAnchorSchema.parse(initialAnchor);
-  const result=(children:MarketStepDefinition[]=[],extra:Partial<MarketKeywordReconciliationFlowInspection>={})=>({children,currentStepKeys:[...current],...extra});
+  const result=(children:MarketStepDefinition[]=[],extra:Partial<MarketKeywordReconciliationFlowInspection>={})=>({children:view.run.status==='cancelled'?[]:children,currentStepKeys:[...current],...extra});
   const attempt=(s:MarketExecutionStep)=>{const matches=view.attempts.filter(a=>a.id===s.latestAttemptId&&a.stepId===s.id);
     if(matches.length!==1||!(matches[0].status===s.status||matches[0].status==='interrupted'&&s.status==='failed'))invalid();return matches[0];};
   const find=(d:MarketStepDefinition,required=false)=>{current.add(d.stepKey);const found=view.steps.filter(s=>s.stepKey===d.stepKey);
-    if(found.length>1||required&&!found.length)invalid();const s=found[0];if(s){same({stepKey:s.stepKey,kind:s.kind,subject:s.subject,input:s.input,inputRefs:s.inputRefs},d);same(s.inputHash,digest(d));if(s.latestAttemptId)attempt(s);else if(s.status!=='queued')invalid();}return s;};
+    if(found.length>1||required&&!found.length)invalid();const s=found[0];if(s){same({stepKey:s.stepKey,kind:s.kind,subject:s.subject,input:s.input,inputRefs:s.inputRefs},d);same(s.inputHash,digest(d));if(s.latestAttemptId)attempt(s);else if(s.status!=='queued'){
+      // Cancellation may stop a queued step before its first claim. The durable
+      // run must itself be cancelled; no prior attempt may be hidden by this case.
+      if(view.run.status!=='cancelled'||s.status!=='cancelled'||s.attemptCount!==0||view.attempts.some(a=>a.stepId===s.id))invalid();
+    }}return s;};
   const priors:string[]=[];
   for(let round=0;round<64;round++){
     let next=marketKeywordReconciliationPageDefinition(anchor,priors),lastPageAttemptId='',planHash:string|undefined,baseHash:string|undefined,initialResultHash:string|undefined,totalWindows=0;

@@ -70,8 +70,8 @@ test("an explicit category repair cycle receives distinct physical dispatch keys
   assert.equal(new Set(attempts.map(item => item.dispatchKey)).size, 4);
 });
 
-test("non-category and non-CONNECT_TIMEOUT failures dispatch once", async () => {
-  assert.equal(await dispatchCount({ stage: "reviews", code: "UND_ERR_CONNECT_TIMEOUT" }), 1);
+test("review connect timeouts retry once; other failure kinds dispatch once", async () => {
+  assert.equal(await dispatchCount({ stage: "reviews", code: "UND_ERR_CONNECT_TIMEOUT" }), 2);
   assert.equal(await dispatchCount({ stage: "category", code: "ECONNRESET" }), 1);
 });
 
@@ -122,3 +122,25 @@ function providerFailure(code) {
   const cause = Object.assign(new Error("provider fixture failed"), { code });
   return Object.assign(new TypeError("fetch failed"), { cause });
 }
+
+
+test("a recovered review connection does not open the job breaker or skip sibling ASINs", async () => {
+  const attempts = [];
+  const env = { ...categoryEnv, AGENT_SYNC_STAGE_ID: "reviews", AGENT_SYNC_JOB_ID: "review-recovered-test" };
+  const options = { env, organizationId: "retry-org", jobId: "review-recovered-test", resourceGovernor: recordingGovernor(attempts), fetchImpl: timeoutThenSuccessFetch(), emitDiagnostics: false };
+  await requestSorftimeMcp("key", "tools/call", { name: "product_reviews", arguments: { asin: "B000000001" } }, options);
+  await requestSorftimeMcp("key", "tools/call", { name: "product_reviews", arguments: { asin: "B000000002" } }, options);
+  assert.deepEqual(attempts.map(item => item.attemptKind), ["initial", "transient-retry", "initial"]);
+});
+
+test("expired request budgets are never retried", async () => {
+  const attempts = [];
+  const controller = new AbortController();
+  await assert.rejects(requestSorftimeMcp("key", "tools/call", categoryParams, {
+    organizationId: "retry-org", jobId: "expired-test", env: { ...categoryEnv, AGENT_SYNC_STAGE_ID: "reviews" }, signal: controller.signal,
+    resourceGovernor: recordingGovernor(attempts), fetchImpl: async () => {
+      controller.abort(); throw providerFailure("UND_ERR_CONNECT_TIMEOUT");
+    },
+  }));
+  assert.equal(attempts.length, 1);
+});

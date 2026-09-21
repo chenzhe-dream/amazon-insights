@@ -9,7 +9,7 @@ import { EntityIdSchema } from "../../shared/agent-contracts";
 import { hashPassword } from "../auth/password";
 import { loadAgentStorageConfig } from "../config";
 import { openRuntimeAgentRepository } from "../db/open-runtime-repository";
-import type { AgentRepository } from "../db/repository";
+import type { AgentRepository, LocalUserInput } from "../db/repository";
 
 const TEST_ACCOUNTS = Object.freeze([
   { email: "test-admin@amazon-insights.local", displayName: "Test Admin", role: "admin" as const },
@@ -50,7 +50,7 @@ export async function seedTestUsers(
     passwords.push(password);
   }
 
-  const inputs = await Promise.all(TEST_ACCOUNTS.map(async (account, index) => ({
+  const inputs = await Promise.all(TEST_ACCOUNTS.map(async (account, index): Promise<LocalUserInput> => ({
       id: randomUUID(),
       organizationId: normalizedOrganizationId,
       email: account.email,
@@ -201,6 +201,7 @@ const WINDOWS_PRIVATE_ACL_SCRIPT = String.raw`
 function applyWindowsPrivateAcl(path: string, kind: "directory" | "file") {
   return new Promise<void>((resolve, reject) => {
     const env: NodeJS.ProcessEnv = {
+      NODE_ENV: process.env.NODE_ENV,
       CREDENTIAL_ACL_PATH: path,
       CREDENTIAL_ACL_KIND: kind,
     };

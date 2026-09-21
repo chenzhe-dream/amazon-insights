@@ -90,8 +90,9 @@ export async function requestSorftimeMcp(
       return await dispatchPhysical(firstKind);
     } catch (error) {
       const diagnostic = classifyProviderFailure(error, diagnosticInput);
-      const eligible = diagnosticInput.stage === "category" &&
-        diagnostic.causeCode === "CONNECT_TIMEOUT" &&
+      // A transient connection failure gets one governed retry before it can
+      // open the job breaker and suppress sibling ASINs or later stages.
+      const eligible = !signal?.aborted && diagnostic.causeCode === "CONNECT_TIMEOUT" &&
         firstKind !== "transient-retry";
       if (!eligible) throw error;
       return await dispatchPhysical(

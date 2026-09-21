@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -96,19 +96,30 @@ function browserFixtureEntry() {
     secondaryImages: [persistedZoomImage],
   });
   return `
-import { createElement } from "react";
+import { createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ListingImagesSection } from "/app/listing-images-section.tsx";
+import "/app/globals.css";
+import "/app/warm-theme.css";
+import "/app/comparison-layout.css";
+window.imageActionCalls = [];
 
 const product = ${JSON.stringify({ asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage })};
 const listing = ${JSON.stringify(listing)};
-createRoot(document.getElementById("root")).render(createElement(ListingImagesSection, {
+function Fixture() {
+ const [job,setJob] = useState(null);
+ window.setImageActionJob = setJob;
+ return createElement(ListingImagesSection, {
+  imageActionJob: job,
   products: [product],
   market: ${JSON.stringify(market)},
   colors: ${JSON.stringify(colors)},
   listingByAsin: { [product.asin]: listing },
   resolveImageRemark: () => null,
-}));
+  onImageAction: async (asin, action) => { window.imageActionCalls.push({asin,action}); await new Promise(resolve=>setTimeout(resolve,250)); if(action==="analyze") throw new Error("模拟提交失败，请重试"); return "image-job"; },
+});
+}
+createRoot(document.getElementById("root")).render(createElement(Fixture));
 `;
 }
 
@@ -197,7 +208,7 @@ test("Sorftime gallery reports the exact count of ready AI remarks", () => {
     listingFixture(),
     () => null,
     (_asin, slotIndex) => slotIndex === 0
-      ? { image_types: ["主图"], remark: "清晰展示产品" }
+      ? { image_types: ["主图"], remark: "清晰展示产品", confidence: "high" }
       : null,
   );
 
@@ -280,9 +291,10 @@ test("interactive hover and pinned previews render direct normalized HTTPS CDN s
       await route.continue();
     });
     await page.goto(`${fixture.baseUrl}/__listing-images-test.html`);
-    const frame = page.locator(".listing-image-frame").first();
+    const activePage = page;
+    const frame = activePage.locator(".listing-image-frame").first();
     await frame.waitFor({ timeout: 5_000 }).catch(async error => {
-      throw new Error(`${error instanceof Error ? error.message : "listing frame did not render"}; pageErrors=${JSON.stringify(pageErrors)}; failedRequests=${JSON.stringify(failedRequests)}; html=${(await page.content()).slice(0, 1_000)}`);
+      throw new Error(`${error instanceof Error ? error.message : "listing frame did not render"}; pageErrors=${JSON.stringify(pageErrors)}; failedRequests=${JSON.stringify(failedRequests)}; html=${(await activePage.content()).slice(0, 1_000)}`);
     });
 
     await frame.hover();
@@ -314,4 +326,58 @@ test("interactive hover and pinned previews render direct normalized HTTPS CDN s
     await browser?.close().catch(() => undefined);
     await fixture?.server.close().catch(() => undefined);
   }
+});
+
+test("each ASIN has a small image actions button below its identity",()=>{
+  const html=renderToStaticMarkup(createElement(ListingImagesSection,{products:[{asin:fixtureAsin,brand:"Test",image:sorftimeMainImage}],market,colors,listingByAsin:{[fixtureAsin]:listingFixture()},onImageAction:async()=>{}} as any));
+  assert.match(html,/重新处理/);
+  assert.match(html,/aria-label="重新处理 B07VY9Q95Q 的图片"/);
+  assert.ok(html.indexOf("listing-images-count")<html.indexOf("重新处理"));
+});
+
+test("image action menu dispatches the selected ASIN and shows success and failure",async()=>{
+  const fixture=await startBrowserFixtureServer();
+  const browser=await chromium.launch({headless:true,executablePath:browserExecutablePath()});
+  const page=await browser.newPage({viewport:{width:1400,height:800}});
+  const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));
+  try {
+    await page.route("**/*",route=>isLoopbackHttpUrl(route.request().url())?route.continue():route.fulfill({status:200,contentType:"image/svg+xml",body:'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#f1f5fb"/><text x="15" y="65" fill="#718096">Test image</text></svg>'}));
+    await page.goto(fixture.baseUrl+"/__listing-images-test.html");
+    const trigger=page.getByRole("button",{name:"重新处理 "+fixtureAsin+" 的图片"});
+    await trigger.click();
+    const output=process.env.IMAGE_ACTION_SCREENSHOT_DIR;
+    if(output){mkdirSync(output,{recursive:true});await page.screenshot({path:join(output,"asin-menu.png"),fullPage:true});}
+    await page.getByRole("button",{name:"重新抓取并重新分析",exact:true}).click();
+    assert.equal(await trigger.isDisabled(),true);
+    await page.getByRole("status").filter({hasText:"已提交"}).waitFor();
+    const updateJob = async (status:string,stageStatus:string,detail="") => page.evaluate(({status,stageStatus,detail,asin}) => {
+      (window as any).setImageActionJob({jobId:"image-job",jobVersion:1,asins:[asin],marketplace:"US",status,message:"",currentStageId:"image_remarks",asinProgress:{},stages:[{id:"image_remarks",imageAction:"refresh",repairAsins:[asin],status:stageStatus,detail}],createdAt:"",updatedAt:""});
+    },{status,stageStatus,detail,asin:fixtureAsin});
+    await updateJob("queued","pending");
+    await page.getByRole("status").filter({hasText:"排队中"}).waitFor();
+    assert.equal(await trigger.isDisabled(),true);
+    await updateJob("running","running");
+    await page.getByRole("status").filter({hasText:"图片分析中"}).waitFor();
+    if(output) await page.screenshot({path:join(output,"asin-running.png"),fullPage:true});
+    await updateJob("completed","partial","已完成 6/6 张 · 就绪 5 · 连接失败 1");
+    await page.getByRole("status").filter({hasText:"部分失败"}).waitFor();
+    assert.equal(await trigger.isDisabled(),false);
+    if(output) await page.screenshot({path:join(output,"asin-partial.png"),fullPage:true});
+    await updateJob("completed","completed","已完成 6/6 张 · 就绪 6");
+    await page.getByRole("status").filter({hasText:"分析完成"}).waitFor();
+    assert.equal(await page.getByText("已提交，请查看同步进度").count(),0);
+    if(output) await page.screenshot({path:join(output,"asin-completed.png"),fullPage:true});
+    await trigger.click();await page.getByRole("button",{name:"重新分析",exact:true}).click();
+    await page.getByRole("status").filter({hasText:"模拟提交失败"}).waitFor();
+    assert.deepEqual(await page.evaluate(()=> (window as any).imageActionCalls),[{asin:fixtureAsin,action:"refresh"},{asin:fixtureAsin,action:"analyze"}]);
+    assert.equal(await trigger.isDisabled(),false);
+    const triggerStyle=await trigger.evaluate(el=>({fontSize:getComputedStyle(el).fontSize,borderStyle:getComputedStyle(el).borderTopStyle}));
+    assert.equal(triggerStyle.fontSize,"11px");assert.equal(triggerStyle.borderStyle,"solid");
+    assert.deepEqual(errors,[]);
+  } finally {await page.close();await browser.close();await fixture.server.close();}
+});
+
+test("failed reanalysis keeps the previous note visible with an explicit failure label",()=>{
+  const html=renderListingImages({asin:fixtureAsin,brand:"Fixture brand",image:sorftimeMainImage},listingFixture(),()=>({status:"connector-failed",reason:"图片分析连接器失败"}),()=>({remark:"上次成功分析",image_types:["产品展示"],confidence:"high"}));
+  assert.match(html,/上次成功分析/);assert.match(html,/本次重新分析失败，暂显示上次结果/);
 });

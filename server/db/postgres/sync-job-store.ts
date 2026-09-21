@@ -84,6 +84,7 @@ const syncJobStageSchema = z.strictObject({
   catalogProviderPlan: catalogProviderPlanSchema.optional(),
   repairAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).optional(),
   repairParentJobId: z.string().trim().min(1).max(200).optional(),
+  imageAction: z.enum(["refresh", "analyze"]).optional(),
   repairXydcAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).optional(),
 }).refine((stage) => stage.catalogProviderPlan === undefined || stage.id === "catalog", {
   message: "Catalog provider plan is only valid on the catalog stage",

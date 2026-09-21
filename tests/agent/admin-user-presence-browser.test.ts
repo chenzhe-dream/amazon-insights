@@ -11,7 +11,7 @@ import { subscribeToAuthenticationRequired } from "../../app/lib/local-agent-bro
 
 const responseFixture: AdminUserPresenceResponse = {
   asOf: "2026-08-31T04:00:00.000Z",
-  recentActivityWindowSeconds: 300,
+  recentActivityWindowSeconds: 900,
   users: [{
     account: "admin@example.com",
     displayName: "Admin",

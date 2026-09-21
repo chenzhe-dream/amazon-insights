@@ -28,6 +28,7 @@ export function createUserPresenceAccess(options: Readonly<{
   env: UserPresenceEnvironment;
   authService: Pick<AuthenticationService, "findPublicUser">;
   repository: UserPresenceBindingRepository | null;
+  isSystemOwner?: (organizationId:string,userId:string)=>Promise<boolean>;
 }>): UserPresenceAccess {
   const organizationId = optionalValue(
     options.env,
@@ -65,8 +66,7 @@ export function createUserPresenceAccess(options: Readonly<{
       try {
         if (
           principal.kind !== "user" ||
-          !organizationId ||
-          principal.organizationId !== organizationId
+          !principal.organizationId
         ) {
           return false;
         }
@@ -74,12 +74,14 @@ export function createUserPresenceAccess(options: Readonly<{
         if (
           !currentUser ||
           currentUser.id !== principal.userId ||
-          currentUser.organizationId !== organizationId ||
+          currentUser.organizationId !== principal.organizationId ||
           currentUser.status !== "active"
         ) {
           return false;
         }
 
+        if(await options.isSystemOwner?.(principal.organizationId,principal.userId))return true;
+        if(!organizationId||principal.organizationId!==organizationId)return false;
         if (
           primaryUserId &&
           primaryEmail &&

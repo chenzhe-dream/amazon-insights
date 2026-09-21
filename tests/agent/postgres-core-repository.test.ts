@@ -112,7 +112,7 @@ function project(overrides: Record<string, unknown> = {}) {
     id: PROJECT_ID,
     organizationId: ORGANIZATION_ID,
     name: "Core repository project",
-    marketplace: "US",
+    marketplace: "US" as const,
     asins: ["B000000001", "B000000002", "B000000003"],
     createdBy: MEMBER_ID,
     createdAt: NOW,

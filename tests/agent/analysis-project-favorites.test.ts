@@ -32,6 +32,21 @@ test("history is initially unstarred; reads create nothing and preserve project 
   assert.equal(readFileSync(join(root, "projects", `${projectId}.json`), "utf8"), bytes);
 });
 
+test("favorites require a non-default segment name, while unfavorite remains available", t => {
+  const { root, store } = fixture(t);
+  store.set(org, actor, projectId, true);
+  const file = join(root, "projects", `${projectId}.json`);
+  for (const name of ["", "   ", "竞品分析 · US", "Kick Scooters · US"]) {
+    writeFileSync(file, JSON.stringify({ id: projectId, kind: "analysis", name, categoryLabel: "Kick Scooters", marketplace: "US" }));
+    assert.throws(() => store.set(org, actor, projectId, true), /细分名称/);
+  }
+  store.set(org, actor, projectId, false);
+  assert.deepEqual(store.list(org), []);
+  writeFileSync(file, JSON.stringify({ id: projectId, kind: "analysis", name: "融蜡灯", categoryLabel: "竞品分析", marketplace: "US" }));
+  store.set(org, actor, projectId, true);
+  assert.deepEqual(store.list(org), [projectId]);
+});
+
 test("explicit favorites survive new instances, share within team, isolate organizations and remove only markers", t => {
   const { root, store, bytes } = fixture(t);
   store.set(org, actor, projectId, true);

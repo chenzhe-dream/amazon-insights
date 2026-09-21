@@ -37,7 +37,7 @@ export const MarketShapeExplanationCatalogSchema = z
       .regex(/^market-shape-explanation:[a-f0-9]{64}$/),
     catalogId: z.string().regex(/^market-shape-price:[a-f0-9]{64}$/),
     revisionId: z.string().regex(/^market-shape-revision:[a-f0-9]{64}$/),
-    scope: MarketAnalysisScopeSchema.extend({
+    scope: MarketAnalysisScopeSchema.safeExtend({
       requestedAsins: z.array(z.string()),
       eligibleAsins: z.array(z.string()),
     }),

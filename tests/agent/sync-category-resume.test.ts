@@ -20,6 +20,7 @@ test("missing node_id is isolated and a later ASIN still becomes ready", async (
   const calls: Array<{ asin: string; tool: string }> = [];
   const result = await collectSorftimeCategoryRecords({
     key: "fixture-key",
+    jobId: "category-resume-fixture",
     marketplace: "US",
     catalog: [
       { asin: "B074QLWRDQ", subRankCategory: "Do not infer this" },
@@ -27,7 +28,7 @@ test("missing node_id is isolated and a later ASIN still becomes ready", async (
     ],
     existing: {},
     fetchedAt: "2026-09-02",
-    callTool: async (_key, tool, args) => {
+    callTool: async (_key: string, tool: string, args: Record<string, unknown>) => {
       const asin = String(args.asin ?? "B0BTM28F9N");
       calls.push({ asin, tool });
       if (tool === "product_detail" && asin === "B074QLWRDQ") return { data: {} };
@@ -38,8 +39,9 @@ test("missing node_id is isolated and a later ASIN still becomes ready", async (
   });
 
   assert.equal(result.records["123456789"].status, "ready");
-  const failed = Object.values(result.records).find(record => record.sourceAsin === "B074QLWRDQ");
-  assert.equal(failed?.nodeId, "");
+  const failed = Object.values(result.records).find(record => typeof record === "object" && record !== null && "sourceAsin" in record && record.sourceAsin === "B074QLWRDQ");
+  assert.ok(failed && typeof failed === "object" && "nodeId" in failed && "status" in failed && "statusMessage" in failed);
+  assert.equal(failed.nodeId, "");
   assert.equal(failed?.status, "error");
   assert.equal(failed?.statusMessage, "MCP_SCHEMA");
   assert.deepEqual(result.diagnostics, [{
@@ -80,11 +82,12 @@ test("repair settlement retains one transient retry with one logical operation",
 test("a successful empty trend uses the existing empty schema without an error diagnostic", async () => {
   const result = await collectSorftimeCategoryRecords({
     key: "fixture-key",
+    jobId: "category-resume-fixture",
     marketplace: "US",
     catalog: [{ asin: "B0BTM28F9N", subRankCategory: "Fixture category" }],
     existing: {},
     fetchedAt: "2026-09-02",
-    callTool: async (_key, tool) => tool === "product_detail"
+    callTool: async (_key: string, tool: string) => tool === "product_detail"
       ? { data: { node_id: "123456789", subcategory: "Fixture category" } }
       : { data: [] },
     wait: async () => {},
@@ -126,7 +129,7 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
     key: string,
     tool: string,
     args: Record<string, unknown>,
-    options: Record<string, unknown>,
+    options: Record<string, unknown> = {},
   ) => {
     const jobId = "cli-category-shared-job";
     return callSorftimeTool(key, tool, args, {
@@ -149,6 +152,7 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
   try {
     cliResult = await categoryBuilder.runSorftimeCategoryCli({
       key: "fixture-key",
+    jobId: "category-resume-fixture",
       marketplace: "US",
       asinFilter: null,
       catalog: [
@@ -173,6 +177,7 @@ test("full-catalog CLI writes current settlements before emitting each ASIN diag
   }
 
   assert.match(written, /"asin-error:B074QLWRDQ"/);
+  assert.ok(cliResult);
   assert.equal(cliResult.records["222222222"].status, "ready");
   assert.doesNotMatch(written, /B0STALE001/);
   assert.deepEqual(events.map(event => event.startsWith("diagnostic:") ? "diagnostic" : event), [
@@ -223,7 +228,7 @@ async function collectMixedNodeFixture(firstAttemptKind: "initial" | "repair" = 
     key: string,
     tool: string,
     args: Record<string, unknown>,
-    options: Record<string, unknown>,
+    options: Record<string, unknown> = {},
   ) => {
     const jobId = `mixed-category-${firstAttemptKind}-shared-job`;
     return callSorftimeTool(key, tool, args, {
@@ -241,6 +246,7 @@ async function collectMixedNodeFixture(firstAttemptKind: "initial" | "repair" = 
   };
   const result = await collectSorftimeCategoryRecords({
     key: "fixture-key",
+    jobId: "category-resume-fixture",
     marketplace: "US",
     catalog: [
       { asin: "B074QLWRDQ", subRankCategory: "Fixture category" },

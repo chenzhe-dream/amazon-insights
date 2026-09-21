@@ -41,6 +41,7 @@ const project: AnalysisProject = {
   asins: projectAsins,
   note: null,
   createdBy: null,
+  latestAnalystName: null,
   createdAt: "2026-08-15T00:00:00.000Z",
   updatedAt: "2026-08-15T00:00:00.000Z",
 };
@@ -188,6 +189,31 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
   };
 }
 
+test('collection source binding persists only an authorized analysis project with matching scope', async () => {
+  const sourceId='30000000-0000-4000-8000-000000000001';
+  const source={...project,id:sourceId};
+  const collection={...project,id:'30000000-0000-4000-8000-000000000002',kind:'keyword-compare' as const};
+  const deps=fakeDeps();let saved:Record<string,unknown>|null=null;let allowed=true;
+  deps.fetchProject=async id=>id===sourceId?source:id===collection.id?collection:null;
+  deps.authorizeSyncScope=async()=>allowed?{organizationId:memberPrincipal().organizationId,projectId:sourceId}:null;
+  deps.createAnalysisProject=async body=>{saved=body;return {...collection,...body} as AnalysisProject;};
+  deps.updateAnalysisProject=async (_id,body)=>{saved=body;return {...collection,...body} as AnalysisProject;};
+  const app=buildAgentApp({env:authenticatedLocalEnv(),authConfig,authService:authService(memberPrincipal()),localDataBridgeDeps:deps});
+  try {
+    const payload={name:'Saved comparison',kind:'keyword-compare',asins:projectAsins,marketplace:'US',sourceProjectId:sourceId};
+    const created=await app.inject({method:'POST',url:'/v1/local-data/projects',headers:authenticatedHeaders(),payload});
+    assert.equal(created.statusCode,201,created.body);assert.equal(created.json().project.sourceProjectId,sourceId);assert.equal(saved?.['sourceProjectId'],sourceId);
+    allowed=false;saved=null;
+    const foreign=await app.inject({method:'POST',url:'/v1/local-data/projects',headers:authenticatedHeaders(),payload});
+    assert.equal(foreign.statusCode,404);assert.equal(saved,null);
+    allowed=true;
+    const wrongSite=await app.inject({method:'POST',url:'/v1/local-data/projects',headers:authenticatedHeaders(),payload:{...payload,marketplace:'UK'}});
+    assert.equal(wrongSite.statusCode,400);assert.equal(saved,null);
+    const linked=await app.inject({method:'PATCH',url:`/v1/local-data/projects/${collection.id}`,headers:authenticatedHeaders(),payload:{sourceProjectId:sourceId}});
+    assert.equal(linked.statusCode,200,linked.body);assert.equal(linked.json().project.sourceProjectId,sourceId);
+  } finally {await app.close();}
+});
+
 function countingDeps(calls: { count: number }): LocalDataBridgeDeps {
   const increment = () => {
     calls.count += 1;
@@ -250,8 +276,8 @@ test("legacy repair routes require the repository-loaded active primary administ
   const repair = {
     jobId: "legacy-job",
     version: "opaque-version",
-    candidates: [{ asin, module: "keywords", connectorId: "sif", nextStatus: "pending", reason: "LEGACY_UNVERIFIED" }],
-  } as const;
+    candidates: [{ asin, module: "keywords", connectorId: "sif" as const, nextStatus: "pending" as const, reason: "LEGACY_UNVERIFIED" as const }],
+  };
   const deps = {
     ...fakeDeps(),
     async previewLegacyStatusRepair() { calls.preview += 1; return repair; },
@@ -450,6 +476,7 @@ test("authenticated sync GET preserves canonical resumability without leaking it
     },
   };
   const repository: SyncJobRepository = {
+    async readStageOutput() { return null; },
     async admit() { throw new Error("unused"); },
     async findById(jobId) { return jobId === record.jobId ? record : null; },
     async resume() { throw new Error("unused"); },
@@ -775,10 +802,10 @@ test("local bridge rejects invalid input and missing records", async (t) => {
 });
 
 test("sync starts normalize ASIN order and retain authenticated scope without accepting an organization from the client", async (t) => {
-  let capturedPrincipal: AuthenticatedPrincipal | null = null;
+  const capturedPrincipals: AuthenticatedPrincipal[] = [];
   const deps = fakeDeps();
   deps.authorizeSyncScope = async (principal, input) => {
-    capturedPrincipal = principal.kind === "user" ? principal : null;
+    if (principal.kind === "user") capturedPrincipals.push(principal);
     return {
       organizationId: principal.kind === "user" ? principal.organizationId : "",
       projectId: input.projectId ?? null,
@@ -807,7 +834,7 @@ test("sync starts normalize ASIN order and retain authenticated scope without ac
 
   assert.equal(response.statusCode, 202);
   assert.equal(response.json().reused, false);
-  assert.equal(capturedPrincipal?.organizationId, memberPrincipal().organizationId);
+  assert.equal(capturedPrincipals[0]?.organizationId, memberPrincipal().organizationId);
 });
 
 test("sync admission limit rejections return a safe rate-limit contract response", async (t) => {
@@ -1285,7 +1312,8 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   assert.match(page, /product-definition/);
   assert.match(page, /暂无已保存报告/);
   assert.match(page, /downloadSavedAnalysisReports/);
-  assert.match(page, /onClick=\{downloadSavedAnalysisReports\}/);
+  assert.doesNotMatch(page, /onClick=\{downloadSavedAnalysisReports\}/);
+  assert.doesNotMatch(page, /导出对比报告/);
   assert.match(page, /取消运行/);
   assert.match(page, /重试 VOC 阶段/);
   assert.match(page, /不会自动采集外部数据/);
@@ -1296,12 +1324,13 @@ test("analysis workspace and its sync funnel use the local Agent bridge", () => 
   );
   assert.match(urlIdentity, /baseSyncRunIdFromSearch\(searchParams\.toString\(\)\)/);
   assert.match(urlIdentity, /runId: baseSyncRunId/);
-  const vocRecoveryStart = page.indexOf("const runId = vocRunIdFromSearch(searchParams.toString())");
-  const vocRecoveryEnd = page.indexOf("}, [searchParams", vocRecoveryStart);
+  const vocRecoveryStart = page.indexOf("const runId = vocRunIdFromSearch(appSearch)");
+  const vocRecoveryEnd = page.indexOf("}, [appSearch", vocRecoveryStart);
   const vocRecovery = page.slice(vocRecoveryStart, vocRecoveryEnd);
   assert.ok(vocRecoveryStart >= 0 && vocRecoveryEnd > vocRecoveryStart, "VOC URL recovery remains a bounded production effect");
-  assert.match(vocRecovery, /void observeVocRun\(runId\)/);
-  assert.match(vocRecovery, /\.then\(setVocRun\)/);
+  assert.match(vocRecovery, /void waitForVocRun\(runId, \{ signal: controller.signal/);
+  assert.match(vocRecovery, /if \(!controller.signal.aborted\) setVocRun\(observation\)/);
+  assert.match(vocRecovery, /controller.abort\(\)/);
   const projectLoadHref = page.slice(
     page.indexOf("function buildProjectLoadHref"),
     page.indexOf("function setProjectParam"),
@@ -1411,4 +1440,27 @@ test("unauthenticated and spoofed member deletion never reaches storage", async 
     assert.equal(response.statusCode, principal ? 403 : 401);
     assert.equal(calls.count, 0);
   }
+});
+
+
+test("project HTTP pagination validates input and scopes favorites to the authenticated team", async t => {
+  const deps = fakeDeps();
+  deps.fetchProjects = async () => Array.from({ length: 23 }, (_, i) => ({ ...project, id: `project-${String(i).padStart(2, "0")}` }));
+  deps.listFavoriteProjectIds = organizationId => { assert.equal(organizationId, memberPrincipal().organizationId); return ["project-22"]; };
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig, authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const result = await app.inject({ method: "GET", url: "/v1/local-data/projects?kind=analysis&page=2&pageSize=10", headers: authenticatedHeaders() });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.equal(result.json().projects.length, 10); assert.equal(result.json().projects[0].id, "project-10");
+  assert.equal(result.json().pagination.total, 23);
+  const favorites = await app.inject({ method: "GET", url: "/v1/local-data/projects?kind=analysis&page=9&view=favorites", headers: authenticatedHeaders() });
+  assert.equal(favorites.statusCode, 200, favorites.body);
+  assert.equal(favorites.json().projects[0].id, "project-22"); assert.equal(favorites.json().pagination.page, 1);
+  const sorted = await app.inject({ method: "GET", url: "/v1/local-data/projects?sort=created_asc&page=2&pageSize=10", headers: authenticatedHeaders() });
+  assert.equal(sorted.statusCode, 200, sorted.body);
+  assert.equal(sorted.json().pagination.page, 2);
+  const invalidSort = await app.inject({ method: "GET", url: "/v1/local-data/projects?sort=invalid", headers: authenticatedHeaders() });
+  assert.equal(invalidSort.statusCode, 400);
+  const invalid = await app.inject({ method: "GET", url: "/v1/local-data/projects?pageSize=500", headers: authenticatedHeaders() });
+  assert.equal(invalid.statusCode, 400);
 });

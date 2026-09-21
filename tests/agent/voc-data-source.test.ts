@@ -121,6 +121,7 @@ function legacySource(
               asin,
               marketplace: "US" as const,
               revision: "3",
+              contentHash: "b".repeat(64),
               normalizedRecord,
               source: "legacy-static-stale" as const,
               generation: "9",

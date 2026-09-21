@@ -4,11 +4,20 @@ import { useMemo } from "react";
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
+  type ProductLaunchAnalysis,
   type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
-import { buildFinalProductDefinition } from "./final-product-definition";
+import { buildFinalProductDefinition, type FinalProductDefinitionReport } from "./final-product-definition";
 import { ActionStepsCell } from "./action-steps-cell";
+import { InlineReportText, ProductDefinitionInlineStyles } from "./product-definition-inline";
 import { LaunchSection, LaunchTable } from "./launch-section";
+import { AnalysisRuleExplanation } from "./analysis-rule-explanation";
+import { presentDefinitionConclusion, hasVisibleQualification } from "./lib/product-definition-presentation";
+import { DefinitionConclusion, OverviewDefinitionValue, ReportParagraphs } from "./product-definition-conclusion";
+
+function ReadableReportText({text}: {text: string}) {
+  return hasVisibleQualification(text) ? <ReportParagraphs text={text} /> : <InlineReportText text={text} />;
+}
 
 type DefinitionProduct = {
   asin: string;
@@ -77,7 +86,7 @@ function FeatureLayerCard({
   tone = "default",
 }: {
   title: string;
-  items: Array<{ item: string; evidence: string }>;
+  items: Array<{ item: string; evidence: string; ruleDecisionIds?: string[] }>;
   tone?: "default" | "avoid";
 }) {
   return (
@@ -85,10 +94,10 @@ function FeatureLayerCard({
       <h4>{title}</h4>
       <ul>
         {items.length ? (
-          items.map(row => (
-            <li key={row.item}>
-              {row.item}
-              <small className="final-def-evidence">{row.evidence}</small>
+          items.map((row,index) => (
+            <li key={`${index}-${row.item}`}>
+              <ReadableReportText text={row.item} />
+              <div className="final-def-evidence"><InlineReportText text={row.evidence} /></div>
             </li>
           ))
         ) : (
@@ -99,19 +108,25 @@ function FeatureLayerCard({
   );
 }
 
-export function LocalProductDefinitionSection({ products, sources }: {
+export function LocalProductDefinitionSection({ products, sources, savedAnalysis, savedReport }: {
   products: DefinitionProduct[];
   sources: ProductLaunchRuntimeSources;
+  savedAnalysis?: ProductLaunchAnalysis;
+  savedReport?: FinalProductDefinitionReport;
 }) {
-  const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
-  const ready = hasProductLaunchAnalysis(products, sources);
+  const analysis = useMemo(
+    () => savedAnalysis ?? (savedReport ? null : buildProductLaunchAnalysis(products, sources)),
+    [products, savedAnalysis, savedReport, sources],
+  );
+  const ready = savedReport != null || savedAnalysis != null || (analysis != null && hasProductLaunchAnalysis(products, sources));
   const priceBand =
-    analysis.marketRows.find(row => row.metric.includes("价格"))?.data ??
-    analysis.productDefinition.targetPrice;
+    analysis?.marketRows.find(row => row.metric.includes("价格"))?.data ??
+    analysis?.productDefinition.targetPrice ?? "待验证";
 
-  const report = useMemo(
-    () =>
-      buildFinalProductDefinition({
+  const report = useMemo(() => {
+    if (savedReport) return savedReport;
+    if (!analysis) throw new Error("生成新品定义需要当前分析或已保存报告");
+    return buildFinalProductDefinition({
         categoryLabel: analysis.meta.categoryLabel,
         productCount: analysis.meta.productCount,
         dataMonth: analysis.meta.dataMonth,
@@ -119,12 +134,15 @@ export function LocalProductDefinitionSection({ products, sources }: {
         keyword: analysis.keywordConclusions,
         priceBand,
         hasVocData: ready,
-      }),
-    [analysis, priceBand, ready]
-  );
+      });
+  }, [analysis, priceBand, ready, savedReport]);
+  const ruleTrace = savedReport
+    ? savedReport.ruleTrace
+    : report.ruleTrace ?? analysis?.ruleTrace;
 
   return (
-    <div className="launch-page definition-page">
+    <div className="launch-page definition-page definition-inline-page">
+      <ProductDefinitionInlineStyles />
       <section className="card launch-block launch-intro-block">
         <div className="launch-section-head">
           <div className="launch-section-head-main">
@@ -149,10 +167,12 @@ export function LocalProductDefinitionSection({ products, sources }: {
             数据源 <b>VOC 定位 · 关键词需求 · 交叉矩阵</b>
           </span>
           <span>
-            关键词 <b>{analysis.keywordConclusions?.hasData ? analysis.keywordConclusions.verdict.gradeLabel : "未就绪"}</b>
+            关键词 <b>{analysis?.keywordConclusions?.hasData ? analysis.keywordConclusions.verdict.gradeLabel : "未就绪"}</b>
           </span>
         </div>
       </section>
+
+      <AnalysisRuleExplanation trace={ruleTrace} resultAvailable={ready} />
 
       {!ready ? (
         <section className="card launch-block">
@@ -164,7 +184,7 @@ export function LocalProductDefinitionSection({ products, sources }: {
         <>
           <LaunchSection
             title="1. 最终产品定义结论"
-            description="8 格要点与「产品定义结论 · 定位方向表」同源，完整展示不截断"
+            description="先看定位要点，原文按需展开；不同商品分别呈现，适用限制直接保留"
             badge={<span className={gradeChipClass(report.opportunity.grade)}>{report.opportunity.gradeLabel}</span>}
           >
             <div className="definition-synthesis">
@@ -172,13 +192,15 @@ export function LocalProductDefinitionSection({ products, sources }: {
                 {report.oneLinerCards.map(card => (
                   <article key={card.key} className={`final-oneliner-card tone-${card.tone}`}>
                     <span className="final-oneliner-label">{card.label}</span>
-                    <strong>{card.value}</strong>
+                    <div className="final-oneliner-value"><OverviewDefinitionValue card={card} rows={report.definitionRows} trace={ruleTrace} /></div>
                   </article>
                 ))}
               </div>
               <div className="final-oneliner-full">
-                <h4 className="voc-pos-subtitle">完整一句话定义</h4>
-                <p className="definition-synthesis-merged">{report.oneLiner}</p>
+                <details className="definition-reading-more definition-full-original">
+                  <summary>查看完整定位原文</summary>
+                  <div className="definition-synthesis-merged"><ReportParagraphs text={report.oneLiner} /></div>
+                </details>
               </div>
               <h4 className="voc-pos-subtitle">为什么选这个方向</h4>
               <div className="final-rationale-grid">
@@ -186,7 +208,7 @@ export function LocalProductDefinitionSection({ products, sources }: {
                   <article key={item.key} className={`final-rationale-card tone-${item.tone}`}>
                     <span className="final-rationale-label">{item.label}</span>
                     {item.highlight ? <strong className="final-rationale-highlight">{item.highlight}</strong> : null}
-                    <p>{item.value}</p>
+                    <div><ReadableReportText text={item.value} /></div>
                   </article>
                 ))}
               </div>
@@ -209,10 +231,10 @@ export function LocalProductDefinitionSection({ products, sources }: {
                   <th>
                     <span className={gradeChipClass(report.opportunity.grade)}>{report.opportunity.gradeLabel}</span>
                   </th>
-                  <td>{report.opportunity.judgment}</td>
-                  <td className="launch-muted">{report.opportunity.demandBasis}</td>
-                  <td>{report.opportunity.entryPath}</td>
-                  <td className="launch-muted">{report.opportunity.mainRisks}</td>
+                  <td><ReadableReportText text={report.opportunity.judgment} /></td>
+                  <td className="launch-muted"><InlineReportText text={report.opportunity.demandBasis} /></td>
+                  <td><ReadableReportText text={report.opportunity.entryPath} /></td>
+                  <td className="launch-muted"><ReportParagraphs text={report.opportunity.mainRisks} /></td>
                 </tr>
               </tbody>
             </LaunchTable>
@@ -241,14 +263,14 @@ export function LocalProductDefinitionSection({ products, sources }: {
                 {report.crossRows.map(row => (
                   <tr key={row.theme}>
                     <th>{row.theme}</th>
-                    <td className="launch-muted">{row.vocEvidence}</td>
-                    <td className="launch-muted">{row.keywordEvidence}</td>
+                    <td className="launch-muted"><InlineReportText text={row.vocEvidence} /></td>
+                    <td className="launch-muted"><InlineReportText text={row.keywordEvidence} /></td>
                     <td>
                       <DemandChip demand={row.marketDemand} priority={row.priority} />
                     </td>
-                    <td className="launch-muted">{row.userValue}</td>
-                    <td className="launch-muted">{row.competition}</td>
-                    <td>{row.judgment}</td>
+                    <td className="launch-muted"><ReadableReportText text={row.userValue} /></td>
+                    <td className="launch-muted"><ReadableReportText text={row.competition} /></td>
+                    <td><ReadableReportText text={row.judgment} /></td>
                     <td>
                       <RoleChip role={row.role} />
                     </td>
@@ -275,21 +297,26 @@ export function LocalProductDefinitionSection({ products, sources }: {
                 </tr>
               </thead>
               <tbody>
-                {report.definitionRows.map(row => (
+                {report.definitionRows.map(row => {
+                  const presentation = presentDefinitionConclusion(row, ruleTrace);
+                  return (
                   <tr key={row.dimension}>
                     <th>{row.dimension}</th>
-                    <td>{row.conclusion}</td>
-                    <td className="launch-muted">{row.vocBasis}</td>
-                    <td className="launch-muted">{row.keywordBasis}</td>
+                    <td><DefinitionConclusion value={presentation} /></td>
+                    <td className="launch-muted">
+                      {presentation.productKeys.length > 0 && (ruleTrace?.inputScope.asins.length ?? 0) > 1 ? <div className="definition-product-keys">{presentation.productKeys.map(key=><div key={key.asin}>{key.label}：{key.asin}</div>)}</div> : null}
+                      <InlineReportText text={row.vocBasis} />
+                    </td>
+                    <td className="launch-muted"><InlineReportText text={row.keywordBasis} /></td>
                     <td>
-                      <ActionStepsCell value={row.action} maxItems={3} />
+                      <ActionStepsCell value={row.action} maxItems={3} expandable />
                     </td>
                     <td>
                       <PriorityChip priority={row.priority} />
                     </td>
-                    <td className="launch-muted">{row.pending}</td>
+                    <td className="launch-muted"><ReportParagraphs text={row.pending} /></td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </LaunchTable>
           </LaunchSection>
@@ -319,10 +346,10 @@ export function LocalProductDefinitionSection({ products, sources }: {
                 {report.keywordGroups.map(row => (
                   <tr key={row.type}>
                     <th>{row.type}</th>
-                    <td>{row.keywords}</td>
-                    <td className="launch-muted">{row.productLink}</td>
-                    <td className="launch-muted">{row.listingAngle}</td>
-                    <td>{row.skuHint}</td>
+                    <td><InlineReportText text={row.keywords} /></td>
+                    <td className="launch-muted"><ReadableReportText text={row.productLink} /></td>
+                    <td className="launch-muted"><ReadableReportText text={row.listingAngle} /></td>
+                    <td><ReadableReportText text={row.skuHint} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -347,13 +374,13 @@ export function LocalProductDefinitionSection({ products, sources }: {
                     <th>
                       <PriorityChip priority={row.priority} />
                     </th>
-                    <td>{row.direction}</td>
-                    <td className="launch-muted">{row.evidence}</td>
-                    <td>{row.businessImpact}</td>
+                    <td><ReadableReportText text={row.direction} /></td>
+                    <td className="launch-muted"><InlineReportText text={row.evidence} /></td>
+                    <td><ReadableReportText text={row.businessImpact} /></td>
                     <td>
-                      <ActionStepsCell value={row.action} />
+                      <ActionStepsCell value={row.action} maxItems={3} expandable />
                     </td>
-                    <td className="launch-muted">{row.acceptance}</td>
+                    <td className="launch-muted"><ReportParagraphs text={row.acceptance} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -365,16 +392,16 @@ export function LocalProductDefinitionSection({ products, sources }: {
               <article>
                 <h4>主要风险</h4>
                 <ul className="final-def-plain-list">
-                  {report.risks.map(item => (
-                    <li key={item}>{item}</li>
+                  {report.risks.map((item,index) => (
+                    <li key={`${index}-${item}`}><ReportParagraphs text={item} /></li>
                   ))}
                 </ul>
               </article>
               <article>
                 <h4>下一步验证</h4>
                 <ul className="final-def-plain-list">
-                  {report.nextValidations.map(item => (
-                    <li key={item}>{item}</li>
+                  {report.nextValidations.map((item,index) => (
+                    <li key={`${index}-${item}`}><ReportParagraphs text={item} /></li>
                   ))}
                 </ul>
               </article>
@@ -382,7 +409,7 @@ export function LocalProductDefinitionSection({ products, sources }: {
           </LaunchSection>
 
           <LaunchSection title="9. 数据边界" description="VOC 与关键词的角色边界">
-            <p className="definition-synthesis-merged">{report.dataBoundary}</p>
+            <div className="definition-synthesis-merged"><ReportParagraphs text={report.dataBoundary} /></div>
           </LaunchSection>
         </>
       )}

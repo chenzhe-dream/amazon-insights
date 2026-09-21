@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import test from 'node:test';
-import {writeFile} from 'node:fs/promises';
+import {mkdir, writeFile} from 'node:fs/promises';
 import {createMarketShapeSynthesisModelWire} from '../../server/runtime/market-shape-synthesis-wire';
 import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {PostgresMarketShapeExplanationRunStore} from '../../server/db/postgres/market-shape-explanation-run-store';
@@ -82,6 +82,7 @@ test('native synthesis executes audited reductions and final output, then restor
  assert.ok(reduceCount>1);
  assert.ok(invalidAliasSent,'exercise a real bounded alias repair');
  const final=await buildMarketShapeFinalSynthesisInput(catalog,roots,expected,()=>true);
+ await mkdir('test-results/market-research-goal/T17', { recursive: true });
  await writeFile('test-results/market-research-goal/T17/shape-synthesis-native-final-fixture.json',JSON.stringify(final,null,2));
  const finalWire=createMarketShapeSynthesisModelWire(final).input; t.diagnostic(JSON.stringify({synthetic:true,finalWireBytes:Buffer.byteLength(JSON.stringify(finalWire)),fields:Object.fromEntries(Object.entries(finalWire).map(([k,v])=>[k,Buffer.byteLength(JSON.stringify(v))]))}));
  const output=await execute(final);assert.equal(output.result.version,'market-shape-final-synthesis-output/v1');

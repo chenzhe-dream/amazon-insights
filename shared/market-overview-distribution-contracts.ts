@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {MarketCurrencySchema} from './market-sites';
 import {MarketInputRecordSchema} from './market-analysis-contracts';
 
 export const MARKET_OVERVIEW_DISTRIBUTION_VERSION='market-overview-distributions/v1';
@@ -13,7 +14,7 @@ const number=z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),coun
 const group=z.enum(['sample','new-products','summary','unclassified']);
 export const MarketOverviewDistributionSchema=z.object({
   version:z.literal(MARKET_OVERVIEW_DISTRIBUTION_VERSION),operation:MarketOverviewDistributionOperationSchema,
-  scopeBasis:z.literal('request-bound'),status:z.enum(['available','partial','empty']),currency:z.enum(['USD']).nullable(),
+  scopeBasis:z.literal('request-bound'),status:z.enum(['available','partial','empty']),currency:MarketCurrencySchema.nullable(),
   rows:z.array(z.object({id:z.string(),sourceIndex:count,label:z.string(),group,asins:z.array(z.string()),
     products:count.nullable(),units:count.nullable(),revenue:number.nullable(),reportedRevenue:number.nullable(),
     productsSharePct:percent,unitsSharePct:percent,revenueSharePct:percent,

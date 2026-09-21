@@ -14,6 +14,13 @@ const PRIMARY_USER_ID = "synthetic-primary-user";
 const DINGTALK_USER_ID = "synthetic-dingtalk-user";
 const PRIMARY_EMAIL = "primary@example.test";
 
+test("protected owner retains management access without configurable legacy allowlists",async()=>{
+ const access=createUserPresenceAccess({env:{},authService:{findPublicUser:async()=>user()},repository:null,isSystemOwner:async(org,id)=>org===ORGANIZATION_ID&&id===PRIMARY_USER_ID});
+ assert.equal(await access.canView(principal()),true);
+ assert.equal(await access.canView(principal({organizationId:"another-org"})),false);
+ assert.equal(await access.canView(principal({userId:"another-user"})),false);
+});
+
 function user(overrides: Partial<UserRecord> = {}): UserRecord {
   return {
     id: PRIMARY_USER_ID,

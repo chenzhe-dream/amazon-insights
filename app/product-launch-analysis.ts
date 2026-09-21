@@ -1,3 +1,5 @@
+import { createProductRuleSession, type RuleActionResult } from "./lib/product-structure-analysis";
+import type { AnalysisInputScope, AnalysisRuleTrace } from "../shared/product-structure-rules";
 import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
 import {
   buildVocDevelopmentSummary,
@@ -11,8 +13,8 @@ import {
   legacyPositivePriorityDisplay,
 } from "../server/domain/voc/priority-rules";
 import { buildLaunchChecklist, launchChecklistMeta, type LaunchChecklistGroup, type LaunchChecklistResearchContext } from "./launch-checklist";
-import { buildVocPositioningConclusion, type VocPositioningConclusion } from "./voc-positioning";
-import { familyFromProducts, type ProductFamily } from "./lib/product-family";
+import { buildVocPositioningConclusion, buildVocDirectionCards, type VocPositioningConclusion } from "./voc-positioning";
+import { type ProductFamily } from "./lib/product-family";
 import type { KeywordDemandAnalysis } from "./keyword-demand-analysis";
 import {
   buildKeywordLaunchConclusions,
@@ -24,6 +26,7 @@ export type LaunchProductInput = {
   asin: string;
   brand: string;
   title?: string;
+  features?: string[];
   price?: number | null;
   sales?: number | null;
   rating?: number | null;
@@ -35,6 +38,7 @@ export type LaunchProductInput = {
 };
 
 export type ProductLaunchRuntimeSources = Readonly<{
+  analysisScope?: Partial<AnalysisInputScope>;
   manualVocByAsin: Readonly<Record<string, ManualAlexaVocNormalizedRecord | undefined>>;
   keywordDemand: KeywordDemandAnalysis | null;
   keywordSources?: import("./keyword-demand-analysis").KeywordDemandSources;
@@ -102,6 +106,7 @@ export type VocInsightRow = {
 };
 
 export type NegativePriorityRow = {
+  ruleDecisionIds?: string[];
   issue: string;
   frequency: string;
   severity: "高" | "中" | "低";
@@ -113,6 +118,7 @@ export type NegativePriorityRow = {
 
 /** 买家喜爱优先级表（对齐亚马逊「买家喜爱什么」） */
 export type PositivePriorityRow = {
+  ruleDecisionIds?: string[];
   theme: string;
   detail: string;
   frequency: string;
@@ -124,6 +130,7 @@ export type PositivePriorityRow = {
 };
 
 export type UnmetOpportunityRow = {
+  ruleDecisionIds?: string[];
   need: string;
   audience: string;
   scenario: string;
@@ -141,6 +148,7 @@ export type FinalAnswerRow = {
 };
 
 export type ProductDirectionProposal = {
+  ruleDecisionIds?: Record<string, string[]>;
   id: string;
   directionName: string;
   positioning: string;
@@ -198,6 +206,7 @@ export type DefinitionSynthesis = {
 };
 
 export type ProductLaunchAnalysis = {
+  ruleTrace?: AnalysisRuleTrace;
   meta: {
     productCount: number;
     brands: string[];
@@ -228,7 +237,7 @@ export type ProductLaunchAnalysis = {
   vocPositioning: VocPositioningConclusion;
   crossAnalyses: CrossAnalysisSection[];
   marketRows: Array<{ metric: string; data: string; judgment: string }>;
-  supplyRows: Array<{ direction: string; feasibility: string; risk: string }>;
+  supplyRows: Array<{ direction: string; feasibility: string; risk: string; ruleDecisionIds?: string[] }>;
   opportunities: OpportunityScore[];
   productDefinition: {
     name: string;
@@ -302,13 +311,13 @@ function latestSorftimeVolume(asin: string) {
 }
 
 function inferCategoryLabel(products: LaunchProductInput[]) {
-  const fromProduct = products.find(product => product.subRankCategory && product.subRankCategory !== "等待同步")?.subRankCategory;
-  return fromProduct ?? "当前对标类目";
+  const categories = [...new Set(products.map(product=>product.subRankCategory).filter(category=>category && category !== "等待同步"))].sort();
+  return categories.join(" / ") || "当前对标类目";
 }
 
-function buildMarketContext(products: LaunchProductInput[]) {
+function buildMarketContext(products: LaunchProductInput[], scoped = false) {
   const rows = products.map(product => {
-    const trend = latestSorftimeVolume(product.asin);
+    const trend = scoped ? null : latestSorftimeVolume(product.asin);
     const sales = trend?.value ?? product.sales ?? 0;
     return {
       brand: product.brand,
@@ -324,7 +333,7 @@ function buildMarketContext(products: LaunchProductInput[]) {
   const minPrice = priced.length ? Math.min(...priced.map(row => row.price!)) : null;
   const maxPrice = priced.length ? Math.max(...priced.map(row => row.price!)) : null;
   const leader = [...rows].sort((a, b) => b.sales - a.sales)[0];
-  const dataMonth = rows.find(row => row.month)?.month ?? sorftimeSalesTrendMeta.updatedAt;
+  const dataMonth = rows.find(row => row.month)?.month ?? (scoped ? "当前项目输入" : sorftimeSalesTrendMeta.updatedAt);
 
   return { rows, totalSales, minPrice, maxPrice, leader, dataMonth };
 }
@@ -698,7 +707,9 @@ function buildVocInsightRows(summary: SummaryMap, productCount: number): VocInsi
   return rows;
 }
 
-function buildNegativePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily): NegativePriorityRow[] {
+type RuleActionBuilder = (label: string, dimension: "positives" | "negatives" | "unmet", id: string) => RuleActionResult;
+
+function buildNegativePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily, ruleAction?: RuleActionBuilder): NegativePriorityRow[] {
   const themes = summary.get("negatives")?.themes ?? [];
   if (!themes.length) {
     return [
@@ -714,7 +725,8 @@ function buildNegativePriorityRows(summary: SummaryMap, productCount: number, fa
     ];
   }
 
-  return themes.slice(0, 8).map(theme => {
+  return themes.slice(0, 8).map((theme, index) => {
+    const rule = ruleAction?.(theme.label, "negatives", `voc-negative:${index}`);
     const severity = impactLevel(theme.mentionPct);
     const industryWide =
       theme.brands.length >= Math.max(2, Math.ceil(productCount * 0.5))
@@ -728,7 +740,8 @@ function buildNegativePriorityRows(summary: SummaryMap, productCount: number, fa
       industryWide,
       impactStages: inferNegativeImpactStages(theme.label),
       shouldFix,
-      fixDirection: inferFixDirection(theme.label, family),
+      fixDirection: rule?.text ?? inferFixDirection(theme.label, family),
+      ruleDecisionIds: rule?.ruleDecisionIds,
     };
   });
 }
@@ -890,7 +903,7 @@ function inferLeverageDirection(label: string, family: ProductFamily = "generic"
   return `需人工介入：主题「${text}」暂无标准强化动作库——请确认是结构卖点、电子卖点还是价格锚点后，再写入五点与 BOM 冻结清单`;
 }
 
-function buildPositivePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily): PositivePriorityRow[] {
+function buildPositivePriorityRows(summary: SummaryMap, productCount: number, family: ProductFamily, ruleAction?: RuleActionBuilder): PositivePriorityRow[] {
   const themes = summary.get("positives")?.themes ?? [];
   if (!themes.length) {
     return [
@@ -907,7 +920,8 @@ function buildPositivePriorityRows(summary: SummaryMap, productCount: number, fa
     ];
   }
 
-  return themes.slice(0, 8).map(theme => {
+  return themes.slice(0, 8).map((theme, index) => {
+    const rule = ruleAction?.(theme.label, "positives", `voc-positive:${index}`);
     const valueLevel = impactLevel(theme.mentionPct);
     const industryWide =
       theme.brands.length >= Math.max(2, Math.ceil(productCount * 0.5))
@@ -925,7 +939,8 @@ function buildPositivePriorityRows(summary: SummaryMap, productCount: number, fa
       industryWide,
       impactStages: inferPositiveImpactStages(theme.label),
       shouldKeep,
-      leverageDirection: inferLeverageDirection(theme.label, family),
+      leverageDirection: rule?.text ?? inferLeverageDirection(theme.label, family),
+      ruleDecisionIds: rule?.ruleDecisionIds,
     };
   });
 }
@@ -933,11 +948,13 @@ function buildPositivePriorityRows(summary: SummaryMap, productCount: number, fa
 function buildUnmetOpportunityRows(
   summary: SummaryMap,
   market: ReturnType<typeof buildMarketContext>,
-  family: ProductFamily
+  family: ProductFamily,
+  ruleAction?: RuleActionBuilder,
+  applicability?: {audiences:string;scenarios:string},
 ): UnmetOpportunityRow[] {
   const unmet = summary.get("unmet")?.themes ?? [];
-  const audiences = topLabels(summary.get("audiences")?.themes ?? [], 2).join("、") || "暂无数据";
-  const scenarios = topLabels(summary.get("scenarios")?.themes ?? [], 2).join("、") || "暂无数据";
+  const audiences = applicability?.audiences ?? "人群待核对";
+  const scenarios = applicability?.scenarios ?? "场景待核对";
   const priceBand =
     market.minPrice !== null && market.maxPrice !== null
       ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
@@ -958,6 +975,7 @@ function buildUnmetOpportunityRows(
   }
 
   return unmet.slice(0, 6).map((theme, index) => {
+    const rule = ruleAction?.(theme.label, "unmet", `voc-unmet:${index}`);
     const negMatch = findTheme(summary.get("negatives")?.themes ?? [], new RegExp(theme.label.slice(0, 4)), "negatives");
     const competitorStatus = negMatch
       ? `竞品差评亦高（${negMatch.label} ${formatPct(negMatch.mentionPct)}%）`
@@ -974,7 +992,8 @@ function buildUnmetOpportunityRows(
       competitorStatus,
       marketValue,
       difficulty,
-      proposal: inferFixDirection(theme.label, family),
+      proposal: rule?.text ?? inferFixDirection(theme.label, family),
+      ruleDecisionIds: rule?.ruleDecisionIds,
     };
   });
 }
@@ -1028,7 +1047,7 @@ function buildFinalAnswers(
   const painPoints = topLabels(summary.get("negatives")?.themes ?? [], 3);
   const keepPoints = topLabels(summary.get("positives")?.themes ?? [], 3);
   const fakeNeeds = productDefinition.avoid.slice(0, 3);
-  const audiences = topLabels(summary.get("audiences")?.themes ?? [], 2).join("、") || "暂无数据";
+  const audiences = topDirection?.targetAudience || "人群待核对";
   const priceBand =
     market.minPrice !== null && market.maxPrice !== null
       ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}（建议售价 ${productDefinition.targetPrice}）`
@@ -1087,196 +1106,23 @@ function buildFinalAnswers(
 }
 
 function buildCrossAnalyses(summary: SummaryMap, market: ReturnType<typeof buildMarketContext>): CrossAnalysisSection[] {
-  const attention = summary.get("attention")?.themes ?? [];
-  const negatives = summary.get("negatives")?.themes ?? [];
-  const unmet = summary.get("unmet")?.themes ?? [];
-  const scenarios = summary.get("scenarios")?.themes ?? [];
-  const audiences = summary.get("audiences")?.themes ?? [];
-  const positives = summary.get("positives")?.themes ?? [];
-  const motives = summary.get("motives")?.themes ?? [];
-
-  const cross1Rows: CrossAnalysisRow[] = [];
-  const durabilityNeg = findTheme(negatives, /耐用|结构/, "negatives");
-  const durabilityUnmet = findTheme(unmet, /耐用|结构/, "unmet");
-  if (durabilityNeg || findTheme(attention, /质量|耐用/, "attention")) {
-    cross1Rows.push({
-      anchor: "耐用/结构",
-      left: "消费者期待：质量/耐用为首要关注",
-      right: durabilityNeg ? `竞品差评维度内 ${formatPct(durabilityNeg.mentionPct)}%` : "竞品耐用口碑薄弱",
-      insight: "最大缺口：家长买「能陪很久的第一辆车」，竞品普遍出现结构/轮子问题",
-    });
-  }
-  const leanAttention = findTheme(attention, /lean|转向/, "attention");
-  const leanNeg = findTheme(negatives, /lean|转向/, "negatives");
-  if (leanAttention || leanNeg) {
-    cross1Rows.push({
-      anchor: "Lean-to-steer 转向",
-      left: leanAttention ? `关注点：${leanAttention.label}` : "与第一辆/低龄强绑定",
-      right: leanNeg ? `差评/未满足 ${formatPct(leanNeg.mentionPct)}%` : "低龄难独立转弯",
-      insight: "不是放弃 lean-steer，而是缺低龄友好调校与说明",
-    });
-  }
-  const installPos = findTheme(positives, /安装/, "positives");
-  const installNeg = findTheme(negatives, /安装|质控|包装/, "negatives");
-  if (installPos || installNeg) {
-    cross1Rows.push({
-      anchor: "安装便捷",
-      left: installPos ? `关注点/好评：${installPos.label}` : "易装是购买前提",
-      right: installNeg ? `差评/未满足 ${formatPct(installNeg.mentionPct)}%` : "出厂质控参差",
-      insight: "装得好是卖点，装不好是雷 — 需出厂 QC",
-    });
-  }
-  const ledAttention = findTheme(attention, /led|发光/, "attention");
-  const ledNeg = findTheme(negatives, /led|发光|灯/, "negatives");
-  if (ledAttention || ledNeg) {
-    cross1Rows.push({
-      anchor: "LED 发光",
-      left: ledAttention ? `关注点 ${formatPct(ledAttention.mentionPct)}%` : "礼物场景引流",
-      right: ledNeg ? `Mixed 差评 ${formatPct(ledNeg.mentionPct)}%` : "灯效寿命参差",
-      insight: "LED 是引流不是护城河 — 灯不亮伤害礼物场景",
-    });
-  }
-
-  const firstScene = findTheme(scenarios, /第一辆|入门/, "scenarios");
-  const leanUnmet = findTheme(unmet, /lean|转向|踏板|deck/i, "unmet");
-  const outdoorScene = findTheme(scenarios, /户外|社区/, "scenarios");
-  const giftScene = findTheme(scenarios, /礼物|节日/, "scenarios");
-
-  const cross2Rows: CrossAnalysisRow[] = [
-    firstScene || leanUnmet
-      ? {
-          anchor: "第一辆 / 2–4 岁入门",
-          left: firstScene?.label ?? "第一辆滑板车",
-          right: leanUnmet?.label ?? "转向/踏板优化",
-          insight: "缺真正低幼友好方案，现有 lean-steer 偏大龄",
-        }
-      : null,
-    outdoorScene || durabilityUnmet
-      ? {
-          anchor: "户外/社区日常",
-          left: outdoorScene?.label ?? "户外骑行",
-          right: durabilityUnmet?.label ?? "结构/轮子耐用",
-          insight: "高强度日常使用下，轮子与连接件是瓶颈",
-        }
-      : null,
-    giftScene || findTheme(unmet, /包装|缺件|led/i, "unmet")
-      ? {
-          anchor: "礼物/节日",
-          left: giftScene?.label ?? "礼物场景",
-          right: "LED 长期亮 + 包装完整 + 售后快",
-          insight: "礼物场景对「开箱即完美 + 灯不丢人」敏感",
-        }
-      : null,
-  ].filter((row): row is CrossAnalysisRow => Boolean(row));
-
-  const giftAudience = findTheme(audiences, /礼物|祖父母|家长/, "audiences");
-  const boyAudience = findTheme(audiences, /儿子|男孩/, "audiences");
-  const cross3Rows: CrossAnalysisRow[] = [
-    {
-      anchor: "祖父母/礼物购买者",
-      left: giftAudience?.label ?? "礼物决策者",
-      right: "转向说明不清、组装困惑、缺件",
-      insight: "需要免工具 + 图文/QR 视频 + 礼盒完整",
-    },
-    {
-      anchor: "2–3 岁幼儿",
-      left: "低龄入门",
-      right: leanUnmet?.label ?? "Deck 偏高、转向阻力大",
-      insight: "更低踏板、更轻转向阻力或转向限位",
-    },
-    {
-      anchor: "5–8 岁 / 多孩家庭",
-      left: boyAudience?.label ?? "较大龄儿童",
-      right: findTheme(unmet, /承重|适龄/, "unmet")?.label ?? "承重标注混乱",
-      insight: "透明承重 + 结构冗余标注",
-    },
-  ];
-
-  const giftMotive = findTheme(motives, /礼物|孩子喜欢/, "motives");
-  const stableMotive = findTheme(motives, /稳定|新手/, "motives");
-  const ledMotive = findTheme(motives, /发光|led/i, "motives");
-  const cross4Rows: CrossAnalysisRow[] = [
-    giftMotive
-      ? {
-          anchor: "礼物 / 孩子喜欢",
-          left: giftMotive.label,
-          right: "LED + 易组装 + 稳定",
-          insight: "转化靠第一眼（灯/色）+ 第一小时（好装、稳）",
-        }
-      : null,
-    stableMotive
-      ? {
-          anchor: "新手稳定性",
-          left: stableMotive.label,
-          right: findTheme(positives, /结构|稳定/, "positives")?.label ?? "结构稳固",
-          insight: "满意靠宽踏板、低重心、不晃",
-        }
-      : null,
-    ledMotive
-      ? {
-          anchor: "发光功能",
-          left: ledMotive.label,
-          right: findTheme(positives, /led|发光/, "positives")?.label ?? "LED 好评",
-          insight: "可保留，但须耐久模组，否则动机反噬",
-        }
-      : null,
-  ].filter((row): row is CrossAnalysisRow => Boolean(row));
-
-  const priceBand =
-    market.minPrice !== null && market.maxPrice !== null
-      ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
-      : "待价格同步";
-
+  const cross = (id: string, title: string, left: DimKey, right: DimKey): CrossAnalysisSection => ({
+    id, title, subtitle: "保留两类来源的原始主题；主题并列不代表已证明因果关系",
+    rows: (summary.get(right)?.themes ?? []).slice(0, 4).map(theme => ({
+      anchor: theme.label,
+      left: topLabels(summary.get(left)?.themes ?? [], 3).join("、") || "该维度资料不足",
+      right: theme.displayText || theme.label,
+      insight: `核对「${theme.label}」对应的 ASIN 与使用条件，按原反馈建立对照验证`,
+    })),
+    conclusion: "产品动作按各 ASIN 的实际结构及反馈分别制定，不从人群或场景自动推导硬件。",
+  });
   return [
-    {
-      id: "attention-negatives",
-      title: "顾客关注点 × 差评点",
-      subtitle: "判断消费者最关注但竞品表现最差的地方",
-      rows: cross1Rows.length ? cross1Rows : [{ anchor: "—", left: "待数据", right: "待数据", insight: "同步 VOC 后自动生成" }],
-      conclusion: "立项应打 Reliability-first（可靠优先），而非 Lighting-first。",
-    },
-    {
-      id: "unmet-scenarios",
-      title: "未满足需求 × 使用场景",
-      subtitle: "判断哪些场景缺少合适的产品解决方案",
-      rows: cross2Rows,
-      conclusion: "最有场景价值的是「日常户外 + 第一辆入门 + 送礼」交集下的耐用可维护方案。",
-    },
-    {
-      id: "audiences-negatives",
-      title: "使用人群 × 差评点",
-      subtitle: "判断不同人群在尺寸、安全性、操作方式等方面的特殊痛点",
-      rows: cross3Rows,
-      conclusion: "人群差异主要在年龄/体重段的操作与说明，开发重点应是低龄转向+踏板与承重诚实标注。",
-    },
-    {
-      id: "motives-positives",
-      title: "购买动机 × 好评点",
-      subtitle: "判断哪些功能真正推动消费者下单并形成满意体验",
-      rows: cross4Rows.length
-        ? cross4Rows
-        : [{ anchor: "—", left: "待数据", right: "待数据", insight: "同步 VOC 后自动生成" }],
-      conclusion: "转化公式 = 礼物/LED 吸引 + 产品质量/安装兑现 + 稳定/可调延长使用；须补齐耐用后半段。",
-    },
-    {
-      id: "market-opportunity",
-      title: "评论机会 × Sorftime 市场数据",
-      subtitle: "判断需求是否具有足够的销量、价格空间和市场容量",
-      rows: market.rows.slice(0, 4).map(row => ({
-        anchor: row.brand,
-        left: `${row.sales.toLocaleString()} 件/月`,
-        right: row.price ? `$${row.price}` : "—",
-        insight: row === market.leader ? "头部单品有量，礼物季脉冲强" : "类目中间价位竞争密集",
-      })),
-      conclusion: `价格带 ${priceBand}；「耐用+备件」方向有足够销量与 $5–10 溢价空间。`,
-    },
-    {
-      id: "supply-opportunity",
-      title: "评论机会 × 供应链能力",
-      subtitle: "判断建议是否能够落地，避免成本过高或合规风险过大",
-      rows: [],
-      conclusion: "首代可落地组合 = 结构加强 + 备件包 + 转向说明/微调 + 保留 LED；避免首代同时改 Deck 模具 + 新转向专利。",
-    },
+    cross("attention-negatives", "顾客关注点 × 差评点", "attention", "negatives"),
+    cross("unmet-scenarios", "未满足需求 × 使用场景", "scenarios", "unmet"),
+    cross("audiences-negatives", "使用人群 × 差评点", "audiences", "negatives"),
+    cross("motives-positives", "购买动机 × 好评点", "motives", "positives"),
+    {id:"market-opportunity",title:"评论机会 × 市场数据",subtitle:"市场样本与 VOC 分开核对",rows:market.rows.slice(0,4).map(row=>({anchor:row.brand,left:`${row.sales.toLocaleString()} 件/月`,right:row.price ? `$${row.price}` : "价格未提供",insight:"样本价格与销量不单独证明某种结构方案的可行性"})),conclusion:"结合具体需求、成本及对照样件评估开发方案。"},
+    {id:"supply-opportunity",title:"评论机会 × 供应链能力",subtitle:"按有依据的动作验证供应可行性",rows:[],conclusion:"依据具体动作确认样件、工艺、成本和验收条件，不预设类目硬件配置。"},
   ];
 }
 
@@ -1313,33 +1159,11 @@ function buildMarketRows(market: ReturnType<typeof buildMarketContext>) {
   ];
 }
 
-function buildSupplyRows(family: ProductFamily): ProductLaunchAnalysis["supplyRows"] {
-  if (family === "lighting") {
-    return [
-      { direction: "底座配重 + 灯杆防晃连接", feasibility: "★★★★ 现有五金件可改", risk: "增重/成本 +5–10%" },
-      { direction: "层板承重加强 + 诚实标注", feasibility: "★★★★ 板材加厚或金属支架", risk: "体积/运费上升" },
-      { direction: "三色温可替换 LED + 柔光灯罩", feasibility: "★★★★ 成熟灯泡供应链", risk: "需标注是否含灯泡" },
-      { direction: "安装说明/QR + 编号零件", feasibility: "★★★★★ 包装 insert", risk: "无新认证" },
-      { direction: "灯罩/层板运输护角", feasibility: "★★★★ 包材改版", risk: "包材成本" },
-      { direction: "全新智能灯控平台", feasibility: "★★ 周期长", risk: "不建议首代立项" },
-    ];
-  }
-  if (family !== "scooter") {
-    return [
-      { direction: "承力结构加强 + 规格诚实标注", feasibility: "★★★★ 现有工艺可改", risk: "成本上升" },
-      { direction: "安装体验（编号零件 + QR）", feasibility: "★★★★★ 包装 insert", risk: "无新认证" },
-      { direction: "包装防破损改版", feasibility: "★★★★ 包材改版", risk: "包材成本" },
-      { direction: "备件/售后补寄路径", feasibility: "★★★★ FBA 配件 SKU", risk: "需备库存" },
-    ];
-  }
-  return [
-    { direction: "加厚前轴/前轮支架 + 金属衬套", feasibility: "★★★★ 现有铝件工艺可改", risk: "增重/成本 +8–12%" },
-    { direction: "官方备件包（后轮×2 + 前轮×1 + 螺丝）", feasibility: "★★★★★ FBA 配件 SKU", risk: "需备库存与 ASIN 维护" },
-    { direction: "转向阻力调校 + 说明书/QR", feasibility: "★★★★ 机构微调 + 包装 insert", risk: "无新认证" },
-    { direction: "长寿命 LED（模组化可换）", feasibility: "★★★ 需换供应商/测寿命", risk: "成本 + 电子合规" },
-    { direction: "更低 Deck 新模具", feasibility: "★★★ 开模 + 重心重算", risk: "CPSIA/ASTM 需重测" },
-    { direction: "全新专利转向机构", feasibility: "★★ 周期长", risk: "不建议首代立项" },
-  ];
+function buildSupplyRows(summary: SummaryMap, ruleAction: ReturnType<typeof createProductRuleSession>["action"]): ProductLaunchAnalysis["supplyRows"] {
+  return (["negatives", "unmet"] as const).flatMap(dimension => (summary.get(dimension)?.themes ?? []).slice(0, 3).map((theme, index) => {
+    const decision = ruleAction(theme.label, dimension, `supply:${dimension}:${index}`);
+    return {direction: decision.text, ruleDecisionIds: decision.ruleDecisionIds, feasibility: "需供应商按实际结构评估并打样", risk: "成本、工艺、认证影响需逐项验证"};
+  })).slice(0, 6);
 }
 
 function buildOpportunities(summary: SummaryMap, market: ReturnType<typeof buildMarketContext>, family: ProductFamily): OpportunityScore[] {
@@ -1494,7 +1318,7 @@ function buildOpportunities(summary: SummaryMap, market: ReturnType<typeof build
     }));
 
   const templates =
-    family === "scooter" ? scooterTemplates : family === "lighting" ? lightingTemplates : genericTemplates.length ? genericTemplates : lightingTemplates;
+    family === "scooter" ? scooterTemplates : family === "lighting" ? lightingTemplates : genericTemplates;
 
   return templates
     .filter(item => item.relevance > 0.08)
@@ -1555,8 +1379,9 @@ function formatFunctionDemand(row: { keyword: string; type: string; volume: numb
 function buildKeywordConclusions(
   analysis: KeywordDemandAnalysis | null,
   products: LaunchProductInput[],
+  scope?: Partial<AnalysisInputScope>,
 ): KeywordLaunchConclusions | null {
-  return analysis ? buildKeywordLaunchConclusions(analysis, products) : null;
+  return analysis ? buildKeywordLaunchConclusions(analysis, products, scope) : null;
 }
 
 function buildProductDefinition(
@@ -1568,11 +1393,8 @@ function buildProductDefinition(
   keyword: KeywordLaunchConclusions | null
 ) {
   const topOpp = opportunities[0];
-  const combo = keyword?.keywordCombos[0];
   const categoryHint = topLabels(summary.get("attention")?.themes ?? [], 1)[0];
-  const name = combo
-    ? `${combo.keyword} / ${topOpp?.name ?? "需求组合导向定义"}`
-    : topOpp
+  const name = topOpp
       ? topOpp.name
       : categoryHint
         ? `${categoryHint}导向产品定义`
@@ -1580,9 +1402,7 @@ function buildProductDefinition(
 
   const mustHave = uniqueTexts(
     [
-      ...(keyword?.functionMatrix ?? [])
-        .filter(row => row.type === "基础必备" || row.type === "高关注")
-        .map(formatFunctionDemand),
+      keyword?.sections.find(section=>section.id==="product_dev")?.items.find(item=>item.label==="基础功能清单")?.acceptedValue,
       ...negativePriorityRows
         .filter(row => row.shouldFix.includes("P0") || row.severity === "高")
         .map(row => `VOC 必修：${row.fixDirection}（针对「${row.issue}」）`),
@@ -1594,19 +1414,16 @@ function buildProductDefinition(
 
   const niceToHave = uniqueTexts(
     [
-      ...(keyword?.functionMatrix ?? []).filter(row => row.type === "差异化").map(formatFunctionDemand),
+      keyword?.sections.find(section=>section.id==="product_dev")?.items.find(item=>item.label==="差异化功能清单")?.acceptedValue,
       ...unmetOpportunityRows.slice(2, 5).map(row => row.proposal),
       keywordItemValue(keyword, "product_dev", "建议颜色/SKU"),
-      "说明书/Listing 内嵌备件复购入口",
+      "按已确认的反馈验证改版体验，再补充说明及售后要求",
     ],
     5
   );
 
   const avoid = uniqueTexts(
     [
-      ...(keyword?.functionMatrix ?? [])
-        .filter(row => row.type === "伪需求")
-        .map(row => `${row.keyword}（伪需求 · ${row.action}）`),
       "仅堆外观/发光噱头、不解决高频差评结构问题",
       "首代同时推进全新专利机构 + 大改模具",
       "与头部竞品正面拼最低价、无差异化",
@@ -1643,14 +1460,16 @@ function enrichDirectionsWithKeyword(
   const audience = keywordItemValue(keyword, "customer_profile", "核心使用人群");
   const age = keywordItemValue(keyword, "customer_profile", "重点年龄段");
   const scenario = keywordItemValue(keyword, "customer_profile", "主要使用场景");
-  const baseFn = keywordItemValue(keyword, "product_dev", "基础功能清单");
-  const diffFn = keywordItemValue(keyword, "product_dev", "差异化功能清单");
-  const material = keywordItemValue(keyword, "product_dev", "建议材质与规格");
+  const productDev = keyword.sections.find(section => section.id === "product_dev");
+  const formItem = productDev?.items.find(item => item.label === "建议产品形态");
+  const baseItem = productDev?.items.find(item => item.label === "基础功能清单");
+  const diffItem = productDev?.items.find(item => item.label === "差异化功能清单");
+  const materialItem = productDev?.items.find(item => item.label === "建议材质与规格");
+  const baseFn = baseItem?.acceptedValue;
+  const diffFn = diffItem?.acceptedValue;
+  const material = materialItem?.acceptedValue;
   const price = keywordItemValue(keyword, "product_dev", "建议目标售价");
-  const fakeNeeds = (keyword.functionMatrix ?? [])
-    .filter(row => row.type === "伪需求")
-    .map(row => row.keyword)
-    .join("、");
+
   const combos = keyword.keywordCombos
     .slice(0, 3)
     .map(row => `${row.keyword}（${row.volume?.toLocaleString() ?? "—"}）`)
@@ -1659,16 +1478,22 @@ function enrichDirectionsWithKeyword(
 
   return directions.map((direction, index) => ({
     ...direction,
+    ruleDecisionIds: {
+      productForm: formItem?.ruleDecisionIds ?? [],
+      baseFeatures: baseItem?.ruleDecisionIds ?? [],
+      differentiatedFeatures: diffItem?.ruleDecisionIds ?? [],
+      materialStructure: materialItem?.ruleDecisionIds ?? [],
+    },
     positioning:
       index === 0 && keyword.verdict.productProposal
-        ? `【关键词】${keyword.verdict.gradeLabel} · ${keyword.verdict.opportunityType}。${direction.positioning}`
+        ? `【关键词】${keyword.verdict.gradeLabel} · ${keyword.verdict.opportunityType}。${formItem?.acceptedValue ? `适用形态：${formItem.acceptedValue}。` : ""}${direction.positioning}`
         : direction.positioning,
-    targetAudience: kwAudience || direction.targetAudience,
-    coreScenarios: scenario || direction.coreScenarios,
+    targetAudience: `${direction.targetAudience}${kwAudience ? `；搜索人群线索（不代表适用）：${kwAudience}` : ""}`,
+    coreScenarios: `${direction.coreScenarios}${scenario ? `；搜索场景线索（不代表适用）：${scenario}` : ""}`,
     baseFeatures: baseFn && baseFn !== "—" ? baseFn : direction.baseFeatures,
     differentiatedFeatures:
       diffFn && !diffFn.includes("暂无明显") ? `${diffFn}；${direction.differentiatedFeatures}` : direction.differentiatedFeatures,
-    avoidFeatures: fakeNeeds ? `${fakeNeeds}；${direction.avoidFeatures}` : direction.avoidFeatures,
+
     materialStructure: material || direction.materialStructure,
     priceRange: index === 0 && price ? `${price}（关键词推算）` : direction.priceRange,
     coreSellingPoints: combos
@@ -1812,13 +1637,14 @@ function buildProductDirectionProposals(
   market: ReturnType<typeof buildMarketContext>,
   opportunities: OpportunityScore[],
   products: LaunchProductInput[],
-  family: ProductFamily
+  family: ProductFamily,
+  applicability?: {audiences:string;scenarios:string},
 ): ProductDirectionProposal[] {
   const category = inferCategoryLabel(products);
   if (family !== "scooter") {
     const rivals = competitorNames(products);
-    const audiences = themeLine(summary, "audiences", 3) || "待 VOC 人群确认";
-    const scenarios = themeLine(summary, "scenarios", 3) || "待 VOC 场景确认";
+    const audiences = applicability?.audiences ?? "人群待核对";
+    const scenarios = applicability?.scenarios ?? "场景待核对";
     const positives = themeLine(summary, "positives", 3) || "高频好评主题";
     const negatives = themeLine(summary, "negatives", 3) || "高频差评主题";
     const unmet = themeLine(summary, "unmet", 3) || "未满足需求主题";
@@ -1869,8 +1695,8 @@ function buildProductDirectionProposals(
         priceRange: priceBand,
         coreSellingPoints: lighting ? "客厅角落一盏多用" : scenarios,
         competitorDifference: `相对 ${rivals}：场景兑现可拍照、可复测`,
-        qualityRisks: "色温/亮度投诉或场景货不对板",
-        complianceRisks: "光源宣称需可验证",
+        qualityRisks: lighting ? "色温/亮度投诉或场景货不对板" : "改进效果与原场景需求不一致",
+        complianceRisks: lighting ? "光源宣称需可验证" : "按已确认用途核对适用要求",
         developmentDifficulty: "中",
         launchPriority: "P1",
       },
@@ -2107,7 +1933,11 @@ function applyKeywordEvidenceToVocPositioning(
   return {
     ...positioning,
     rationale: [...positioning.rationale, evidence],
-    nextValidations: ["继续验证关键词规模、趋势与转化是否支持该 VOC 定位", ...positioning.nextValidations].slice(0, 6),
+    nextValidations: [
+      ...[keyword.functionMatrix.filter(row => row.type === "待验证" || row.type === "数据不足")
+        .map(row => `${row.keyword}（${row.type}）：${row.action}`).join("；")].filter(Boolean),
+      "继续验证关键词规模、趋势与转化是否支持该 VOC 定位", ...positioning.nextValidations,
+    ].slice(0, 6),
     dataBoundary: `${positioning.dataBoundary} ${evidence}。`,
   };
 }
@@ -2117,31 +1947,37 @@ export function buildProductLaunchAnalysis(
   sources: ProductLaunchRuntimeSources,
 ): ProductLaunchAnalysis {
   const productList = [...products];
-  const family = familyFromProducts(productList);
+  const ruleSession = createProductRuleSession(productList, sources);
+  const audienceProfile = ruleSession.applicability("audiences");
+  const scenarioProfile = ruleSession.applicability("scenarios");
+  const applicability = {audiences:audienceProfile.summary,scenarios:scenarioProfile.summary};
+  // Legacy product families cannot prove physical structure. Concrete actions
+  // are generated per ASIN by the shared rules, never by a family template.
+  const family: ProductFamily = "generic";
   const summaries = buildVocDevelopmentSummary(productList.map(product => ({
     asin: product.asin,
     brand: product.brand,
-    productFamily: product.productFamily ?? family,
+    productFamily: family,
   })), sources.manualVocByAsin, sources.reviewAnalysisByAsin);
   const summary: SummaryMap = new Map(summaries.map(item => [item.key, item]));
-  const market = buildMarketContext(productList);
+  const market = buildMarketContext(productList, Boolean(sources.analysisScope));
   const hasData = hasVocDevelopmentData(productList, sources.manualVocByAsin, sources.reviewAnalysisByAsin);
   const opportunities = buildOpportunities(summary, market, family);
   const crossAnalyses = buildCrossAnalyses(summary, market);
-  const supplyRows = buildSupplyRows(family);
+  const supplyRows = buildSupplyRows(summary, ruleSession.action);
 
   crossAnalyses.find(section => section.id === "supply-opportunity")!.rows = supplyRows.map(row => ({
     anchor: row.direction,
     left: row.feasibility,
     right: row.risk,
-    insight: row.feasibility.includes("★★★★★") ? "优先落地" : row.feasibility.includes("★★") ? "首代回避" : "可纳入 P0/P1",
+    insight: "先验证适用性和供应商能力，再确定实施顺序",
   }));
 
-  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList);
+  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList, ruleSession.scope);
   const verdict = buildVerdict(opportunities, market, hasData, keywordConclusions);
-  const negativePriorityRows = buildNegativePriorityRows(summary, productList.length, family);
-  const positivePriorityRows = buildPositivePriorityRows(summary, productList.length, family);
-  const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market, family);
+  const negativePriorityRows = buildNegativePriorityRows(summary, productList.length, family, ruleSession.action);
+  const positivePriorityRows = buildPositivePriorityRows(summary, productList.length, family, ruleSession.action);
+  const unmetOpportunityRows = buildUnmetOpportunityRows(summary, market, family, ruleSession.action, applicability);
   const productDefinition = buildProductDefinition(
     opportunities,
     market,
@@ -2151,7 +1987,7 @@ export function buildProductLaunchAnalysis(
     keywordConclusions
   );
   const productDirections = enrichDirectionsWithKeyword(
-    buildProductDirectionProposals(summary, market, opportunities, productList, family),
+    buildProductDirectionProposals(summary, market, opportunities, productList, family, applicability),
     keywordConclusions,
     productDefinition
   );
@@ -2172,8 +2008,8 @@ export function buildProductLaunchAnalysis(
     keywordConclusions,
   );
   const vocInsightRows = buildVocInsightRows(summary, productList.length);
-  const topAudiencesLabel = summary.get("audiences")?.themes?.slice(0, 2).map(t => t.label).join("、");
-  const topScenariosLabel = summary.get("scenarios")?.themes?.slice(0, 2).map(t => t.label).join("、");
+  const topAudiencesLabel = audienceProfile.summary;
+  const topScenariosLabel = scenarioProfile.summary;
   const priceBandForPositioning =
     market.minPrice !== null && market.maxPrice !== null
       ? `$${market.minPrice.toFixed(0)}–$${market.maxPrice.toFixed(0)}`
@@ -2188,6 +2024,20 @@ export function buildProductLaunchAnalysis(
     audiences: topAudiencesLabel,
     scenarios: topScenariosLabel,
   }), keywordConclusions);
+  const formRule = ruleSession.form();
+  const formRow = vocPositioning.dimensionRows.find(row=>row.dimension === "产品形态");
+  if (formRow) { formRow.conclusion = formRule.text; formRow.evidence = "所选 ASIN 的商品资料；按结构条件分别分组"; }
+  const audienceRow = vocPositioning.dimensionRows.find(row=>row.dimension === "目标人群");
+  if (audienceRow) { audienceRow.conclusion = audienceProfile.conclusion; audienceRow.ruleDecisionIds = audienceProfile.ruleDecisionIds; audienceRow.evidence="逐 ASIN 的 VOC 原文；限制及条件保留，搜索词另作需求线索"; }
+  const scenarioRow = vocPositioning.dimensionRows.find(row=>row.dimension === "核心场景");
+  if (scenarioRow) { scenarioRow.conclusion = scenarioProfile.conclusion; scenarioRow.ruleDecisionIds = scenarioProfile.ruleDecisionIds; scenarioRow.evidence="逐 ASIN 的 VOC 场景原文；不适用、条件及未知分别记录"; }
+  for (const row of vocPositioning.dimensionRows) {
+    const rule = ruleSession.explain(row.action, `voc-dimension:${row.dimension}`);
+    row.action = rule.text;
+    row.ruleDecisionIds = [...(row.ruleDecisionIds ?? []), ...(row.dimension === "产品形态" ? formRule.ruleDecisionIds : []), ...rule.ruleDecisionIds];
+  }
+  vocPositioning.directionCards = buildVocDirectionCards(vocPositioning.dimensionRows,vocPositioning.mustAvoid);
+  vocPositioning.ruleTrace = ruleSession.trace();
   const definitionSynthesis = buildDefinitionSynthesis({
     categoryLabel: inferCategoryLabel(productList),
     executiveSummary,
@@ -2212,8 +2062,8 @@ export function buildProductLaunchAnalysis(
   const topUnmet = summary.get("unmet")?.themes[0]?.label;
   const topAttention = summary.get("attention")?.themes[0]?.label;
   const topMotives = summary.get("motives")?.themes?.slice(0, 2).map(t => t.label).join("、");
-  const topAudiences = summary.get("audiences")?.themes?.slice(0, 2).map(t => t.label).join("、");
-  const topScenarios = summary.get("scenarios")?.themes?.slice(0, 2).map(t => t.label).join("、");
+  const topAudiences = audienceProfile.summary;
+  const topScenarios = scenarioProfile.summary;
   const priceBand =
     market.minPrice !== null && market.maxPrice !== null
       ? `$${market.minPrice}–$${market.maxPrice}`
@@ -2255,6 +2105,7 @@ export function buildProductLaunchAnalysis(
   }, 0);
 
   return {
+    ruleTrace: ruleSession.trace(),
     meta: {
       productCount: products.length,
       brands: productList.map(product => product.brand),

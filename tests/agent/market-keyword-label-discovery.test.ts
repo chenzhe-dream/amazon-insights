@@ -88,7 +88,8 @@ test('discovery rejects duplicate, colliding, unknown, wrong-dimension, and unus
 });
 
 test('proposal evidence and each assignment stay on the owning keyword and exact source text', () => {
-  const wrongOwner = fixture('labels-and-clusters/v1'); wrongOwner.output.labelProposals[0].evidence = [span('text-k2', 'desk')]; reject(wrongOwner, 'foreign_span');
-  const wrongAssignment = fixture('labels-and-clusters/v1'); (wrongAssignment.output.keywords[0].W1 as { evidence: ReturnType<typeof span>[] }).evidence = [span('text-k2', 'desk')]; reject(wrongAssignment, 'foreign_span');
-  const wrongQuote = fixture('labels-and-clusters/v1'); wrongQuote.output.labelProposals[0].evidence[0].quote = 'outdoor'; reject(wrongQuote, 'invalid_span');
+  const wrongOwner = fixture('labels-and-clusters/v1'); wrongOwner.output.labelProposals[0].evidence = [span('text-k2', 'desk')]; reject(wrongOwner, 'span_unknown_or_foreign_reference');
+  const wrongAssignment = fixture('labels-and-clusters/v1'); (wrongAssignment.output.keywords[0].W1 as { evidence: ReturnType<typeof span>[] }).evidence = [span('text-k2', 'desk')]; reject(wrongAssignment, 'span_unknown_or_foreign_reference');
+  const wrongQuote = fixture('labels-and-clusters/v1'); wrongQuote.output.labelProposals[0].evidence[0].quote = 'outdoor'; reject(wrongQuote, 'span_quote_mismatch');
 });
+

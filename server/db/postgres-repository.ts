@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { readLatestProjectAnalysts, type ProjectLatestAnalystInput } from "./project-latest-analyst-repository";
+import {PostgresUsageAnalyticsStore} from "./postgres/usage-analytics-store";
+import {PostgresModuleVisibilityStore} from './postgres/module-visibility-store';
+import {PostgresMarketFavoritesStore} from './postgres/market-favorites-store';
 import { PostgresVocAutomationStore } from './postgres/voc-automation-store';
 
 import { Pool, type PoolConfig } from "pg";
@@ -68,12 +72,17 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly syncJobs: PostgresSyncJobStore;
   readonly concurrencyControl: PostgresConcurrencyControlStore;
   readonly adminUserPresence: PostgresAdminUserPresenceStore;
+  readonly usageAnalytics: PostgresUsageAnalyticsStore;
+  readonly moduleVisibility: PostgresModuleVisibilityStore;
+  readonly marketFavorites: PostgresMarketFavoritesStore;
   readonly trafficDetailRecoveries: PostgresTrafficDetailRecoveryStore;
   readonly marketResearch: PostgresMarketResearchStore;
   readonly marketExecutionContext: PostgresQueryContext;
 
   constructor(pool: Pool) {
     this.#queries = new PostgresQueryContext(pool);
+    this.moduleVisibility = new PostgresModuleVisibilityStore(this.#queries);
+    this.marketFavorites = new PostgresMarketFavoritesStore(this.#queries);
     this.marketExecutionContext = this.#queries;
     this.vocAutomations = new PostgresVocAutomationStore(this.#queries);
     const productDependencyReconciler =
@@ -99,6 +108,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
       { permitId: () => randomUUID() },
     );
     this.adminUserPresence = new PostgresAdminUserPresenceStore(this.#queries);
+    this.usageAnalytics = new PostgresUsageAnalyticsStore(this.#queries);
     this.trafficDetailRecoveries = new PostgresTrafficDetailRecoveryStore(this.#queries);
     this.marketResearch = new PostgresMarketResearchStore(this.#queries);
   }
@@ -169,6 +179,11 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
     this.#core.createProject(project);
   findProjectById: RuntimeAgentRepository["findProjectById"] = (id) =>
     this.#core.findProjectById(id);
+
+  listLatestProjectAnalysts = (input: ProjectLatestAnalystInput) =>
+    readLatestProjectAnalysts(input, "postgres", async (sql, values) =>
+      (await this.#queries.query<{ project_id: string; display_name: string | null }>(sql, values)).rows,
+    );
   createProjectOnce = (input: CreateProjectOnceInput): Promise<CreateProjectResult> => {
     const idempotencyKey = parseProjectCreationIdempotencyKey(input.idempotencyKey);
     const canonicalPayload = canonicalProjectCreationPayload(input.project);

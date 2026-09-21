@@ -100,7 +100,7 @@ export class PostgresJobStore implements JobRepositoryContract {
   }
 
   enqueueJob(input: EnqueueJobInput): Promise<JobAttemptRecord> {
-    return this.#execute(async () => {
+    return this.#execute(() => this.#queries.transaction(async () => {
       assertIdentifier(input.id, "job ID");
       assertIdentifier(input.stageId, "stage ID");
       assertPositiveInteger(input.attemptNumber, "attempt number");
@@ -110,6 +110,19 @@ export class PostgresJobStore implements JobRepositoryContract {
       }
       assertTimestamp(input.availableAt, "availableAt");
       assertTimestamp(input.createdAt, "createdAt");
+      if (input.supersedeVocPredecessors) {
+        const scope = await this.#queries.query<{ run_id: string; stage: string; run_status: string; status: string }>(
+          `SELECT rs.run_id, rs.stage, rs.status, ar.status AS run_status
+           FROM run_stages rs JOIN analysis_runs ar ON ar.id = rs.run_id
+           WHERE rs.id = $1 FOR UPDATE OF ar, rs`, [input.stageId]);
+        const current = scope.rows[0];
+        if (!current || current.stage !== "voc-positioning" || current.run_status === "cancelled" || current.status === "cancelled") {
+          throw new PostgresJobStoreConflictError();
+        }
+        const pending = await this.#queries.query<{ id: string }>(
+          `SELECT id FROM job_attempts WHERE stage_id = $1 AND status = 'queued' AND attempt_number >= $2 ORDER BY attempt_number DESC LIMIT 1`, [input.stageId, input.attemptNumber]);
+        if (pending.rows[0]) return await this.#findRequiredJob(pending.rows[0].id);
+      }
       const inserted = await this.#queries.query<JobRow>(
         `INSERT INTO job_attempts (
            id, stage_id, attempt_number, max_attempts,
@@ -128,8 +141,22 @@ export class PostgresJobStore implements JobRepositoryContract {
           input.createdAt,
         ],
       );
+      if (input.supersedeVocPredecessors) {
+        await this.#queries.query(
+          `UPDATE job_attempts SET status = 'cancelled', leased_by = NULL, lease_expires_at = NULL,
+           lease_generation = lease_generation + 1, retryable = FALSE, retry_scheduled_at = NULL,
+           report_publication_retry_at = NULL, completed_at = COALESCE(completed_at, $1), updated_at = $1,
+           error_json = $2::jsonb WHERE stage_id = $3 AND attempt_number < $4
+           AND (status IN ('queued', 'running') OR (status = 'failed' AND retryable = TRUE AND retry_scheduled_at IS NULL))`,
+          [input.createdAt, JSON.stringify({ code: "SUPERSEDED", message: "新 VOC 输入已接替本次定位，旧任务停止且不再重试。", retryable: false }), input.stageId, input.attemptNumber]);
+        const stage = await this.#queries.query<{ run_id: string }>(
+          `UPDATE run_stages SET status = 'queued', progress = 0, started_at = NULL,
+           completed_at = NULL, last_error_json = NULL, updated_at = $1 WHERE id = $2 RETURNING run_id`,
+          [input.createdAt, input.stageId]);
+        await this.#refreshAnalysisRunStatus(stage.rows[0]!.run_id, input.createdAt);
+      }
       return await this.#findRequiredJob(inserted.rows[0]!.id);
-    });
+    }));
   }
 
   claimNextJob(input: ClaimJobInput): Promise<JobAttemptRecord | null> {
@@ -380,6 +407,7 @@ export class PostgresJobStore implements JobRepositoryContract {
       assertLeaseMutationInput(input);
       assertTimestamp(input.releasedAt, "releasedAt");
       return await this.#queries.transaction(async () => {
+        await this.#lockJobParentScope(input.jobId);
         const result = await this.#queries.query(
           `UPDATE job_attempts
               SET status = 'queued', available_at = $1, leased_by = NULL,
@@ -410,6 +438,7 @@ export class PostgresJobStore implements JobRepositoryContract {
       assertLeaseMutationInput(input);
       assertTimestamp(input.completedAt, "completedAt");
       return await this.#queries.transaction(async () => {
+        await this.#lockJobParentScope(input.jobId);
         const result = await this.#queries.query(
           `UPDATE job_attempts
               SET status = 'succeeded', leased_by = NULL,
@@ -450,6 +479,7 @@ export class PostgresJobStore implements JobRepositoryContract {
       assertTimestamp(input.failedAt, "failedAt");
       if (input.retryAt !== null) assertTimestamp(input.retryAt, "retryAt");
       return await this.#queries.transaction(async () => {
+        await this.#lockJobParentScope(input.jobId);
         const transactionNow = await this.#transactionNow();
         const current = await this.#findRequiredJob(input.jobId, true);
         const disposition = await this.#durableCycleDisposition(current);
@@ -793,6 +823,16 @@ export class PostgresJobStore implements JobRepositoryContract {
       "UPDATE analysis_runs SET status = $1, updated_at = $2 WHERE id = $3",
       [status, updatedAt, runId],
     );
+  }
+
+  // Match claim, expiry and input replacement: parent scope before attempt.
+  // Otherwise a completing attempt can hold ja while replacement holds rs.
+  async #lockJobParentScope(jobId: string): Promise<void> {
+    await this.#queries.query(
+      `SELECT ar.id FROM job_attempts ja
+       JOIN run_stages rs ON rs.id = ja.stage_id
+       JOIN analysis_runs ar ON ar.id = rs.run_id
+       WHERE ja.id = $1 FOR UPDATE OF ar, rs`, [jobId]);
   }
 
   async #findRequiredJob(id: string, forUpdate = false) {

@@ -47,7 +47,7 @@ test("full production page leaves deleted workspace and cannot restore it from d
     if (method !== "GET") writes.push(`${method} ${path}`);
     if (deleted && documents > 1) readsAfterNavigation.push(path);
     if (path === `/api/projects/${project.id}` && method === "DELETE") { deleted = true; return reply({ ok: true }); }
-    if (path === "/api/projects" || path === "/api/agent/v1/local-data/projects") return reply({ projects: deleted ? [] : [project] });
+    if (path === "/api/projects" || path === "/api/agent/v1/local-data/projects") return reply({ projects: deleted ? [] : [project], ...(new URL(request.url()).searchParams.has("page") ? { pagination: { page: 1, pageSize: 10, total: deleted ? 0 : 1, totalPages: 1, historyTotal: deleted ? 0 : 1, favoritesTotal: deleted ? 0 : 1, categories: [] } } : {}) });
     if (path === `/api/agent/v1/local-data/projects/${project.slug}` || path === `/api/agent/v1/local-data/projects/${project.id}`) return reply(deleted ? { error: { message: "not found" } } : { project }, deleted ? 404 : 200);
     if (path.endsWith("/project-favorites")) return reply({ projectIds: deleted ? [] : [project.id] });
     if (path === `/api/agent/v1/runs/${runId}` || path === `/api/agent/v1/local-data/sync-asins/${jobId}`) {

@@ -1,3 +1,5 @@
+import {marketSpanFailure} from './shape-span-normalization';
+import {marketSemanticValidationRuleId} from './semantic-validation-rules';
 import {validateMarketOverviewSynthesisInputEvidence,validateMarketOverviewDimensionSynthesisOutput,validateMarketOverviewFinalSynthesisOutput} from './overview-synthesis';
 import {validateMarketShapeExplanationCatalog} from './shape-explanation-catalog';
 import {validateMarketShapeExplanationWindow} from './shape-explanation-wire';
@@ -15,7 +17,8 @@ import {validateOverviewAnalysis,validateOverviewAnalysisBrief} from './overview
 type Binding = c.MarketSemanticValidationBinding;
 type Field = c.MarketSemanticSourceField;
 function fail(code: string, path: (string | number)[] = []): never {
-  throw new z.ZodError([{ code: 'custom', message: code, path }]);
+  const ruleId = marketSemanticValidationRuleId(code);
+  throw new z.ZodError([{ code: 'custom', message: code, path, ...(ruleId ? { params: { ruleId } } : {}) }]);
 }
 function safe(value: unknown): void {
   const parsed = MarketInputRecordSchema.shape.data.safeParse(value);
@@ -23,7 +26,8 @@ function safe(value: unknown): void {
 }
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
-  if (!result.success) fail('invalid_schema', result.error.issues[0]?.path.filter((p): p is string | number => typeof p !== 'symbol') ?? []);
+  // Preserve structural diagnostics for bounded repair; never retain raw error prose.
+  if (!result.success) throw new z.ZodError(result.error.issues.map(issue => ({ ...issue, message: 'invalid_schema' })));
   return result.data;
 }
 function equal(left: unknown, right: unknown, code: string): void { if (digest(left) !== digest(right)) fail(code); }
@@ -238,23 +242,26 @@ export function validateMarketSemanticInput(inputValue: unknown, binding: Bindin
   }
 }
 
-function spans(values: readonly c.MarketTextSpanRef[], fields: Map<string, Field>, owners: ReadonlySet<string>): Set<string> {
-  unique(values.map(value => `${value.refId}:${value.start}:${value.end}`));
+function spans(values: readonly c.MarketTextSpanRef[], fields: Map<string, Field>, owners: ReadonlySet<string>, path: (string | number)[] = []): Set<string> {
+  const seen = new Set<string>();
   const cited = new Set<string>();
-  for (const value of values) {
+  for (const [spanIndex, value] of values.entries()) {
+    const spanPath = [...path, spanIndex];
+    const spanKey = `${value.refId}:${value.start}:${value.end}`;
+    if(seen.has(spanKey))fail('duplicate_id',spanPath);
+    seen.add(spanKey);
     const field = fields.get(value.refId);
-    if (!field || !owners.has(field.recordId)) fail('foreign_span');
+    if (!field || !owners.has(field.recordId)) fail('span_unknown_or_foreign_reference',spanPath);
     const { text } = field;
-    const split = (position: number) => position > 0 && position < text.length &&
-      /[\uD800-\uDBFF]/.test(text[position - 1]) && /[\uDC00-\uDFFF]/.test(text[position]);
-    if (value.start >= value.end || value.end > text.length || text.slice(value.start, value.end) !== value.quote || !value.quote.trim() || split(value.start) || split(value.end)) fail('invalid_span');
+    const reason = marketSpanFailure(value,text);
+    if(reason)fail(reason,spanPath);
     cited.add(field.recordId);
   }
   return cited;
 }
-function unknown(decision: z.infer<typeof c.MarketSemanticUnknownSchema>, fields: Map<string, Field>, owner: string, hasMissing: boolean) {
-  if (decision.reason === 'missing-source' && !hasMissing) fail('source_not_missing');
-  spans(decision.evidence, fields, new Set([owner]));
+function unknown(decision: z.infer<typeof c.MarketSemanticUnknownSchema>, fields: Map<string, Field>, owner: string, hasMissing: boolean, path: (string | number)[] = []) {
+  if (decision.reason === 'missing-source' && !hasMissing) fail('source_not_missing', [...path,'reason']);
+  spans(decision.evidence, fields, new Set([owner]), [...path,'evidence']);
 }
 function partition<T>(items: T[], expected: readonly string[], key: (item: T) => string): T[] {
   sameSet(items.map(key), expected, 'member_partition_mismatch');
@@ -263,14 +270,15 @@ function partition<T>(items: T[], expected: readonly string[], key: (item: T) =>
 
 export function validateMarketShapeSuggestions(inputValue: unknown, candidate: unknown, binding: Binding): c.MarketShapeSuggestionOutput {
   const { input, output, fields } = prepare(inputValue, candidate, binding, c.MarketShapeSuggestionInputSchema, c.MarketShapeSuggestionOutputSchema);
+  const originalProductIndexes = new Map(output.products.map((product,i)=>[product.productId,i]));
   output.products = partition(output.products, input.products.map(p => p.productId), p => p.productId);
   const labels = new Set(input.allowedLabels.map(label => label.labelId));
   for (const [i, product] of output.products.entries()) {
-    const source = input.products[i], decision = product.decision;
-    if (decision.status === 'unknown') unknown(decision, fields, product.productId, source.title.state === 'missing' || source.parameters.state === 'missing');
+    const source = input.products[i], decision = product.decision, outputIndex=originalProductIndexes.get(product.productId)!;
+    if (decision.status === 'unknown') unknown(decision, fields, product.productId, source.title.state === 'missing' || source.parameters.state === 'missing', ['products',outputIndex,'decision']);
     else {
       subset(decision.candidates.map(c => c.labelId), labels, 'unknown_label');
-      for (const suggestion of decision.candidates) spans(suggestion.evidence, fields, new Set([product.productId]));
+      for (const [ci,suggestion] of decision.candidates.entries()) spans(suggestion.evidence, fields, new Set([product.productId]), ['products',outputIndex,'decision','candidates',ci,'evidence']);
     }
   }
   return frozen(output);
@@ -285,6 +293,7 @@ export function validateMarketKeywordSemantics(inputValue: unknown, candidate: u
   if (!discovery && Object.hasOwn(output, 'labelProposals')) fail('label_proposals_not_allowed');
   if(input.reconciliationDimension!==undefined&&(output.proposals.length||output.synonymRelations.length))fail('reconciliation_proposals_not_allowed');
   const members = input.keywords.map(k => k.keywordId), memberSet = new Set(members);
+  const originalKeywordIndexes = new Map(output.keywords.map((keyword,i)=>[keyword.keywordId,i]));
   output.keywords = partition(output.keywords, members, k => k.keywordId);
   const proposals = index(output.proposals, p => p.proposalId), assigned = new Map<string, Set<string>>();
   const labelProposals = index(output.labelProposals ?? [], p => p.labelId);
@@ -293,10 +302,11 @@ export function validateMarketKeywordSemantics(inputValue: unknown, candidate: u
   for (const proposal of labelProposals.values()) if (inputLabelIds.has(proposal.labelId)) fail('label_id_collision');
   const clusters = new Set(input.clusterCatalog.map(cluster => cluster.clusterId));
   for (const keyword of output.keywords) {
+    const ki=originalKeywordIndexes.get(keyword.keywordId)!;
     for (const dimension of ['W1', 'W2', 'W3', 'W4'] as const) {
       const decision = keyword[dimension];
       if(input.reconciliationDimension!==undefined&&dimension!==input.reconciliationDimension&&decision.status!=='unknown')fail('inactive_reconciliation_decision');
-      if (decision.status === 'unknown') unknown(decision, fields, keyword.keywordId, false);
+      if (decision.status === 'unknown') unknown(decision, fields, keyword.keywordId, false, ['keywords',ki,dimension]);
       else {
         unique(decision.labelIds);
         const existing = new Set(input.dimensionLabels[dimension].map(item => item.labelId));
@@ -308,14 +318,14 @@ export function validateMarketKeywordSemantics(inputValue: unknown, candidate: u
           const owners = proposedAssignments.get(labelId) ?? new Set<string>();
           owners.add(keyword.keywordId); proposedAssignments.set(labelId, owners);
         }
-        spans(decision.evidence, fields, new Set([keyword.keywordId]));
+        spans(decision.evidence, fields, new Set([keyword.keywordId]), ['keywords',ki,dimension,'evidence']);
       }
     }
     const cluster = keyword.cluster;
     if(input.reconciliationDimension!==undefined&&input.reconciliationDimension!=='cluster'&&cluster.status!=='unknown')fail('inactive_reconciliation_decision');
-    if (cluster.status === 'unknown') unknown(cluster, fields, keyword.keywordId, false);
+    if (cluster.status === 'unknown') unknown(cluster, fields, keyword.keywordId, false, ['keywords',ki,'cluster']);
     else {
-      spans(cluster.evidence, fields, new Set([keyword.keywordId]));
+      spans(cluster.evidence, fields, new Set([keyword.keywordId]), ['keywords',ki,'cluster','evidence']);
       if (cluster.status === 'existing' && !clusters.has(cluster.clusterId)) fail('unknown_cluster');
       if (cluster.status === 'proposed') {
         if (!proposals.has(cluster.proposalId)) fail('unknown_proposal');
@@ -323,20 +333,20 @@ export function validateMarketKeywordSemantics(inputValue: unknown, candidate: u
       }
     }
   }
-  for (const proposal of output.proposals) {
+  for (const [pi,proposal] of output.proposals.entries()) {
     const owners = assigned.get(proposal.proposalId); if (!owners) fail('unused_proposal');
-    spans(proposal.evidence, fields, owners);
+    spans(proposal.evidence, fields, owners, ['proposals',pi,'evidence']);
   }
-  for (const proposal of labelProposals.values()) {
+  for (const [pi,proposal] of [...labelProposals.values()].entries()) {
     const owners = proposedAssignments.get(proposal.labelId); if (!owners) fail('unused_label_proposal');
-    spans(proposal.evidence, fields, owners);
+    spans(proposal.evidence, fields, owners, ['labelProposals',pi,'evidence']);
   }
   const relations = new Set<string>();
-  for (const relation of output.synonymRelations) {
+  for (const [ri,relation] of output.synonymRelations.entries()) {
     const pair = [relation.leftKeywordId, relation.rightKeywordId];
     if (pair[0] === pair[1] || pair.some(id => !memberSet.has(id))) fail('invalid_relation');
     const key = JSON.stringify([...pair].sort()); if (relations.has(key)) fail('duplicate_relation'); relations.add(key);
-    const cited = spans(relation.evidence, fields, new Set(pair));
+    const cited = spans(relation.evidence, fields, new Set(pair), ['synonymRelations',ri,'evidence']);
     if (pair.some(id => !cited.has(id))) fail('endpoint_evidence_missing');
   }
   return frozen(output);
@@ -345,14 +355,15 @@ export function validateMarketKeywordSemantics(inputValue: unknown, candidate: u
 export function validateMarketCustomerThemeMapping(inputValue: unknown, candidate: unknown, binding: Binding): c.MarketCustomerThemeMappingOutput {
   const { input, output, fields } = prepare(inputValue, candidate, binding, c.MarketCustomerThemeMappingInputSchema, c.MarketCustomerThemeMappingOutputSchema);
   if(input.mappingMode==='catalog-only' && (output.proposals.length || output.themes.some(t=>t.decision.status==='mapped'&&t.decision.target.kind==='proposed')))fail('catalog_only_proposal');
+  const originalThemeIndexes = new Map(output.themes.map((theme,i)=>[theme.sourceThemeId,i]));
   output.themes = partition(output.themes, input.themes.map(t => t.sourceThemeId), t => t.sourceThemeId);
   const groups = new Set(input.groupCatalog.map(group => group.groupId));
   const proposals = index(output.proposals, p => p.proposalId), assigned = new Map<string, Set<string>>();
   for (const [i, theme] of output.themes.entries()) {
-    const decision = theme.decision, source = input.themes[i];
-    if (decision.status === 'unknown') unknown(decision, fields, theme.sourceThemeId, source.keyword.state === 'missing' || source.content.state === 'missing');
+    const decision = theme.decision, source = input.themes[i], outputIndex=originalThemeIndexes.get(theme.sourceThemeId)!;
+    if (decision.status === 'unknown') unknown(decision, fields, theme.sourceThemeId, source.keyword.state === 'missing' || source.content.state === 'missing', ['themes',outputIndex,'decision']);
     else {
-      spans(decision.evidence, fields, new Set([theme.sourceThemeId]));
+      spans(decision.evidence, fields, new Set([theme.sourceThemeId]), ['themes',outputIndex,'decision','evidence']);
       if (decision.target.kind === 'existing' && !groups.has(decision.target.groupId)) fail('unknown_group');
       if (decision.target.kind === 'proposed') {
         if (!proposals.has(decision.target.proposalId)) fail('unknown_proposal');
@@ -360,9 +371,9 @@ export function validateMarketCustomerThemeMapping(inputValue: unknown, candidat
       }
     }
   }
-  for (const proposal of output.proposals) {
+  for (const [pi,proposal] of output.proposals.entries()) {
     const owners = assigned.get(proposal.proposalId); if (!owners) fail('unused_proposal');
-    spans(proposal.evidence, fields, owners);
+    spans(proposal.evidence, fields, owners, ['proposals',pi,'evidence']);
   }
   return frozen(output);
 }

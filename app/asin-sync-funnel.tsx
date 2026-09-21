@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {isModuleVisible,type ModuleKey} from "../shared/module-visibility-contracts";
 
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { createSyncStartGate, isSyncJobScopeMatch } from "./lib/asin-sync-session";
@@ -68,6 +69,7 @@ function navigateToSifDestination(tab: "keywords" | "traffic") {
 }
 
 type Props = {
+  visibleModules?: ModuleKey[];
   asins: string[];
   marketplace: string;
   projectId?: string | null;
@@ -85,6 +87,7 @@ type Props = {
   allowDismiss?: boolean;
   restoredFromHistory?: boolean;
   onSyncJobObserved?: (jobId: string) => void;
+  onJobSnapshot?: (job: SyncJob) => void;
 };
 
 type AsinSyncStatusPayload = {
@@ -94,6 +97,7 @@ type AsinSyncStatusPayload = {
 };
 
 type SectionProps = {
+  visibleModules?: ModuleKey[];
   asins: string[];
   marketplace: string;
   syncRequest: string[] | null;
@@ -125,11 +129,13 @@ export type SyncResumeBundle = {
   allowDismiss?: boolean;
   knownSessionJobIds?: ReadonlySet<string>;
   onSyncJobObserved?: (jobId: string) => void;
+  onJobSnapshot?: (job: SyncJob) => void;
 };
 
 export type SyncCompletionDisposition = "settled" | "navigation-started" | "convergence-blocked";
 
 type UrlResumableFunnelProps = {
+  visibleModules?: ModuleKey[];
   asins: string[];
   marketplace: string;
   syncRequest: string[] | null;
@@ -140,6 +146,7 @@ type UrlResumableFunnelProps = {
 };
 
 export function UrlResumableAsinSyncFunnel({
+  visibleModules,
   asins,
   marketplace,
   syncRequest,
@@ -161,6 +168,7 @@ export function UrlResumableAsinSyncFunnel({
   }
   return (
     <AsinSyncFunnel
+      visibleModules={visibleModules}
       key={resumeJobId ?? "new"}
       asins={syncRequest ?? asins}
       marketplace={marketplace}
@@ -173,6 +181,7 @@ export function UrlResumableAsinSyncFunnel({
       stageOutputScopeKey={resume.stageOutputScopeKey}
       restoredFromHistory={Boolean(resumeJobId && !syncRequest && !resume.knownSessionJobIds?.has(resumeJobId))}
       onSyncJobObserved={resume.onSyncJobObserved}
+      onJobSnapshot={resume.onJobSnapshot}
       onStageOutput={resume.onStageOutput}
       onJobId={resume.onSyncJobId}
       focusStageIds={focusStageIds}
@@ -194,6 +203,7 @@ export function UrlResumableAsinSyncFunnel({
 }
 
 export function AsinSyncProgressSection({
+  visibleModules,
   asins,
   marketplace,
   syncRequest,
@@ -250,6 +260,7 @@ export function AsinSyncProgressSection({
   if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) {
     return (
       <UrlResumableAsinSyncFunnel
+        visibleModules={visibleModules}
         asins={syncRequest ?? asins}
         marketplace={marketplace}
         syncRequest={syncRequest}
@@ -318,7 +329,7 @@ export function AsinSyncProgressSection({
   );
 }
 
-export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, sessionIdentity = "", stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, restartPending = false, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; sessionIdentity?: string; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot, reason?: "owner-disposed") => void }) {
+export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId = null, runId = null, resumeJobId = null, terminalJob = null, organizationId = null, sessionIdentity = "", stageOutputScopeKey = "", onStageOutput, onJobId, focusStageIds, onComplete, onTerminal, onDismiss, onRestart, restartPending = false, canResumeFailedStages = false, allowDismiss = true, restoredFromHistory = false, onSyncJobObserved, onJobSnapshot }: Props & { terminalJob?: SyncJob | null; organizationId?: string | null; sessionIdentity?: string; stageOutputScopeKey?: string; onStageOutput?: (snapshot: StageOutputSnapshot, reason?: "owner-disposed") => void }) {
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [job, setJob] = useState<SyncJob | null>(terminalJob);
   const [error, setError] = useState<string | null>(null);
@@ -338,6 +349,8 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
   const repairInFlight = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const onTerminalRef = useRef(onTerminal);
+  const onJobSnapshotRef = useRef(onJobSnapshot);
+  useEffect(() => { onJobSnapshotRef.current = onJobSnapshot; }, [onJobSnapshot]);
   const onStageOutputRef = useRef(onStageOutput);
   const stageOutputOwnerRef = useRef<{
     key: string;
@@ -505,6 +518,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
       if (pollingStopped || pollInFlightJobId.current === jobId) return;
       // Capture the callback for this owner; a later session must not relabel its response.
       const emitStageOutput = onStageOutputRef.current;
+      const emitJobSnapshot = onJobSnapshotRef.current;
       pollInFlightJobId.current = jobId;
       try {
         let outputsSettled = true;
@@ -580,6 +594,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           lastObservationKey.current = observationKey;
           setError(null);
           setJob(payload);
+          emitJobSnapshot?.(payload);
         }
         if (terminalSyncIsQuiescent(payload, outputsSettled)) {
           completedJobs.current.add(jobId);
@@ -740,7 +755,7 @@ export function AsinSyncFunnel({ asins, marketplace, projectId = null, runId = n
           {typeof job?.queuePosition === "number" && job.queuePosition > 0 ? (
             <span>{`队列 #${job.queuePosition}`}</span>
           ) : null}
-          {overall.sifDestinations.map(destination => (
+          {overall.sifDestinations.filter(destination=>isModuleVisible(visibleModules,destination.tab)).map(destination => (
             <button
               key={destination.tab}
               type="button"

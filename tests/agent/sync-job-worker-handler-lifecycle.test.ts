@@ -89,11 +89,11 @@ function repositoryForLifecycle(input: {
     async readStageOutput() {
       return null;
     },
-    async recordProgress(progress) {
+    async recordProgress(progress: Parameters<SyncJobRepository["recordProgress"]>[0]) {
       if (input.recordProgress) return await input.recordProgress(progress);
       return lease.job;
     },
-    async heartbeat(heartbeat) {
+    async heartbeat(heartbeat: Parameters<SyncJobRepository["heartbeat"]>[0]) {
       if (input.heartbeat) return await input.heartbeat(heartbeat);
       return lease.job;
     },
@@ -101,7 +101,7 @@ function repositoryForLifecycle(input: {
       input.events.push("db:complete");
       return { ...lease.job, status: "completed" };
     },
-    async fail(failure) {
+    async fail(failure: Parameters<SyncJobRepository["fail"]>[0]) {
       input.events.push(`db:fail:${failure.message}`);
       return { ...lease.job, status: "failed" };
     },

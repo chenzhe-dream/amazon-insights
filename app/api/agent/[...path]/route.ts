@@ -616,7 +616,7 @@ export async function proxyAgentRequest(
   } as AgentServiceRequest;
   const result = await client(serviceRequest);
 
-  return new Response(JSON.stringify(result.body), {
+  return new Response(result.status === 204 ? null : JSON.stringify(result.body), {
     status: result.status,
     headers: result.headers,
   });

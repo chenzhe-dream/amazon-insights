@@ -120,6 +120,7 @@ export async function runSorftimeCategoryCli(options = {}) {
 export type SorftimeCategoryTrendPoint = { month: string; value: number };
 
 export type SorftimeCategoryTrendRecord = {
+  asin?: string;
   nodeId: string;
   categoryName: string;
   topCategory: string;
@@ -174,7 +175,7 @@ export async function collectSorftimeCategoryRecords({
   existing,
   fetchedAt,
   jobId,
-  callTool,
+  callTool = /** @type {typeof callSorftimeTool | undefined} */ (undefined),
   providerCall = callSorftimeTool,
   wait = sleep,
 }) {

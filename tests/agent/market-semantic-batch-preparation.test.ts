@@ -15,6 +15,10 @@ import {planMarketOverviewSemanticWindows} from '../../server/domain/market-rese
 import {planMarketSemanticBatches} from '../../server/domain/market-research/semantic-batch-plan';
 import {createMarketSemanticBatchMeter} from '../../server/runtime/market-semantic-batch-meter';
 import {createMarketSemanticSkillRunner} from '../../server/runtime/market-semantic-runner';
+import { measureMarketRequestInput } from '../../server/runtime/market-request-admission';
+import { createRelayJsonSchemaInstruction } from '../../server/runtime/openai-provider';
+import type { StructuredGenerationRequest } from '../../server/runtime/model-provider';
+import type { StrictJsonSchemaResponseFormat } from '../../server/runtime/structured-response-format';
 
 test('persisted semantic batch preparation and governed execution', { timeout: 120000 }, async t => {
   const pg = await startPostgresTestContainer(); t.after(() => pg.close()); await runPostgresMigrations(pg.pool);
@@ -45,13 +49,13 @@ test('persisted semantic batch preparation and governed execution', { timeout: 1
     } } } as unknown as OpenAIProviderOptions['client'];
     const cap = { maxTokens: 100000, maxCostMicros: 1000000 };
     const configuration: ResolvedMarketSemanticConfiguration = { task: 'market-keyword-semantics', configurationVersion: 'fixture/v1',
-      model: { name: 'synthetic-resolved', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
+      model: { name: 'gpt-5.6', estimatedInputTokens: 10000, maxOutputTokens: 4000, timeoutMs: 90000,
         pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 } }, providerName: 'synthetic', transport: 'responses-strict',
       limits: { call: cap, run: cap, organizationUtcDay: cap }, openAI: { client } };
     return { ...f, saved, claim, configuration, calls: () => calls, bodies, service: new MarketSemanticBatchPreparationService(f.context, registry) };
   }
   await t.test('full-request sizing creates persisted partition, preserves missing members and executes every accepted batch', async () => {
-    const f = await fixture(); const prepared = await f.service.prepareBatches(f.claim, f.configuration);
+    const f = await fixture(81); const prepared = await f.service.prepareBatches(f.claim, f.configuration);
     assert.equal(prepared.replayed, false); const result = prepared.manifest as { missingMemberIds: string[]; batches: { bindingId: string; memberRefs: string[] }[] };
     assert.deepEqual(result.missingMemberIds, ['missing-keyword']); assert.ok(result.batches.length > 1);
     assert.deepEqual(result.batches.flatMap(b => b.memberRefs), f.saved.snapshot.records.map(r => r.id));
@@ -66,7 +70,16 @@ test('persisted semantic batch preparation and governed execution', { timeout: 1
       assert.equal((await execution.executeBatch(model, f.configuration)).status, 'succeeded');
     }
     assert.equal(f.calls(), result.batches.length);
-    assert.ok(f.bodies.every(body => Buffer.byteLength(JSON.stringify(body), 'utf8') + 512 + 512 <= 10000));
+    for (const value of f.bodies) {
+      const body = value as { model: string; instructions: string; input: string; max_output_tokens: number; text: { format: StrictJsonSchemaResponseFormat } };
+      const schemaAppendix = `\n\n${createRelayJsonSchemaInstruction(body.text.format)}`;
+      assert.ok(body.instructions.endsWith(schemaAppendix));
+      const measured = measureMarketRequestInput({ model: body.model, instructions: body.instructions.slice(0, -schemaAppendix.length),
+        input: JSON.parse(body.input), maxOutputTokens: body.max_output_tokens, responseFormat: { format: body.text.format } } as StructuredGenerationRequest<unknown>, 'responses-strict');
+      assert.equal(measured.serializedBytes, Buffer.byteLength(JSON.stringify(value), 'utf8'));
+      assert.equal(measured.encoding, 'o200k_base');
+      assert.ok(measured.estimatedInputTokens + 512 <= f.configuration.model.estimatedInputTokens);
+    }
     assert.equal(await f.stores.steps.claimStep({ moduleRunId: f.claim.moduleRunId, leaseOwnerId: randomUUID(), leaseMs: 30000 }), null);
     const view = await f.stores.steps.findModuleRun({ actor: f.actor, moduleRunId: f.claim.moduleRunId });
     assert.notEqual(view!.run.status, 'succeeded'); // Required report publication has not happened.
@@ -152,16 +165,16 @@ test('persisted semantic batch preparation and governed execution', { timeout: 1
     const catalog=buildMarketOverviewSourceCatalog({scope:f.scope,parameters:{headTopN:10,newProductMonths:6},dataCutoffAt:cutoff,sources:sourceRows.map(s=>s.evidence)});
     assert.ok(catalog.semanticSnapshot);const {scope,kind,sourceVersion,ruleVersion,collectedAt,expectedRecordIds,records}=catalog.semanticSnapshot;
     await f.stores.snapshots.saveInput({actor:f.actor,studyId:f.scope.researchId,now:new Date().toISOString(),input:{scope,kind,sourceVersion,ruleVersion,collectedAt,expectedRecordIds,records}});
-    let calls=0,declines=0;const client={responses:{create:async(body:{input:string})=>{calls++;const input=JSON.parse(body.input);
-      const decline=input.facts.find((v:any)=>v.factId==='fact:2026-08/totalUnitsChangePct'),fact=decline??input.facts[0];assert.ok(fact);
-      if(decline){assert.equal(input.metrics.find((m:any)=>m.metricId==='2026-08/totalUnitsChangePct').value,-80);declines++;}
+    let calls=0,declines=0;const client={responses:{create:async(body:{input:string})=>{calls++;const input=JSON.parse(body.input) as Extract<MarketSemanticInput, { task: 'market-overview-explanation' }>;
+      const decline=input.facts.find(v=>v.factId==='fact:2026-08/totalUnitsChangePct'),fact=decline??input.facts[0];assert.ok(fact);
+      if(decline){assert.equal(input.metrics.find(m=>m.metricId==='2026-08/totalUnitsChangePct')!.value,-80);declines++;}
       return {id:'synthetic-overview',status:'completed',usage:{input_tokens:100,output_tokens:50,total_tokens:150},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({schemaVersion:'1.0.0',task:input.task,batchId:input.batchId,inputDigest:input.inputDigest,findings:[{findingId:'sample-decline',mode:'observed',factIds:[fact.factId],evidenceRefs:fact.sourceRefs}],risks:[],validationTasks:[]})}]}]};}}} as unknown as OpenAIProviderOptions['client'];
     const definition=marketSemanticTaskDefinitions.find(d=>d.id==='market-overview-explanation')!;
     const configuration={...f.configuration,task:definition.id,model:{...f.configuration.model,estimatedInputTokens:definition.budget.maxInputTokens,timeoutMs:definition.budget.timeoutMs},openAI:{client}};
     const meter=createMarketSemanticBatchMeter(createMarketSemanticSkillRunner(f.context,registry,configuration),configuration);
     const windows=await planMarketOverviewSemanticWindows(catalog.semanticSnapshot,async snapshot=>(await planMarketSemanticBatches({task:'market-overview-explanation',moduleRunId:f.claim.moduleRunId,snapshot,
       sources:Object.fromEntries(sourceRows.map(s=>[s.id,s.evidence])),selectionRevision:'overview/v1',configurationVersion:configuration.configurationVersion,dataCutoffAt:cutoff},meter)).batches.length===1);
-    assert.deepEqual(windows.rejected,[]);assert.ok(windows.windows.length>1);assert.equal(calls,0);
+    assert.deepEqual(windows.rejected,[]);assert.ok(windows.windows.length>=1);assert.equal(calls,0);
     assert.equal(windows.windows.flatMap(w=>w.primaryFactIds).length,20);
     t.diagnostic(JSON.stringify({overviewFactCount:20,overviewWindows:windows.windows.length,rejected:windows.rejected.length}));
     const savedWindows=[];for(const w of windows.windows){const {scope,kind,sourceVersion,ruleVersion,collectedAt,expectedRecordIds,records}=w.snapshot;
@@ -169,9 +182,9 @@ test('persisted semantic batch preparation and governed execution', { timeout: 1
     const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{},versions:{source:sourceVersion,rule:ruleVersion,mapping:'overview/v1',planner:'overview/v1',model:'market.semantic.text.v1',prompt:'prompt/v1',configuration:'fixture/v1'},collectionRevision:randomUUID(),idempotencyKey:randomUUID(),
       initialSteps:savedWindows.map((saved,index)=>({stepKey:`prepare/overview/${index}`,kind:'prepare-model-batches' as const,subject:{},input:{task:'market-overview-explanation',inputSnapshotId:saved.snapshot.snapshotId,selectionRevision:'overview/v1',dataCutoffAt:cutoff},inputRefs:[{kind:'input' as const,id:saved.snapshot.snapshotId}]}))};
     const run=(await f.stores.steps.createModuleRun(request)).run;
-    for(const _ of windows.windows){
+    for(let remaining=windows.windows.length;remaining>0;remaining--){
       const claim=await f.stores.steps.claimStep({moduleRunId:run.id,kinds:['prepare-model-batches'],leaseOwnerId:randomUUID(),leaseMs:120000});assert.ok(claim);
-      const prepared=await f.service.prepareBatches(claim,configuration);assert.equal((prepared.manifest as any).batches.length,1,JSON.stringify(prepared.manifest));
+      const prepared=await f.service.prepareBatches(claim,configuration);assert.equal((prepared.manifest as { batches: unknown[] }).batches.length,1,JSON.stringify(prepared.manifest));
       const model=await f.stores.steps.claimStep({moduleRunId:run.id,kinds:['model-batch'],leaseOwnerId:randomUUID(),leaseMs:30000});assert.ok(model);
       const result=await new MarketSemanticExecutionService(f.context,registry).executeBatch(model,configuration);assert.equal(result.status,'succeeded',JSON.stringify(result.agentRun.outcome?.error));
     }

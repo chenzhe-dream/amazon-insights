@@ -1,4 +1,6 @@
 import { z } from "zod";
+import {PresencePaginationSchema,PresenceSummarySchema} from './admin-user-presence-query';
+import {UsageBatchSchema,UsageActivityResponseSchema,RECENT_ACTIVITY_WINDOW_MS} from "./usage-analytics-contracts";
 
 const strictObject = z.strictObject;
 
@@ -11,8 +13,8 @@ export function createAdminUserPresenceContracts<
   UserRoleSchema: UserRole;
   UserStatusSchema: UserStatus;
 }>) {
-  const ActivityRequestSchema = strictObject({});
-  const ActivityResponseSchema = strictObject({ ok: z.literal(true) });
+  const ActivityRequestSchema = strictObject({usage:UsageBatchSchema.optional()});
+  const ActivityResponseSchema = UsageActivityResponseSchema;
   const PresenceStatusSchema = z.enum([
     "disabled",
     "recently-online",
@@ -32,6 +34,7 @@ export function createAdminUserPresenceContracts<
     invalidationReason: InvalidationReasonSchema,
   });
   const AdminUserPresenceUserSchema = strictObject({
+    source: z.enum(['dingtalk','local']).optional(),
     account: z.email(),
     displayName: z.string().trim().min(1).max(200),
     role: schemas.UserRoleSchema,
@@ -44,8 +47,10 @@ export function createAdminUserPresenceContracts<
     recentLogins: z.array(AdminUserPresenceRecentLoginSchema).max(10),
   });
   const AdminUserPresenceResponseSchema = strictObject({
+    pagination: PresencePaginationSchema.optional(),
+    summary: PresenceSummarySchema.optional(),
     asOf: schemas.DateTimeSchema,
-    recentActivityWindowSeconds: z.literal(300),
+    recentActivityWindowSeconds: z.literal(RECENT_ACTIVITY_WINDOW_MS / 1000),
     users: z.array(AdminUserPresenceUserSchema),
   });
 

@@ -1258,6 +1258,7 @@ test("an authenticated local workspace registration makes the same project ident
     return {
       job: {
         jobId: "registered-project-sync",
+        jobVersion: 1,
         asins: workspaceAsins,
         marketplace: "US",
         status: "queued",
@@ -1271,6 +1272,8 @@ test("an authenticated local workspace registration makes the same project ident
           organizationId,
           projectId: workspaceId,
           runId: null,
+          marketplace: "US",
+          asins: workspaceAsins,
           actorId,
         },
       },

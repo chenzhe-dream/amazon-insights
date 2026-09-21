@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildKeywordLaunchConclusions } from "../../app/keyword-demand-conclusions";
 
 import { buildFinalProductDefinition } from "../../app/final-product-definition";
 import {
@@ -107,6 +108,74 @@ function buildDefinition(analysis: ReturnType<typeof buildProductLaunchAnalysis>
 }
 
 const readyKeywordDemand = buildKeywordDemandAnalysis([product], keywordSources);
+
+function functionDemandFixture(values: Array<[string, number | null, number]>) {
+  const demand = structuredClone(readyKeywordDemand);
+  demand.meta.readyCount = 4;
+  const bucket = demand.categories.find(row => row.id === "function")!;
+  assert.ok(bucket);
+  bucket.keywords = values.map(([keyword, searchVolume, competitorCount], index) => ({
+    keyword, searchVolume, competitorCount, category: "function", categoryLabel: "功能",
+    aggregateShare: 100 - index, maxShare: 10, abaRank: null, competitors: [], listingHint: "功能词",
+  }));
+  bucket.keywordCount = values.length;
+  return demand;
+}
+
+const dimmableKeyword = "unit dimmable candle warmer lamp";
+const candleDemand = () => functionDemandFixture([
+  ["unit candle warmer lamp with timer", 166151, 4],
+  ["unit adjustable height candle warmer lamp", 8772, 1],
+  ["unit candle warmer with timer", 16070, 2],
+  [dimmableKeyword, 8212, 2],
+]);
+
+test("functional search evidence below priority thresholds stays pending instead of becoming a false need", () => {
+  const result = buildKeywordLaunchConclusions(candleDemand(), [product]);
+  assert.deepEqual(result.functionMatrix.map(row => row.type), ["基础必备", "高关注", "高关注", "待验证"]);
+  const dimmable = result.functionMatrix.find(row => row.keyword === dimmableKeyword)!;
+  assert.equal(dimmable.volume, 8212);
+  assert.equal(dimmable.coverage, 2);
+  assert.match(dimmable.action, /VOC/);
+  assert.doesNotMatch(dimmable.action, /不单独配置|伪需求/);
+  const profile = result.sections.find(row => row.id === "customer_profile")!;
+  assert.ok(profile.items.some(row => row.label === "功能搜索信号" && row.value.includes(dimmableKeyword)));
+  assert.ok(!profile.items.some(row => row.label === "最关注功能"));
+});
+
+test("missing search volumes cannot acquire a positive priority through a zero threshold", () => {
+  for (const values of [
+    [["unit missing volume", null, 4], ["unit zero volume", 0, 1]],
+    [["unit known volume", 9000, 4], ["unit missing volume", null, 4]],
+  ] as Array<Array<[string, number | null, number]>>) {
+    const result = buildKeywordLaunchConclusions(functionDemandFixture(values), [product]);
+    for (const row of result.functionMatrix.filter(row => row.keyword !== "unit known volume")) {
+      assert.equal(row.type, "数据不足");
+      assert.match(row.action, /补齐/);
+    }
+  }
+});
+
+test("uncertain keyword functions are retained for validation and never become automatic avoid recommendations", () => {
+  const demand = candleDemand();
+  demand.categories.find(row => row.id === "function")!.keywords.push({
+    ...demand.categories.find(row => row.id === "function")!.keywords[3],
+    keyword: "unit missing dimming evidence", searchVolume: null,
+  });
+  const launch = analysisWith(demand);
+  const definition = buildDefinition(launch);
+  for (const keyword of [dimmableKeyword, "unit missing dimming evidence"]) {
+    const avoid = JSON.stringify({
+      launch: launch.productDefinition.avoid,
+      directions: launch.productDirections.map(row => row.avoidFeatures),
+      final: definition.featureLayers.notInV1,
+      requirements: definition.definitionRows.filter(row => row.dimension === "避坑要求"),
+      riskWords: definition.keywordGroups.filter(row => /风险词/.test(row.type)),
+    });
+    assert.equal(avoid.includes(keyword), false, avoid);
+    assert.ok(definition.nextValidations.some(row => row.includes(keyword)));
+  }
+});
 const proxyKeywordDemand = buildKeywordDemandAnalysis([product], {
   analysisByAsin: {},
   enrichmentByKeyword: {},

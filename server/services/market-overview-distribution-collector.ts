@@ -56,18 +56,18 @@ export function projectMarketOverviewDistribution(input:Params&{scope:MarketAnal
     // No response echoes are synthesized from the request. Currency must be
     // declared for the whole response or every row that reports money.
     const moneyRows=rows.map(obj).filter(r=>r.revenue!==undefined||r.totalRevenue!==undefined);
-    const currencyKnown=envelope.currency==='USD'||demand&&obj(data).currency==='USD'||moneyRows.length>0&&moneyRows.every(r=>r.currency==='USD');
+    const currencyKnown=envelope.currency===scope.currency||demand&&obj(data).currency===scope.currency||moneyRows.length>0&&moneyRows.every(r=>r.currency===scope.currency);
     const fields=[...new Set((demand?[obj(data),...(obj(data).items as unknown[]).map(obj)]:rows.map(obj)).flatMap(r=>Object.keys(r)))];
     const units:Record<string,MarketSourceUnit>={};
     for(const field of fields){
       if(field.endsWith('Ratio'))units[field]={status:'unknown',rawUnit:field,reason:'供应商未声明此字段使用比例原值或百分数'};
-      else if(['revenue','totalRevenue','newRevenue','avgPrice'].includes(field))units[field]=currencyKnown?{status:'known',unit:'currency',rawUnit:field,currency:'USD'}:{status:'unknown',rawUnit:field,reason:'响应未确认金额币种'};
+      else if(['revenue','totalRevenue','newRevenue','avgPrice'].includes(field))units[field]=currencyKnown?{status:'known',unit:'currency',rawUnit:field,currency:scope.currency}:{status:'unknown',rawUnit:field,reason:'响应未确认金额币种'};
       else if(['products','asinNum','productNum','units','totalUnits','newProducts','newUnits','ratings','reviews','asinCount'].includes(field))units[field]={status:'known',unit:'count',rawUnit:field};
     }
     let distribution:MarketOverviewDistribution|null=null,empty=false;const issues:Issue[]=[];
     if(demand){const d=obj(data);empty=(d.items as unknown[]).length===0&&Object.entries(d).filter(([key])=>!['items','marketplace','nodeIdPath','nodeId','month','currency'].includes(key)).every(([,v])=>v===null||v===undefined);
       if(!empty)issues.push({code:'demand-series-not-normalized',retryable:false});
-    }else{distribution=normalizeMarketOverviewDistribution(operation,payload,currencyKnown?{currency:'USD'}:{});empty=distribution.status==='empty';issues.push(...distribution.issues.map(code=>({code,retryable:false})));}
+    }else{distribution=normalizeMarketOverviewDistribution(operation,payload,currencyKnown?{currency:scope.currency}:{});empty=distribution.status==='empty';issues.push(...distribution.issues.map(code=>({code,retryable:false})));}
     const evidence=createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month},responseIdentityPaths:paths,payload,
       fetchedAt:input.fetchedAt,observationPeriod:{kind:'calendar-months',fromMonth:month,toMonth:month},units,
       coverage:{receivedCount:demand?(obj(data).items as unknown[]).length:rows.length,expectedCount:null,truncation:{status:'unknown',reason:'来源返回分组，未证明覆盖整个类目'}}},input.now??new Date());

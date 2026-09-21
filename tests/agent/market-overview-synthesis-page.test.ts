@@ -25,6 +25,7 @@ test('overview final report preserves history and source limitations across mobi
  assert.doesNotMatch(await page.getByRole('region',{name:'已保存总览报告'}).innerText(),/完整综合判断仍待/);
  await mkdir('test-results/market-overview-synthesis-page',{recursive:true});await synthesis.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-overview-synthesis-page/synthesis-desktop.png'});
  await page.setViewportSize({width:390,height:844});await synthesis.scrollIntoViewIfNeeded();assert.ok(await synthesis.evaluate(element=>element.scrollWidth<=element.clientWidth+1));await page.screenshot({path:'test-results/market-overview-synthesis-page/synthesis-mobile.png'});
+ await page.getByText('分析设置与任务管理',{exact:true}).click();
  await page.getByLabel('总览报告版本').selectOption(overviewEntry(true).attemptId);await page.getByRole('region',{name:'已保存总览报告'}).getByText('17',{exact:true}).first().waitFor();assert.equal(await synthesis.count(),0);
  await page.getByLabel('总览报告版本').selectOption(overviewEntry().attemptId);await page.getByRole('region',{name:'已保存分段解释'}).waitFor();assert.equal(await synthesis.count(),0);
  await page.getByLabel('总览报告版本').selectOption('latest');await synthesis.waitFor();await page.reload();await synthesis.waitFor();assert.equal(writes,0);assert.deepEqual(errors,[]);

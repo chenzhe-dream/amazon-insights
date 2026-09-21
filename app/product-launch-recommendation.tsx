@@ -9,6 +9,7 @@ import {
   type ProductLaunchRuntimeSources,
 } from "./product-launch-analysis";
 import { LaunchSection, LaunchTable } from "./launch-section";
+import { AnalysisRuleExplanation, RuleDecisionExplanation } from "./analysis-rule-explanation";
 
 type LaunchProduct = {
   asin: string;
@@ -29,6 +30,12 @@ function decisionClass(decision: FinalDecision) {
   if (decision === "优先立项") return "approve";
   if (decision === "建议小批量测试") return "conditional";
   return "hold";
+}
+
+function rowDecisionIds(row: unknown): string[] | undefined {
+  if (!row || typeof row !== "object" || !("ruleDecisionIds" in row)) return undefined;
+  const value = (row as { ruleDecisionIds?: unknown }).ruleDecisionIds;
+  return Array.isArray(value) && value.every(item => typeof item === "string") ? value : undefined;
 }
 
 export function ProductLaunchRecommendationSection({ products, sources }: {
@@ -63,6 +70,8 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
           </span>
         </div>
       </section>
+
+      <AnalysisRuleExplanation trace={analysis.ruleTrace} resultAvailable={ready} />
 
       {!ready ? (
         <section className="card launch-block">
@@ -126,6 +135,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                   <th>影响环节</th>
                   <th>是否建议保留</th>
                   <th>强化方向</th>
+                  <th>判定依据</th>
                 </tr>
               </thead>
               <tbody>
@@ -141,6 +151,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                     <td>{row.impactStages}</td>
                     <td>{row.shouldKeep}</td>
                     <td className="launch-muted">{row.leverageDirection}</td>
+                    <td><RuleDecisionExplanation trace={analysis.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -161,6 +172,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                   <th>影响环节</th>
                   <th>是否建议解决</th>
                   <th>解决方向</th>
+                  <th>判定依据</th>
                 </tr>
               </thead>
               <tbody>
@@ -175,6 +187,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                     <td>{row.impactStages}</td>
                     <td>{row.shouldFix}</td>
                     <td className="launch-muted">{row.fixDirection}</td>
+                    <td><RuleDecisionExplanation trace={analysis.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -195,6 +208,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                   <th>市场价值</th>
                   <th>实现难度</th>
                   <th>建议方案</th>
+                  <th>判定依据</th>
                 </tr>
               </thead>
               <tbody>
@@ -207,6 +221,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
                     <td>{row.marketValue}</td>
                     <td>{row.difficulty}</td>
                     <td className="launch-muted">{row.proposal}</td>
+                    <td><RuleDecisionExplanation trace={analysis.ruleTrace} decisionIds={rowDecisionIds(row)} /></td>
                   </tr>
                 ))}
               </tbody>

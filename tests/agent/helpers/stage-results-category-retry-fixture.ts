@@ -151,7 +151,7 @@ export async function createStageResultsCategoryRetryFixture(): Promise<{
           jobId: scope.jobId,
           stage,
         });
-        if (output) owner.accept(LocalDataStageOutputResponseSchema.parse(output));
+        if (output) owner.accept(stage, LocalDataStageOutputResponseSchema.parse(output));
       }
       const stageOutputReadSideEffects = sideEffectCount(counters) - sideEffectsBeforeReads;
       const visible = owner.snapshot();
@@ -185,9 +185,11 @@ export async function createStageResultsCategoryRetryFixture(): Promise<{
           .every((stage) => visible[stage]?.stageStatus === "done"),
         globalReloadsBeforeAppliedPublication: counters.reloads,
         stageOutputReadSideEffects,
-        artifactHashesMatch: publicationView !== null && STAGES.every((stage) =>
-          publicationView.stageContentHashes[stage] === visible[stage]?.contentHash
-        ),
+        artifactHashesMatch: publicationView !== null && STAGES.every((stage) => {
+          const output = visible[stage];
+          return output !== undefined && "contentHash" in output &&
+            publicationView.stageContentHashes[stage] === output.contentHash;
+        }),
         fixtureBuilds: counters.builds,
       };
     },
@@ -369,6 +371,7 @@ async function runCategoryTransport(
       catalog: [{ asin: ASIN, subRankCategory: "Fixture category" }],
       existing: {},
       fetchedAt: "2026-08-26",
+      jobId: input.jobId,
       callTool,
       wait: async () => {},
     });

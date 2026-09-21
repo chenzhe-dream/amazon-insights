@@ -80,9 +80,11 @@ export function shouldReactivateImageRemarks({
 }
 
 export function imageRemarkRunAsins(job, asins) {
-  const planned = job?.stages?.find(stage => stage.id === "image_remarks")?.repairAsins;
+  const stage = job?.stages?.find(stage => stage.id === "image_remarks");
+  const planned = stage?.repairAsins;
   return asins.filter(asin => (!Array.isArray(planned) || planned.includes(asin))
-    && job?.asinProgress?.[asin]?.image_remarks?.status === "pending");
+    && (stage?.imageAction !== "refresh" || job?.asinProgress?.[asin]?.listing?.status === "ready")
+    && (stage?.imageAction || job?.asinProgress?.[asin]?.image_remarks?.status === "pending"));
 }
 
 function reactivateImageRemarksForReadyGalleries(jobId, asins) {
@@ -163,7 +165,7 @@ export function asinsForSyncStage(job, stageId, readinessCandidates, requestedAs
 
 export function repairProviderEnvironment(job, stageId, env = {}) {
   return Array.isArray(job?.stages?.find(stage => stage.id === stageId)?.repairAsins)
-    ? { ...env, FORCE_REFRESH: "0", AGENT_SYNC_REPAIR_INCOMPLETE: "1" }
+    ? { ...env, FORCE_REFRESH: "0", AGENT_SYNC_REPAIR_INCOMPLETE: "1", ...(job.stages.find(stage => stage.id === stageId)?.imageAction ? {AGENT_SYNC_IMAGE_ACTION:job.stages.find(stage => stage.id === stageId).imageAction} : {}) }
     : env;
 }
 
@@ -426,7 +428,10 @@ export function applyPersistedStagePostcondition(
     if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) {
       markModule(jobId, asin, stageId, {
         status: reported,
-        reason: reported === "ready" ? null : "连接器记录的局部结果",
+        reason: reported === "ready" ? null
+          : diagnostics.some(item => item.asin === asin && item.stage === stageId && item.causeCode === "PROVIDER_DEGRADED")
+            ? "数据源连接异常，保护机制已跳过本次请求，可补抓未完成项"
+            : "连接器记录的局部结果",
       });
     }
   }
@@ -1199,7 +1204,21 @@ async function main() {
       finalizeCachedStage(jobId, "listing", asins);
     }
 
-    const reactivatedImageAsins = reactivateImageRemarksForReadyGalleries(jobId, asins);
+    const explicitImageStage = job.stages.find(stage => stage.id === "image_remarks");
+    const currentImageJob = readSyncJob(jobId);
+    const refreshFailures = explicitImageStage?.imageAction === "refresh"
+      ? (explicitImageStage.repairAsins ?? []).filter(asin => currentImageJob?.asinProgress?.[asin]?.listing?.status !== "ready")
+      : [];
+    if (refreshFailures.length) {
+      finalizeProcessedStageCohort(jobId, "image_remarks", refreshFailures, asins, {
+        initialJob: job,
+        commandSucceeded: false,
+        resultStatusesByAsin: Object.fromEntries(refreshFailures.map(asin => [asin, "connector-failed"])),
+        unavailableReason: "本次图片抓取失败，未重新分析，保留原图和分析结果",
+      });
+    }
+    const reactivatedImageAsins = reactivateImageRemarksForReadyGalleries(jobId,
+      explicitImageStage?.imageAction ? (explicitImageStage.repairAsins ?? []).filter(asin => !refreshFailures.includes(asin)) : asins);
 
     const categoryAsins = stageAsins("category");
     if (shouldRunSyncStage(job, "category") && categoryAsins.length) {
@@ -1255,9 +1274,9 @@ async function main() {
 
     const imageStageJob = readSyncJob(jobId);
     const imageAsins = imageRemarkRunAsins(imageStageJob, asins);
-    const trafficIsTerminal = imageAsins.length > 0 && imageAsins.every(asin =>
+    const trafficIsTerminal = imageAsins.length > 0 && (Boolean(explicitImageStage?.imageAction) || imageAsins.every(asin =>
       trafficIsTerminalBeforeImageRemarks(imageStageJob?.asinProgress?.[asin])
-    );
+    ));
     if ((shouldRunSyncStage(job, "image_remarks") || reactivatedImageAsins.length > 0) && trafficIsTerminal) {
       activateStage(jobId, "image_remarks");
       setStage(jobId, "image_remarks", {

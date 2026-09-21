@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>子体颜色展示预览</title>
+<style>body{margin:0;background:#f3f6fb;color:#20344c;font-family:Arial,"Microsoft YaHei",sans-serif}main{max-width:940px;margin:32px auto;padding:16px}h1{font-size:24px}p{font-size:14px;line-height:1.7}button{font-family:inherit}</style></head>
+<body><main><h1>子体颜色展示预览</h1><p>演示数据：用于检查配色与交互，不代表真实销量。冷门色显示近似色系，原名保留在标签或悬浮说明中。同色的不同子体各自保留份额。</p><div id="root"></div></main>
+<script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {XydcVariantSection} from '/app/xydc-variant-section.tsx';
+import '/app/comparison-layout.css';
+const names=['Aqua Blue','Black','White','Lime Green','Orange','Black-Red','After the Storm','Uncharted ZZZ Finish','Clear','Black'];
+const asins=names.map((_,i)=>'B'+String(i+1).padStart(9,'0'));
+const months=Array.from({length:12},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-12+i);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
+const window={startMonth:months[0],endMonth:months.at(-1),months};
+const children=asins.map((asin,i)=>({asin,attributes:[{dimension:'Color',value:names[i]},...(i===9?[{dimension:'Size',value:'Large'}]:[])],title:names[i],imageUrl:null,price:39.99,currency:'USD',stars:4.5,productPageRatings:100,listingDate:null,infoStatus:'ready'}));
+const family={inputAsin:asins[0],country:'US',parentAsin:'B000000099',dimensions:['Color','Size'],children,sourceUpdatedAt:null,fetchedAt:'2026-09-17T00:00:00.000Z',status:'ready',reasonCode:null,cacheState:'fresh'};
+const snapshot={version:1,source:'xydc',aggregation:'children',country:'US',parentAsin:family.parentAsin,childAsins:asins,window,children:asins.map(asin=>({asin,trends:months.map(date=>({date,orders:100})),reasonCode:null,fetchedAt:family.fetchedAt})),sourceUpdatedAt:null,fetchedAt:family.fetchedAt,cacheState:'fresh',reasonCode:null};
+createRoot(document.getElementById('root')).render(React.createElement(XydcVariantSection,{products:[{asin:asins[0],brand:'配色演示',title:'单色、双色、近似色、未知颜色和同色不同尺寸',image:''}],families:[family],orderFamilies:[snapshot],market:{label:'美国站',domain:'www.amazon.com'}}));
+</script></body></html>

@@ -108,7 +108,18 @@ test("PostgreSQL binding lookup is exact, read-only, current, and provider-scope
     createdAt: NOW,
     auditEventId: "30000000-0000-4000-8000-000000000010",
   };
-  await store.findOrCreateDingTalkUser(identity);
+  // Legacy account fixture: this test exercises binding lookup across organization
+  // changes, not provisioning. New accounts now have an organization-bound snapshot.
+  await pool.query(
+    `INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at)
+     VALUES($1,$2,$3,$4,'member','active',$5,$5)`,
+    [identity.id,identity.organizationId,identity.candidateEmail,identity.displayName,NOW],
+  );
+  await pool.query(
+    `INSERT INTO auth_identities(provider,corp_id,subject_id,user_id,created_at,last_login_at)
+     VALUES('dingtalk',$1,$2,$3,$4,$4)`,
+    [identity.corpId,identity.subjectId,identity.id,NOW],
+  );
   const before = await pool.query(
     "SELECT provider, corp_id, subject_id, user_id, created_at, last_login_at FROM auth_identities WHERE user_id = $1",
     [identity.id],

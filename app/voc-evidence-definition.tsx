@@ -225,7 +225,7 @@ export function VocEvidenceDefinition(props: Props) {
       {observation?.reports.some(item => item.stage === "voc-positioning") && source?.keywords.state !== "ready" ? <p>VOC 报告已保存；{source ? keywordLabels[source.keywords.state] : "关键词未获取"}，暂停联合判断。</p> : null}
       {observation?.reports.filter(item => item.stage === "voc-positioning").slice(0, 1).map(item => <details key={item.id}><summary>查看已保存的 VOC 分析（版本 {item.version}）</summary><SavedVocSummary result={item.result} /></details>)}
     </section>
-    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner || automation?.state === "failed" ? "failed" : automation?.state === "voc-running" ? "waiting-voc-report" : stage?.status ?? ( automation?.state === "voc-running" || automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
+    <ProductDefinitionSection products={props.products} sources={props.sources} savedReport={(report ?? undefined) as SavedProductDefinitionReport | undefined} current={current} sourceLabel={sourceLabel} executionState={errorState?.owner === owner || automation?.state === "failed" ? "failed" : automation?.state === "voc-running" ? "waiting-voc-report" : stage?.status ?? (automation?.state === "definition-running" ? "running" : manualReady && automation?.state === "queued" ? "input-ready" : "waiting-input")} />
   </div>;
 }
 

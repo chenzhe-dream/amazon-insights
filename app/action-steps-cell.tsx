@@ -1,5 +1,7 @@
 "use client";
 
+import { hasVisibleQualification } from './lib/product-definition-presentation';
+
 const ACTION_TAG_CLASS: Record<string, string> = {
   产品: "product",
   listing: "listing",
@@ -43,15 +45,18 @@ function parseActionSteps(raw: string): Array<{ tag: string | null; text: string
 export function ActionStepsCell({
   value,
   maxItems = 5,
+  expandable = false,
 }: {
   value: string;
   maxItems?: number;
+  expandable?: boolean;
 }) {
   const steps = parseActionSteps(value);
   if (!steps.length) return <span className="launch-muted">—</span>;
 
-  const visible = steps.slice(0, maxItems);
-  const rest = steps.length - visible.length;
+  const visible = steps.filter((step,index)=>index < maxItems || (expandable && hasVisibleQualification(`${step.tag ?? ''}：${step.text}`)));
+  const remaining = steps.filter(step=>!visible.includes(step));
+  const rest = remaining.length;
 
   return (
     <ul className="action-steps">
@@ -61,7 +66,7 @@ export function ActionStepsCell({
           <span className="action-text">{step.text}</span>
         </li>
       ))}
-      {rest > 0 ? <li className="action-more">另有 {rest} 项，见完整规格书</li> : null}
+      {rest > 0 ? <li className="action-more">{expandable ? <details className="definition-reading-more"><summary>展开其余 {rest} 项动作</summary><ul className="action-steps">{remaining.map((step,index)=><li key={index}>{step.tag ? <span className={`action-tag ${resolveTagClass(step.tag)}`}>{step.tag}</span> : <span className="action-dot" />}<span className="action-text">{step.text}</span></li>)}</ul></details> : <>另有 {rest} 项，见完整规格书</>}</li> : null}
     </ul>
   );
 }

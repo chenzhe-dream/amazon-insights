@@ -375,6 +375,7 @@ test("PostgreSQL AgentRun persists a complete auditable execution and aggregates
   );
   assert.deepEqual(
     await repository.getJobAttemptModelUsage({
+      agentRunId: begun.record.id,
       organizationId: subject.organizationId,
       runId: subject.runId,
       jobAttemptId: subject.jobAttemptId,
@@ -497,6 +498,7 @@ test("PostgreSQL AgentRun reclaims one logical execution and aggregates model at
   const skill = await repository.registerSkillVersion(skillVersionInput());
   const originalInput = beginInput(subject, skill.id);
   const original = await repository.beginAgentRun(originalInput);
+  await insertModelAttempt(pool, subject, subject.jobAttemptId, 0, "settled", original.record.id);
 
   await pool.query(
     `UPDATE job_attempts
@@ -543,6 +545,21 @@ test("PostgreSQL AgentRun reclaims one logical execution and aggregates model at
   assert.equal(recovered.record.id, original.record.id);
   assert.equal(recovered.created, false);
   assert.equal(recovered.claimStatus, "acquired");
+  const recoveredUsageScope = {
+    agentRunId: original.record.id,
+    organizationId: subject.organizationId,
+    runId: subject.runId,
+    jobAttemptId: recoveredJobId,
+  };
+  assert.equal((await repository.getJobAttemptModelUsage(recoveredUsageScope)).inputTokens, 12,
+    "the active recovery must see previous billed attempts before deciding to call the provider");
+  for (const invalid of [
+    { ...recoveredUsageScope, organizationId: randomUUID() },
+    { ...recoveredUsageScope, runId: randomUUID() },
+    { ...recoveredUsageScope, jobAttemptId: subject.jobAttemptId },
+  ]) {
+    assert.deepEqual((await repository.getJobAttemptModelUsage(invalid)).attempts, []);
+  }
   await repository.assertAgentRunClaim({
     agentRunId: original.record.id,
     organizationId: subject.organizationId,
@@ -565,15 +582,16 @@ test("PostgreSQL AgentRun reclaims one logical execution and aggregates model at
     AgentRunClaimLostError,
   );
 
-  await insertModelAttempt(pool, subject, subject.jobAttemptId, 0, "settled");
   await insertModelAttempt(
     pool,
     subject,
     recoveredJobId,
     1,
     "dispatched",
+    original.record.id,
   );
   const usage = await repository.getJobAttemptModelUsage({
+    agentRunId: original.record.id,
     organizationId: subject.organizationId,
     runId: subject.runId,
     jobAttemptId: recoveredJobId,
@@ -592,6 +610,7 @@ async function insertModelAttempt(
   jobAttemptId: string,
   ordinal: number,
   state: "settled" | "dispatched",
+  agentRunId: string,
 ) {
   const settled = state === "settled";
   await pool.query(
@@ -601,11 +620,11 @@ async function insertModelAttempt(
        projected_output_tokens, projected_cost_micros, actual_input_tokens,
        actual_output_tokens, actual_cost_micros, lease_expires_at, created_at,
        updated_at, dispatched_at, settled_at, job_attempt_id, request_ordinal,
-       attempt_kind, transient_retry_count, format_repair, response_id
+       attempt_kind, transient_retry_count, format_repair, response_id, agent_run_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11,
        $12, $13, $14, NULL, $7, $7, $15, $16, $17, $18,
-       $19, $20, FALSE, $21
+       $19, $20, FALSE, $21, $22
      )`,
     [
       randomUUID(),
@@ -629,6 +648,7 @@ async function insertModelAttempt(
       ordinal === 0 ? "initial" : "transient-retry",
       ordinal === 0 ? 0 : 1,
       settled ? `response-${ordinal}` : null,
+      agentRunId,
     ],
   );
 }

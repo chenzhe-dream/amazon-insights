@@ -45,7 +45,7 @@ function session(role: User["role"], canViewUserPresence = false): Authenticated
 }
 
 const statuses = [
-  ["recently-online", "近期在线"],
+  ["recently-online", "近期有活动"],
   ["valid-session-idle", "会话有效但近期无活动"],
   ["never-logged-in", "从未登录"],
   ["session-expired", "会话已失效"],
@@ -61,7 +61,7 @@ const recentLogins = Array.from({ length: 10 }, (_, index) => ({
 
 const readyResponse: AdminUserPresenceResponse = {
   asOf: "2026-08-31T04:00:00.000Z",
-  recentActivityWindowSeconds: 300,
+  recentActivityWindowSeconds: 900,
   users: statuses.map(([presenceStatus], index) => ({
     account: `person-${index}@example.com`,
     displayName: `Person ${index}`,
@@ -160,7 +160,7 @@ test("identity control renders the users link only with capability and keeps nor
 
   assert.doesNotMatch(deniedAdmin, /href="\/admin\/users"|用户状态/);
   assert.match(permittedMember, /href="\/admin\/users"/);
-  assert.match(permittedMember, /用户状态/);
+  assert.match(permittedMember, /用户与使用统计/);
   for (const html of [deniedAdmin, permittedMember]) {
     assert.match(html, /修改密码/);
     assert.match(html, /退出登录/);

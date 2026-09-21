@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MarketInputRecordSchema, type MarketAnalysisScope, type MarketJsonValue } from '../../shared/market-analysis-contracts';
 import { MARKET_SOURCE_HANDLER_VERSION, MarketSourceIdentityValueSchemas, type MarketSourceEvidence } from '../../shared/market-source-contracts';
-import type { ConnectorMap } from '../connectors/connector-contract';
+import { ConnectorError, type ConnectorMap } from '../connectors/connector-contract';
 import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
@@ -64,7 +64,7 @@ function collected(scope: MarketAnalysisScope, kind: 'products' | 'keywords' | '
     sources: [json(evidenceProposal(evidence))], inputs: [json(input)] } };
 }
 
-export function createMarketSourceStepHandlers(deps: { context: PostgresQueryContext; connectors: Pick<ConnectorMap, 'sellerSprite' | 'sorftime'> & Partial<Pick<ConnectorMap,'sif'>> }) {
+function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; connectors: Pick<ConnectorMap, 'sellerSprite' | 'sorftime'> & Partial<Pick<ConnectorMap,'sif'>> }) {
   const steps = new PostgresMarketModuleExecutionStore(deps.context), snapshots = new PostgresMarketAnalysisSnapshotStore(deps.context);
   async function scopeFor(claim: MarketStepClaim, signal: AbortSignal, moduleKind?:'overview') {
     signal.throwIfAborted();
@@ -125,6 +125,7 @@ export function createMarketSourceStepHandlers(deps: { context: PostgresQueryCon
       const record=pool.records.find(r=>r.id===member.keywordId);
       return !record||object(record.data).collection!=='keyword-page'||object(object(record.data).member).keyword!==member.keyword;
     }))invalid('ABA keywords differ from the fixed pool');
+    if(scope.marketplace!=='US')return failure('unsupported-marketplace',false);
     if(!deps.connectors.sif)return failure('configuration',false);
     const result=await collectMarketKeywordAba({scope,keywords:input.members.map(m=>m.keyword),referenceMonth:input.referenceMonth,jobId:claim.moduleRunId,connector:deps.connectors.sif,signal});
     if(result.status==='failed')return failure(result.failure.code,'retryable' in result.failure&&result.failure.retryable===true);
@@ -151,4 +152,25 @@ export function createMarketSourceStepHandlers(deps: { context: PostgresQueryCon
       {month:input.month,operation:input.operation,parameters:result.parameters,issues:result.issues});
   };
   return Object.freeze({ 'collect-product-month': products, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
+}
+
+/** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */
+export function createMarketSourceStepHandlers(deps: Parameters<typeof buildMarketSourceStepHandlers>[0]) {
+  const handlers = buildMarketSourceStepHandlers(deps);
+  return Object.fromEntries(Object.keys(handlers).map(kind => [kind, (async input => {
+    let admission: ConnectorError['admission'];
+    const connectors = Object.fromEntries(Object.entries(deps.connectors).map(([id, connector]) => [id, {
+      ...connector,
+      execute: async (request: Parameters<typeof connector.execute>[0]) => {
+        try { return await connector.execute({...request, sessionScope:'market'}); }
+        catch(error) { if(error instanceof ConnectorError && error.code==='local-admission') admission=error.admission; throw error; }
+      },
+    }])) as typeof deps.connectors;
+    const work = await buildMarketSourceStepHandlers({...deps, connectors})[kind as keyof typeof handlers](input);
+    if (!admission) return work;
+    input.signal.throwIfAborted();
+    return {kind:'settlement',value:{outcome:{status:'failed',error:{code:'local-admission',
+      retryable:admission.reason==='rolling-window'||admission.reason==='concurrency',admission},
+      diagnostic:{handlerVersion:MARKET_SOURCE_HANDLER_VERSION,sourceCode:'local-admission'}}}};
+  }) satisfies MarketStepHandler])) as typeof handlers;
 }

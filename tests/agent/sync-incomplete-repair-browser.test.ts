@@ -42,3 +42,11 @@ test("a failed request releases the click guard so the user can retry", async ()
   assert.deepEqual(await repair(scope, () => true), { noWork: true, message: "暂无待补抓数据" });
   assert.equal(calls, 2);
 });
+
+test("image repair transports exactly the chosen ASIN and action", async()=>{
+  let body:any;
+  const input={...scope,imageAction:{asin:scope.asins[0],action:"refresh" as const}};
+  await createIncompleteSyncRepair(async(_url,init)=>{body=JSON.parse(String(init?.body));return Response.json({jobId:"new",scope:{projectId:scope.projectId,runId:"new-run"}});})(input,()=>true);
+  assert.deepEqual(body.imageAction,input.imageAction);
+  assert.deepEqual(body.asins,scope.asins);
+});

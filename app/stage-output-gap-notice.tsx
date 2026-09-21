@@ -19,6 +19,7 @@ type Props = Readonly<{
   asins: readonly string[];
   records: Readonly<Record<string, Readonly<{ status?: unknown }> | undefined>>;
   reasonCode: StageOutputGapReasonCode;
+  gapItems?: readonly { asin: string; causeCode: StageOutputGapReasonCode }[];
 }>;
 
 const reasonCopy: Readonly<Record<StageOutputGapReasonCode, string>> = {
@@ -35,14 +36,16 @@ export function stageOutputGapReasonCode(entry: StageOutputGapEntry | undefined)
   return entry.stageStatus === "missing-output" ? entry.reasonCode : entry.gap.reasonCode;
 }
 
-export function StageOutputGapNotice({ label, asins, records, reasonCode }: Props) {
+export function StageOutputGapNotice({ label, asins, records, reasonCode, gapItems = [] }: Props) {
   const ready = asins.filter(asin => records[asin]?.status === "ready");
   const missing = asins.filter(asin => records[asin]?.status !== "ready");
   if (!missing.length) return null;
   return (
     <p className="stage-output-gap-notice" role="status">
       <strong>{`${label} ${ready.length}/${asins.length}`}</strong>
-      <span>{`；${missing.join("、")} ${reasonCopy[reasonCode]}`}</span>
+      <span>{gapItems.length
+        ? `；${missing.map(asin => `${asin}：${reasonCopy[gapItems.find(item => item.asin === asin)?.causeCode ?? reasonCode]}`).join("；")}`
+        : `；${missing.join("、")} ${reasonCopy[reasonCode]}`}</span>
     </p>
   );
 }

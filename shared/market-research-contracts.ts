@@ -1,9 +1,10 @@
 import { z } from "zod";
+import {MarketSiteSchema,MarketCurrencySchema,marketSiteCurrency} from './market-sites';
 
 const object = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const numberOrMissing = z.number().finite().nonnegative().nullable();
 export const MarketResearchScopeSchema = object({
-  marketplace: z.literal("US"),
+  marketplace: MarketSiteSchema,
   nodeQuery: z.string().trim().min(1).max(240).regex(/^\d+(?::\d+)*$/),
   month: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
   headTopN: z.union([z.literal(5), z.literal(10), z.literal(20)]),
@@ -41,13 +42,13 @@ export const MarketOverviewReportSchema = object({
   nodeId: z.string().regex(/^\d+$/),
   nodeIdPath: z.string().regex(/^\d+(?::\d+)*$/),
   categoryName: z.string().max(300),
-  currency: z.literal("USD"),
+  currency: MarketCurrencySchema,
   collectedAt: z.string().datetime(),
   metrics: MarketOverviewMetricsSchema,
   evidence: z.array(MarketResearchEvidenceSchema).max(3),
   issues: z.array(MarketResearchIssueSchema).max(3),
   boundaries: z.array(z.string().max(300)).max(10),
-});
+}).refine(report=>marketSiteCurrency(report.scope.marketplace)===report.currency,'Report currency differs from marketplace');
 export type MarketOverviewReport = z.infer<typeof MarketOverviewReportSchema>;
 export const MarketResearchJobSchema = object({
   id: z.string().uuid(),

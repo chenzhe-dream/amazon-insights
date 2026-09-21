@@ -14,11 +14,10 @@ const user = {
 };
 
 let childRenderCount = 0;
-const checking = renderToStaticMarkup(createElement(AuthSessionGate, null,
-  () => {
+const checking = renderToStaticMarkup(createElement(AuthSessionGate, { children: () => {
     childRenderCount += 1;
     return createElement("div", null, "protected-app");
-  },
+  } },
 ));
 const login = renderToStaticMarkup(createElement(AuthLoginCard, {
   state: { status: "unauthenticated", user: null, message: null, retryAfterSeconds: null },

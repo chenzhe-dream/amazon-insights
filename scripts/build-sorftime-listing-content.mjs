@@ -1,4 +1,4 @@
-import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
+import { createRepairSafeRecordMap, isRepairIncomplete, reportIncompleteRepair } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -43,8 +43,9 @@ async function main() {
   const asins =
     process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
+  const refreshImages = process.env.AGENT_SYNC_IMAGE_ACTION === "refresh";
   const existing = readCachedDataExport(outPath, "sorftimeListingContentData");
-  const records = createRepairSafeRecordMap(existing);
+  const records = refreshImages ? { ...existing } : createRepairSafeRecordMap(existing);
 
   if (!sorftimeKey && !jobId && !Object.values(existing).some(record => record?.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -64,7 +65,7 @@ async function main() {
         operation: "product_detail",
       })
       : null;
-    const selected = selectScopedListingRecord({
+    const selected = refreshImages ? null : selectScopedListingRecord({
       evidence,
       existingRecord: existing[asin],
       forceRefresh: isForceRefresh(),
@@ -81,7 +82,8 @@ async function main() {
     }
     if (!sorftimeKey) {
       console.log(`[skip] ${asin} · 无 Sorftime MCP key`);
-      if (jobId) discardUnscopedListingRecord(records, asin);
+      if (refreshImages) reportIncompleteRepair(asin);
+      else if (jobId) discardUnscopedListingRecord(records, asin);
       missingCredential = true;
       continue;
     }
@@ -91,15 +93,16 @@ async function main() {
       const detailRaw = await callSorftimeTool(sorftimeKey, "product_detail", { asin, amz_site: marketplace });
       const detail = detailRaw?.data ?? detailRaw;
       const galleryImages = parseImageList(detail?.main_image);
+      if (refreshImages && !galleryImages.length) throw new Error("本次未返回图片，保留原图册");
       const mainImage = galleryImages[0] ?? null;
       const secondaryImages = galleryImages.slice(1);
       const hasAplus =
-        detail?.a_plus === true ? true : detail?.a_plus === false ? false : null;
+        detail?.a_plus === true ? true : detail?.a_plus === false ? false : refreshImages ? existing[asin]?.hasAplus ?? null : null;
 
-      let hasEbc = null;
-      let hasVideo = null;
-      let lqs = null;
-      if (sellerSpriteKey) {
+      let hasEbc = refreshImages ? existing[asin]?.hasEbc ?? null : null;
+      let hasVideo = refreshImages ? existing[asin]?.hasVideo ?? null : null;
+      let lqs = refreshImages ? existing[asin]?.lqs ?? null : null;
+      if (sellerSpriteKey && !refreshImages) {
         try {
           const ssRaw = await callSellerSpriteMcpTool(sellerSpriteKey, "asin_detail", {
             marketplace,
@@ -143,6 +146,7 @@ async function main() {
           status: "ready",
           mainImage,
           galleryImages,
+          ...(refreshImages ? { previousGalleryImages: existing[asin]?.previousGalleryImages ?? existing[asin]?.galleryImages ?? [] } : {}),
           secondaryImages,
           imageCount: galleryImages.length,
           hasAplus,
@@ -155,7 +159,10 @@ async function main() {
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }
     } catch (error) {
-      if (!jobId && existing[asin]?.status === "ready") {
+      if (refreshImages) {
+        console.error(`error · 保留原图册 (${error instanceof Error ? error.message : String(error)})`);
+        reportIncompleteRepair(asin);
+      } else if (!jobId && existing[asin]?.status === "ready") {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {
@@ -191,6 +198,7 @@ export type SorftimeListingContentRecord = {
   statusMessage?: string;
   mainImage: string | null;
   galleryImages: string[];
+  previousGalleryImages?: string[];
   secondaryImages: string[];
   imageCount: number;
   hasAplus: boolean | null;
@@ -206,6 +214,7 @@ export type SorftimeListingContentRecord = {
     fetchedAt: string;
     connector: string;
     tool: string;
+    stageId?: string;
   } | null;
 };
 

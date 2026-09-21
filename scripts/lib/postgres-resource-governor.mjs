@@ -3,20 +3,45 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 
 export class ResourceGovernorAdmissionError extends Error {
-  constructor() {
+  constructor(options = {}) {
     super("External request capacity is temporarily unavailable");
     this.name = "ResourceGovernorAdmissionError";
+    this.reason = ['rolling-window','concurrency','paused','unavailable','cancelled'].includes(options.reason) ? options.reason : 'unavailable';
+    this.retryAt = this.reason === 'rolling-window' && options.retryAt && Number.isFinite(Date.parse(options.retryAt)) ? new Date(options.retryAt).toISOString() : null;
   }
 }
 
 const { Pool } = pg;
 const admissionLockId = "731553996872021106";
 
-export function createPostgresResourceGovernor({
-  databaseUrl,
-  ownerId = `child-${process.pid}-${randomUUID()}`,
-  pool,
-} = {}) {
+/**
+ * @template T
+ * @typedef {object} ScriptGovernedRequest
+ * @property {string} organizationId
+ * @property {import('../../server/db/concurrency-control-repository').GovernedResource} resource
+ * @property {string} jobId
+ * @property {import('../../server/db/concurrency-control-repository').GovernedAttemptKind | 'transient-retry'} attemptKind
+ * @property {() => Promise<T>} operation
+ * @property {string} [stageId]
+ * @property {string} [logicalOperationKey]
+ * @property {string} [dispatchKey]
+ * @property {AbortSignal} [signal]
+ * @property {number} [leaseMs]
+ * @property {number} [maxWaitMs]
+ */
+
+/**
+ * @typedef {object} ScriptResourceGovernor
+ * @property {<T>(input: ScriptGovernedRequest<T>) => Promise<T>} run
+ * @property {() => Promise<void>} [close]
+ */
+
+/**
+ * @param {{ databaseUrl?: string, ownerId?: string, pool?: import('pg').Pool }} [options]
+ * @returns {ScriptResourceGovernor & { close: () => Promise<void> }}
+ */
+export function createPostgresResourceGovernor(options = {}) {
+  const { databaseUrl, ownerId = `child-${process.pid}-${randomUUID()}`, pool } = options;
   const ownedPool = pool ?? (
     databaseUrl
       ? new Pool({ connectionString: databaseUrl, max: 1 })
@@ -39,7 +64,7 @@ export function createPostgresResourceGovernor({
         const receipt = await recordPhysicalAttempt(ownedPool, governedInput);
         if (governedInput.signal?.aborted) {
           await compensateUndispatchedPhysicalAttempt(ownedPool, receipt);
-          throw new ResourceGovernorAdmissionError();
+          throw new ResourceGovernorAdmissionError({reason:'cancelled'});
         }
         return await governedInput.operation();
       } finally {
@@ -56,6 +81,7 @@ export function createPostgresResourceGovernor({
   };
 }
 
+/** @param {Readonly<Record<string, string | undefined>>} [env] */
 export function createPostgresResourceGovernorFromEnv(env = process.env) {
   return createPostgresResourceGovernor({
     databaseUrl: env.AGENT_DATABASE_URL,
@@ -63,23 +89,49 @@ export function createPostgresResourceGovernorFromEnv(env = process.env) {
   });
 }
 
-export async function governExternalRequest({
-  resourceGovernor,
-  createResourceGovernor = createPostgresResourceGovernorFromEnv,
-  requireResourceGovernor = false,
-  env = process.env,
-  organizationId = env.AGENT_EXECUTION_ORGANIZATION_ID,
-  jobId = env.AGENT_SYNC_JOB_ID,
-  resource,
-  attemptKind = "initial",
-  stageId = env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
-  logicalOperationKey,
-  dispatchKey,
-  signal,
-  leaseMs,
-  maxWaitMs,
-  operation,
-}) {
+/**
+ * @template T
+ * @typedef {object} GovernExternalRequestOptions
+ * @property {ScriptResourceGovernor} [resourceGovernor]
+ * @property {(env: Readonly<Record<string, string | undefined>>) => ScriptResourceGovernor} [createResourceGovernor]
+ * @property {boolean} [requireResourceGovernor]
+ * @property {Readonly<Record<string, string | undefined>>} [env]
+ * @property {string | null} [organizationId]
+ * @property {string | null} [jobId]
+ * @property {import('../../server/db/concurrency-control-repository').GovernedResource} resource
+ * @property {import('../../server/db/concurrency-control-repository').GovernedAttemptKind | 'transient-retry'} [attemptKind]
+ * @property {string} [stageId]
+ * @property {string} [logicalOperationKey]
+ * @property {string} [dispatchKey]
+ * @property {AbortSignal} [signal]
+ * @property {number} [leaseMs]
+ * @property {number} [maxWaitMs]
+ * @property {() => Promise<T>} operation
+ */
+
+/**
+ * @template T
+ * @param {GovernExternalRequestOptions<T>} options
+ * @returns {Promise<T>}
+ */
+export async function governExternalRequest(options) {
+  const {
+    resourceGovernor,
+    createResourceGovernor = createPostgresResourceGovernorFromEnv,
+    requireResourceGovernor = false,
+    env = process.env,
+    organizationId = env.AGENT_EXECUTION_ORGANIZATION_ID,
+    jobId = env.AGENT_SYNC_JOB_ID,
+    resource,
+    attemptKind = "initial",
+    stageId = env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+    logicalOperationKey,
+    dispatchKey,
+    signal,
+    leaseMs,
+    maxWaitMs,
+    operation,
+  } = options;
   let ownsGovernor = false;
   const governor = resourceGovernor ??
     (requireResourceGovernor || env.AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED === "1"
@@ -121,13 +173,13 @@ async function acquirePermit(pool, input) {
           ownerId: input.ownerId,
           leaseGeneration: permit.leaseGeneration,
         }).catch(() => undefined);
-        throw new ResourceGovernorAdmissionError();
+        throw new ResourceGovernorAdmissionError({reason:'cancelled'});
       }
       return permit;
     }
     assertAdmissionActive(input.signal);
     if (input.maxWaitMs === 0 || Date.now() >= deadline) {
-      throw new ResourceGovernorAdmissionError();
+      throw new ResourceGovernorAdmissionError({reason:'concurrency'});
     }
     await delay(
       Math.min(50, Math.max(1, deadline - Date.now())),
@@ -143,6 +195,7 @@ async function tryAcquirePermit(pool, input) {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [admissionLockId]);
     const policy = await readPolicy(client, input.organizationId, input.jobId);
+    await requireOpenCircuit(client,input);
     const active = await client.query(
       `SELECT count(*)::integer AS count
        FROM concurrency_resource_permits
@@ -187,8 +240,9 @@ async function tryAcquirePermit(pool, input) {
       permitId: inserted.rows[0].permit_id,
       leaseGeneration: inserted.rows[0].lease_generation,
     };
-  } catch {
+  } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
+    if(error instanceof ResourceGovernorAdmissionError) throw error;
     throw new ResourceGovernorAdmissionError();
   } finally {
     client.release();
@@ -198,25 +252,30 @@ async function tryAcquirePermit(pool, input) {
 async function recordPhysicalAttempt(pool, input) {
   assertAdmissionActive(input.signal);
   const client = await pool.connect();
-  const recordedAt = new Date().toISOString();
   try {
     await client.query("BEGIN");
     assertAdmissionActive(input.signal);
     await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [admissionLockId]);
     assertAdmissionActive(input.signal);
+    const clock = await client.query("SELECT clock_timestamp() AS admission_now");
+    const recordedAt = new Date(clock.rows[0].admission_now).toISOString();
     const policy = await readPolicy(client, input.organizationId, input.jobId);
+    await requireOpenCircuit(client,input);
     if (input.resource === "sellerSprite") {
       const count = await client.query(
-        `SELECT count(*)::integer AS count
-         FROM concurrency_physical_attempts
-         WHERE organization_id = $1
-           AND resource = 'sellerSprite'
-           AND recorded_at > $2::timestamptz - ($3::text || ' milliseconds')::interval
-           AND recorded_at <= $2::timestamptz`,
-        [input.organizationId, recordedAt, policy.seller_sprite_rolling_window_ms],
+        `WITH active AS (
+             SELECT recorded_at FROM concurrency_physical_attempts
+             WHERE organization_id = $1 AND resource = 'sellerSprite'
+               AND recorded_at > $2::timestamptz - ($3::text || ' milliseconds')::interval
+               AND recorded_at <= $2::timestamptz
+           ) SELECT count(*)::integer AS count,
+             (SELECT recorded_at + ($3::text || ' milliseconds')::interval FROM active
+              ORDER BY recorded_at OFFSET GREATEST(0,(SELECT count(*) FROM active)-$4) LIMIT 1) AS retry_at
+             FROM active`,
+        [input.organizationId, recordedAt, policy.seller_sprite_rolling_window_ms, policy.seller_sprite_rolling_max_attempts],
       );
       if ((count.rows[0]?.count ?? 0) >= policy.seller_sprite_rolling_max_attempts) {
-        throw new ResourceGovernorAdmissionError();
+        throw new ResourceGovernorAdmissionError({reason: 'rolling-window', retryAt: new Date(count.rows[0].retry_at).toISOString()});
       }
     }
     assertAdmissionActive(input.signal);
@@ -372,7 +431,7 @@ function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => {
       clearTimeout(timeout);
-      reject(new ResourceGovernorAdmissionError());
+      reject(new ResourceGovernorAdmissionError({reason:'cancelled'}));
     };
     const timeout = setTimeout(() => {
       signal?.removeEventListener("abort", abort);
@@ -383,7 +442,7 @@ function delay(ms, signal) {
 }
 
 function assertAdmissionActive(signal) {
-  if (signal?.aborted) throw new ResourceGovernorAdmissionError();
+  if (signal?.aborted) throw new ResourceGovernorAdmissionError({reason:'cancelled'});
 }
 
 function withAttemptIdentity(input) {
@@ -415,4 +474,10 @@ function boundedIdentity(value, maxLength) {
     throw new ResourceGovernorAdmissionError();
   }
   return normalized;
+}
+
+async function requireOpenCircuit(client,input) {
+  if(!['sellerSprite','sif','sorftime'].includes(input.resource) || (input.resource==='sellerSprite'&&input.attemptKind==='quota-refresh'))return;
+  const result=await client.query('SELECT manual_hold, auto_paused FROM concurrency_resource_circuits WHERE organization_id=$1 AND resource=$2',[input.organizationId,input.resource]);
+  if(result.rows[0]?.manual_hold||result.rows[0]?.auto_paused)throw new ResourceGovernorAdmissionError({reason:'paused'});
 }

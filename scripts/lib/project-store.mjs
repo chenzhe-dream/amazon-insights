@@ -45,6 +45,7 @@ function normalizeProject(raw) {
   const slug = String(raw.slug ?? "").trim().toLowerCase();
   return {
     ...raw,
+    updatedAt: Number.isFinite(Date.parse(raw.updatedAt)) ? raw.updatedAt : raw.createdAt,
     kind: normalizeKind(raw.kind),
     slug: isProjectSlug(slug) ? slug : null,
     majorCategory: String(raw.majorCategory ?? "").trim() || null,
@@ -74,7 +75,7 @@ function ensureProjectSlug(project) {
   if (!project) return null;
   if (isProjectSlug(project.slug)) return project;
   project.slug = uniqueSlug(projectSlugBase(project), usedSlugs(project.id));
-  return writeProject(project);
+  return writeProject(project, { preserveUpdatedAt: true });
 }
 
 export function listProjects(options = {}) {
@@ -123,9 +124,9 @@ export function readProject(idOrSlug) {
   );
 }
 
-export function writeProject(project) {
+export function writeProject(project, options = {}) {
   ensureProjectsDir();
-  project.updatedAt = new Date().toISOString();
+  if (!options.preserveUpdatedAt) project.updatedAt = new Date().toISOString();
   fs.writeFileSync(projectFilePath(project.id), JSON.stringify(project, null, 2), "utf8");
   return project;
 }
@@ -162,16 +163,19 @@ export function createProject(input) {
     marketplace: String(input.marketplace ?? "US").trim().toUpperCase() || "US",
     asins,
     note: String(input.note ?? "").trim() || null,
+    ...(input.sourceProjectId ? { sourceProjectId: input.sourceProjectId } : {}),
     createdBy: String(input.createdBy ?? "").trim() || null,
     createdAt: now,
     updatedAt: now,
   };
-  return writeProject(project);
+  return writeProject(project, { preserveUpdatedAt: true });
 }
 
-export function updateProject(id, patch) {
+export function updateProject(id, patch, options = {}) {
   const existing = readProject(id);
   if (!existing) return null;
+
+  if (patch.sourceProjectId !== undefined) existing.sourceProjectId = patch.sourceProjectId;
 
   if (patch.kind != null) {
     existing.kind = normalizeKind(patch.kind);
@@ -202,7 +206,7 @@ export function updateProject(id, patch) {
     existing.asins = asins;
   }
 
-  return writeProject(existing);
+  return writeProject(existing, options);
 }
 
 export function deleteProject(id) {

@@ -19,6 +19,8 @@ import { resolveVocPositioningRuntimeConfig } from "../../server/config";
 import { createAlexaVocNormalizationInputCipher } from "../../server/security/alexa-voc-normalization-input-cipher";
 import { createAlexaVocNormalizationFingerprint } from "../../server/domain/voc/alexa-voc-normalization-contracts";
 
+import { wakeVocPositioning } from "../../server/runtime/alexa-voc-normalization-runtime";
+
 const NOW = "2026-09-09T00:00:00.000Z";
 const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
 let pg: PostgresTestContainer;
@@ -199,6 +201,60 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     assert.equal(settled.length, 4, "no unbounded recovery attempts are allocated");
     assert.equal(settled.find(job => job.id === finalTry.id)?.retryable, false);
     assert.equal((await f.repository.claimNextJob({ ownerId: "normalization-sibling", stage: "alexa-voc-normalization", claimedAt: at(10001), leaseDurationMs: 1000 }))?.id, successorId, "independent queued work remains claimable after predecessor exhaustion");
+  });
+
+  test(`${dialect}: new VOC input revokes the running predecessor without consuming the new deadline`, async (t) => {
+    const f = await fixture(t, dialect), old = await f.seed();
+    const running = await f.claim(1);
+    assert.equal(running?.id, old.id);
+    assert.equal(await wakeVocPositioning(f.repository, old.runId, at(100000)), true);
+    const attempts = await f.repository.listJobAttempts(old.stageId);
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].status, "cancelled");
+    assert.equal(attempts[0].error?.code, "SUPERSEDED");
+    assert.equal(attempts[0].leasedBy, null);
+    assert.equal(attempts[0].retryable, false);
+    assert.equal(attempts[1].retryCycleStartAttempt, 2);
+    assert.equal((await f.repository.findRunStage(old.stageId))?.status, "queued");
+    await assert.rejects(f.repository.renewJobLease({ jobId: old.id, ownerId: "fixture-worker", leaseGeneration: running!.leaseGeneration, renewedAt: at(100001), leaseDurationMs: 120000 }), /lease/i);
+    await assert.rejects(f.repository.completeJob({ jobId: old.id, ownerId: "fixture-worker", leaseGeneration: running!.leaseGeneration, completedAt: at(100001) }), /lease/i);
+    assert.equal(await wakeVocPositioning(f.repository, old.runId, at(100002)), false);
+    assert.equal((await f.repository.listJobAttempts(old.stageId)).length, 2);
+    assert.equal((await f.claim(100003, 300000))?.id, attempts[1].id);
+    assert.equal(await f.repository.expireVocQueue({ checkedAt: at(300000), timeoutMs: 300000 }), 0);
+    assert.equal(await f.repository.expireVocQueue({ checkedAt: at(400000), timeoutMs: 300000 }), 1);
+    assert.equal((await f.repository.listJobAttempts(old.stageId))[0].error?.code, "SUPERSEDED");
+  });
+
+  test(`${dialect}: concurrent VOC wakeups coalesce and cancelled runs cannot be resurrected`, async (t) => {
+    const f = await fixture(t, dialect), old = await f.seed();
+    await f.claim(1);
+    await Promise.all([wakeVocPositioning(f.repository, old.runId, at(1000)), wakeVocPositioning(f.repository, old.runId, at(1000))]);
+    const attempts = await f.repository.listJobAttempts(old.stageId);
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts.filter(job => job.status === "queued").length, 1);
+    await f.repository.cancelAnalysisRun({ runId: old.runId, cancelledAt: at(2000), error: { code: "CANCELLED", message: "cancel" } });
+    await assert.rejects(f.repository.enqueueJob({ id: randomUUID(), stageId: old.stageId, attemptNumber: 3, maxAttempts: 5, createdAt: at(2001), availableAt: at(2001), supersedeVocPredecessors: true }));
+    assert.equal((await f.repository.listJobAttempts(old.stageId)).length, 2);
+    assert.equal((await f.repository.findAnalysisRun(old.runId))?.status, "cancelled");
+  });
+
+  for (const releaseBeforeWake of [true, false]) test(`${dialect}: new input replaces a requeued predecessor, releaseBeforeWake=${releaseBeforeWake}`, async (t) => {
+    const f = await fixture(t, dialect), old = await f.seed();
+    const running = (await f.claim(1))!;
+    const release = () => f.repository.releaseJobLease({ jobId: old.id, ownerId: "fixture-worker", leaseGeneration: running.leaseGeneration, releasedAt: at(1000) });
+    if (releaseBeforeWake) await release();
+    else {
+      const enqueue = f.repository.enqueueJob.bind(f.repository);
+      f.repository.enqueueJob = async input => { await release(); return enqueue(input); };
+    }
+    await wakeVocPositioning(f.repository, old.runId, at(2000));
+    const attempts = await f.repository.listJobAttempts(old.stageId);
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].status, "cancelled");
+    assert.equal(attempts[1].status, "queued");
+    assert.equal(attempts[1].retryCycleStartAttempt, 2);
+    assert.notEqual(attempts[0].logicalExecutionCycleId, attempts[1].logicalExecutionCycleId);
   });
 
   test(`${dialect}: superseded failed predecessor cannot duplicate its successor or starve a new job`, async (t) => {

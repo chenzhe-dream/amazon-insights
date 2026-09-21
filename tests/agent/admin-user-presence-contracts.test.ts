@@ -39,12 +39,12 @@ test("admin user presence contracts are strict and expose only the approved fiel
 
   const response = AdminUserPresenceResponseSchema.parse({
     asOf: AS_OF,
-    recentActivityWindowSeconds: 300,
+    recentActivityWindowSeconds: 900,
     users: [user],
   });
   assert.deepEqual(response, {
     asOf: AS_OF,
-    recentActivityWindowSeconds: 300,
+    recentActivityWindowSeconds: 900,
     users: [user],
   });
 
@@ -74,7 +74,7 @@ test("admin user presence contracts are strict and expose only the approved fiel
     assert.equal(
       AdminUserPresenceResponseSchema.safeParse({
         asOf: AS_OF,
-        recentActivityWindowSeconds: 300,
+        recentActivityWindowSeconds: 900,
         users: [{ ...user, [sensitiveField]: "must-not-leak" }],
       }).success,
       false,
@@ -83,7 +83,7 @@ test("admin user presence contracts are strict and expose only the approved fiel
     assert.equal(
       AdminUserPresenceResponseSchema.safeParse({
         asOf: AS_OF,
-        recentActivityWindowSeconds: 300,
+        recentActivityWindowSeconds: 900,
         users: [{ ...user, recentLogins: [{ ...login, [sensitiveField]: "must-not-leak" }] }],
       }).success,
       false,
@@ -101,7 +101,7 @@ test("admin user presence contracts are strict and expose only the approved fiel
   assert.equal(
     AdminUserPresenceResponseSchema.safeParse({
       asOf: AS_OF,
-      recentActivityWindowSeconds: 300,
+      recentActivityWindowSeconds: 900,
       users: [{ ...user, recentLogins: Array.from({ length: 11 }, () => login) }],
     }).success,
     false,
