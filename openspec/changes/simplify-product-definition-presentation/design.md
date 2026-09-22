@@ -1,4 +1,5 @@
 ## Context
+<<<<<<< HEAD:openspec/changes/simplify-product-definition-presentation/design.md
 当前 report 的 conclusion 兼作 VOC 原文载体，不能直接回滚规则或截断后当结论。页面已有 InlineReportText；ActionStepsCell 目前隐藏超限项。
 
 ## Goals / Non-Goals
@@ -19,3 +20,56 @@
 
 ## Validation
 纯函数覆盖跨 ASIN/项目/站点/版本、重复/缺失引用、限制/冲突、原对象不变、无 trace 回退及不同形态。组件测试检查展开内容完整；浏览器测试键盘/折叠/移动端及七列表格。回归既有快照与隔离测试。
+=======
+
+See proposal.md for motivation. Shared rule-baseline contracts and a connector-free assembler already exist. The first business module to finish is market overview: its complete catalog already stores known metrics, real zeros, and gaps such as empty demand trend and unconfirmed concentration units. Semantic windows and synthesis remain later steps and are not the baseline.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- Adapt the saved overview catalog into one rule baseline the existing assembler can normalize.
+- Keep later shape, keyword, and theme adapters, persistence, and the Agent read boundary in this change, but implement overview first so it can be tested on its own.
+
+**Non-Goals:**
+
+- Changing overview public report JSON, page wait states, or the unpublished window-split default.
+- Publishing or restarting the formal stack.
+- Treating a missing semantic window as a failed baseline.
+
+## Decisions
+
+### 1. Overview baseline wraps the saved catalog
+
+- **Choice:** `buildOverviewRuleBaseline` reads the catalog semantic record: known metrics become baseline metrics, gaps become null metrics with reasons.
+- **Why:** The catalog is already the deterministic overview result. A second calculator would drift.
+- **Alternative:** Recompute distributions inside the baseline. Rejected.
+
+### 2. Finish overview before the other modules
+
+- **Choice:** Tasks implement and verify overview before shape, keyword, theme, persistence, and the Agent boundary.
+- **Why:** The operator will test overview before the other modules are adapted.
+- **Alternative:** Adapt all four modules before any module is testable. Rejected for this pass.
+
+### 3. Synthesis stays outside the baseline
+
+- **Choice:** The baseline rule version is the catalog version. No synthesis payload is copied in.
+- **Why:** A missing or failed AI window must not erase the numeric result or be reported as synthesis success.
+- **Alternative:** Mark the baseline complete only after synthesis. Rejected.
+
+## Risks / Trade-offs
+
+- [Catalog metric ids are long and numerous] → Baseline limits match the complete-catalog bounds instead of dropping rows.
+- [Other modules are specified later in tasks] → They stay unchecked until overview tests pass and the operator finishes that test.
+
+## Migration Plan
+
+1. Land the overview adapter and its fixtures in this worktree.
+2. Leave historical overview flows and public report shapes unchanged.
+3. Stop after overview so the operator can test. Persistence and the other modules follow the remaining tasks.
+4. Rollback is reverting the overview adapter commit. Saved catalogs stay readable.
+
+## Open Questions
+
+- None for the overview slice. Frozen snapshot choice for full runtime replay belongs to the later persistence task.
+>>>>>>> ae6e123c (feat: expose deterministic overview rule baseline):openspec/changes/split-market-rule-baselines/design.md

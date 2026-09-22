@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import type {MarketModuleRunView,MarketStepDefinition} from '../../db/market-module-execution-repository';
 import {canonicalJsonSha256 as digest} from '../../runtime/model-request-accounting';
+export { buildOverviewRuleBaseline } from './overview-rule-baseline';
 export const MarketOverviewReportInputSchema=z.object({task:z.literal('overview-report'),catalogAttemptId:z.string().uuid(),
   phase:z.enum(['numeric','window-results']),windowAttemptId:z.string().uuid().nullable(),preparationAttemptIds:z.array(z.string().uuid()).max(2000),modelAttemptIds:z.array(z.string().uuid()).max(2000),
   numericInputSnapshotId:z.string().regex(/^market-input:[a-f0-9]{64}$/)}).strict();

@@ -12,13 +12,13 @@ export const MarketRuleEvidenceRefSchema = z.object({
 export type MarketRuleEvidenceRef = z.infer<typeof MarketRuleEvidenceRefSchema>;
 
 export const MarketRuleMetricSchema = z.object({
-  key: z.string().trim().min(1).max(120),
+  key: z.string().trim().min(1).max(240),
   value: z.number().finite().nullable(),
   unit: z.string().trim().min(1).max(40),
   denominator: z.number().finite().nullable(),
   status: MarketRuleBaselineStatusSchema,
   missingReason: z.string().trim().min(1).max(400).nullable(),
-  evidenceRefs: z.array(MarketRuleEvidenceRefSchema).max(200),
+  evidenceRefs: z.array(MarketRuleEvidenceRefSchema).max(2000),
 }).strict();
 export type MarketRuleMetric = z.infer<typeof MarketRuleMetricSchema>;
 
@@ -32,7 +32,7 @@ export const MarketRuleFactSchema = z.object({
 export type MarketRuleFact = z.infer<typeof MarketRuleFactSchema>;
 
 export const MarketRuleMissingSchema = z.object({
-  key: z.string().trim().min(1).max(120),
+  key: z.string().trim().min(1).max(240),
   reason: z.string().trim().min(1).max(400),
 }).strict();
 
@@ -41,10 +41,10 @@ export const MarketRuleBaselineSchema = z.object({
   ruleVersion: z.string().trim().min(1).max(160),
   scope: MarketAnalysisScopeSchema,
   status: MarketRuleBaselineStatusSchema,
-  metrics: z.array(MarketRuleMetricSchema).max(500),
-  facts: z.array(MarketRuleFactSchema).max(500),
-  missing: z.array(MarketRuleMissingSchema).max(500),
-  evidenceRefs: z.array(MarketRuleEvidenceRefSchema).max(500),
+  metrics: z.array(MarketRuleMetricSchema).max(16000),
+  facts: z.array(MarketRuleFactSchema).max(2000),
+  missing: z.array(MarketRuleMissingSchema).max(10000),
+  evidenceRefs: z.array(MarketRuleEvidenceRefSchema).max(2000),
 }).strict();
 export type MarketRuleBaseline = z.infer<typeof MarketRuleBaselineSchema>;
 
