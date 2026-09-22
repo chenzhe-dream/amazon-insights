@@ -10,11 +10,11 @@ export const usageDuration=(ms:number)=>{const minutes=Math.floor(ms/60000);retu
 const label=(page:string)=>USAGE_PAGES[page as UsagePageKey]??page;
 const time=(value:string|null)=>value?new Date(value).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}):"—";
 export function UsageAnalyticsPanel({sessionIdentity}:{sessionIdentity:string}){
-  const [period,setPeriod]=useState<UsageQuery["period"]>("day"),[date,setDate]=useState(beijingToday),[person,setPerson]=useState<UsagePerson|null>(null),[page,setPage]=useState(""),[group,setGroup]=useState<"person"|"page">("person"),[refresh,setRefresh]=useState(0);
-  const [result,setResult]=useState<{key:string;data:UsageReport}|null>(null),[failure,setFailure]=useState<{key:string;message:string}|null>(null),[selected,setSelected]=useState<UsagePerson|null>(null),[detail,setDetail]=useState<{key:string;data:UsageReport}|null>(null),[detailFailure,setDetailFailure]=useState("");
-  const actualDate=period==="day"?date:beijingToday(),key=JSON.stringify([sessionIdentity,period,actualDate,person?.userId,page,refresh]),detailKey=key+":"+selected?.userId;
+  const today=beijingToday(),[period,setPeriod]=useState<UsageQuery["period"]>("day"),[date,setDate]=useState(today),[weekDate,setWeekDate]=useState(today),[monthDate,setMonthDate]=useState(today.slice(0,7)),[person,setPerson]=useState<UsagePerson|null>(null),[page,setPage]=useState(""),[group,setGroup]=useState<"person"|"page">("person"),[refresh,setRefresh]=useState(0);
+  const [result,setResult]=useState<{key:string;data:UsageReport}|null>(null),[failure,setFailure]=useState<{key:string;message:string}|null>(null),[selected,setSelected]=useState<UsagePerson|null>(null),[detail,setDetail]=useState<{key:string;data:UsageReport}|null>(null),[detailFailure,setDetailFailure]=useState<{key:string;message:string}|null>(null);
+  const actualDate=period==="day"?date:period==="week"?weekDate:`${monthDate}-01`,key=JSON.stringify([sessionIdentity,period,actualDate,person?.userId,page,refresh]),detailKey=key+":"+selected?.userId;
   const query:UsageQuery={period,date:actualDate,...(person?{userId:person.userId}:{}),...(page?{pageKey:page as UsagePageKey}:{})};
-  const data=result?.key===key?result.data:null,error=failure?.key===key?failure.message:null,details=detail?.key===detailKey?detail.data:null;
+  const data=result?.key===key?result.data:null,error=failure?.key===key?failure.message:null,details=detail?.key===detailKey?detail.data:null,detailError=detailFailure?.key===detailKey?detailFailure.message:null;
   useEffect(()=>{publishUsagePage("admin-usage")},[]);
   useEffect(()=>{
     if(!actualDate)return;const controller=new AbortController();
@@ -24,8 +24,8 @@ export function UsageAnalyticsPanel({sessionIdentity}:{sessionIdentity:string}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[key]);
   useEffect(()=>{
-    setDetailFailure("");if(!selected)return;const controller=new AbortController();
-    void fetchUsageReport({...query,userId:selected.userId},controller.signal).then(data=>{if(!controller.signal.aborted)setDetail({key:detailKey,data})}).catch(e=>{if(!controller.signal.aborted)setDetailFailure(e instanceof Error?e.message:"明细加载失败")});
+    if(!selected)return;const controller=new AbortController();
+    void fetchUsageReport({...query,userId:selected.userId},controller.signal).then(data=>{if(!controller.signal.aborted)setDetail({key:detailKey,data})}).catch(e=>{if(!controller.signal.aborted)setDetailFailure({key:detailKey,message:e instanceof Error?e.message:"明细加载失败"})});
     return()=>controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[detailKey]);
@@ -33,7 +33,7 @@ export function UsageAnalyticsPanel({sessionIdentity}:{sessionIdentity:string}){
   return <section className={styles.panel} aria-label="使用统计">
     <div className={styles.toolbar} data-usage-ignore>
       <div className={styles.segment} aria-label="统计周期">{(["day","week","month"] as const).map((value,i)=><button key={value} type="button" aria-pressed={period===value} onClick={()=>setPeriod(value)}>{["日","周","月"][i]}</button>)}</div>
-      {period==="day"?<label>统计日期<input type="date" aria-label="选择统计年月日" value={date} max={beijingToday()} onChange={e=>{if(e.target.value&&e.target.validity.valid)setDate(e.target.value)}}/></label>:<span>{period==="week"?"本周 · 周一开始":"本月 · 自然月"}</span>}
+      {period==="day"?<label>统计日期<input type="date" aria-label="选择统计年月日" value={date} max={today} onChange={e=>{if(e.target.value&&e.target.validity.valid)setDate(e.target.value)}}/></label>:period==="week"?<label>统计周<input type="date" aria-label="选择统计周内日期" value={weekDate} max={today} onChange={e=>{if(e.target.value&&e.target.validity.valid)setWeekDate(e.target.value)}}/></label>:<label>统计月份<input type="month" aria-label="选择统计年月" value={monthDate} max={today.slice(0,7)} onChange={e=>{if(e.target.value&&e.target.validity.valid)setMonthDate(e.target.value)}}/></label>}
       <PersonSearch key={sessionIdentity} value={person} onChange={p=>{setPerson(p);setSelected(null)}}/>
       <label>页面<select value={page} aria-label="筛选页面" onChange={e=>setPage(e.target.value)}><option value="">全部页面</option>{Object.entries(USAGE_PAGES).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
       <button type="button" className={styles.refresh} onClick={()=>{setFailure(null);setRefresh(n=>n+1)}}>刷新</button>
@@ -54,7 +54,7 @@ export function UsageAnalyticsPanel({sessionIdentity}:{sessionIdentity:string}){
       <section className={styles.card}><header><h2>页面使用分布</h2><span>有效使用时长</span></header><div className={styles.bars}>{data.pages.toSorted((a,b)=>b.activeMs-a.activeMs).map(row=><div key={row.pageKey}><span>{label(row.pageKey)}</span><div><i style={{width:row.activeMs/Math.max(1,...data.pages.map(r=>r.activeMs))*100+"%"}}/></div><span>{usageDuration(row.activeMs)}</span></div>)}</div></section>
     </>}
     {selected&&<section className={styles.card} aria-label="个人页面明细"><header><div><h2>{selected.displayName} · 页面明细</h2><p>钉钉已绑定 · {selected.personLabel}</p></div><button type="button" onClick={()=>setSelected(null)}>收起明细</button></header>
-      {detailFailure?<p role="alert">{detailFailure}</p>:!details?<p className={styles.state} role="status">正在读取个人明细…</p>:<div className={styles.scroll}><table><thead><tr><th>页面</th><th>访问</th><th>点击</th><th>有效时长</th><th>停留时长</th></tr></thead><tbody>{details.pages.map(row=><tr key={row.pageKey}><td>{label(row.pageKey)}</td><td>{row.visits}</td><td>{row.clicks}</td><td>{usageDuration(row.activeMs)}</td><td>{usageDuration(row.visibleMs)}</td></tr>)}</tbody></table></div>}
+      {detailError?<p role="alert">{detailError}</p>:!details?<p className={styles.state} role="status">正在读取个人明细…</p>:<div className={styles.scroll}><table><thead><tr><th>页面</th><th>访问</th><th>点击</th><th>有效时长</th><th>停留时长</th></tr></thead><tbody>{details.pages.map(row=><tr key={row.pageKey}><td>{label(row.pageKey)}</td><td>{row.visits}</td><td>{row.clicks}</td><td>{usageDuration(row.activeMs)}</td><td>{usageDuration(row.visibleMs)}</td></tr>)}</tbody></table></div>}
     </section>}
     <p className={styles.note}>个人时长对重叠时间取并集；跨设备使用不同页面时，页面时长之和可能更大。采集任务耗时不计入人员时长。</p>
   </section>;
