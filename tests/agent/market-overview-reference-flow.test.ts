@@ -13,7 +13,9 @@ test('reference result row opens current-backend report inline and reopening is 
  const writes:Array<{path:string;body:Record<string,unknown>}>=[],errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  const run=overviewRun(),details=overviewDistributionDetails();
  run.run.scope.fromMonth='2026-08';for(const entry of [...run.run.history,run.run.currentReport!,run.run.latestSavedReport!])entry.report.scope.fromMonth='2026-08';details.entry.report.scope.fromMonth='2026-08';
- const scope={marketplace:'US',nodeQuery:'123:456',month:'2026-08',headTopN:10,newProductMonths:6};
+ // The legacy collector accepts a bare node and returns its canonical path in
+ // the report. Opening the new flow must carry that returned path forward.
+ const scope={marketplace:'US',nodeQuery:'456',month:'2026-08',headTopN:10,newProductMonths:6};
  const job={id:'80000000-0000-4000-8000-000000000001',scope,status:'succeeded',attempts:1,createdAt:'2026-09-12T00:00:00.000Z',updatedAt:'2026-09-12T00:00:00.000Z',error:null,report:{schemaVersion:'market-overview/v1',scope,nodeId:'456',nodeIdPath:'123:456',categoryName:'Gel Pens',currency:'USD',collectedAt:'2026-09-12T00:00:00.000Z',metrics:{sampleProducts:20,brands:4,sellers:5,totalUnits:100,totalRevenue:2000,avgPrice:20,avgUnits:5,avgRatings:null,avgRating:4.5,productConcentrationRaw:null,brandConcentrationRaw:null,sellerConcentrationRaw:null,newCount:2,newAvgPrice:null,newAvgUnits:null},evidence:[],issues:[],boundaries:[]}};
  let ready=false;let heldRead:Promise<void>|undefined,releaseRead:(()=>void)|undefined;
  await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==new URL(origin).origin)return route.abort();
@@ -31,7 +33,7 @@ test('reference result row opens current-backend report inline and reopening is 
   if(url.pathname.endsWith('/overview')){if(heldRead)await heldRead;return route.fulfill({json:run});}
   return route.fulfill({status:404,json:{error:{message:'no fixture'}}});
  });
- await page.goto(origin+'?marketNode=123:456&marketMonth=2026-08');
+ await page.goto(origin+'?marketNode=456&marketMonth=2026-08');
  await page.getByRole('button',{name:'筛选市场',exact:true}).click();
  const open=page.getByRole('button',{name:'查看市场分析报告',exact:true});await open.waitFor();
  assert.equal(await page.getByRole('button',{name:'开始总览分析',exact:true}).isVisible(),false,'auxiliary workflow is initially collapsed');

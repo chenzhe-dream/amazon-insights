@@ -91,6 +91,7 @@ import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
 import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service.node.js";
 import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service.node.js";
+import { resolveMarketNodePath } from './services/market-node-path-resolver';
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -419,6 +420,7 @@ export async function createAgentService(
     const app = buildAgentApp({
       marketResearchService,
       marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
+        resolveNodePath: input => resolveMarketNodePath({ ...input, connector: connectors.sellerSprite }),
         modelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.configurationVersion, promptVersion: marketModelRuntime.promptVersion } : null,
         overviewSynthesisModelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.overviewSynthesisConfigurationVersion, promptVersion: marketModelRuntime.overviewSynthesisPromptVersion } : null,
         keywordModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordDiscoveryConfigurationVersion,promptVersion:marketModelRuntime.keywordDiscoveryPromptVersion} : null,

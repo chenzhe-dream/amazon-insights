@@ -35,6 +35,7 @@ import {buildMarketKeywordScoreInputAudit} from '../domain/market-research/keywo
 import {PostgresMarketKeywordRevisionStore} from '../db/postgres/market-keyword-revision-store';
 import {MarketKeywordRevisionIdSchema} from '../../shared/market-keyword-revision-contracts';
 import {canonicalJsonSha256} from '../runtime/model-request-accounting';
+import { MarketNodePathResolutionError, type MarketNodePathResolutionInput } from './market-node-path-resolver';
 
 export class MarketModuleServiceError extends Error {
   constructor(readonly statusCode: 400 | 403 | 404 | 503, message: string) { super(message); }
@@ -46,7 +47,7 @@ const unavailable = () => new MarketModuleServiceError(404, '未找到该组织�
 export class MarketModuleService {
   private readonly snapshots: PostgresMarketAnalysisSnapshotStore;
   private readonly steps: PostgresMarketModuleExecutionStore;
-  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; now?: () => Date }) {
+  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string> }) {
     this.snapshots = new PostgresMarketAnalysisSnapshotStore(deps.context); this.steps = new PostgresMarketModuleExecutionStore(deps.context);
   }
   private now() { return (this.deps.now?.() ?? new Date()).toISOString(); }
@@ -62,9 +63,27 @@ export class MarketModuleService {
   async createStudy(actor: MarketExecutionActor, body: unknown, key: unknown) {
     const request = MarketStudyRequestSchema.parse(body), id = MarketModuleIdSchema.parse(key), now = this.now();
     if (request.toMonth >= now.slice(0, 7)) throw new MarketModuleServiceError(400, '请选择当前月份之前的完整月份');
+    let scope = { ...request };
+    if (!request.nodeIdPath.includes(':') && this.deps.resolveNodePath) {
+      try {
+        scope = { ...scope, nodeIdPath: await this.deps.resolveNodePath({
+          marketplace: request.marketplace,
+          nodeId: request.nodeIdPath,
+          month: request.toMonth,
+          organizationId: actor.organizationId,
+          jobId: id,
+        }) };
+      } catch (error) {
+        if (error instanceof MarketNodePathResolutionError) {
+          throw new MarketModuleServiceError(error.reason === 'source-mismatch' ? 503 : 400,
+            error.reason === 'empty' ? '未找到该类目节点的完整路径' : '类目节点路径无法确认');
+        }
+        throw new MarketModuleServiceError(503, '类目节点解析暂不可用，请稍后重试');
+      }
+    }
     // The client's one-time UUID command key also names this new study. Retrying
     // that command preserves scope identity; no random ID is regenerated on ACK loss.
-    const result = await this.snapshots.createStudy({ actor, scope: { ...request, organizationId: actor.organizationId, researchId: id }, idempotencyKey: id, now });
+    const result = await this.snapshots.createStudy({ actor, scope: { ...scope, organizationId: actor.organizationId, researchId: id }, idempotencyKey: id, now });
     return { created: result.created, ...MarketStudyResponseSchema.parse({ study: { id: result.study.id, scope: result.study.scope, createdAt: result.study.createdAt } }) };
   }
   async findStudy(actor: MarketExecutionActor, id: string) {
