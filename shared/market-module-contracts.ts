@@ -24,7 +24,8 @@ export const MarketThemeReportSchema = z.object({ reportVersion: z.enum(['market
   dataCutoffAt: z.string().datetime(), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20), selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false),
   metricKind: z.literal('customers_say_topic_share'), reviewDeduplication: z.literal('unavailable'), status: z.enum(['complete', 'partial', 'no-data']),
   dataReady: z.boolean(), semanticsReady: z.boolean(), counts: MarketThemeReadinessCountsSchema,
-  reasons: z.array(z.enum(['selection-shortfall', 'no-theme-data', 'empty-asins', 'source-results-missing', 'model-results-missing', 'unknown-themes', 'reconciliation-required'])).max(7), reportHash: hash }).strict()
+  reasons: z.array(z.enum(['selection-shortfall', 'no-theme-data', 'empty-asins', 'source-results-missing', 'model-results-missing', 'unknown-themes', 'reconciliation-required'])).max(7), reportHash: hash,
+  ruleStatus: z.enum(['complete','partial','unavailable']).optional(), semanticStatus: z.enum(['skipped','pending','partial','complete','unavailable']).optional() }).strict()
   .refine(v=>(v.basis==='reconciliation-evaluation')===(v.reportVersion==='market-theme-report/v2'),'Theme report version differs from its basis');
 export const MarketThemeReportEntrySchema = z.object({ attemptId: MarketModuleIdSchema, current: z.boolean(), report: MarketThemeReportSchema }).strict();
 export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema, kind: z.enum(['collect-product-month', 'collect-overview-month', 'collect-keyword-page', 'collect-keyword-trend', 'collect-keyword-aba', 'collect-customer-themes',

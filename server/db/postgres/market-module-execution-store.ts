@@ -29,6 +29,7 @@ const uuid4 = uuid.regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3
 const label = z.string().min(1).max(240).refine(value => value.trim() === value);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const json = MarketInputRecordSchema.shape.data;
+const obj = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const actorSchema = z.object({ organizationId: uuid, userId: uuid }).strict();
 const refSchema = z.object({ kind: z.enum(["input", "source", "step-output"]), id: label }).strict();
 const stepSchema = z.object({ stepKey:label,kind:z.enum(MARKET_STEP_KINDS),subject:json,input:json,inputRefs:z.array(refSchema).max(2_000) }).strict();
@@ -187,7 +188,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   private async refreshRun(id:string):Promise<void>{
     const refreshed=await this.queries.query<RunRow>(`UPDATE market_analysis_module_runs r SET status=CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' WHEN EXISTS(SELECT 1 FROM market_analysis_steps WHERE run_id=r.id AND status='running') THEN 'running' WHEN EXISTS(SELECT 1 FROM market_analysis_steps WHERE run_id=r.id AND status='queued') THEN 'queued' WHEN EXISTS(SELECT 1 FROM market_analysis_steps WHERE run_id=r.id AND status IN ('succeeded','empty')) THEN 'partial' ELSE 'failed' END,updated_at=clock_timestamp() WHERE id=$1 RETURNING r.*`,[id]);
     const run=refreshed.rows[0];
-    if(run)await this.completeShapeReport(run);
+    if(run){await this.completeShapeReport(run);await this.completeRulesOnlyRun(run);}
     if(run?.status==='partial'&&run.latest_report_attempt_id&&isMarketThemeFlow(mapRun(run))){
       const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:id});
       if(view&&canCompleteMarketThemeRun(view,inspectMarketThemeContinuation(view,new Date().toISOString()).currentStepKeys))
@@ -201,6 +202,15 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
     const report=view.steps.find(s=>s.kind==='report'&&s.latestAttemptId===run.latest_report_attempt_id&&current.has(s.stepKey));
     if(report?.status==='succeeded'&&!frontier.children.length&&view.steps.filter(s=>current.has(s.stepKey)).every(s=>s.status==='succeeded'))
       await this.queries.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1",[run.id]);
+  }
+  private async completeRulesOnlyRun(run:RunRow):Promise<void>{
+    const mapped=mapRun(run),flow=String(obj(mapped.params).flow);
+    if(mapped.status!=='partial'||!flow.endsWith('/rules-v1'))return;
+    const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:run.id});if(!view)return;
+    const now=(await this.queries.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.toISOString();
+    const frontier=inspectMarketContinuation(view,now),current=view.steps.filter(step=>frontier.currentStepKeys.includes(step.stepKey));
+    if(frontier.children.length||!current.length||current.some(step=>!['succeeded','empty'].includes(step.status)))return;
+    await this.queries.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1 AND status='partial'",[run.id]);
   }
   async renewStep(value:unknown):Promise<boolean>{
     bounded(value);const {claim,leaseMs:duration}=z.object({claim:claimSchema,leaseMs}).strict().parse(value);

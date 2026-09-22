@@ -18,6 +18,7 @@ import {MarketKeywordAbaMemberSchema} from '../../shared/market-keyword-aba-sour
 import { validateMarketKeywordSemantics } from '../domain/market-research/semantic-validation';
 import { canonicalJsonSha256 as digest } from '../runtime/model-request-accounting';
 import { MarketKeywordPoolStepInputSchema } from '../runtime/market-keyword-pool-step';
+import { MarketRuleBaselineSchema } from '../../shared/market-rule-baseline-contracts';
 
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 function invalid(): never { throw new MarketExecutionConflictError(); }
@@ -147,6 +148,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
       const unavailableKeywordIds = members.filter(m => !observed.has(m.keywordId)).map(m => m.keywordId);
       const pending = view.steps.some(s => current.has(s.stepKey) && s.inputRefs.some(r=>r.kind==='input'&&r.id===semantic.snapshot.snapshotId) && ['prepare-model-batches', 'model-batch'].includes(s.kind) && ['queued', 'running'].includes(s.status));
       const p = rebuilt.manifest;
+      const ruleBaseline = Object.hasOwn(savedPool, 'ruleBaseline') ? MarketRuleBaselineSchema.parse(savedPool.ruleBaseline) : undefined;
       const value = { version: 'market-keyword-facts/v1' as const, moduleRunId: id, scope: view.run.scope, referenceMonth: view.run.scope.toMonth,
         pool: { attemptId: poolAttempt.id, rawInputSnapshotId: raw.snapshot.snapshotId, semanticInputSnapshotId: semantic.snapshot.snapshotId, basisHash: p.basisHash,
           dataCutoffAt: p.dataCutoffAt, plannedPageCount: p.plannedPageCount, receivedPageCount: p.receivedPageCount, missingPages: p.missingPages, emptyPages: p.emptyPages, fullPages: p.fullPages,
@@ -154,7 +156,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
           omittedMemberIds: p.omittedMemberIds, conflictingMemberIds: p.conflictingMemberIds, duplicateMemberCount: p.duplicateMemberCount, memberLimitReached: p.memberLimitReached, selectionPolicy: p.selectionPolicy },
         members, semantics: { status: !view.run.versions.model ? 'unavailable' : pending ? 'pending' : members.length > 0 && !unavailableKeywordIds.length ? 'validated' : 'partial',
           batches, unavailableKeywordIds, unknownDimensionCount: decisions.reduce((sum, k) => sum + (['W1', 'W2', 'W3', 'W4'] as const).filter(d => k[d].status === 'unknown').length, 0),
-          unknownClusterCount: decisions.filter(k => k.cluster.status === 'unknown').length } };
+          unknownClusterCount: decisions.filter(k => k.cluster.status === 'unknown').length }, ...(ruleBaseline ? { ruleBaseline } : {}) };
       facts = MarketKeywordFactsSchema.parse({ ...value, factsId: `market-keyword-facts:${digest(value)}` });
     }
     return MarketKeywordRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, params, facts,

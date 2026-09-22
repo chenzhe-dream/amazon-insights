@@ -85,7 +85,7 @@ export function inspectMarketThemeContinuation(view: MarketModuleRunView, now: s
   const poolAttempt = attempt(poolStep), pool = obj(poolAttempt.output), semanticInputSnapshotId = inputId.parse(pool.semanticInputSnapshotId);
   let preparationAttemptId: string | null = null, preparationReceiptId: string | null = null;
   let modelSteps: MarketExecutionStep[] = [];
-  if (pool.semanticStatus !== 'no-input') {
+  if (pool.semanticStatus !== 'no-input' && p.flow !== MARKET_THEME_RULES_FLOW_VERSION) {
     const preparation = one(view.steps.filter(s => s.kind === 'prepare-model-batches' && obj(s.input).inputSnapshotId === semanticInputSnapshotId));
     current.add(preparation.stepKey); if (!terminal(preparation)) return result();
     const prepared = attempt(preparation); preparationAttemptId = prepared.id;

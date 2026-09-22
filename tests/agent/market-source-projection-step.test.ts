@@ -683,8 +683,8 @@ test('collected source projection feeds the native model queue in isolated Postg
     const httpId = started.json().run.id, httpUrl = `/v1/market-analysis/runs/${httpId}`; await drain();
     const publicResult = await http.inject({ method: 'GET', url: httpUrl }); assert.equal(publicResult.statusCode, 200, publicResult.body);
     const publicRun = MarketThemeRunResponseSchema.parse(publicResult.json()).run;
-    assert.equal(publicRun.currentReport!.report.status, 'partial'); assert.equal(publicRun.currentReport!.report.counts.unknownCount, 1);
-    assert.equal(sourceCalls, httpSourceStart + 4); assert.equal(modelCalls, httpModelStart + 1);
+    assert.equal(publicRun.currentReport!.report.status, 'partial'); assert.equal(publicRun.currentReport!.report.ruleStatus, 'complete'); assert.equal(publicRun.currentReport!.report.semanticStatus, 'skipped'); assert.equal(publicRun.currentReport!.report.counts.unknownCount, 0);
+    assert.equal(sourceCalls, httpSourceStart + 4); assert.equal(modelCalls, httpModelStart);
     const retryable = publicRun.steps.find(s => s.canRetry)!; assert.equal(retryable.asin, 'B000000003');
     themePoolMode = false; const commandKey = randomUUID();
     const retryHttp = () => http.inject({ method: 'POST', url: `${httpUrl}/retry`, headers: { 'idempotency-key': commandKey },
@@ -692,8 +692,8 @@ test('collected source projection feeds the native model queue in isolated Postg
     assert.equal((await retryHttp()).statusCode, 200); assert.equal((await retryHttp()).statusCode, 200);
     assert.equal((await http.inject({ method: 'GET', url: httpUrl })).json().run.currentReport, null); await drain();
     const latest = MarketThemeRunResponseSchema.parse((await http.inject({ method: 'GET', url: httpUrl })).json()).run;
-    assert.equal(latest.history.length, 2); assert.equal(latest.currentReport!.report.counts.successfulCount, 2);
-    assert.equal(sourceCalls, httpSourceStart + 5); assert.equal(modelCalls, httpModelStart + 2);
+    assert.equal(latest.history.length, 2); assert.equal(latest.currentReport!.report.counts.successfulCount, 2); assert.equal(latest.currentReport!.report.ruleStatus, 'complete'); assert.equal(latest.currentReport!.report.semanticStatus, 'skipped'); assert.equal(modelCalls, httpModelStart);
+    assert.equal(sourceCalls, httpSourceStart + 5); assert.equal(modelCalls, httpModelStart);
     const detailUrl = (attemptId: string) => `${httpUrl}/reports/${attemptId}/details`;
     const firstDetails = await http.inject({ method: 'GET', url: `${detailUrl(publicRun.currentReport!.attemptId)}?section=groups&limit=1` });
     assert.equal(firstDetails.statusCode, 200, firstDetails.body); assert.equal(firstDetails.json().report.current, false);

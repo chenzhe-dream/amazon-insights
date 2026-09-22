@@ -14,6 +14,7 @@ import { readMarketProductMonth } from '../domain/market-research/product-month-
 import { validateMarketShapeSuggestions } from '../domain/market-research/semantic-validation';
 import {buildMarketShapePeriodProjection} from '../domain/market-research/shape-period-projection';
 import {projectMarketShapeSourceMetadata} from '../domain/market-research/shape-source-metadata';
+import {MarketRuleBaselineSchema} from '../../shared/market-rule-baseline-contracts';
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 function invalid(): never { throw new MarketExecutionConflictError(); }
 type Saved = NonNullable<Awaited<ReturnType<PostgresMarketShapePriceRevisionStore['find']>>>;
@@ -34,6 +35,10 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
     const params = MarketShapeFlowParamsSchema.parse(view.run.params), { flow: _flow, ...publicParams } = params;
     // Cancelled runs retain their frozen inputs and accepted suggestions for viewing.
     const current = new Set(inspectMarketShapeContinuation(view.run.status === 'cancelled' ? { ...view, run: { ...view.run, status: 'partial' } } : view, new Date().toISOString()).currentStepKeys);
+    const rulesOnly = params.flow === 'market-shape-price-flow/rules-v1';
+    const projection = view.steps.find(s => s.kind === 'prepare-members' && obj(s.input).catalog && obj(obj(s.input).catalog).task === 'market-product-shape-suggestion');
+    const projectionAttempt = projection?.latestAttemptId ? view.attempts.find(a => a.id === projection.latestAttemptId && ['succeeded','empty'].includes(a.status)) : undefined;
+    const ruleBaseline = projectionAttempt && Object.hasOwn(obj(projectionAttempt.output), 'ruleBaseline') ? MarketRuleBaselineSchema.parse(obj(projectionAttempt.output).ruleBaseline) : undefined;
     const readScope = { actor, studyId: view.run.scope.researchId, moduleRunId: id };
     const anchor = view.steps.find(s => s.stepKey === 'shape-flow/anchor'), a = view.attempts.find(a => a.id === anchor?.latestAttemptId);
     let source: null | {
@@ -91,6 +96,6 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         ordinal: number;
         stored_at: Date;
     }>('SELECT revision_id,ordinal,stored_at FROM market_shape_price_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100', [actor.organizationId, id])).rows.map(r => ({ revisionId: r.revision_id, ordinal: r.ordinal, createdAt: new Date(r.stored_at).toISOString() }));
-    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
+    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), ...(rulesOnly?{ruleStatus:ruleBaseline?.status??(source?'partial':'unavailable'),semanticStatus:'skipped' as const,...(ruleBaseline?{ruleBaseline}: {})}:{}), source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
             steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', asin: null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
 }

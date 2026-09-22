@@ -8,6 +8,7 @@ import {MarketKeywordRuleReportSchema} from './market-keyword-rule-report-contra
 import {MarketKeywordComparisonMonthsSchema} from './market-keyword-comparison-contracts';
 import {MarketKeywordAbaMemberSchema} from './market-keyword-aba-source-contracts';
 import {MarketKeywordScoreInputAuditSchema} from './market-keyword-score-input-audit-contracts';
+import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const inputId = z.string().regex(/^market-input:[a-f0-9]{64}$/);
@@ -32,7 +33,7 @@ export const MarketKeywordFactsSchema = z.object({
     collectionCoverage: z.enum(['none', 'partial', 'complete']), exhaustive: z.literal(false), maxMembers: count,
     uniqueObservedMemberCount: count, omittedMemberIds: z.array(z.string()), conflictingMemberIds: z.array(z.string()),
     duplicateMemberCount: count, memberLimitReached: z.boolean(), selectionPolicy: z.literal('seed-page-source-order/first-observation/v1'),
-  }).strict(),
+  }).strict(), ruleBaseline:MarketRuleBaselineSchema.optional(),
   members: z.array(z.object({ keywordId: z.string(), keyword: z.string(), sourceRef, occurrences: z.array(occurrence),
     aba:z.object({status:z.enum(['pending','failed','cancelled','ready','partial','empty','unsupported']),stepId:z.string().uuid().nullable(),attemptId:z.string().uuid().nullable(),
       inputSnapshotId:inputId.nullable(),sourceRef:sourceRef.nullable(),fetchedAt:z.string().datetime().nullable(),referenceMonth:month,
@@ -55,7 +56,7 @@ export const MarketKeywordFactsSchema = z.object({
 }).strict();
 export const MarketKeywordRunResponseSchema = z.object({ run: z.object({ id: z.string().uuid(), scope: MarketAnalysisScopeSchema,
   status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), createdAt: z.string().datetime(),
-  params: MarketKeywordStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), facts: MarketKeywordFactsSchema.nullable(),
+  params: MarketKeywordStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), facts: MarketKeywordFactsSchema.nullable(), ruleStatus:z.enum(['complete','partial','unavailable']).optional(), semanticStatus:z.enum(['skipped','pending','partial','complete','unavailable']).optional(),
   reconciliation:MarketKeywordReconciliationReportSchema.optional(),
   ruleReport:MarketKeywordRuleReportSchema.optional(),
   scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional(),

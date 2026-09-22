@@ -30,10 +30,10 @@ test('production source-only worker finishes complete overview numbers and repor
   const data=request.operation==='market_research'?{items:[basic]}:request.operation==='market_research_statistics'?basic:[];
   return {data:{code:'OK',...identity,data},source:{connectorId:'sellerSprite',operation:request.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
- const base=loadVocPositioningRuntimeConfig({OPENAI_API_KEY:'synthetic-key',AGENT_VOC_MODEL:'synthetic-model',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'12000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'60000',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2',AGENT_VOC_CALL_MAX_TOKENS:'1000000',AGENT_VOC_CALL_MAX_COST_MICROS:'10000000',AGENT_VOC_RUN_MAX_TOKENS:'1000000',AGENT_VOC_RUN_MAX_COST_MICROS:'10000000',AGENT_VOC_DAILY_MAX_TOKENS:'1000000',AGENT_VOC_DAILY_MAX_COST_MICROS:'10000000',AGENT_VOC_WORKER_OWNER_ID:'synthetic-recovery-worker'});
+ const base=loadVocPositioningRuntimeConfig({OPENAI_API_KEY:'synthetic-key',AGENT_VOC_MODEL: 'gpt-5.6',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'12000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'60000',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2',AGENT_VOC_CALL_MAX_TOKENS:'1000000',AGENT_VOC_CALL_MAX_COST_MICROS:'10000000',AGENT_VOC_RUN_MAX_TOKENS:'1000000',AGENT_VOC_RUN_MAX_COST_MICROS:'10000000',AGENT_VOC_DAILY_MAX_TOKENS:'1000000',AGENT_VOC_DAILY_MAX_COST_MICROS:'10000000',AGENT_VOC_WORKER_OWNER_ID:'synthetic-recovery-worker'});
  let modelCalls=0;
  const client={responses:{create:async()=>{modelCalls++;throw Error('The interrupted setup must stop before model execution');}}} as unknown as OpenAIProviderOptions['client'];
- const cases=[{flow:'market-overview-flow/v4',phase:'sources'},{flow:'market-overview-flow/v5',phase:'sources'},
+ const cases=[{flow:'market-overview-flow/rules-v1',phase:'sources'},{flow:'market-overview-flow/v4',phase:'sources'},{flow:'market-overview-flow/v5',phase:'sources'},
   {flow:'market-overview-flow/v5',phase:'prepare-model-batches'},{flow:'market-overview-flow/v5',phase:'model-batch'}];
  for(const {flow,phase} of cases)await t.test(`${flow}/${phase}`,async()=>{
   const configured=phase==='sources'?null:await createMarketModelRuntime(f.context,base,{client,connectors:{sellerSprite:connector,sorftime:connector}});
@@ -62,15 +62,25 @@ test('production source-only worker finishes complete overview numbers and repor
    while(current?.report.phase!=='window-results'&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,250));current=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport;}
    assert.ok(current,'The real no-model worker must save a numeric report for the complete flow');
    const recovery=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:run.id}))!;
-   assert.equal(current.report.phase,'window-results',JSON.stringify({queuedAtRestart,steps:recovery.steps.map(step=>({kind:step.kind,status:step.status})),errors:recovery.attempts.filter(attempt=>attempt.status==='failed').map(attempt=>attempt.error)}));
-   assert.equal(current.report.dataReady,true);assert.equal(current.report.windowStatus,'partial');
-   assert.ok(current.report.failures.length>0);
-   if(phase==='sources')assert.ok(current.report.failures.some(failure=>failure.stage==='planning'));
+   if(flow==='market-overview-flow/rules-v1'){
+    assert.equal(current.report.phase,'numeric'); assert.equal(current.report.windowStatus,'complete'); assert.equal(current.report.ruleStatus,'complete'); assert.equal(current.report.semanticStatus,'skipped');
+   } else assert.equal(current.report.phase,'window-results',JSON.stringify({queuedAtRestart,steps:recovery.steps.map(step=>({kind:step.kind,status:step.status})),errors:recovery.attempts.filter(attempt=>attempt.status==='failed').map(attempt=>attempt.error)}));
+   assert.equal(current.report.dataReady,true);
+   if(flow!=='market-overview-flow/rules-v1'){
+    assert.equal(current.report.windowStatus,'partial');
+    // Planning/preparation failures and model outcomes occupy separate audit fields.
+    if(phase==='model-batch')assert.ok(current.report.modelResults.some(result=>result.status==='failed'));
+    else assert.ok(current.report.failures.length>0);
+    if(phase==='sources')assert.ok(current.report.failures.some(failure=>failure.stage==='planning'));
+   }
    const view=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:run.id}))!;
    assert.equal(view.steps.some(step=>step.status==='queued'||step.status==='running'),false,'No unsupported semantic work remains stuck');
    assert.equal(view.steps.some(step=>(step.input as {phase?:string}).phase==='prepare-overview-synthesis'),false);
-   const unavailable=view.steps.filter(step=>step.status==='failed'&&['prepare-members','prepare-model-batches','model-batch'].includes(step.kind));assert.ok(unavailable.length>0);
-   for(const step of unavailable)assert.deepEqual(view.attempts.find(attempt=>attempt.id===step.latestAttemptId)!.error,{code:'governance',retryable:false});
+   const unavailable=view.steps.filter(step=>step.status==='failed'&&['prepare-members','prepare-model-batches','model-batch'].includes(step.kind));
+   if(flow!=='market-overview-flow/rules-v1'){
+    assert.ok(unavailable.length>0);
+    for(const step of unavailable)assert.deepEqual(view.attempts.find(attempt=>attempt.id===step.latestAttemptId)!.error,{code:'governance',retryable:false});
+   } else assert.equal(unavailable.length,0);
    const saved=await reports.details({actor:f.actor,moduleRunId:run.id,attemptId:current.attemptId});
    assert.deepEqual(await reports.details({actor:f.actor,moduleRunId:run.id,attemptId:current.attemptId}),saved);
    assert.equal(sourceCalls,calls,'History reads and fallback restart must not recollect sources');

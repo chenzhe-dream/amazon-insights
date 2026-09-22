@@ -81,8 +81,6 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
         const [y, m] = month.split('-').map(Number);
         month = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
     }
-    if (!view.run.versions.model)
-        return result();
     const selectionRevision = `shape-selection:${digest(selection.selectionInputSnapshotId)}`;
     const projectionDefinition: MarketStepDefinition = { stepKey: key('project', a.id), kind: 'prepare-members', subject: { flow: p.flow }, input: { inputSnapshotId: selection.selectionInputSnapshotId, catalog: p.catalog, selectionRevision, dataCutoffAt: selection.dataCutoffAt }, inputRefs: [{ kind: 'input', id: selection.selectionInputSnapshotId }, { kind: 'step-output', id: a.id }] };
     const projection = find(projectionDefinition);
@@ -95,6 +93,8 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
     const projected = attempt(projection), snapshotId = z.string().regex(/^market-input:[a-f0-9]{64}$/).parse(obj(projected.output).inputSnapshotId);
     if (obj(projected.output).sourceInputSnapshotId !== selection.selectionInputSnapshotId || obj(projected.output).catalogHash !== digest(p.catalog))
         throw new TypeError('Shape projection differs');
+    if (p.flow === MARKET_SHAPE_RULES_FLOW_VERSION)
+        return result();
     const preparationDefinition: MarketStepDefinition = { stepKey: `prepare-model/${digest({ projection: snapshotId, selectionRevision, dataCutoffAt: selection.dataCutoffAt })}`, kind: 'prepare-model-batches', subject: { task: p.catalog.task }, input: { task: p.catalog.task, inputSnapshotId: snapshotId, selectionRevision, dataCutoffAt: selection.dataCutoffAt }, inputRefs: [{ kind: 'input', id: snapshotId }] };
     const preparation = find(preparationDefinition);
     if (!preparation)

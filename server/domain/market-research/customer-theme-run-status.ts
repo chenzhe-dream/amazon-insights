@@ -17,5 +17,7 @@ export function canCompleteMarketThemeRun(view:MarketModuleRunView,currentStepKe
   const {reportHash,...report}=parsed.data;
   if(report.moduleRunId!==view.run.id||digest(report.scope)!==digest(view.run.scope)||digest(report.versions)!==digest(view.run.versions)||digest(report)!==reportHash)return false;
   const readiness=classifyMarketThemeReport(report.counts);
-  return report.status==='complete'&&report.dataReady&&report.semanticsReady&&report.reasons.length===0&&readiness.status==='complete';
+  const rulesOnly = report.versions.model === null && report.semanticStatus === 'skipped';
+  const ruleStatus = report.ruleStatus ?? (report.status === 'complete' ? 'complete' : 'partial');
+  return ruleStatus === 'complete' && report.dataReady && report.reasons.filter(reason => rulesOnly ? reason !== 'model-results-missing' && reason !== 'unknown-themes' : true).length === 0 && (rulesOnly || report.semanticsReady && readiness.status==='complete');
 }

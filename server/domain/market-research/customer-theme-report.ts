@@ -101,6 +101,8 @@ export function createMarketThemeReport(view: MarketModuleRunView, definition: M
   const report = { reportVersion: input.basis==='reconciliation-evaluation'?MARKET_THEME_RECONCILED_REPORT_VERSION:MARKET_THEME_REPORT_VERSION, moduleRunId: view.run.id, scope: view.run.scope, versions: view.run.versions,
     basis: input.basis, basisAttemptId, inputSnapshotId: snapshot.snapshotId, resultHash, dataCutoffAt: snapshot.collectedAt,
     selectedAsins, selectionBasis: 'provider-row-order', bsrTopVerified: false, metricKind: 'customers_say_topic_share',
-    reviewDeduplication: 'unavailable', ...readiness };
+    reviewDeduplication: 'unavailable', ...readiness,
+    ruleStatus: readiness.dataReady ? 'complete' as const : readiness.status === 'partial' ? 'partial' as const : 'unavailable' as const,
+    semanticStatus: params.flow === 'market-theme-flow/rules-v1' ? 'skipped' as const : readiness.semanticsReady ? 'complete' as const : readiness.counts.expectedMemberCount ? 'partial' as const : 'unavailable' as const };
   return { ...report, reportHash: digest(report) };
 }

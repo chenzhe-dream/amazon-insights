@@ -30,7 +30,8 @@ export function createMarketThemePoolStep(context: PostgresQueryContext): Market
     if (!view || !step || claim.step.kind !== 'prepare-members' || step.status !== 'running' || step.latestAttemptId !== claim.attemptId ||
       digest(claim.step) !== claim.inputHash || step.inputHash !== claim.inputHash || view.run.createdBy !== claim.createdBy || view.run.scope.researchId !== claim.studyId ||
       view.run.moduleKind !== 'customer-themes' || view.run.status === 'cancelled' || view.run.versions.source !== MARKET_SOURCE_HANDLER_VERSION ||
-      view.run.versions.mapping !== input.catalog.mappingVersion || view.run.versions.model !== 'market.semantic.text.v1' || !view.run.versions.configuration) invalid();
+      view.run.versions.mapping !== input.catalog.mappingVersion || !((view.run.versions.model === null && view.run.versions.configuration === null && view.run.versions.prompt === null) ||
+        (view.run.versions.model === 'market.semantic.text.v1' && !!view.run.versions.configuration && !!view.run.versions.prompt))) invalid();
     async function bound(snapshotId: string) {
       signal.throwIfAborted(); if (!claim.step.inputRefs.some(r => r.kind === 'input' && r.id === snapshotId)) invalid();
       const saved = await snapshots.findInput({ actor, studyId: claim.studyId, id: snapshotId });
@@ -76,7 +77,7 @@ export function createMarketThemePoolStep(context: PostgresQueryContext): Market
     return { kind: 'settlement', value: { outcome: { status: aggregation.dataReady ? 'succeeded' : 'empty', output: { ...manifest, selection: selectionSummary, totals: aggregation.totals,
       perAsin: aggregation.perAsin.map(({ asin, status, reason, totals }) => ({ asin, status, reason, totals })),
       ruleBaseline: customerThemeRuleBaselineFromRawPool({ scope: view.run.scope, snapshot: rawSnapshot, selectedAsins: input.selectedAsins }) } },
-      inputs: [factory(rawSnapshot), factory(semanticSnapshot)], children: semanticSnapshot.records.length ? [{
+      inputs: [factory(rawSnapshot), factory(semanticSnapshot)], children: semanticSnapshot.records.length && view.run.versions.model === 'market.semantic.text.v1' ? [{
         stepKey: `theme-model/${manifest.basisHash}`, kind: 'prepare-model-batches', subject: { task: input.catalog.task },
         input: { task: input.catalog.task, inputSnapshotId: semanticSnapshot.snapshotId, selectionRevision: input.selectionRevision, dataCutoffAt: input.dataCutoffAt },
         inputRefs: [{ kind: 'input', id: semanticSnapshot.snapshotId }],

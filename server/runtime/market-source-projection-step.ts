@@ -35,7 +35,8 @@ export function createMarketSourceProjectionStep(context: PostgresQueryContext):
       step.inputHash !== claim.inputHash || digest(claim.step) !== claim.inputHash || view.run.createdBy !== claim.createdBy ||
       view.run.scope.researchId !== claim.studyId || view.run.moduleKind !== moduleKind || view.run.status === 'cancelled' ||
       view.run.versions.source !== MARKET_SOURCE_HANDLER_VERSION || view.run.versions.mapping !== mapping ||
-      view.run.versions.model !== 'market.semantic.text.v1' || !view.run.versions.configuration) invalid();
+      !((view.run.versions.model === null && view.run.versions.configuration === null && view.run.versions.prompt === null) ||
+        (view.run.versions.model === 'market.semantic.text.v1' && !!view.run.versions.configuration && !!view.run.versions.prompt))) invalid();
     async function bound(id: string) {
       signal.throwIfAborted();
       if (!claim.step.inputRefs.some(r => r.kind === 'input' && r.id === id)) invalid();
@@ -66,8 +67,9 @@ export function createMarketSourceProjectionStep(context: PostgresQueryContext):
     const projected = result.snapshot;
     const factory = { scope: projected.scope, kind: projected.kind, sourceVersion: projected.sourceVersion, ruleVersion: projected.ruleVersion,
       collectedAt: projected.collectedAt, expectedRecordIds: projected.expectedRecordIds, records: projected.records };
+    const hasModel = view.run.versions.model === 'market.semantic.text.v1' && !!view.run.versions.configuration && !!view.run.versions.prompt;
     return { kind: 'settlement', value: { outcome: { status: projected.records.length ? 'succeeded' : 'empty', output: ruleBaseline ? { ...result.manifest, ruleBaseline } : result.manifest },
-      inputs: [JSON.parse(JSON.stringify(factory)) as MarketJsonValue], children: projected.records.length ? [{
+      inputs: [JSON.parse(JSON.stringify(factory)) as MarketJsonValue], children: projected.records.length && hasModel ? [{
         stepKey: `prepare-model/${digest({ projection: projected.snapshotId, selectionRevision: input.selectionRevision, dataCutoffAt: input.dataCutoffAt })}`,
         kind: 'prepare-model-batches', subject: { task: catalog.task },
         input: { task: catalog.task, inputSnapshotId: projected.snapshotId, selectionRevision: input.selectionRevision, dataCutoffAt: input.dataCutoffAt },

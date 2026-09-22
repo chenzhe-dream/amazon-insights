@@ -5,6 +5,7 @@ import {MarketOverviewExplanationOutputSchema,MarketSemanticRecordSchema} from '
 import {MarketModuleIdSchema as uuid,MarketModuleStepPublicSchema,MarketThemeReportSchema} from './market-module-contracts';
 import {MarketOverviewDistributionEntrySchema,MARKET_OVERVIEW_ALL_OPERATIONS} from './market-overview-distribution-contracts';
 import {MarketOverviewFinalSynthesisOutputSchema,MarketOverviewSynthesisChildSchema,MarketOverviewGapGroupSchema} from './market-overview-reduction-contracts';
+import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 const id=z.string().min(1).max(240),hash=z.string().regex(/^[a-f0-9]{64}$/),count=z.number().int().nonnegative().safe(),month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
 export const MarketOverviewStartRequestSchema=z.object({headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]).default(10),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6)}).strict();
 export const MarketOverviewLegacyReportSchema=z.object({reportVersion:z.literal('market-overview-report/v1'),moduleRunId:uuid,scope:MarketAnalysisScopeSchema,versions:MarketThemeReportSchema.shape.versions,
@@ -14,7 +15,10 @@ export const MarketOverviewLegacyReportSchema=z.object({reportVersion:z.literal(
   modelResults:z.array(z.object({attemptId:uuid,bindingId:uuid,status:z.enum(['succeeded','failed','empty']),errorCode:id.nullable(),agentRunId:uuid.nullable(),output:MarketOverviewExplanationOutputSchema.nullable()}).strict()).max(2000),
   failures:z.array(z.object({attemptId:uuid,stage:z.enum(['planning','preparation']),errorCode:id}).strict()).max(2000),
   coverage:z.array(z.object({dimension:id,status:z.enum(['available','partial','missing','not-integrated']),availableMetrics:z.array(id),missingMetrics:z.array(id)}).strict()).max(50),
-  reasons:z.array(id).max(50),reportHash:hash}).strict();
+  reasons:z.array(id).max(50),reportHash:hash,
+  ruleStatus:z.enum(['complete','partial','unavailable']).optional(),
+  semanticStatus:z.enum(['skipped','pending','partial','complete','unavailable']).optional(),
+  ruleBaseline:MarketRuleBaselineSchema.optional()}).strict();
 export const MarketOverviewSavedSynthesisSchema=z.object({status:z.literal('complete'),result:MarketOverviewFinalSynthesisOutputSchema,
   dimensionChildren:z.array(MarketOverviewSynthesisChildSchema).min(1).max(64),
   gapGroups:z.array(MarketOverviewGapGroupSchema.extend({originalGapIds:z.array(id).min(1).max(10000)}).strict()).max(10000),

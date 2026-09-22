@@ -7,6 +7,7 @@ import { MarketShapeStartRequestSchema, MarketShapePriceBandsSchema } from './ma
 import {MarketShapeStructureSchema} from './market-shape-structure-contracts';
 import {MarketShapePeriodProjectionSchema} from './market-shape-period-contracts';
 import {MarketShapeSourceMetadataSchema} from './market-shape-source-metadata-contracts';
+import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 const text = z.string().max(4000), asin = z.string().regex(/^[A-Z0-9]{10}$/), count = z.number().int().nonnegative().safe(), num = z.number().finite().nonnegative().nullable();
 export const MarketShapeRevisionIdSchema = z.string().regex(/^market-shape-revision:[a-f0-9]{64}$/);
 const month = z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), issue = z.array(z.string().max(80)).max(10);
@@ -19,7 +20,7 @@ export const MarketShapeRevisionPublicSchema = z.object({ revisionId: MarketShap
     products: z.array(z.object({ asin, shape: text.nullable(), price: num, rawPrice: num, priceIssues: issue, provenance:MarketProductPriceProvenanceSchema.optional(), observations: z.array(z.object({ month, units: num, rawUnits: num, issues: issue, provenance:MarketProductMonthProvenanceSchema.optional() }).strict()).max(120) }).strict()).max(100),
     monthly: z.array(z.object({ month, totalUnits: num, eligibleAsins: z.array(asin).max(100) }).strict()).max(120), semanticStatus: z.literal('not-integrated'), structure:MarketShapeStructureSchema.optional(), sourcePolicy:MarketProductSourcePolicySchema.optional(),
 }).strict().refine(value=>!value.periodProjection||value.periodProjection.basisCatalogId===value.catalogId,'Period projection belongs to another saved catalog');
-export const MarketShapeRunResponseSchema = z.object({ run: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema, status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), params: MarketShapeStartRequestSchema, sourcePolicy:MarketProductSourcePolicySchema.optional(),
+export const MarketShapeRunResponseSchema = z.object({ run: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema, status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), params: MarketShapeStartRequestSchema, sourcePolicy:MarketProductSourcePolicySchema.optional(), ruleStatus:z.enum(['complete','partial','unavailable']).optional(), semanticStatus:z.enum(['skipped','pending','partial','complete','unavailable']).optional(), ruleBaseline:MarketRuleBaselineSchema.optional(),
         steps: z.array(MarketModuleStepPublicSchema.extend({ month: month.nullable() })),
         source: z.object({ referenceAttemptId: MarketModuleIdSchema, historyAttemptIds: z.array(MarketModuleIdSchema).max(120), referenceSnapshotId: z.string(), fetchedAt: z.string().datetime(), selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false), products: z.array(z.object({ asin, title: text.nullable(), brand: text.nullable(), price: num, units: num, metadata:MarketShapeSourceMetadataSchema.optional() }).strict()).max(100) }).strict().nullable(),
         suggestions: z.object({ status: z.enum(['not-ready', 'unavailable', 'running', 'partial', 'complete']), items: z.array(MarketShapeSuggestionOutputSchema.shape.products.element).max(100) }).strict(),
