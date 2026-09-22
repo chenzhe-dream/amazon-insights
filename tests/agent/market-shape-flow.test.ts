@@ -52,6 +52,11 @@ test('shape flow freezes members, collects their history and audits suggestions 
     assert.ok(view.steps.every(s => s.status === 'succeeded'), JSON.stringify(view.attempts));
     assert.deepEqual(calls, ['202608', '202607']);
     assert.equal(modelCalls, 1);
+    const projection = view.steps.find(s => s.kind === 'prepare-members' && (s.input as { phase?: string }).phase !== 'select-shape-members')!;
+    const projectionOutput = view.attempts.find(a => a.id === projection.latestAttemptId)!.output as { ruleBaseline: { module: string; metrics: { key: string; value: number | null; missingReason: string | null }[] } };
+    assert.equal(projectionOutput.ruleBaseline.module, 'shape-price');
+    assert.equal(projectionOutput.ruleBaseline.metrics.find(metric => metric.key === 'totalUnits')?.value, 10);
+    assert.equal(projectionOutput.ruleBaseline.metrics.find(metric => metric.key === 'margin')?.missingReason, 'cost inputs are not collected');
     assert.equal(view.run.status, 'partial');
     assert.equal(inspectMarketShapeContinuation(view, new Date().toISOString()).children.length, 0);
     const service = new MarketModuleService({ context: f.context, modelIdentity: () => ({ configurationVersion: runtime.configurationVersion, promptVersion: runtime.promptVersion }) });

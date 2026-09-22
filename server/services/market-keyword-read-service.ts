@@ -10,6 +10,7 @@ import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analy
 import { PostgresMarketAgentRunStore } from '../db/postgres/market-agent-run-store';
 import { isMarketKeywordFlow, inspectMarketKeywordContinuation, MarketKeywordFlowParamsSchema } from '../domain/market-research/keyword-flow';
 import { assembleMarketKeywordPool } from '../domain/market-research/keyword-source-pool';
+import { keywordRuleBaselineFromPool } from '../domain/market-research/keyword-rule-baseline';
 import { readMarketKeywordTrendEvidence } from '../domain/market-research/keyword-trend-evidence';
 import {projectKeywordComparisonMonths} from '../domain/market-research/keyword-comparison-months';
 import {readMarketKeywordAbaEvidence} from '../domain/market-research/keyword-aba-evidence';
@@ -62,7 +63,10 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
         pages.push({ snapshot: saved.snapshot, sourceRef: page.sourceRef }); sources[page.sourceRef] = raw.evidence;
       }
       const rebuilt = assembleMarketKeywordPool({ ...input, scope: view.run.scope, pages, sources });
-      same(rebuilt.manifest, poolAttempt.output);
+      const savedPool = obj(poolAttempt.output);
+      const comparable = Object.hasOwn(savedPool, 'ruleBaseline') ? Object.fromEntries(Object.entries(savedPool).filter(([key]) => key !== 'ruleBaseline')) : savedPool;
+      same(rebuilt.manifest, comparable);
+      if (Object.hasOwn(savedPool, 'ruleBaseline')) same(savedPool.ruleBaseline, keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rebuilt.rawSnapshot, clusterCount: input.catalog.clusterCatalog.length }));
       const raw = await snapshots.findInput({ ...readScope, id: rebuilt.rawSnapshot.snapshotId });
       const semantic = await snapshots.findInput({ ...readScope, id: rebuilt.semanticSnapshot.snapshotId });
       if (!raw || !semantic) invalid();

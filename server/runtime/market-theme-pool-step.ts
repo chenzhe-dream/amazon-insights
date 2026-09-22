@@ -5,6 +5,7 @@ import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
 import { selectMarketThemeMembers, assembleMarketThemePool, MarketThemePoolCatalogSchema } from '../domain/market-research/customer-theme-source-pool';
+import { customerThemeRuleBaselineFromRawPool } from '../domain/market-research/customer-theme-rule-baseline';
 import { canonicalJsonSha256 as digest } from './model-request-accounting';
 import type { MarketStepHandler, MarketStepWork } from './market-module-step-worker';
 
@@ -73,7 +74,8 @@ export function createMarketThemePoolStep(context: PostgresQueryContext): Market
     const pool = assembleMarketThemePool({ selection, selectedAsins: input.selectedAsins, catalog: input.catalog, dataCutoffAt: input.dataCutoffAt, observations, sources, failures }); signal.throwIfAborted();
     const { rawSnapshot, semanticSnapshot, aggregation, manifest } = pool;
     return { kind: 'settlement', value: { outcome: { status: aggregation.dataReady ? 'succeeded' : 'empty', output: { ...manifest, selection: selectionSummary, totals: aggregation.totals,
-      perAsin: aggregation.perAsin.map(({ asin, status, reason, totals }) => ({ asin, status, reason, totals })) } },
+      perAsin: aggregation.perAsin.map(({ asin, status, reason, totals }) => ({ asin, status, reason, totals })),
+      ruleBaseline: customerThemeRuleBaselineFromRawPool({ scope: view.run.scope, snapshot: rawSnapshot, selectedAsins: input.selectedAsins }) } },
       inputs: [factory(rawSnapshot), factory(semanticSnapshot)], children: semanticSnapshot.records.length ? [{
         stepKey: `theme-model/${manifest.basisHash}`, kind: 'prepare-model-batches', subject: { task: input.catalog.task },
         input: { task: input.catalog.task, inputSnapshotId: semanticSnapshot.snapshotId, selectionRevision: input.selectionRevision, dataCutoffAt: input.dataCutoffAt },

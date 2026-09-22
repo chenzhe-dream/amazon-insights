@@ -70,6 +70,12 @@ test('keyword pool without a model retains sources and trends, and does not crea
   const receipt = view.attempts.find(a => a.stepId === view.steps.find(s => s.stepKey === 'pool')!.id)!.output as { rawInputSnapshotId: string };
   const raw = (await snapshots.findInput({ actor, studyId: scope.researchId, id: receipt.rawInputSnapshotId }))!;
   assert.equal((raw.snapshot.records[0].data as any).member.monthlySearchVolume.value, 0);
+  const poolOutput = view.attempts.find(a => a.stepId === view.steps.find(s => s.stepKey === 'pool')!.id)!.output as { ruleBaseline: { module: string; ruleVersion: string; metrics: { key: string; value: number | null; missingReason: string | null }[] } };
+  assert.equal(poolOutput.ruleBaseline.module, 'keywords');
+  assert.equal(poolOutput.ruleBaseline.ruleVersion.startsWith('calendar-three-month-growth/v1'), true);
+  assert.equal(poolOutput.ruleBaseline.metrics.find(metric => metric.key.endsWith(':searchVolume'))?.value, 0);
+  assert.equal(poolOutput.ruleBaseline.metrics.find(metric => metric.key.endsWith(':threeMonthGrowth'))?.missingReason, 'missing-baseline');
+  assert.equal(poolOutput.ruleBaseline.metrics.find(metric => metric.key === 'cpc')?.missingReason, 'source-provides-recommended-bid-only');
   assert.deepEqual(calls, ['keyword_extends', 'keyword_trend']);
   assert.equal(view.steps.some(s => s.kind === 'model-batch'), false);
 });

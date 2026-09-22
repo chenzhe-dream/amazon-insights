@@ -5,6 +5,7 @@ import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
 import { assembleMarketKeywordPool, MARKET_KEYWORD_POOL_VERSION, MarketKeywordPageIdentitySchema, MarketKeywordPoolCatalogSchema } from '../domain/market-research/keyword-source-pool';
+import { keywordRuleBaselineFromPool } from '../domain/market-research/keyword-rule-baseline';
 import { canonicalJsonSha256 as digest } from './model-request-accounting';
 import type { MarketStepHandler, MarketStepWork } from './market-module-step-worker';
 
@@ -66,7 +67,8 @@ export function createMarketKeywordPoolStep(context: PostgresQueryContext): Mark
     }
     const pool = assembleMarketKeywordPool({ ...input, scope: view.run.scope, pages, sources }); signal.throwIfAborted();
     const { rawSnapshot, semanticSnapshot, manifest } = pool;
-    return { kind: 'settlement', value: { outcome: { status: rawSnapshot.records.length ? 'succeeded' : 'empty', output: manifest },
+    const output = { ...manifest, ruleBaseline: keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rawSnapshot, clusterCount: input.catalog.clusterCatalog.length }) };
+    return { kind: 'settlement', value: { outcome: { status: rawSnapshot.records.length ? 'succeeded' : 'empty', output },
       inputs: [factory(rawSnapshot), factory(semanticSnapshot)], children: rawSnapshot.records.length ? [
         { stepKey: `pool-trends/${manifest.basisHash}`, kind: 'prepare-keyword-pool', subject: {},
           input: { phase: 'dispatch-trends', inputSnapshotId: rawSnapshot.snapshotId, basisHash: manifest.basisHash },

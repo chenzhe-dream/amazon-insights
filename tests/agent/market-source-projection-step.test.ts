@@ -208,6 +208,10 @@ test('collected source projection feeds the native model queue in isolated Postg
     const pool = saved.attempts.find(a => a.id === poolStep.latestAttemptId)!.output as any;
     assert.equal(pool.coverage.selectedAsinCount, 3); assert.equal(pool.coverage.successfulAsinCount, 1); assert.equal(pool.coverage.emptyAsinCount, 1); assert.equal(pool.coverage.failedAsinCount, 1);
     assert.equal(pool.totals.mention, 2); assert.equal(pool.reviewDeduplication, 'unavailable');
+    assert.equal(pool.ruleBaseline.module, 'customer-themes');
+    assert.equal(pool.ruleBaseline.metrics.find((metric: { key: string; value: number | null }) => metric.key === 'mention')?.value, 2);
+    assert.equal(pool.ruleBaseline.metrics.find((metric: { key: string; missingReason: string | null }) => metric.key === 'uniqueReviews')?.missingReason, 'Customers Say observations are not deduplicated reviews');
+    assert.equal(pool.ruleBaseline.facts[0].value, 'not_assumed_disjoint');
     assert.equal(pool.selection.requestedCount, 20); assert.equal(pool.selection.observedProductCount, 3); assert.equal(pool.selection.requestedCountMet, false);
     await runtime.tick(); await runtime.tick(); saved = (await view(run.id))!;
     assert.equal(saved.steps.find(s => s.kind === 'model-batch')!.status, 'succeeded');

@@ -66,6 +66,26 @@ test("keyword baseline keeps calendar three-month growth and does not rename rec
   assert.equal(baseline.facts[0]?.value, "1/2");
 });
 
+test("keyword pool baseline leaves cluster coverage missing until clustering runs", () => {
+  const baseline = buildKeywordRuleBaseline({
+    scope,
+    sourceSnapshot,
+    revisionId: null,
+    clusterCount: 2,
+    coveredClusterCount: null,
+    keywords: [{
+      keywordId: "gel-pen",
+      searchVolume: 120,
+      searchVolumeReason: null,
+      threeMonthGrowth: null,
+      threeMonthReason: "missing-baseline",
+    }],
+  });
+  assert.equal(baseline.facts[0]?.value, null);
+  assert.equal(baseline.facts[0]?.status, "unavailable");
+  assert.equal(baseline.missing.some(item => item.key === "cluster-coverage"), true);
+});
+
 test("theme baseline counts Customers Say observations and rebuilds after an exclusion", () => {
   const sourcePool = {
     selectedAsins: ["B000000001", "B000000002"],

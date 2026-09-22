@@ -6,6 +6,7 @@ import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
 import { MarketProjectionCatalogSchema, projectMarketSourceSnapshot } from '../domain/market-research/source-semantic-projection';
+import { shapeRuleBaselineFromProductSnapshot } from '../domain/market-research/shape-price-rule-baseline';
 import { canonicalJsonSha256 as digest } from './model-request-accounting';
 import type { MarketStepHandler } from './market-module-step-worker';
 import { createMarketThemePoolStep } from './market-theme-pool-step';
@@ -61,10 +62,11 @@ export function createMarketSourceProjectionStep(context: PostgresQueryContext):
       if (!saved) invalid(); sources[ref] = saved.evidence;
     }
     const result = projectMarketSourceSnapshot({ snapshot, sources, catalog }); signal.throwIfAborted();
+    const ruleBaseline = catalog.task === 'market-product-shape-suggestion' ? shapeRuleBaselineFromProductSnapshot({ snapshot, sources }) : null;
     const projected = result.snapshot;
     const factory = { scope: projected.scope, kind: projected.kind, sourceVersion: projected.sourceVersion, ruleVersion: projected.ruleVersion,
       collectedAt: projected.collectedAt, expectedRecordIds: projected.expectedRecordIds, records: projected.records };
-    return { kind: 'settlement', value: { outcome: { status: projected.records.length ? 'succeeded' : 'empty', output: result.manifest },
+    return { kind: 'settlement', value: { outcome: { status: projected.records.length ? 'succeeded' : 'empty', output: ruleBaseline ? { ...result.manifest, ruleBaseline } : result.manifest },
       inputs: [JSON.parse(JSON.stringify(factory)) as MarketJsonValue], children: projected.records.length ? [{
         stepKey: `prepare-model/${digest({ projection: projected.snapshotId, selectionRevision: input.selectionRevision, dataCutoffAt: input.dataCutoffAt })}`,
         kind: 'prepare-model-batches', subject: { task: catalog.task },
