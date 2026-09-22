@@ -86,6 +86,24 @@ test("keyword pool baseline leaves cluster coverage missing until clustering run
   assert.equal(baseline.missing.some(item => item.key === "cluster-coverage"), true);
 });
 
+test("keyword pool baseline is unavailable when every rule metric is missing", () => {
+  const baseline = buildKeywordRuleBaseline({
+    scope,
+    sourceSnapshot,
+    revisionId: null,
+    clusterCount: 0,
+    coveredClusterCount: null,
+    keywords: [{
+      keywordId: "gel-pen",
+      searchVolume: null,
+      searchVolumeReason: "missing-completed-month-volume",
+      threeMonthGrowth: null,
+      threeMonthReason: "missing-baseline",
+    }],
+  });
+  assert.equal(baseline.status, "unavailable");
+});
+
 test("theme baseline counts Customers Say observations and rebuilds after an exclusion", () => {
   const sourcePool = {
     selectedAsins: ["B000000001", "B000000002"],

@@ -71,7 +71,7 @@ export function buildKeywordRuleBaseline(input: {
     sourceSnapshot: input.sourceSnapshot,
     projection: {
       ruleVersion: input.revisionId ? `${KEYWORD_THREE_MONTH_FORMULA_VERSION}+revision:${input.revisionId}` : KEYWORD_THREE_MONTH_FORMULA_VERSION,
-      status: volumeKnown || recordIds.length > 0 ? 'partial' : 'unavailable',
+      status: volumeKnown ? 'partial' : 'unavailable',
       metrics,
       facts: [{
         id: 'cluster-coverage',

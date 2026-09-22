@@ -136,7 +136,7 @@ git commit -m "feat: complete market runs from local rule reports"
 - Replaying the same accepted create command returns the same run and does not call a source connector or model.
 - An explicit re-fetch command is the only path that creates a new source revision.
 
-- [ ] **Step 1: Write failing counter-based tests**
+- [x] **Step 1: Write failing counter-based tests**
 
 Use connector and model stubs with counters. After the first local-rule run, replay the same command with the model identity removed and assert no counter increases.
 
@@ -149,7 +149,7 @@ assert.deepEqual({ sourceCalls, modelCalls }, before);
 
 Add a failure fixture where the optional semantic path is unavailable and assert the stored rule report remains readable.
 
-- [ ] **Step 2: Run the new replay test and verify it fails**
+- [x] **Step 2: Run the new replay test and verify it fails**
 
 Run:
 
@@ -159,11 +159,11 @@ npx tsx --conditions=react-server --test tests/agent/market-local-rule-replay.te
 
 Expected: FAIL until rules-only completion and counter assertions are wired through the runtime.
 
-- [ ] **Step 3: Implement idempotent local-rule completion**
+- [x] **Step 3: Implement idempotent local-rule completion**
 
 Make continuation and public read paths use the persisted rule report before consulting any model identity. Keep command conflict checks and organization scoping unchanged.
 
-- [ ] **Step 4: Run replay, cancellation, and history tests**
+- [x] **Step 4: Run replay, cancellation, and history tests**
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/market-local-rule-replay.test.ts tests/agent/market-module-entry-replay.test.ts tests/agent/market-cancellation.test.ts tests/agent/market-history-contract-routing.test.ts
@@ -171,7 +171,7 @@ npx tsx --conditions=react-server --test tests/agent/market-local-rule-replay.te
 
 Expected: all pass and no replay creates new source or model calls.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add server/domain/market-research/module-flow.ts server/services/market-module-service.ts tests/agent/market-local-rule-replay.test.ts tests/agent/market-module-entry-replay.test.ts
@@ -190,7 +190,7 @@ git commit -m "test: prove local rule replay and failure preservation"
 - The fixture contains complete distribution values, a real zero, empty demand trend, and concentration without a confirmed unit.
 - Rebuilding from the fixture produces the same rule metrics, missing reasons, and evidence references without network or model access.
 
-- [ ] **Step 1: Add the fixture-driven failing replay test**
+- [x] **Step 1: Add the fixture-driven failing replay test**
 
 Load the JSON fixture twice, build the overview baseline twice, and assert deep equality plus zero connector/model calls.
 
@@ -200,7 +200,7 @@ assert.equal(first.metrics.find(metric => metric.key === 'demandTrend')?.value, 
 assert.equal(first.missing.some(item => item.reason.includes('concentration')), true);
 ```
 
-- [ ] **Step 2: Run the focused overview tests**
+- [x] **Step 2: Run the focused overview tests**
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/market-overview-rule-baseline.test.ts tests/agent/market-overview-source-only.test.ts
@@ -208,11 +208,11 @@ npx tsx --conditions=react-server --test tests/agent/market-overview-rule-baseli
 
 Expected: the new fixture test fails only because the fixture and replay assertion are not present.
 
-- [ ] **Step 3: Add the fixture and documentation assertions**
+- [x] **Step 3: Add the fixture and documentation assertions**
 
 Keep the existing catalog version and evidence IDs. Do not add a synthetic demand value or concentration unit. Update the OpenSpec task text with the fixture path and completion evidence.
 
-- [ ] **Step 4: Run the overview tests and strict OpenSpec validation**
+- [x] **Step 4: Run the overview tests and strict OpenSpec validation**
 
 ```powershell
 npx tsx --conditions=react-server --test tests/agent/market-overview-rule-baseline.test.ts tests/agent/market-overview-source-only.test.ts
@@ -221,7 +221,7 @@ openspec validate split-market-rule-baselines --type change --strict --no-intera
 
 Expected: tests pass, the change validates, and task 5.1 can be checked.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add tests/fixtures/market-overview-local-rule-snapshot.json tests/agent/market-overview-rule-baseline.test.ts tests/agent/market-overview-source-only.test.ts openspec/changes/split-market-rule-baselines/tasks.md
@@ -283,11 +283,13 @@ git commit -m "feat: show local rule reports as completed market runs"
 
 ### Task 6: Local-rule release gate
 
+> 当前门禁记录：关键词全缺失基线状态和旧 HTTP 语义断言已按规则优先合同修复。完整 `market-source-projection-step.test.ts` 11 项、规则专项 34 项、`npm run typecheck`、严格 OpenSpec 校验和 `git diff --check` 均已通过。实际页面验收和正式发布仍未执行，正式服务不发布、不重启。
+
 **Files:**
 - Modify: `openspec/changes/split-market-rule-baselines/tasks.md`
 - Test: existing focused suites from Tasks 1–5
 
-- [ ] **Step 1: Run the complete local-rule verification set**
+- [x] **Step 1: Run the complete local-rule verification set**
 
 ```powershell
 npm run typecheck
@@ -298,7 +300,7 @@ git diff --check
 
 Expected: all commands exit 0. Existing source projection call-count regression must be resolved or explicitly documented before release; it cannot be silently ignored.
 
-- [ ] **Step 2: Mark only local-rule tasks complete**
+- [x] **Step 2: Mark only local-rule tasks complete**
 
 Check 3.2, 3.3 and 5.1 only after their tests pass. Leave 4.1 and 4.2 unchecked because Agent integration is a later phase.
 
