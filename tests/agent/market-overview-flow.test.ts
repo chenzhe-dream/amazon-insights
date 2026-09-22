@@ -47,7 +47,7 @@ test('overview source barrier saves numbers independently and fences retried sou
     const first=await view(run.id),rules=first.steps.find(s=>s.kind==='rules')!,a=first.attempts.find(a=>a.id===rules.latestAttemptId)!;assert.equal(a.status,'succeeded');
     const output=a.output as any,old=await f.stores.snapshots.findInput({actor:f.actor,studyId:f.scope.researchId,id:output.numericInputSnapshotId});assert.ok(old);
     assert.equal((old.snapshot.records[0].data as any).metrics.totalUnits.reason,'collection-failed');assert.equal((old.snapshot.records[1].data as any).metrics.totalUnits.value,0);
-    assert.equal(output.sourceReceipts.length,4);assert.equal(output.sourceReceipts.filter((r:any)=>r.status==='empty').length,1);assert.equal(output.semanticStatus,'pending');assert.notEqual(first.run.status,'succeeded');
+    assert.equal(output.sourceReceipts.length,4);assert.equal(output.sourceReceipts.filter((r:any)=>r.status==='empty').length,1);assert.equal(output.semanticStatus,'pending');assert.equal(output.ruleBaseline.module,'overview');assert.equal(output.ruleBaseline.metrics.some((metric:any)=>metric.value===0),true);assert.notEqual(first.run.status,'succeeded');
     const previous=digest(old.snapshot),successful=first.steps.filter(s=>s.kind==='collect-overview-month'&&s.status!=='failed'),failed=first.steps.find(s=>s.status==='failed')!;assert.ok(failed);
     failJuly=false;await f.stores.steps.retryFailedSteps({actor:f.actor,moduleRunId:run.id,steps:[{stepId:failed.id,failedAttemptId:failed.latestAttemptId!}],idempotencyKey:randomUUID()});
     await worker.tick();await worker.tick();const second=await view(run.id),current=new Set(inspectMarketOverviewContinuation(second,new Date().toISOString()).currentStepKeys);
@@ -94,6 +94,7 @@ test('overview source barrier saves numbers independently and fences retried sou
     try{await service.start({host:'127.0.0.1',port:0});const deadline=Date.now()+12000;let saved=await view(run.id);
       while(!saved.attempts.some(a=>(a.output as any)?.reportVersion==='market-overview-report/v1'&&(a.output as any)?.phase==='window-results')&&Date.now()<deadline){await new Promise(r=>setTimeout(r,25));saved=await view(run.id);}
       const window=saved.steps.find(s=>s.kind==='prepare-members');assert.equal(window?.status,'failed');assert.deepEqual(saved.attempts.find(a=>a.id===window!.latestAttemptId)!.error,{code:'governance',retryable:false});
+      const rules=saved.steps.find(s=>s.kind==='rules'&&s.status==='succeeded');assert.equal((saved.attempts.find(a=>a.id===rules!.latestAttemptId)!.output as any).ruleBaseline.module,'overview');
       const row=(await pg.pool.query('SELECT diagnostic_json FROM market_analysis_step_attempts WHERE id=$1',[window!.latestAttemptId])).rows[0];assert.equal(row.diagnostic_json.reason,'model-configuration-unavailable');
       assert.ok(await f.stores.snapshots.findInput({actor:f.actor,studyId:f.scope.researchId,id:row.diagnostic_json.numericInputSnapshotId}));assert.equal(saved.steps.some(s=>s.kind==='model-batch'),false);
       const report=(await new MarketOverviewReportService(f.context).read({actor:f.actor,moduleRunId:run.id}))?.currentReport?.report;

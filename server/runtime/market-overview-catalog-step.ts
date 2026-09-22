@@ -9,6 +9,7 @@ import {inspectMarketOverviewContinuation,marketOverviewFlowInitialSteps,MarketO
 import {MarketOverviewSourceStepInputSchema} from '../services/market-overview-source-collector';
 import {MarketOverviewDistributionStepInputSchema} from '../services/market-overview-distribution-collector';
 import {buildMarketOverviewCompleteCatalog,MARKET_OVERVIEW_TABLE_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
+import {buildOverviewRuleBaseline} from '../domain/market-research/overview-rule-baseline';
 import {buildMarketOverviewExpandedCatalog} from '../domain/market-research/overview-expanded-catalog';
 import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION,type MarketOverviewExpandedSourceFailure} from '../../shared/market-overview-distribution-contracts';
 import {MarketOverviewSourceFailureSchema} from '../domain/market-research/overview-source-catalog';
@@ -27,7 +28,7 @@ export function createMarketOverviewCatalogStep(context:PostgresQueryContext):Ma
     const view=await steps.findModuleRun({actor,moduleRunId:claim.moduleRunId}),step=view?.steps.find(s=>s.id===claim.stepId);
     if(!view||!step||claim.step.kind!=='rules'||step.status!=='running'||step.latestAttemptId!==claim.attemptId||digest(claim.step)!==claim.inputHash||step.inputHash!==claim.inputHash||view.run.status==='cancelled'||view.run.createdBy!==claim.createdBy||view.run.scope.researchId!==claim.studyId)invalid();
     if(!inspectMarketOverviewContinuation(view,input.dataCutoffAt).currentStepKeys.includes(step.stepKey))invalid();
-    const {catalog,output}=await computeMarketOverviewCatalog(context,view,claim.step,signal);
+    const {catalog,output}=await computeMarketOverviewCatalog(context,view,claim.step,signal,'current',true);
     const hasNumericData=catalog.months.some(m=>Object.values(m.metrics).some(v=>v.state==='known'))||'distributions' in catalog&&catalog.distributions.some(d=>d.distribution?.rows.some(r=>r.products!==null||r.units!==null));
     return {kind:'settlement',value:{inputs:[factory(catalog.numericSnapshot),...(catalog.semanticSnapshot?[factory(catalog.semanticSnapshot)]:[])].map(s=>MarketInputRecordSchema.shape.data.parse(s)),outcome:{status:hasNumericData?'succeeded':'empty',output}}};
   };
@@ -36,14 +37,14 @@ export function createMarketOverviewCatalogStep(context:PostgresQueryContext):Ma
 export async function readMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,attemptId:string,signal:AbortSignal,mode:'current'|'frozen'='current'){
   const a=view.attempts.find(a=>a.id===attemptId),step=view.steps.find(s=>s.id===a?.stepId);
   if(!a||!step||step.kind!=='rules'||!['succeeded','empty'].includes(a.status)||mode==='current'&&(step.latestAttemptId!==a.id||step.status!==a.status))invalid();
-  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode);if(digest(a.output)!==digest(computed.output))invalid();
+  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode,Object.hasOwn(obj(a.output),'ruleBaseline'));if(digest(a.output)!==digest(computed.output))invalid();
   const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
   for(const value of [computed.catalog.numericSnapshot,...(computed.catalog.semanticSnapshot?[computed.catalog.semanticSnapshot]:[])]){
     signal.throwIfAborted();const saved=await snapshots.findInput({actor,studyId:view.run.scope.researchId,id:value.snapshotId});if(!saved||digest(saved.snapshot)!==digest(value))invalid();
   }
   return computed;
 }
-async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,mode:'current'|'frozen'='current'){
+async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,mode:'current'|'frozen'='current',includeRuleBaseline=false){
     const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy},studyId=view.run.scope.researchId;
     const input=MarketOverviewCatalogStepInputSchema.parse(definition.input),params=MarketOverviewFlowParamsSchema.parse(view.run.params),expected=marketOverviewFlowInitialSteps(view.run);
     const sourceSteps=expected.map((d,i)=>{const s=view.steps.find(s=>s.stepKey===d.stepKey),a=view.attempts.find(a=>a.id===input.sourceAttemptIds[i]);
@@ -69,5 +70,7 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
     }
     const common={scope:view.run.scope,parameters:{headTopN:params.headTopN,newProductMonths:params.newProductMonths},dataCutoffAt:input.dataCutoffAt,sources};
     const catalog=view.run.versions.rule===MARKET_OVERVIEW_TABLE_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true}):view.run.versions.rule===MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION?buildMarketOverviewExpandedCatalog({...common,failures}):buildMarketOverviewSourceCatalog({...common,failures:failures.map(f=>MarketOverviewSourceFailureSchema.parse(f)),version:MarketOverviewCatalogVersionSchema.parse(view.run.versions.rule)});signal.throwIfAborted();
-    return {catalog,sources,output:MarketInputRecordSchema.shape.data.parse({catalogVersion:catalog.version,numericInputSnapshotId:catalog.numericSnapshot.snapshotId,semanticInputSnapshotId:catalog.semanticSnapshot?.snapshotId??null,semanticStatus:catalog.semanticSnapshot?'pending':'no-input',sourceRefs:catalog.sourceRefs,sourceReceipts:receipts,sourceAttemptIds:input.sourceAttemptIds,dataCutoffAt:input.dataCutoffAt,failures})};
+    const output:Record<string,unknown>={catalogVersion:catalog.version,numericInputSnapshotId:catalog.numericSnapshot.snapshotId,semanticInputSnapshotId:catalog.semanticSnapshot?.snapshotId??null,semanticStatus:catalog.semanticSnapshot?'pending':'no-input',sourceRefs:catalog.sourceRefs,sourceReceipts:receipts,sourceAttemptIds:input.sourceAttemptIds,dataCutoffAt:input.dataCutoffAt,failures};
+    if(includeRuleBaseline)output.ruleBaseline=buildOverviewRuleBaseline(catalog);
+    return {catalog,sources,output:MarketInputRecordSchema.shape.data.parse(output)};
 }
