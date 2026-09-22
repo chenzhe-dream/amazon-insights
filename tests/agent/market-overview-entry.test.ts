@@ -8,7 +8,7 @@ import {PostgresMarketAnalysisSnapshotStore} from '../../server/db/postgres/mark
 import {PostgresMarketModuleExecutionStore} from '../../server/db/postgres/market-module-execution-store';
 import {MarketExecutionConflictError,type MarketExecutionActor} from '../../server/db/market-module-execution-repository';
 import {MARKET_OVERVIEW_TABLE_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
-import {MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
 import {MarketModuleService} from '../../server/services/market-module-service';
 import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION} from '../../shared/market-overview-distribution-contracts';
 import {MARKET_SOURCE_HANDLER_VERSION} from '../../shared/market-source-contracts';
@@ -26,20 +26,20 @@ async function seedStudy(pool:Pool,organizationId:string=randomUUID()):Promise<{
   return {actor,scope,context};
 }
 
-test('overview entry freezes v5 identity and replays commands by public intent',{timeout:120_000},async t=>{
+test('overview entry freezes local rules identity and replays commands by public intent',{timeout:120_000},async t=>{
   const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
   const first=await seedStudy(pg.pool),identity={configurationVersion:'overview-config/v1',promptVersion:'overview-prompt/v1'};
   const service=new MarketModuleService({context:first.context,modelIdentity:()=>({configurationVersion:'legacy-config/v9',promptVersion:'legacy-prompt/v9'}),overviewSynthesisModelIdentity:()=>identity,now:()=>new Date(NOW)});
 
-  await t.test('new runs bind synthesis flow, table catalog and dedicated identity',async()=>{
+  await t.test('new runs bind local rules flow and no model identity',async()=>{
     const key=randomUUID(),started=await service.startOverview(first.actor,first.scope.researchId,PARAMS,key);
     assert.equal(started.created,true);
     const saved=await new PostgresMarketModuleExecutionStore(first.context).findModuleRun({actor:first.actor,moduleRunId:started.run.id});assert.ok(saved);
-    assert.deepEqual(saved.run.params,{...PARAMS,flow:MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION});
-    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,mapping:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,planner:MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,model:'market.semantic.text.v1',prompt:identity.promptVersion,configuration:identity.configurationVersion});
+    assert.deepEqual(saved.run.params,{...PARAMS,flow:'market-overview-flow/rules-v1'});
+    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,mapping:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,planner:'market-overview-flow/rules-v1',model:null,prompt:null,configuration:null});
   });
 
-  await t.test('missing synthesis identity freezes null and never borrows the generic identity',async()=>{
+  await t.test('missing model identity does not block a rules-only start',async()=>{
     const withoutSynthesis=new MarketModuleService({context:first.context,modelIdentity:()=>({configurationVersion:'legacy-config/v9',promptVersion:'legacy-prompt/v9'}),now:()=>new Date(NOW)});
     const started=await withoutSynthesis.startOverview(first.actor,first.scope.researchId,PARAMS,randomUUID());
     const saved=await new PostgresMarketModuleExecutionStore(first.context).findModuleRun({actor:first.actor,moduleRunId:started.run.id});assert.ok(saved);
@@ -56,7 +56,7 @@ test('overview entry freezes v5 identity and replays commands by public intent',
     assert.equal((frozen.run.params as {flow:string}).flow,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION);
   });
 
-  await t.test('current v5 command replay ignores later synthesis identity changes',async()=>{
+  await t.test('current rules command replay ignores later model identity changes',async()=>{
     const key=randomUUID(),created=await service.startOverview(first.actor,first.scope.researchId,{...PARAMS,headTopN:5},key);
     const changed=new MarketModuleService({context:first.context,modelIdentity:()=>null,overviewSynthesisModelIdentity:()=>({configurationVersion:'overview-config/v2',promptVersion:'overview-prompt/v2'}),now:()=>new Date(NOW)});
     const replay=await changed.startOverview(first.actor,first.scope.researchId,{...PARAMS,headTopN:5},key);

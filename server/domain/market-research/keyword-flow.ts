@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { MarketAnalysisScopeSchema } from '../../../shared/market-analysis-contracts';
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../../shared/market-source-contracts';
-import { MARKET_KEYWORD_FLOW_VERSION, MarketKeywordFlowParamsSchema,isMarketKeywordGlobalMode } from '../../../shared/market-keyword-flow-contracts';
-export { MARKET_KEYWORD_FLOW_VERSION, MarketKeywordFlowParamsSchema, MarketKeywordStartRequestSchema } from '../../../shared/market-keyword-flow-contracts';
+import { MARKET_KEYWORD_FLOW_VERSION, MARKET_KEYWORD_RULES_FLOW_VERSION, MarketKeywordFlowParamsSchema,isMarketKeywordGlobalMode } from '../../../shared/market-keyword-flow-contracts';
+export { MARKET_KEYWORD_FLOW_VERSION, MARKET_KEYWORD_RULES_FLOW_VERSION, MarketKeywordFlowParamsSchema, MarketKeywordStartRequestSchema } from '../../../shared/market-keyword-flow-contracts';
 import type { CreateMarketModuleRunInput, MarketExecutionStep, MarketModuleRunView, MarketStepDefinition } from '../../db/market-module-execution-repository';
 import { MARKET_KEYWORD_POOL_VERSION } from './keyword-source-pool';
 import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accounting';
@@ -27,7 +27,7 @@ function params(request: Request) {
     !(noModel || v.model === 'market.semantic.text.v1' && v.prompt && v.configuration)) throw new TypeError('Keyword flow versions differ');
   return p;
 }
-export const isMarketKeywordFlow = (run: { params: unknown }) => obj(run.params).flow === MARKET_KEYWORD_FLOW_VERSION;
+export const isMarketKeywordFlow = (run: { params: unknown }) => [MARKET_KEYWORD_FLOW_VERSION, MARKET_KEYWORD_RULES_FLOW_VERSION].includes(String(obj(run.params).flow));
 export function marketKeywordFlowInitialSteps(request: Request): MarketStepDefinition[] {
   const p = params(request);
   return p.plannedPages.map(page => ({ stepKey: key('page', page), kind: 'collect-keyword-page', subject: { flow: p.flow }, input: page, inputRefs: [] }));
@@ -118,7 +118,7 @@ export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now:
     memberIds.forEach((id, i) => find({ stepKey: `trend/${digest({ pool: raw, keywordId: id })}`, kind: 'collect-keyword-trend', subject: { keywordId: id },
       input: { keywordId: id, keyword: keywords[i], poolInputSnapshotId: raw }, inputRefs: [{ kind: 'input', id: raw }] }, true));
   }
-  if (!view.run.versions.model) return result();
+  if (!view.run.versions.model || p.flow === MARKET_KEYWORD_RULES_FLOW_VERSION) return result();
   const preparation = find({ stepKey: `pool-model/${basisHash}`, kind: 'prepare-model-batches', subject: { task: p.catalog.task },
     input: { task: p.catalog.task, inputSnapshotId: semantic, selectionRevision, dataCutoffAt }, inputRefs: [{ kind: 'input', id: semantic }] }, true)!;
   if (!success(preparation)) return result();

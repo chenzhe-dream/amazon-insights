@@ -13,20 +13,20 @@ import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { MarketThemeReportService } from './market-theme-report-service';
-import { MARKET_THEME_RECONCILED_FLOW_VERSION, marketThemeFlowInitialSteps, inspectMarketThemeContinuation, isMarketThemeFlow } from '../domain/market-research/customer-theme-flow';
+import { MARKET_THEME_RULES_FLOW_VERSION, marketThemeFlowInitialSteps, inspectMarketThemeContinuation, isMarketThemeFlow } from '../domain/market-research/customer-theme-flow';
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../shared/market-source-contracts';
 import { MARKET_THEME_MAPPING_RULE_VERSION } from '../domain/market-research/customer-theme-mapping-rules';
 import { MarketThemeDetailQueryError } from '../domain/market-research/customer-theme-details';
 import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema} from '../../shared/market-overview-report-contracts';
 import {MarketOverviewReportService} from './market-overview-report-service';
-import {MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_TABLE_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../domain/market-research/module-flow';
-import {MarketShapeStartRequestSchema,MARKET_SHAPE_FLOW_VERSION,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
+import {MarketShapeStartRequestSchema,MARKET_SHAPE_RULES_FLOW_VERSION,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
 import {MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,assertMarketProductQueryWindow} from '../../shared/market-product-source-policy';
 import {PostgresMarketShapePriceRevisionStore} from '../db/postgres/market-shape-price-revision-store';
 import {readMarketShapeRun,marketShapePublicRevision} from './market-shape-read-service';
-import {isMarketKeywordFlow,MarketKeywordStartRequestSchema,MARKET_KEYWORD_FLOW_VERSION,marketKeywordFlowInitialSteps} from '../domain/market-research/keyword-flow';
+import {isMarketKeywordFlow,MarketKeywordStartRequestSchema,MARKET_KEYWORD_RULES_FLOW_VERSION,marketKeywordFlowInitialSteps} from '../domain/market-research/keyword-flow';
 import {MARKET_KEYWORD_POOL_VERSION} from '../domain/market-research/keyword-source-pool';
 import {readMarketKeywordRun} from './market-keyword-read-service';
 import {readMarketKeywordReconciliationReport} from './market-keyword-reconciliation-read';
@@ -80,10 +80,10 @@ export class MarketModuleService {
       return {created:false,...await this.findOverview(actor,previous.id)};
     };
     const previous=await replay();if(previous)return previous;
-    const {study}=await this.findStudy(actor,studyId),identity=this.deps.overviewSynthesisModelIdentity?.()??null;
-    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,mapping:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,planner:MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,
-        model:identity?'market.semantic.text.v1':null,prompt:identity?.promptVersion??null,configuration:identity?.configurationVersion??null},collectionRevision:'initial/v1',idempotencyKey};
+    const {study}=await this.findStudy(actor,studyId);
+    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_RULES_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,mapping:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,planner:MARKET_OVERVIEW_RULES_FLOW_VERSION,
+        model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}
@@ -109,10 +109,10 @@ export class MarketModuleService {
     const params=MarketShapeStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);
     const replay=async()=>{const previous=await this.replayModuleStart(actor,studyId,idempotencyKey,'shape-price',params);return previous?{created:false,...await this.findShapes(actor,previous.id)}:null;};
     const previous=await replay();if(previous)return previous;
-    const {study}=await this.findStudy(actor,studyId),identity=this.deps.modelIdentity();
+    const {study}=await this.findStudy(actor,studyId);
     assertMarketProductQueryWindow(study.scope,new Date(this.now()));
-    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_FLOW_VERSION,model:identity?'market.semantic.text.v1':null,prompt:identity?.promptVersion??null,configuration:identity?.configurationVersion??null},collectionRevision:'initial/v1',idempotencyKey};
+    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_RULES_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_RULES_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketShapeFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}
@@ -122,10 +122,10 @@ export class MarketModuleService {
     const params=MarketKeywordStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);
     const replay=async()=>{const previous=await this.replayModuleStart(actor,studyId,idempotencyKey,'keywords',params);return previous?{created:false,...await this.findKeywords(actor,previous.id)}:null;};
     const previous=await replay();if(previous)return previous;
-    const {study}=await this.findStudy(actor,studyId),identity=params.analysisMode==='global-reconciliation/v2'?this.deps.keywordExplicitModelIdentity?.()??null:params.analysisMode==='global-reconciliation/v1'?this.deps.keywordReconciliationModelIdentity?.()??null:params.catalog.discoveryMode==='labels-and-clusters/v1'?this.deps.keywordModelIdentity?.()??null:this.deps.modelIdentity();
-    const request={actor,scope:study.scope,moduleKind:'keywords' as const,params:{...params,flow:MARKET_KEYWORD_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_KEYWORD_POOL_VERSION,mapping:params.catalog.dictionaryVersion,planner:MARKET_KEYWORD_FLOW_VERSION,
-        model:identity?'market.semantic.text.v1':null,prompt:identity?.promptVersion??null,configuration:identity?.configurationVersion??null},collectionRevision:'initial/v1',idempotencyKey};
+    const {study}=await this.findStudy(actor,studyId);
+    const request={actor,scope:study.scope,moduleKind:'keywords' as const,params:{...params,flow:MARKET_KEYWORD_RULES_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_KEYWORD_POOL_VERSION,mapping:params.catalog.dictionaryVersion,planner:MARKET_KEYWORD_RULES_FLOW_VERSION,
+        model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketKeywordFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}
@@ -194,13 +194,13 @@ export class MarketModuleService {
     const params=MarketThemeStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);
     const replay=async()=>{const previous=await this.replayModuleStart(actor,studyId,idempotencyKey,'customer-themes',params);return previous?{created:false,...await this.findRun(actor,previous.id)}:null;};
     const previous=await replay();if(previous)return previous;
-    const {study}=await this.findStudy(actor,studyId),identity=this.model();
+    const {study}=await this.findStudy(actor,studyId);
     // Empty frozen catalog permits A4 proposals; it does not imply approved groups.
     // Cross-batch reconciliation remains a mandatory report readiness condition.
     const catalog = { task: 'market-customer-theme-mapping', mappingVersion: 'theme-groups/unreviewed-v1', groupCatalog: [] };
-    const request = { actor, scope: study.scope, moduleKind: 'customer-themes' as const, params: { ...params, flow: MARKET_THEME_RECONCILED_FLOW_VERSION, catalog },
-      versions: { source: MARKET_SOURCE_HANDLER_VERSION, rule: MARKET_THEME_MAPPING_RULE_VERSION, mapping: catalog.mappingVersion, planner: MARKET_THEME_RECONCILED_FLOW_VERSION,
-        model: 'market.semantic.text.v1', prompt: identity.promptVersion, configuration: identity.configurationVersion }, collectionRevision: 'initial/v1', idempotencyKey };
+    const request = { actor, scope: study.scope, moduleKind: 'customer-themes' as const, params: { ...params, flow: MARKET_THEME_RULES_FLOW_VERSION, catalog },
+      versions: { source: MARKET_SOURCE_HANDLER_VERSION, rule: MARKET_THEME_MAPPING_RULE_VERSION, mapping: catalog.mappingVersion, planner: MARKET_THEME_RULES_FLOW_VERSION,
+        model: null, prompt: null, configuration: null }, collectionRevision: 'initial/v1', idempotencyKey };
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketThemeFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}

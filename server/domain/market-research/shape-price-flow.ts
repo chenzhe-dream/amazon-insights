@@ -6,7 +6,8 @@ import type { CreateMarketModuleRunInput, MarketModuleRunView, MarketExecutionSt
 import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accounting';
 import {MarketShapeCatalogVersionSchema} from '../../../shared/market-shape-structure-contracts';
 export const MARKET_SHAPE_FLOW_VERSION = 'market-shape-price-flow/v1';
-export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.literal(MARKET_SHAPE_FLOW_VERSION) });
+export const MARKET_SHAPE_RULES_FLOW_VERSION = 'market-shape-price-flow/rules-v1';
+export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION]) });
 export const MarketShapeSelectionSchema = z.object({ referenceAttemptId: z.string().uuid(), selectionInputSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/),
     sourceRef: z.string().regex(/^market-source:[a-f0-9]{64}$/), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(100), dataCutoffAt: z.string().datetime(),
     selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false) }).strict();
@@ -16,7 +17,7 @@ const success = (s: MarketExecutionStep) => s.status === 'succeeded' || s.status
 const key = (phase: string, basis: unknown) => `shape-flow/${phase}:${digest(basis)}`;
 export const isMarketShapeFlow = (run: {
     params: unknown;
-}) => obj(run.params).flow === MARKET_SHAPE_FLOW_VERSION;
+}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION].includes(String(obj(run.params).flow));
 function params(r: Request) {
     const p = MarketShapeFlowParamsSchema.parse(r.params);
     MarketAnalysisScopeSchema.parse(r.scope);

@@ -21,9 +21,17 @@ test('all market module starts replay frozen commands before current model or da
  const cases=[{name:'shape-price',method:'startShapes',params:shapes,changed:{...shapes,poolSize:11}},
   {name:'keywords',method:'startKeywords',params:keywords,changed:{...keywords,maxMembers:11}},
   {name:'customer-themes',method:'startThemes',params:themes,changed:{...themes,memberCount:4}}] as const;
+ const expectedFlows={
+  'shape-price':'market-shape-price-flow/rules-v1',
+  keywords:'market-keyword-flow/rules-v1',
+  'customer-themes':'market-theme-flow/rules-v1',
+ } as const;
  for(const c of cases)await t.test(c.name,async()=>{
   const key=randomUUID(),original=await service[c.method](actor,study.study.id,c.params,key);
   assert.equal(original.created,true);
+  const initial=await new PostgresMarketModuleExecutionStore(new PostgresQueryContext(pg.pool)).findModuleRun({actor,moduleRunId:original.run.id});
+  assert.equal((initial!.run.params as {flow:string}).flow,expectedFlows[c.name]);
+  assert.equal(initial!.run.versions.model,null);
   for(const next of [create(null),create({...identity,configurationVersion:'synthetic/config-v2'},'2027-09-16T08:00:00Z')]){
    const restored=await next[c.method](actor,study.study.id,c.params,key);assert.equal(restored.created,false);assert.equal(restored.run.id,original.run.id);
   }
@@ -33,11 +41,11 @@ test('all market module starts replay frozen commands before current model or da
   if('catalog' in c.params)await assert.rejects(service[c.method](actor,study.study.id,{...c.params,catalog:{...c.params.catalog,...(c.name==='shape-price'?{taxonomyVersion:'changed/v2'}:{categoryContext:'unrelated product'})}},key),MarketExecutionConflictError);
   const otherStudy=await service.createStudy(actor,{marketplace:'US',currency:'USD',nodeIdPath:'12:35',fromMonth:'2026-07',toMonth:'2026-08'},randomUUID());
   await assert.rejects(service[c.method](actor,otherStudy.study.id,c.params,key),MarketExecutionConflictError);
-  const saved=await new PostgresMarketModuleExecutionStore(new PostgresQueryContext(pg.pool)).findModuleRun({actor,moduleRunId:original.run.id});assert.equal(saved?.run.versions.configuration,identity.configurationVersion);
-  const raceKey=randomUUID(),contenders=[create(identity),create({...identity,configurationVersion:'synthetic/race-v2'})];
+  const saved=await new PostgresMarketModuleExecutionStore(new PostgresQueryContext(pg.pool)).findModuleRun({actor,moduleRunId:original.run.id});assert.equal(saved?.run.versions.configuration,null);
+  const raceKey=randomUUID(),raceParams=c.name==='shape-price'?{...c.params,poolSize:12}:c.name==='keywords'?{...c.params,maxMembers:12}:{...c.params,memberCount:6},contenders=[create(identity),create({...identity,configurationVersion:'synthetic/race-v2'})];
   let arrivals=0;let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
   for(const contender of contenders){const store=(contender as unknown as {steps:PostgresMarketModuleExecutionStore}).steps,find=store.findCreatedModuleRunByCommand.bind(store);store.findCreatedModuleRunByCommand=async input=>{const prior=await find(input);if(!prior){if(++arrivals===2)release();await gate;}return prior;};}
-  const race=await Promise.all(contenders.map(s=>s[c.method](actor,study.study.id,c.params,raceKey)));assert.equal(new Set(race.map(r=>r.run.id)).size,1);assert.equal(race.filter(r=>r.created).length,1);
+  const race=await Promise.all(contenders.map(s=>s[c.method](actor,study.study.id,raceParams,raceKey)));assert.equal(new Set(race.map(r=>r.run.id)).size,1);assert.equal(race.filter(r=>r.created).length,1);
   const outsider={organizationId:randomUUID(),userId:randomUUID()};
   await pg.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Other organization','member','active',clock_timestamp(),clock_timestamp())",[outsider.userId,outsider.organizationId,`${outsider.userId}@example.test`]);
   const foreignStudy=await service.createStudy(outsider,{marketplace:'US',currency:'USD',nodeIdPath:'12:34',fromMonth:'2026-07',toMonth:'2026-08'},randomUUID());
