@@ -420,6 +420,22 @@ export class PostgresProjectDisplayVersionStore {
     const limit = input.limit ?? 100;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError("Invalid cleanup limit");
     return this.queries.transaction(async () => {
+      await this.queries.query(`WITH stale_unversioned AS (
+        SELECT output.job_id,output.stage_id FROM sync_job_stage_outputs output
+        JOIN sync_jobs job ON job.job_id=output.job_id AND job.organization_id=output.organization_id
+          AND job.project_id=output.project_id AND job.status='completed'
+        JOIN projects project ON project.id=job.project_id AND project.organization_id=job.organization_id
+        LEFT JOIN LATERAL (
+          SELECT min(initial.published_at) AS published_at FROM project_display_versions initial
+          WHERE initial.project_id=project.id AND initial.revision_kind='job-publication'
+        ) first_publication ON true
+        WHERE project.current_display_version_id IS NOT NULL AND first_publication.published_at IS NOT NULL
+          AND greatest(coalesce(job.completed_at,job.updated_at),first_publication.published_at) + interval '24 hours' <= $1
+          AND NOT EXISTS (SELECT 1 FROM project_display_versions version WHERE version.source_job_id=job.job_id)
+        ORDER BY job.completed_at,output.job_id,output.stage_id LIMIT $2
+        FOR UPDATE OF output SKIP LOCKED
+      ) DELETE FROM sync_job_stage_outputs output USING stale_unversioned stale
+        WHERE output.job_id=stale.job_id AND output.stage_id=stale.stage_id`, [now,limit]);
       const expired = await this.queries.query<{ id: string; source_job_id: string; body_json: unknown }>(`SELECT version.id,version.source_job_id,version.body_json
         FROM project_display_versions version JOIN projects project ON project.id=version.project_id
         JOIN sync_jobs job ON job.job_id=version.source_job_id AND job.organization_id=version.organization_id

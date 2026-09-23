@@ -239,6 +239,42 @@ test("catalog revision creates an audited immutable version and keeps shared job
   assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
 });
 
+test("unversioned completed outputs expire after the first project publication without resetting on catalog revision", async () => {
+  const { pool, ids, store } = await fixture();
+  const stageStore = new PostgresSyncJobStore(new PostgresQueryContext(pool));
+  const now = new Date();
+  const at = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * 3_600_000).toISOString();
+  const historical = await addJob(pool, ids, at(48));
+  const markReadable = async (jobId: string) => pool.query(`UPDATE sync_jobs SET stages=$2::jsonb WHERE job_id=$1`,
+    [jobId, JSON.stringify([{ id: "image_remarks", status: "done", label: "Images", kind: "auto", estimatedSeconds: 1 }])]);
+  const readImage = (jobId: string, runId: string) => stageStore.readStageOutput({ organizationId: ids.organizationId,
+    projectId: ids.projectId, runId, jobId, stage: "image_remarks" });
+  await markReadable(historical.jobId);
+  assert.ok(await readImage(historical.jobId, historical.runId));
+  await store.cleanupExpiredBodies({ now: now.toISOString() });
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [historical.jobId])).rows[0]?.n, 10,
+    "a project without a current version retains recovery evidence");
+
+  const published = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: at(25) });
+  const revised = await store.reviseCurrentCatalog({ organizationId: ids.organizationId,
+    projectId: ids.projectId, expectedCurrentVersionId: published.versionId, publishedAt: at(1), catalog: [],
+    evidence: { sourceKind: "generated-file", sourceRef: "app/competitor-data.ts#refreshedCatalog",
+      sourceSha256: "d".repeat(64), sourceUpdatedAt: at(2), capturedAt: at(1) } });
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+  assert.equal(await readImage(historical.jobId, historical.runId), null,
+    "a catalog revision cannot reopen the first publication rollback window");
+
+  const recent = await addJob(pool, ids, at(1));
+  await markReadable(recent.jobId);
+  assert.ok(await readImage(recent.jobId, recent.runId), "a new unversioned result retains its own 24-hour diagnostic window");
+  await store.cleanupExpiredBodies({ now: now.toISOString() });
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [historical.jobId])).rows[0]?.n, 0);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [recent.jobId])).rows[0]?.n, 10);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [ids.jobId])).rows[0]?.n, 10,
+    "current-version source rows remain untouched");
+});
+
 test("catalog recovery CLI previews exact 8 ASIN provenance and requires reviewed file hash to apply", async () => {
   const { pool, ids, store } = await fixture();
   const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,

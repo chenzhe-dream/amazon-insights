@@ -394,6 +394,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
        JOIN sync_jobs job ON job.job_id = output.job_id
        JOIN projects project ON project.id = job.project_id
        JOIN analysis_runs run ON run.id = job.run_id
+       LEFT JOIN LATERAL (
+         SELECT min(initial.published_at) AS published_at
+         FROM project_display_versions initial
+         WHERE initial.project_id=project.id AND initial.revision_kind='job-publication'
+       ) first_publication ON true
        WHERE output.organization_id = $1
          AND output.project_id = $2
          AND output.run_id = $3
@@ -405,7 +410,10 @@ export class PostgresSyncJobStore implements SyncJobRepository {
          AND project.organization_id = $1
          AND run.project_id = $2
          AND (
-           NOT EXISTS (SELECT 1 FROM project_display_versions version WHERE version.source_job_id=job.job_id)
+           (NOT EXISTS (SELECT 1 FROM project_display_versions version WHERE version.source_job_id=job.job_id)
+             AND (project.current_display_version_id IS NULL OR job.status <> 'completed'
+               OR (first_publication.published_at IS NOT NULL
+                 AND now() < greatest(coalesce(job.completed_at,job.updated_at),first_publication.published_at) + interval '24 hours')))
            OR EXISTS (SELECT 1 FROM project_display_versions version
              WHERE version.source_job_id=job.job_id AND version.body_json IS NOT NULL
                AND (version.body_expires_at IS NULL OR version.body_expires_at > now()))
