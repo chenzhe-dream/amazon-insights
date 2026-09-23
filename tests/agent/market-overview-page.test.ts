@@ -29,9 +29,9 @@ test('overview page restores fixed reports, shares selection and isolates late h
   });
   await page.goto(`${origin}/?overviewRun=${overviewRunId}`);
   await page.getByRole('heading',{name:'总览分析与报告',exact:true}).waitFor();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(writes.length,0);
-  await page.getByRole('heading',{name:'分布与需求来源',exact:true}).waitFor();await page.getByText('2026-08 · 价格分布',{exact:false}).click();
+  await page.getByRole('heading',{name:'价格分布',exact:true}).waitFor();await page.locator('[data-report-section="price"] summary').first().click();
   const price=page.getByRole('region',{name:'2026-08 价格分布明细'});await price.getByText('0-15',{exact:true}).waitFor();assert.equal(await price.getByText('50%',{exact:true}).count(),4);assert.equal(await price.getByText('未知',{exact:true}).count(),2);
-  await page.getByText('2026-08 · 需求趋势',{exact:false}).click();await page.getByText('来源本次未返回需求数据，未生成趋势或填零。',{exact:true}).waitFor();
+  await page.locator('[data-report-section="product-demand"] summary').first().click();await page.getByText('来源本次未返回需求数据，未生成趋势或填零。',{exact:true}).waitFor();
   await mkdir('test-results/market-overview-page',{recursive:true});await price.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-overview-page/distribution-desktop.png'});
   await page.setViewportSize({width:390,height:844});await price.scrollIntoViewIfNeeded();assert.ok(await price.evaluate(el=>el.scrollWidth>el.clientWidth));await page.screenshot({path:'test-results/market-overview-page/distribution-mobile.png'});await page.setViewportSize({width:1400,height:1000});
   assert.equal(await page.getByLabel('类目节点或路径').inputValue(),overviewScope.nodeIdPath);
@@ -53,4 +53,11 @@ test('overview page restores fixed reports, shares selection and isolates late h
   failReads=false;await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();
   await page.getByRole('button',{name:'取消总览分析',exact:true}).click();await page.getByRole('heading',{name:'分析已取消',exact:true}).waitFor();assert.equal(writes.length,6);assert.equal(errors.length,0,errors.join('\n'));
   failReads=true;await page.reload();await page.getByText('未能读取任务，请刷新状态或检查任务编号。',{exact:true}).waitFor();assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);assert.equal(writes.length,6);
+  failReads=false;current=overviewRun(true);current.run.status='partial';current.run.currentReport=null;current.run.latestSavedReport=null;current.run.history=[];
+  current.run.steps=[{...current.run.steps[0],kind:'rules',status:'failed',current:true,canRetry:true,errorCode:'internal'}];
+  await page.reload();await page.getByRole('heading',{name:'总览分析失败，可重试'}).waitFor();
+  await page.getByText('整理数字失败：内部处理失败',{exact:true}).waitFor();
+  assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'重试整理数字'}).count(),1);
+  await page.screenshot({path:'test-results/market-overview-page/terminal-failure.png'});
 });

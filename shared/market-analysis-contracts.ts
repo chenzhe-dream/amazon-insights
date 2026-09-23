@@ -4,11 +4,11 @@ import {MarketSiteSchema,MarketCurrencySchema,marketSiteCurrencyMatches} from '.
 export type MarketJsonValue = null | boolean | number | string | MarketJsonValue[] | { [key: string]: MarketJsonValue };
 
 /** Source payloads must be bounded, plain JSON, without accessors or serialization hooks. */
-function isPlainJson(value: unknown): value is MarketJsonValue {
+export function isPlainMarketJson(value: unknown, maxNodes = 50_000): value is MarketJsonValue {
   const ancestors = new Set<object>();
   let nodes = 0;
   const visit = (item: unknown, depth: number): boolean => {
-    if (++nodes > 50_000 || depth > 24) return false;
+    if (++nodes > maxNodes || depth > 24) return false;
     if (item === null || typeof item === "boolean") return true;
     if (typeof item === "string") return item.length <= 1_000_000;
     if (typeof item === "number") return Number.isFinite(item);
@@ -58,7 +58,7 @@ export type MarketAnalysisScope = z.infer<typeof MarketAnalysisScopeSchema>;
 export const MarketInputRecordSchema = z.object({
   id: identifier,
   scope: MarketAnalysisScopeSchema,
-  data: z.custom<MarketJsonValue>(isPlainJson, "Source data must be bounded plain JSON with finite numbers"),
+  data: z.custom<MarketJsonValue>(isPlainMarketJson, "Source data must be bounded plain JSON with finite numbers"),
 }).strict();
 
 export const MarketInputSnapshotInputSchema = z.object({

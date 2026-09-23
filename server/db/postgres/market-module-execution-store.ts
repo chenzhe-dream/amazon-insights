@@ -5,7 +5,7 @@ import {readMarketShapeExplanationReport} from '../../runtime/market-shape-expla
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { MarketAnalysisScopeSchema, MarketInputRecordSchema } from "../../../shared/market-analysis-contracts";
+import { MarketAnalysisScopeSchema, MarketInputRecordSchema, isPlainMarketJson } from "../../../shared/market-analysis-contracts";
 import {
   MARKET_MODULE_KINDS, MARKET_STEP_KINDS, MARKET_STEP_ERROR_CODES, MarketExecutionConflictError,
   type MarketModuleExecutionRepository, type MarketModuleRun, type MarketModuleRunView,
@@ -20,7 +20,7 @@ import { isMarketThemeFlow, marketThemeFlowInitialSteps, inspectMarketThemeConti
 import { loadMarketThemeEvaluationHistory } from './market-theme-evaluation-history';
 import { createMarketThemeReport, MarketThemeReportStepInputSchema } from '../../domain/market-research/customer-theme-report';
 import { canCompleteMarketThemeRun } from '../../domain/market-research/customer-theme-run-status';
-import {isMarketOverviewFlow,marketOverviewFlowInitialSteps} from '../../domain/market-research/overview-flow';
+import {isMarketOverviewFlow,marketOverviewFlowInitialSteps,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION} from '../../domain/market-research/overview-flow';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../../domain/market-research/module-flow';
 import {readMarketOverviewReport} from '../../runtime/market-overview-report-reader';
 
@@ -53,9 +53,8 @@ type RunRow={id:string;organization_id:string;study_id:string;created_by:string;
 type StepRow={id:string;organization_id:string;study_id:string;run_id:string;definition_json:unknown;input_hash:string;kind:MarketStepDefinition["kind"];status:MarketExecutionStep["status"];attempt_count:number;retry_round:number;round_attempt_count:number;next_attempt_at:Date|string|null;latest_attempt_id:string|null;lease_owner_id:string|null;lease_generation:number;lease_until:Date|string|null};
 type AttemptRow={id:string;step_id:string;attempt_number:number;retry_round:number;lease_generation:number;lease_owner_id:string;input_hash:string;status:MarketExecutionAttempt["status"];output_json:MarketExecutionAttempt["output"];error_json:MarketExecutionAttempt["error"];output_hash:string|null;completion_hash:string|null;receipt_json:unknown};
 const iso=(date:Date|string)=>new Date(date).toISOString();
-function bounded(value:unknown):void {
-  const checked=json.safeParse(value);
-  if(!checked.success || Buffer.byteLength(JSON.stringify(checked.data),"utf8")>8_000_000)throw new MarketExecutionConflictError();
+function bounded(value:unknown,maxNodes=50_000):void {
+  if(!isPlainMarketJson(value,maxNodes) || Buffer.byteLength(JSON.stringify(value),"utf8")>8_000_000)throw new MarketExecutionConflictError();
 }
 function mapRun(row:RunRow):MarketModuleRun {
   const request=requestSchema.parse(row.request_json);
@@ -205,7 +204,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   private async completeRulesOnlyRun(run:RunRow):Promise<void>{
     const mapped=mapRun(run),flow=String(obj(mapped.params).flow);
-    if(mapped.status!=='partial'||!flow.endsWith('/rules-v1'))return;
+    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION))return;
     const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:run.id});if(!view)return;
     const now=(await this.queries.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.toISOString();
     const frontier=inspectMarketContinuation(view,now),current=view.steps.filter(step=>frontier.currentStepKeys.includes(step.stepKey));
@@ -223,7 +222,9 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
 
   async settleAndEnqueue(value:unknown):Promise<MarketStepSettlementReceipt>{
-    bounded(value);
+    // An atomic settlement can contain several individually bounded snapshots.
+    // Keep its byte cap while allowing their combined node count to exceed one snapshot's limit.
+    bounded(value,200_000);
     const input=settlementSchema.parse(value),{claim}=input;let outcome=input.outcome;
     const lost:MarketStepSettlementReceipt={status:"lease-lost",attemptId:claim.attemptId,sourceIds:[],inputIds:[],childStepIds:[]};
     if(canonicalJsonSha256(claim.step)!==claim.inputHash)return lost;

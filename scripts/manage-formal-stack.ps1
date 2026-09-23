@@ -157,7 +157,8 @@ try {
       (SELECT count(*)::int FROM sync_jobs WHERE status IN ('queued', 'running')) +
       (SELECT count(*)::int FROM run_stages WHERE status IN ('queued', 'running')) +
       (SELECT count(*)::int FROM job_attempts WHERE status IN ('queued', 'running')) +
-      (SELECT count(*)::int FROM analysis_runs WHERE status IN ('queued', 'running')) AS active
+      (SELECT count(*)::int FROM analysis_runs WHERE status IN ('queued', 'running')) +
+      (SELECT CASE WHEN EXISTS(SELECT 1 FROM market_analysis_steps WHERE status IN ('queued', 'running')) THEN 1 ELSE 0 END) AS active
   `);
   process.stdout.write(JSON.stringify({ ok: true, active: Number(rows[0]?.active ?? -1) }));
 } catch (error) {

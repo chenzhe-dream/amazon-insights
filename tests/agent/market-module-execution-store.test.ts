@@ -165,6 +165,14 @@ test("market module execution persists independent runs and database-clock fence
     await assert.rejects(pg.pool.query("DELETE FROM market_analysis_steps WHERE id=$1",[active.stepId]));
     await assert.rejects(pg.pool.query("UPDATE market_analysis_steps SET status='queued' WHERE id=$1",[active.stepId]));
   });
+  await t.test("settlement accepts multiple individually bounded snapshots above the envelope node budget", async () => {
+    const run=(await store.createModuleRun(request())).run,active=await claim(run.id);assert.ok(active);
+    const values=Array.from({length:27_000},(_,index)=>index);
+    const inputs=[1,2].map(tag=>({scope,kind:'products',sourceVersion:'fixture/v1',ruleVersion:'rules/v1',collectedAt:new Date().toISOString(),expectedRecordIds:['B000000001'],records:[{id:'B000000001',scope,data:{tag,values}}]}));
+    const saved=await store.settleAndEnqueue({claim:active,outcome:success,inputs});
+    assert.equal(saved.inputIds.length,2);
+    assert.equal((await store.findModuleRun({actor,moduleRunId:run.id}))?.steps[0].status,'succeeded');
+  });
   await t.test("child enqueue failure rolls back previously saved source, input and attempt completion", async () => {
     const run=(await store.createModuleRun(request())).run;const active=await claim(run.id);assert.ok(active);
     const input=sourceInput();

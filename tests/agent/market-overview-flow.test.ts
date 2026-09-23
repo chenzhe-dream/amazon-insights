@@ -6,7 +6,8 @@ import {startPostgresTestContainer} from './helpers/postgres-test-container';
 import {createMarketSemanticFixture} from './helpers/market-semantic-fixture';
 import {createMarketSourceStepHandlers,MARKET_SOURCE_HANDLER_VERSION} from '../../server/runtime/market-source-step-handlers';
 import {createMarketOverviewCatalogStep,readMarketOverviewCatalog} from '../../server/runtime/market-overview-catalog-step';
-import {MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation} from '../../server/domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation} from '../../server/domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
 import {MARKET_OVERVIEW_CATALOG_VERSION} from '../../server/domain/market-research/overview-source-catalog';
 import {MarketModuleStepWorker} from '../../server/runtime/market-module-step-worker';
 import {ConnectorError,type RemoteMcpConnector} from '../../server/connectors/connector-contract';
@@ -22,13 +23,13 @@ import {MarketOverviewReportService} from '../../server/services/market-overview
 test('overview source barrier saves numbers independently and fences retried source generations',{timeout:120000},async t=>{
   const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);const f=await createMarketSemanticFixture(pg.pool);
   await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
-  const calls:string[]=[];let failJuly=true,failAll=false;
+  const calls:string[]=[];let failJuly=true,failAll=false,emptyDistributions=false;
   const connector:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw new Error('unused');},execute:async request=>{
     const q=request.input.request as any;calls.push(`${q.month}/${request.operation}`);
     if(failAll)throw new ConnectorError('sellerSprite','authentication',false);
     if(q.month==='202607'&&request.operation==='market_research_statistics'&&failJuly)throw new ConnectorError('sellerSprite','upstream-permanent',false);
     const row={nodeIdPath:f.scope.nodeIdPath,nodeId:'34',month:q.month,currency:'USD',marketplace:'US',topProducts:100,totalUnits:q.month==='202608'?0:100,totalRevenue:q.month==='202608'?0:2000};
-    const data=request.operation==='market_research'?{items:q.month==='202607'?[]:[row]}:row;
+    const data=emptyDistributions&&request.operation==='market_product_demand_trend'?{items:[]}:emptyDistributions&&!['market_research','market_research_statistics'].includes(request.operation)?[]:request.operation==='market_research'?{items:q.month==='202607'?[]:[row]}:row;
     return {data:{code:'OK',data},source:{connectorId:'sellerSprite',operation:request.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
   }};
   const catalog=createMarketOverviewCatalogStep(f.context),handlers={...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector,sorftime:connector}}),rules:catalog};
@@ -36,6 +37,19 @@ test('overview source barrier saves numbers independently and fences retried sou
   const request=()=>({actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{flow:MARKET_OVERVIEW_FLOW_VERSION,headTopN:10,newProductMonths:6},versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_CATALOG_VERSION,mapping:MARKET_OVERVIEW_CATALOG_VERSION,planner:MARKET_OVERVIEW_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:randomUUID(),idempotencyKey:randomUUID()});
   const create=async()=>{const r=request();return (await f.stores.steps.createModuleRun({...r,initialSteps:marketOverviewFlowInitialSteps(r)})).run;};
   const view=async(id:string)=>(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:id}))!;
+  await t.test('product rules flow finishes after its saved report',async()=>{
+    failJuly=false;emptyDistributions=true;
+    try{
+      const original=request(),r={...original,params:{...original.params,flow:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION},versions:{...original.versions,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION}};
+      const run=(await f.stores.steps.createModuleRun({...r,initialSteps:marketOverviewFlowInitialSteps(r)})).run;
+      for(let i=0;i<marketOverviewFlowInitialSteps(r).length+1;i++)assert.equal(await worker.tick(),true);
+      assert.equal((await view(run.id)).steps.find(s=>s.kind==='rules')?.status,'succeeded');
+      const claim=await f.stores.steps.claimStep({moduleRunId:run.id,kinds:['report'],leaseOwnerId:randomUUID(),leaseMs:120000});assert.ok(claim);
+      const work=await createMarketOverviewReportStep(f.context)({claim,signal:new AbortController().signal});assert.equal(work.kind,'settlement');if(work.kind!=='settlement')throw Error('Expected report settlement');
+      await f.stores.steps.settleAndEnqueue({...work.value,claim});
+      const saved=await view(run.id);assert.equal(saved.run.status,'succeeded',JSON.stringify(saved.steps.filter(s=>s.status==='failed').map(s=>s.stepKey)));assert.equal(saved.steps.find(s=>s.kind==='report')?.status,'succeeded');
+    }finally{failJuly=true;emptyDistributions=false;}
+  });
   await t.test('all months/endpoints are fixed; omitted or changed initial definitions reject',async()=>{
     const r=request(),initial=marketOverviewFlowInitialSteps(r);assert.equal(initial.length,4);
     await assert.rejects(f.stores.steps.createModuleRun({...r,initialSteps:initial.slice(1)}));
