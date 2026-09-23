@@ -1,12 +1,16 @@
 import {z} from 'zod';
 import {MarketModuleIdSchema,MarketStudyRequestSchema} from '../../shared/market-module-contracts';
-import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema} from '../../shared/market-overview-report-contracts';
+import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema,MarketOverviewSavedRunQuerySchema,MarketOverviewSavedRunResponseSchema} from '../../shared/market-overview-report-contracts';
 import {localAgentFetch,localAgentErrorMessage} from './local-agent-browser';
 import {createThemeStudy} from './market-theme-browser';
 export {retryThemeSteps as retryOverviewSteps,cancelThemeRun as cancelOverviewRun} from './market-theme-browser';
 export async function createOverviewStudy(scope:z.input<typeof MarketStudyRequestSchema>,key:string,signal?:AbortSignal){
   const input=MarketStudyRequestSchema.parse(scope),study=await createThemeStudy(input,key,signal);
   if(Object.entries(input).some(([name,value])=>study.scope[name as keyof typeof input]!==value))throw new Error('研究范围不一致，未加载该结果。');return study;
+}
+export async function findSavedOverviewRun(input:z.input<typeof MarketOverviewSavedRunQuerySchema>,signal?:AbortSignal){
+  const query=MarketOverviewSavedRunQuerySchema.parse(input),search=new URLSearchParams(Object.entries(query).map(([key,value])=>[key,String(value)]));
+  return request(`overview/saved?${search}`,MarketOverviewSavedRunResponseSchema,{signal});
 }
 function validateRun(run:z.infer<typeof MarketOverviewRunResponseSchema>['run']){
   for(const entry of [...run.history,...(run.currentReport?[run.currentReport]:[]),...(run.latestSavedReport?[run.latestSavedReport]:[])]){

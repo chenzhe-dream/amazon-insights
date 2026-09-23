@@ -17,7 +17,7 @@ import { MARKET_THEME_RULES_FLOW_VERSION, marketThemeFlowInitialSteps, inspectMa
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../shared/market-source-contracts';
 import { MARKET_THEME_MAPPING_RULE_VERSION } from '../domain/market-research/customer-theme-mapping-rules';
 import { MarketThemeDetailQueryError } from '../domain/market-research/customer-theme-details';
-import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema} from '../../shared/market-overview-report-contracts';
+import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewSavedRunQuerySchema,MarketOverviewSavedRunResponseSchema} from '../../shared/market-overview-report-contracts';
 import {MarketOverviewReportService} from './market-overview-report-service';
 import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
@@ -89,6 +89,20 @@ export class MarketModuleService {
   async findStudy(actor: MarketExecutionActor, id: string) {
     id = MarketModuleIdSchema.parse(id); const study = await this.snapshots.findStudy({ actor, id }); if (!study) throw unavailable();
     return MarketStudyResponseSchema.parse({ study: { id: study.id, scope: study.scope, createdAt: study.createdAt } });
+  }
+  async findSavedOverview(actor:MarketExecutionActor,query:unknown){
+    const input=MarketOverviewSavedRunQuerySchema.parse(query);
+    const result=await this.deps.context.query<{id:string;from_month:string}>(`SELECT r.id,s.scope_json->>'fromMonth' AS from_month FROM market_analysis_module_runs r
+      JOIN market_analysis_studies s ON s.id=r.study_id AND s.organization_id=r.organization_id
+      WHERE r.organization_id=$1 AND r.request_json->>'moduleKind'='overview'
+        AND r.request_json->'scope'=s.scope_json
+        AND s.scope_json->>'marketplace'=$3 AND s.scope_json->>'nodeIdPath'=$4 AND s.scope_json->>'toMonth'=$5
+        AND r.request_json->'params'->>'headTopN'=$6 AND r.request_json->'params'->>'newProductMonths'=$7
+        AND EXISTS(SELECT 1 FROM users u WHERE u.id=$2 AND u.organization_id=$1 AND u.status='active')
+      ORDER BY (r.latest_report_attempt_id IS NOT NULL) DESC,
+        (r.status IN ('queued','running','partial')) DESC,r.created_at DESC,r.id DESC LIMIT 1`,
+      [actor.organizationId,actor.userId,input.marketplace,input.nodeIdPath,input.toMonth,String(input.headTopN),String(input.newProductMonths)]);
+    return MarketOverviewSavedRunResponseSchema.parse({runId:result.rows[0]?.id??null,fromMonth:result.rows[0]?.from_month??null});
   }
   async startOverview(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     const params=MarketOverviewStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);

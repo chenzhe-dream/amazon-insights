@@ -5,7 +5,7 @@ import {MarketShapeRunResponseSchema,MarketShapeRevisionResponseSchema,MarketSha
 import { MarketResearchScopeSchema, MarketResearchJobResponseSchema, MarketResearchListResponseSchema } from "./market-research-contracts";
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from './market-theme-detail-contracts';
 import { MarketThemeEvidenceQuerySchema, MarketThemeEvidenceResponseSchema } from './market-theme-evidence-contracts';
-import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema} from './market-overview-report-contracts';
+import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema,MarketOverviewSavedRunQuerySchema,MarketOverviewSavedRunResponseSchema} from './market-overview-report-contracts';
 import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema, MarketThemeStartRequestSchema, MarketThemeRunResponseSchema,
   MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from './market-module-contracts';
 import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
@@ -1696,6 +1696,7 @@ export const v1Contracts = [
   { method: "POST", path: "/v1/market-research/jobs/:id/retry", params: z.object({id:z.string().uuid()}).strict(), request: z.object({}).strict(), response: MarketResearchJobResponseSchema, error: ApiErrorResponseSchema },
   { method: 'POST', path: '/v1/market-analysis/studies', request: MarketStudyRequestSchema, response: MarketStudyResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/studies/:id', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketStudyResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/overview/saved', query: MarketOverviewSavedRunQuerySchema, response: MarketOverviewSavedRunResponseSchema, error: ApiErrorResponseSchema },
   { method: 'POST', path: '/v1/market-analysis/studies/:id/customer-themes', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketThemeStartRequestSchema, response: MarketThemeRunResponseSchema, error: ApiErrorResponseSchema },
   { method: 'POST', path: '/v1/market-analysis/studies/:id/overview', params: z.object({ id: MarketModuleIdSchema }).strict(), request: MarketOverviewStartRequestSchema, response: MarketOverviewRunResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/runs/:id/overview', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketOverviewRunResponseSchema, error: ApiErrorResponseSchema },

@@ -26,6 +26,7 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
     const { created, ...result } = await s.createStudy(actor, req.body, req.headers['idempotency-key']); reply.code(created ? 201 : 200); return result;
   }));
   app.get('/v1/market-analysis/studies/:id', async req => execute(req, (s, actor) => s.findStudy(actor, id(req))));
+  app.get('/v1/market-analysis/overview/saved',async req=>execute(req,(s,actor)=>s.findSavedOverview(actor,req.query)));
   app.post('/v1/market-analysis/studies/:id/keywords',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.startKeywords(actor,id(req),req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
   app.get('/v1/market-analysis/runs/:id/keywords',async req=>execute(req,(s,actor)=>s.findKeywords(actor,id(req))));
   app.post('/v1/market-analysis/runs/:id/keywords/revisions',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.saveKeywordRevision(actor,id(req),req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));

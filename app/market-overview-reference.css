@@ -2,8 +2,20 @@
 .market-ui-reference .market-reference-favorites:not(.card) { display: flex; justify-content: flex-end; margin-bottom: -8px; }
 .market-ui-reference .market-reference-overview { min-width: 0; margin-top: 14px; }
 .market-ui-reference .market-reference-tools { border-top: 1px solid #e7ebf2; padding-top: 12px; font-size: 12px; }
+.market-ui-reference .market-reference-overview .market-reference-tools { margin-top: 18px; }
 .market-ui-reference .market-reference-tools > summary,
 .market-ui-reference .market-reference-history > summary { cursor: pointer; color: #62758d; font-size: 12px; font-weight: 600; }
+.market-ui-reference .market-reference-overview .market-reference-pending { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 72px; padding: 14px 16px; border: 1px solid #e3eaf3; border-radius: 8px; background: #f8faff; color: #33465c; }
+.market-ui-reference .market-reference-overview .market-reference-pending-copy { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.market-ui-reference .market-reference-overview .market-reference-pending-copy strong,
+.market-ui-reference .market-reference-overview .market-reference-pending-copy span:not(.market-theme-spinner) { display: block; }
+.market-ui-reference .market-reference-overview .market-reference-pending-copy strong { font-size: 12px; font-weight: 650; }
+.market-ui-reference .market-reference-overview .market-reference-pending-copy span:not(.market-theme-spinner) { margin-top: 4px; color: #708097; font-size: 11px; }
+.market-ui-reference .market-reference-overview .market-reference-pending .market-theme-spinner { flex: none; margin-top: 2px; }
+.market-ui-reference .market-reference-overview .market-reference-pending button { flex: none; }
+.market-ui-reference .market-research-result > .market-research-boundaries { margin-top: 14px; padding-top: 12px; border-top-color: #e7ebf2; font-size: 12px; }
+.market-ui-reference .market-research-result > .market-research-boundaries > summary { width: fit-content; border-radius: 4px; padding: 2px 4px; color: #65758a; }
+.market-ui-reference .market-research-result > .market-research-boundaries > summary:focus-visible { outline: 2px solid #8f7dea; outline-offset: 2px; }
 .market-ui-reference .market-reference-tools .market-theme-actions { margin: 12px 0; }
 .market-ui-reference .market-reference-history.card { padding: 12px 18px; }
 .market-ui-reference .market-reference-history .market-research-body { margin-top: 14px; }
@@ -44,4 +56,5 @@
  .market-ui-reference .market-reference-overview .ss-report-kpis { grid-template-columns: 1fr; }
  .market-ui-reference .market-reference-overview .ss-report-hero { padding: 12px; }
  .market-ui-reference .market-reference-overview .market-theme-actions { flex-wrap: wrap; }
+ .market-ui-reference .market-reference-overview .market-reference-pending { align-items: stretch; flex-direction: column; }
 }

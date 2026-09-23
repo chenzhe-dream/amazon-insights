@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import test from 'node:test';
+import Fastify from 'fastify';
 import type {Pool} from 'pg';
 import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {PostgresQueryContext} from '../../server/db/postgres/query-context';
@@ -10,6 +11,7 @@ import {MarketExecutionConflictError,type MarketExecutionActor} from '../../serv
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
 import {MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
 import {MarketModuleService} from '../../server/services/market-module-service';
+import {registerMarketModuleRoutes} from '../../server/routes/market-modules';
 import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION} from '../../shared/market-overview-distribution-contracts';
 import {MARKET_SOURCE_HANDLER_VERSION} from '../../shared/market-source-contracts';
 import {startPostgresTestContainer} from './helpers/postgres-test-container';
@@ -103,4 +105,26 @@ test('overview entry freezes local rules identity and replays commands by public
     try{await assert.rejects(service.startOverview(first.actor,first.scope.researchId,{...PARAMS,newProductMonths:1},key));}
     finally{await pg.pool.query("UPDATE users SET status='active' WHERE id=$1",[first.actor.userId]);}
   });
+});
+
+test('saved overview lookup is read-only and exact to organization, node, month and report options',{timeout:120_000},async t=>{
+  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
+  const first=await seedStudy(pg.pool),service=new MarketModuleService({context:first.context,modelIdentity:()=>null,now:()=>new Date(NOW)});
+  const started=await service.startOverview(first.actor,first.scope.researchId,PARAMS,randomUUID());
+  const query={marketplace:'US' as const,nodeIdPath:first.scope.nodeIdPath,toMonth:first.scope.toMonth,...PARAMS};
+  const before=Number((await pg.pool.query('SELECT count(*) AS n FROM market_analysis_module_runs')).rows[0].n);
+  assert.deepEqual(await service.findSavedOverview(first.actor,query),{runId:started.run.id,fromMonth:first.scope.fromMonth});
+  assert.deepEqual(await service.findSavedOverview(first.actor,{...query,headTopN:5}),{runId:null,fromMonth:null});
+  assert.deepEqual(await service.findSavedOverview(first.actor,{...query,nodeIdPath:'12:35'}),{runId:null,fromMonth:null});
+  assert.deepEqual(await service.findSavedOverview(first.actor,{...query,toMonth:'2026-07'}),{runId:null,fromMonth:null});
+  const other=await seedStudy(pg.pool);
+  assert.deepEqual(await service.findSavedOverview(other.actor,query),{runId:null,fromMonth:null});
+  const app=Fastify();t.after(()=>app.close());app.decorateRequest('authPrincipal',null);
+  app.addHook('preHandler',async req=>{req.authPrincipal={kind:'user',...first.actor,role:'member',email:'overview@example.test',sessionId:randomUUID()};});
+  registerMarketModuleRoutes(app,service);
+  const response=await app.inject({method:'GET',url:`/v1/market-analysis/overview/saved?${new URLSearchParams(Object.entries(query).map(([key,value])=>[key,String(value)]))}`});
+  assert.equal(response.statusCode,200,response.body);
+  assert.deepEqual(response.json(),{runId:started.run.id,fromMonth:first.scope.fromMonth});
+  const after=Number((await pg.pool.query('SELECT count(*) AS n FROM market_analysis_module_runs')).rows[0].n);
+  assert.equal(after,before,'lookup must not create a study or analysis run');
 });
