@@ -14,6 +14,7 @@ import {
 } from "../../scripts/lib/web-reload-request.mjs";
 import { SyncPublicationStatusService } from "../../server/services/sync-publication-status-service";
 import { publishWebBuild } from "../../scripts/run-asin-sync-job.mjs";
+import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 import type { SyncJobLease, SyncJobRepository } from "../../server/db/sync-job-repository";
 import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-handler";
@@ -176,6 +177,45 @@ test("the final build is refused before execution when a persisted ready project
 
   assert.equal(builds, 0);
   assert.equal(manifests, 0);
+});
+
+test("failed build recovery uses the verified persisted report when generated files have moved on", async () => {
+  const organizationId = "99000000-0000-4000-8000-000000000099";
+  const projectId = "88000000-0000-4000-8000-000000000088";
+  const runId = "77000000-0000-4000-8000-000000000077";
+  const stageIds = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+    "child_sales", "price_strategy", "image_remarks"];
+  const outputs = stageIds.map(stage => projectStageOutput(stage, ["B0TEST0001"], {
+    organizationId, projectId, runId, updatedAt: requestedAt, readExport: () => ({}),
+  }));
+  const hashes = Object.fromEntries(outputs.map(output => [output.stage, output.contentHash]));
+  const job = {
+    jobId: "job-build-recovery", jobVersion: 9, asins: ["B0TEST0001"], resumeStages: ["build"],
+    scope: { organizationId, projectId, runId },
+    stages: stageIds.map(id => ({ id, status: "done" })), outputs,
+    persistedStageContentHashes: hashes,
+  };
+  let builds = 0;
+  const options = {
+    readJob: () => job,
+    projectOutput: () => { throw new Error("The later generated workspace is not this report's source"); },
+    createArtifactId: () => artifactId,
+    publishArtifact: async (input: { build: () => void }) => { input.build(); },
+    build: () => { builds += 1; },
+    completeBuildStage: () => undefined,
+    configuredTarget: () => ({ worktreeId: "d".repeat(64), webHost: "127.0.0.1", webPort: 43123 }),
+    writeReloadRequest: async () => ({ id: "e".repeat(64) }),
+    patchJob: () => undefined,
+  };
+  await publish(job.jobId, options);
+  assert.equal(builds, 1);
+
+  const tampered = { ...job, outputs: outputs.map(output => output.stage === "child_sales"
+    ? { ...output, data: { rowsByAsin: { B0TEST0001: [{ sales: 999 }] } } } : output) };
+  await assert.rejects(() => publish(job.jobId, { ...options, readJob: () => tampered }),
+    (error: unknown) => error instanceof Error &&
+      (error as Error & { code?: string }).code === "WEB_PUBLICATION_CONTENT_MISMATCH");
+  assert.equal(builds, 1);
 });
 
 test("the final build is refused when worker persistence has not acknowledged the projection set", async () => {

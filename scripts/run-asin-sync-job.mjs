@@ -28,6 +28,7 @@ import {
 } from "./lib/sync-job-store.mjs";
 import {
   isProjectableSyncStage,
+  persistedStageOutputContentHash,
   projectStageOutput,
 } from "./lib/sync-stage-output.mjs";
 import { readCachedDataExport } from "./lib/sync-cache.mjs";
@@ -286,14 +287,18 @@ export async function publishWebBuild(
   } = {},
 ) {
   const initialJob = readJob(jobId);
-  const expectedHashes = projectFinalStageHashes(jobId, initialJob, projectOutput);
+  const recovery = Array.isArray(initialJob?.resumeStages) &&
+    initialJob.resumeStages.length === 1 && initialJob.resumeStages[0] === "build";
+  const hashesFor = recovery ? projectRecoveredStageHashes :
+    (currentJobId, job) => projectFinalStageHashes(currentJobId, job, projectOutput);
+  const expectedHashes = hashesFor(jobId, initialJob);
   let reconciliation = null;
   const persistenceDeadline = persistenceNow() + persistenceTimeoutMs;
   let firstAttempt = true;
   while (true) {
     const candidate = firstAttempt ? initialJob : readJob(jobId);
     firstAttempt = false;
-    const candidateHashes = projectFinalStageHashes(jobId, candidate, projectOutput);
+    const candidateHashes = hashesFor(jobId, candidate);
     if (!stageHashesMatch(candidateHashes, expectedHashes)) {
       throw publicationContentMismatch("Final persisted stage projection set changed during acknowledgement");
     }
@@ -648,6 +653,42 @@ export function projectFinalStageHashes(jobId, job, projectOutput) {
     throw publicationContentMismatch("Final persisted stage projection set is stale");
   }
   return Object.freeze(Object.fromEntries(Object.entries(stageContentHashes).sort(([left], [right]) => left.localeCompare(right))));
+}
+
+export function projectRecoveredStageHashes(jobId, job) {
+  if (
+    !job || job.jobId !== jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1 ||
+    !Array.isArray(job.resumeStages) || job.resumeStages.length !== 1 || job.resumeStages[0] !== "build" ||
+    !job.scope?.organizationId || !job.scope?.projectId || !job.scope?.runId
+  ) throw publicationContentMismatch("Build recovery identity is unavailable");
+  const expected = new Map((job.stages ?? [])
+    .filter(stage => isProjectableSyncStage(stage?.id) && ["done", "partial", "failed"].includes(stage?.status))
+    .map(stage => [stage.id, stage.status]));
+  const outputs = Array.isArray(job.outputs) ? job.outputs : [];
+  if (expected.size !== 10 || outputs.length !== expected.size) {
+    throw publicationContentMismatch("Build recovery stage projections are incomplete");
+  }
+  const hashes = {};
+  for (const output of outputs) {
+    if (
+      !isProjectableSyncStage(output?.stage) || Object.hasOwn(hashes, output.stage) ||
+      expected.get(output.stage) !== output.stageStatus ||
+      output.organizationId !== job.scope.organizationId ||
+      output.projectId !== job.scope.projectId || output.runId !== job.scope.runId ||
+      typeof output.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(output.contentHash)
+    ) throw publicationContentMismatch("Build recovery projection scope is invalid");
+    let actualHash;
+    try { actualHash = persistedStageOutputContentHash(output); }
+    catch { throw publicationContentMismatch(`Persisted ${output.stage} recovery projection is invalid`); }
+    if (actualHash !== output.contentHash) {
+      throw publicationContentMismatch(`Persisted ${output.stage} recovery projection content differs from its hash`);
+    }
+    hashes[output.stage] = output.contentHash;
+  }
+  if ([...expected.keys()].some(stage => !Object.hasOwn(hashes, stage))) {
+    throw publicationContentMismatch("Build recovery projection set is incomplete");
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(hashes).sort(([left], [right]) => left.localeCompare(right))));
 }
 
 function stageHashesMatch(candidate, expected) {

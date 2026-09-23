@@ -394,6 +394,20 @@ function hashCanonical(value) {
   return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");
 }
 
+export function persistedStageOutputContentHash(output) {
+  if (!output || typeof output !== "object" || !isProjectableSyncStage(output.stage)) {
+    throw new TypeError("Invalid persisted stage output");
+  }
+  const body = { stage: output.stage };
+  if (output.stageStatus === "done" && output.data && !output.gap) body.data = output.data;
+  else if (output.stageStatus === "partial" && output.data && output.gap) {
+    body.data = output.data;
+    body.gap = output.gap;
+  } else if (output.stageStatus === "failed" && !output.data && output.gap) body.gap = output.gap;
+  else throw new TypeError("Invalid persisted stage status or body");
+  return hashCanonical(body);
+}
+
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== "object") return value;
