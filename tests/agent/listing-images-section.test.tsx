@@ -479,7 +479,7 @@ test("supplemental image remarks fill only matching missing slots and carry a vi
   assert.match(mismatched, /1 张图缺少 AI 备注/);
   const failedOriginal = renderToStaticMarkup(createElement(ListingImagesSection, {
     ...props, resolveImageRemark: () => null,
-    resolveImageOutcome: () => ({ status: "connector-failed", reason: "图片分析连接器失败" }),
+    resolveImageOutcome: () => ({ status: "connector-failed" as const, reason: "图片分析连接器失败" }),
   }));
   assert.match(failedOriginal, /原任务图片分析未完成，已显示补充备注/);
   assert.doesNotMatch(failedOriginal, /暂显示上次结果/);
