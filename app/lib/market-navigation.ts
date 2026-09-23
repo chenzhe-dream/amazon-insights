@@ -1,3 +1,5 @@
+import { marketModuleNodeQueryKey, marketModuleSelectionQueryKeys } from './market-module-selection';
+
 export const marketNavigation = [
   { view: "overview", label: "市场总览", sub: "类目采集 · 基础指标" },
   { view: "shapes", label: "商品形态及价格带", sub: "商品形态 · 价格分布" },
@@ -16,9 +18,10 @@ export function marketViewHref(view: MarketView, current: { toString(): string }
   const params = new URLSearchParams({ tab: "market-overview" });
   if (view !== "overview") params.set("themeView", view);
   // Market navigation is independent of competitor projects and sync jobs.
-  for (const key of ["webArtifact", "marketNode", "marketMonth", "marketFrom", "marketHead", "marketNew", "marketSite"]) {
+  for (const key of ["webArtifact", "marketNode", "marketMonth", "marketFrom", "marketHead", "marketNew", "marketSite", ...marketModuleSelectionQueryKeys, "overviewRun", "shapeRun", "keywordRun", "themeRun"]) {
     const value = source.get(key);
     if (value !== null) params.set(key, value);
   }
+  if (view !== 'overview' && !params.has(marketModuleNodeQueryKey(view))) params.set(marketModuleNodeQueryKey(view), '');
   return `/?${params}`;
 }

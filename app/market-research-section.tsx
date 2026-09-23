@@ -1,7 +1,8 @@
 "use client";
 import { browserRequestId } from "./lib/browser-request-id";
 import {publishUsagePage} from "./lib/usage-analytics-browser";
-import { marketNavigation, marketViewFromParam, type MarketView } from "./lib/market-navigation";
+import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView } from "./lib/market-navigation";
+import {emptyMarketModuleSelection, marketModuleNodeQueryKey, readMarketModuleSelection, writeMarketModuleSelection, type IndependentMarketView, type MarketModuleSelection} from './lib/market-module-selection';
 import {MarketSiteSchema} from "../shared/market-sites";
 import {MarketSharedFavorites,type KeywordFavoriteInput} from "./market-shared-favorites";
 import type {MarketFavorite} from "../shared/market-favorites-contracts";
@@ -177,31 +178,68 @@ function MarketResearchModules({ view: controlledView, onViewChange }: MarketNav
   const [viewRestored,setViewRestored]=useState(false);
   useEffect(()=>{if(viewRestored)publishUsagePage(view==="shapes"?"market-shapes":view==="keywords"?"market-keywords":view==="themes"?"market-themes":"market-overview")},[view,viewRestored]);
   const [scope,setScope]=useState<MarketResearchScope>({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6}),[fromMonth,setFromMonth]=useState(previousCompleteMonth());
-  useEffect(()=>{const params=new URL(window.location.href).searchParams;setView(marketViewFromParam(params.get('themeView')));
+  const [moduleSelections,setModuleSelections]=useState<Record<IndependentMarketView,MarketModuleSelection>>(()=>({
+    shapes:emptyMarketModuleSelection(previousCompleteMonth()),
+    keywords:emptyMarketModuleSelection(previousCompleteMonth()),
+    themes:emptyMarketModuleSelection(previousCompleteMonth()),
+  }));
+  useEffect(()=>{const url=new URL(window.location.href),params=url.searchParams;setView(marketViewFromParam(params.get('themeView')));
     setViewRestored(true);
-    setScope(current=>({...current,marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US'}));
-    const parsed=MarketResearchScopeSchema.safeParse({marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US',nodeQuery:params.get('marketNode')??'',month:params.get('marketMonth')??previousCompleteMonth(),headTopN:Number(params.get('marketHead')??10),newProductMonths:Number(params.get('marketNew')??6)});
-    if(parsed.success&&parsed.data.month<=previousCompleteMonth()){setScope(parsed.data);const from=params.get('marketFrom');setFromMonth(from&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(from)&&from<=parsed.data.month?from:parsed.data.month);}
+    const initialView=marketViewFromParam(params.get('themeView'));
+    const latest=previousCompleteMonth();
+    const restoredModules={
+      shapes:readMarketModuleSelection(params,'shapes',latest,initialView==='shapes'),
+      keywords:readMarketModuleSelection(params,'keywords',latest,initialView==='keywords'),
+      themes:readMarketModuleSelection(params,'themes',latest,initialView==='themes'),
+    };
+    setModuleSelections(restoredModules);
+    const legacyModule=initialView!=='overview'&&!params.has(marketModuleNodeQueryKey(initialView))&&params.has('marketNode');
+    if(legacyModule){
+      writeMarketModuleSelection(params,initialView,restoredModules[initialView]);
+      for(const key of ['marketSite','marketNode','marketMonth','marketFrom','marketHead','marketNew'])params.delete(key);
+      window.history.replaceState(window.history.state,'',url);
+    }else{
+      setScope(current=>({...current,marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US'}));
+      const parsed=MarketResearchScopeSchema.safeParse({marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US',nodeQuery:params.get('marketNode')??'',month:params.get('marketMonth')??previousCompleteMonth(),headTopN:Number(params.get('marketHead')??10),newProductMonths:Number(params.get('marketNew')??6)});
+      if(parsed.success&&parsed.data.month<=latest){setScope(parsed.data);const from=params.get('marketFrom');setFromMonth(from&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(from)&&from<=parsed.data.month?from:parsed.data.month);}
+    }
   },[]);
   const rememberScope=(next:MarketResearchScope)=>{const url=new URL(window.location.href);url.searchParams.set('marketSite',next.marketplace);url.searchParams.set('marketNode',next.nodeQuery);url.searchParams.set('marketMonth',next.month);url.searchParams.set('marketHead',String(next.headTopN));url.searchParams.set('marketNew',String(next.newProductMonths));window.history.replaceState(window.history.state,'',url);};
   const updateScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>=next=>setScope(current=>{const updated=typeof next==='function'?next(current):next;rememberScope(updated);return updated;});
   const updateFrom=(month:string)=>{setFromMonth(month);const url=new URL(window.location.href);url.searchParams.set('marketFrom',month);window.history.replaceState(window.history.state,'',url);};
   useEffect(()=>{if(fromMonth>scope.month)updateFrom(scope.month);},[scope.month,fromMonth]);
-  const selection={marketplace:scope.marketplace,nodeIdPath:scope.nodeQuery,fromMonth,toMonth:scope.month},changeSelection=(next:Partial<typeof selection>)=>{updateScope(current=>({...current,marketplace:next.marketplace??current.marketplace,nodeQuery:next.nodeIdPath??current.nodeQuery,month:next.toMonth??current.month}));if(next.fromMonth)updateFrom(next.fromMonth);};
-  const favoriteQuery:Record<string,string>={marketMonth:scope.month,marketFrom:fromMonth,marketHead:String(scope.headTopN),marketNew:String(scope.newProductMonths),marketSite:scope.marketplace,...(scope.nodeQuery?{marketNode:scope.nodeQuery}:{})};
+  const changeSelection=(targetView:IndependentMarketView,next:Partial<MarketModuleSelection>)=>setModuleSelections(current=>{
+    const selection={...current[targetView],...next};
+    if(selection.fromMonth>selection.toMonth)selection.fromMonth=selection.toMonth;
+    const url=new URL(window.location.href);writeMarketModuleSelection(url.searchParams,targetView,selection);window.history.replaceState(window.history.state,'',url);
+    return {...current,[targetView]:selection};
+  });
+  const selectedScope=view==='overview'?{marketplace:scope.marketplace,nodeIdPath:scope.nodeQuery,fromMonth,toMonth:scope.month}:moduleSelections[view];
+  const favoriteQuery:Record<string,string>={marketMonth:selectedScope.toMonth,marketFrom:selectedScope.fromMonth,marketHead:String(scope.headTopN),marketNew:String(scope.newProductMonths),marketSite:selectedScope.marketplace,...(selectedScope.nodeIdPath?{marketNode:selectedScope.nodeIdPath}:{})};
   function restoreFavorite(favorite:MarketFavorite){
-    const params=new URLSearchParams({tab:"market-overview",themeView:favorite.module,...favorite.query});
-    const artifact=new URLSearchParams(window.location.search).get("webArtifact");if(artifact)params.set("webArtifact",artifact);
-    window.history.replaceState(window.history.state,"","/?"+params);
-    const next=MarketResearchScopeSchema.safeParse({marketplace:favorite.query.marketSite??"US",nodeQuery:favorite.query.marketNode??"",month:favorite.query.marketMonth??previousCompleteMonth(),headTopN:Number(favorite.query.marketHead??10),newProductMonths:Number(favorite.query.marketNew??6)});
-    setScope(next.success?next.data:{marketplace:"US",nodeQuery:"",month:previousCompleteMonth(),headTopN:10,newProductMonths:6});
-    setFromMonth(favorite.query.marketFrom??favorite.query.marketMonth??previousCompleteMonth());
+    const url=new URL(window.location.href),params=url.searchParams;
+    params.set('tab','market-overview');params.set('themeView',favorite.module);
+    const runKeys={overview:'overviewRun',shapes:'shapeRun',keywords:'keywordRun',themes:'themeRun'} as const;
+    const runKey=runKeys[favorite.module];
+    params.delete(runKey);
+    if(favorite.module==='overview'){
+      const next=MarketResearchScopeSchema.safeParse({marketplace:favorite.query.marketSite??'US',nodeQuery:favorite.query.marketNode??'',month:favorite.query.marketMonth??previousCompleteMonth(),headTopN:Number(favorite.query.marketHead??10),newProductMonths:Number(favorite.query.marketNew??6)});
+      const restored=next.success?next.data:{marketplace:'US' as const,nodeQuery:'',month:previousCompleteMonth(),headTopN:10 as const,newProductMonths:6 as const};
+      setScope(restored);setFromMonth(favorite.query.marketFrom??restored.month);
+      params.set('marketSite',restored.marketplace);params.set('marketNode',restored.nodeQuery);params.set('marketMonth',restored.month);params.set('marketFrom',favorite.query.marketFrom??restored.month);params.set('marketHead',String(restored.headTopN));params.set('marketNew',String(restored.newProductMonths));
+    }else if(favorite.query.marketNode){
+      const targetView=favorite.module,selection:MarketModuleSelection={marketplace:favorite.query.marketSite??'US',nodeIdPath:favorite.query.marketNode,fromMonth:favorite.query.marketFrom??favorite.query.marketMonth??previousCompleteMonth(),toMonth:favorite.query.marketMonth??previousCompleteMonth()};
+      setModuleSelections(current=>({...current,[targetView]:selection}));writeMarketModuleSelection(params,targetView,selection);
+    }
+    if(favorite.query[runKey])params.set(runKey,favorite.query[runKey]!);
+    window.history.replaceState(window.history.state,'',url);
     setRestoredKeywordInput(favorite.keywordInput);setKeywordInput(favorite.keywordInput);setView(favorite.module);setRestoreVersion(value=>value+1);
+    onViewChange?.(favorite.module);
     // The URL carries the saved run identity; do not invoke a collection action here.
   }
-  return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);const url=new URL(window.location.href);url.searchParams.set('themeView',id);window.history.replaceState(window.history.state,'',url);}}>{label}</button>)}</nav>}
+  return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
     <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
-    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={selection} onSelectionChange={changeSelection} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
+    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
 }
 export function MarketResearchSection({ sessionIdentity, ...navigation }: { sessionIdentity: string } & MarketNavigationProps) {
   return <MarketResearchModules key={sessionIdentity} {...navigation} />;

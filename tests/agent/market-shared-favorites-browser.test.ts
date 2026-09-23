@@ -45,13 +45,15 @@ for (const withoutRandomUUID of [false, true]) test(`shared favorites persist ac
  assert.equal(ids[0],ids[1],"save retry keeps the same id");
  assert.equal(entries[0].keywordInput?.seeds,"desk lamp");assert.equal(entries[0].keywordInput?.categoryContext,"学习用台灯");
  await one.close();
- const two=await open();await two.getByRole("navigation",{name:"市场调研模块"}).getByRole("button",{name:"类目关键词洞察",exact:true}).click();
+ const two=await open();await two.getByRole("region",{name:"市场总览查询条件"}).getByLabel("类目节点或路径").fill("999999");await two.getByRole("navigation",{name:"市场调研模块"}).getByRole("button",{name:"类目关键词洞察",exact:true}).click();
  await two.getByRole("button",{name:"☆ 团队共享收藏",exact:true}).click();
  await two.getByRole("button",{name:"团队台灯研究",exact:true}).click();
  try{await two.getByLabel("类目说明",{exact:true}).waitFor()}catch(error){console.log("restore-debug",two.url(),await two.locator("body").innerText());throw error}
  assert.equal(await two.getByLabel("产品核心名",{exact:true}).inputValue(),"desk lamp");
  assert.equal(await two.getByLabel("类目说明",{exact:true}).inputValue(),"学习用台灯");
  await two.getByText("类目范围与采集设置",{exact:true}).click();assert.equal(await two.getByLabel("类目节点或路径",{exact:true}).inputValue(),"123:456");
+ await two.getByRole("navigation",{name:"市场调研模块"}).getByRole("button",{name:"市场总览",exact:true}).click();
+ assert.equal(await two.getByRole("region",{name:"市场总览查询条件"}).getByLabel("类目节点或路径").inputValue(),"999999","restoring a keyword favorite must not replace overview input");
  assert.deepEqual(writes,["/api/agent/v1/market-research/favorites","/api/agent/v1/market-research/favorites"]);
  await two.setViewportSize({width:390,height:844});assert.ok(await two.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  await two.close();
