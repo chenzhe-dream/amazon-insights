@@ -6,9 +6,10 @@ import {validateOverviewAnalysisBrief} from './overview-analysis-validation';
 
 export const MARKET_OVERVIEW_COMPLETE_CATALOG_VERSION='market-overview-source-catalog/v5';
 export const MARKET_OVERVIEW_TABLE_CATALOG_VERSION='market-overview-source-catalog/v6';
+export const MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION='market-overview-source-catalog/v7';
 type Semantic=Extract<MarketSemanticRecord,{task:'market-overview-explanation'}>;
 type Dimension=MarketOverviewAnalysisBrief['dimensions'][number];
-const labels:Record<string,string>={market_price_distribution:'价格分布',market_ratings_count_distribution:'评价数分布',market_rating_distribution:'评分分布',market_listing_date_distribution:'上架年龄分布',market_listing_trend_distribution:'上架年份结构',market_brand_concentration:'品牌份额',market_seller_concentration:'卖家份额',market_seller_country_distribution:'卖家所属地',market_seller_type_concentration:'发货类型',market_ebc_distribution:'内容配置',market_product_demand_trend:'搜索需求'};
+const labels:Record<string,string>={market_price_distribution:'价格分布',market_ratings_count_distribution:'评价数分布',market_rating_distribution:'评分分布',market_listing_date_distribution:'上架年龄分布',market_listing_trend_distribution:'上架年份结构',market_brand_concentration:'品牌份额',market_seller_concentration:'卖家份额',market_seller_country_distribution:'卖家所属地',market_seller_type_concentration:'发货类型',market_ebc_distribution:'内容配置',market_product_demand_trend:'搜索需求',market_product_concentration:'商品份额'};
 const scalarLabels:Record<string,string>={sampleProducts:'样本商品数',brands:'品牌数',sellers:'卖家数',totalUnits:'样本销量',totalRevenue:'样本销售额',avgPrice:'平均价格',avgUnits:'平均单品销量',avgRatings:'平均评价数',avgRating:'平均评分',productConcentrationRaw:'商品集中度',brandConcentrationRaw:'品牌集中度',sellerConcentrationRaw:'卖家集中度',newCount:'新品数',newAvgPrice:'新品平均价格',newAvgUnits:'新品平均销量',totalUnitsChangePct:'样本销量环比',totalRevenueChangePct:'样本销售额环比'};
 const scalarDimension=(name:string)=>name.endsWith('ChangePct')?'sample-trend':name.includes('Concentration')?'concentration':name.startsWith('new')?'new-products':['brands','sellers'].includes(name)?'participants':['avgPrice','avgRatings','avgRating'].includes(name)?'rating-price':'sample-scale';
 const scalarDimensionLabels:Record<string,string>={'sample-trend':'可比样本趋势',concentration:'头部集中度','new-products':'新品概况',participants:'品牌与卖家数量','rating-price':'评分与价格均值','sample-scale':'样本规模'};
@@ -18,8 +19,8 @@ const scalarDimensionLabels:Record<string,string>={'sample-trend':'可比样本�
  * of a provider request; admission/analysis is a separate versioned stage.
  * Structural comparisons concern the last requested month. The numeric history
  * keeps every requested month; only verified scalar trends cross months. */
-export function buildMarketOverviewCompleteCatalog(input:Parameters<typeof buildMarketOverviewExpandedCatalog>[0],options:{metricTable?:boolean}={}){
-  const base=buildMarketOverviewExpandedCatalog(input),latest=base.months.at(-1)!;
+export function buildMarketOverviewCompleteCatalog(input:Parameters<typeof buildMarketOverviewExpandedCatalog>[0],options:{metricTable?:boolean;productRows?:boolean}={}){
+  const base=buildMarketOverviewExpandedCatalog(input,{productRows:options.productRows}),latest=base.months.at(-1)!;
   const sourceSemantic=base.semanticSnapshot?MarketSemanticRecordSchema.parse((base.semanticSnapshot.records[0].data as {semantic:unknown}).semantic):null;
   if(sourceSemantic&&sourceSemantic.task!=='market-overview-explanation')throw new TypeError('Expected overview');
   const semantic:Semantic=sourceSemantic?structuredClone(sourceSemantic):{task:'market-overview-explanation',metrics:[],facts:[],gaps:[],interpretationOptions:[],validationOptions:[]};
@@ -60,7 +61,7 @@ export function buildMarketOverviewCompleteCatalog(input:Parameters<typeof build
   semantic.analysisBrief={mode:'dimension',scopeStatement:`结构分布仅分析最后请求月份 ${latest.month} 的返回样本；其他月份保留在数字历史，仅明确可比的基础指标产生趋势。请求月份未获响应确认时只描述该响应，不代表全市场。各接口、内容全样本与新品子集的分母独立；重叠汇总不进入组分母。上架年份结构不是历史新增量，成交不代表搜索需求。`,dimensions:[...dimensions.values()],factLabels};
   const parsed=semantic.facts.length?MarketSemanticRecordSchema.parse(semantic):null;
   if(parsed?.task==='market-overview-explanation')validateOverviewAnalysisBrief(parsed);
-  const version=options.metricTable?MARKET_OVERVIEW_TABLE_CATALOG_VERSION:MARKET_OVERVIEW_COMPLETE_CATALOG_VERSION,n=base.numericSnapshot;
+  const version=options.productRows?MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION:options.metricTable?MARKET_OVERVIEW_TABLE_CATALOG_VERSION:MARKET_OVERVIEW_COMPLETE_CATALOG_VERSION,n=base.numericSnapshot;
   const numericSnapshot=createMarketInputSnapshot({scope:n.scope,kind:n.kind,sourceVersion:n.sourceVersion,ruleVersion:version,collectedAt:n.collectedAt,expectedRecordIds:n.expectedRecordIds,records:n.records});
   const semanticSnapshot=parsed?createMarketInputSnapshot({scope:n.scope,kind:'overview',sourceVersion:n.sourceVersion,ruleVersion:version,collectedAt:n.collectedAt,expectedRecordIds:['overview'],records:[{id:'overview',scope:n.scope,data:{semantic:parsed}}]}):null;
   return {...base,version,numericSnapshot,semanticSnapshot,status:semanticSnapshot?'ready' as const:'no-input' as const};

@@ -9,6 +9,18 @@ test('distribution shares use returned sample counts, never ambiguous upstream r
   assert.equal(result.rows[0].unitsSharePct,25);assert.equal(result.rows[0].productsSharePct,50);
   assert.equal(result.rows[0].reportedRates.unitsRatio,0.99);assert.equal(result.rows[0].revenue,null);assert.equal(result.scopeBasis,'request-bound');
 });
+test('product rows calculate Top Listing shares only within the returned product response',()=>{
+ const data=[{asin:'B000000001',ranking:1,totalUnits:30,totalRevenue:100,totalUnitsRatio:0.95},{asin:'B000000002',ranking:2,totalUnits:70,totalRevenue:200,totalUnitsRatio:0.05}];
+ const result=normalizeMarketOverviewDistribution('market_product_concentration',{code:'OK',data});
+ assert.equal(result.groups[0].units,100);
+ assert.deepEqual(result.rows.map(r=>r.asins),[['B000000001'],['B000000002']]);
+ assert.deepEqual(result.rows.map(r=>r.unitsSharePct),[30,70]);
+ assert.equal(result.rows[0].reportedRates.totalUnitsRatio,0.95);
+ assert.equal(result.rows[0].revenue,null);
+ const repeated=normalizeMarketOverviewDistribution('market_product_concentration',{code:'OK',data:[data[0],data[0]]});
+ assert.equal(repeated.groups[0].units,null);
+ assert.equal(repeated.rows[0].unitsSharePct,null);
+});
 test('content combinations split whole sample, new subset and overlapping summaries without double counting',()=>{
   const labels=['有A+有视频','有A+无视频','无A+有视频','无A+无视频'];
   const data=labels.flatMap((label,i)=>[{label,products:i+1,units:10*(i+1),unitsRatio:999},{label:`新品${label}`,products:1,units:5,unitsRatio:999}]);data.push({label:'A+',products:3,units:30,unitsRatio:30});

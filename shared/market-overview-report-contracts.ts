@@ -3,7 +3,7 @@ import {MarketAnalysisScopeSchema,MarketInputRecordSchema} from './market-analys
 import {MarketSourceUnitSchema} from './market-source-contracts';
 import {MarketOverviewExplanationOutputSchema,MarketSemanticRecordSchema} from './market-semantic-contracts';
 import {MarketModuleIdSchema as uuid,MarketModuleStepPublicSchema,MarketThemeReportSchema} from './market-module-contracts';
-import {MarketOverviewDistributionEntrySchema,MARKET_OVERVIEW_ALL_OPERATIONS} from './market-overview-distribution-contracts';
+import {MarketOverviewDistributionEntrySchema,MARKET_OVERVIEW_ALL_OPERATIONS_V2} from './market-overview-distribution-contracts';
 import {MarketOverviewFinalSynthesisOutputSchema,MarketOverviewSynthesisChildSchema,MarketOverviewGapGroupSchema} from './market-overview-reduction-contracts';
 import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 const id=z.string().min(1).max(240),hash=z.string().regex(/^[a-f0-9]{64}$/),count=z.number().int().nonnegative().safe(),month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
@@ -30,7 +30,7 @@ export const MarketOverviewSynthesisReportSchema=MarketOverviewLegacyReportSchem
 export const MarketOverviewReportSchema=z.discriminatedUnion('reportVersion',[MarketOverviewLegacyReportSchema,MarketOverviewSynthesisReportSchema]);
 export const MarketOverviewReportEntrySchema=z.object({attemptId:uuid,current:z.boolean(),report:MarketOverviewReportSchema}).strict();
 export const MarketOverviewRunResponseSchema=z.object({run:z.object({id:uuid,scope:MarketAnalysisScopeSchema,status:z.enum(['queued','running','partial','succeeded','failed','cancelled']),createdAt:z.string().datetime(),planRevision:count,
-  params:MarketOverviewStartRequestSchema,steps:z.array(MarketModuleStepPublicSchema.extend({source:z.object({month,operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS)}).strict().optional()})),currentReport:MarketOverviewReportEntrySchema.nullable(),latestSavedReport:MarketOverviewReportEntrySchema.nullable(),history:z.array(MarketOverviewReportEntrySchema)}).strict()}).strict();
+  params:MarketOverviewStartRequestSchema,steps:z.array(MarketModuleStepPublicSchema.extend({source:z.object({month,operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS_V2)}).strict().optional()})),currentReport:MarketOverviewReportEntrySchema.nullable(),latestSavedReport:MarketOverviewReportEntrySchema.nullable(),history:z.array(MarketOverviewReportEntrySchema)}).strict()}).strict();
 const reason=z.enum(['not-collected','collection-failed','field-absent','invalid-source','unit-unknown','period-incompatible']);
 const metric=z.object({state:z.enum(['known','missing','conflict']),value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),
   observations:z.array(z.object({sourceRef:id,field:id,raw:MarketInputRecordSchema.shape.data,value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),scopeBasis:z.enum(['request-bound','response-verified']).optional()}).strict())}).strict();

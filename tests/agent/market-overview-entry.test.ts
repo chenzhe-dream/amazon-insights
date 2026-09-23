@@ -7,7 +7,7 @@ import {PostgresQueryContext} from '../../server/db/postgres/query-context';
 import {PostgresMarketAnalysisSnapshotStore} from '../../server/db/postgres/market-analysis-snapshot-store';
 import {PostgresMarketModuleExecutionStore} from '../../server/db/postgres/market-module-execution-store';
 import {MarketExecutionConflictError,type MarketExecutionActor} from '../../server/db/market-module-execution-repository';
-import {MARKET_OVERVIEW_TABLE_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
+import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
 import {MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
 import {MarketModuleService} from '../../server/services/market-module-service';
 import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION} from '../../shared/market-overview-distribution-contracts';
@@ -35,8 +35,9 @@ test('overview entry freezes local rules identity and replays commands by public
     const key=randomUUID(),started=await service.startOverview(first.actor,first.scope.researchId,PARAMS,key);
     assert.equal(started.created,true);
     const saved=await new PostgresMarketModuleExecutionStore(first.context).findModuleRun({actor:first.actor,moduleRunId:started.run.id});assert.ok(saved);
-    assert.deepEqual(saved.run.params,{...PARAMS,flow:'market-overview-flow/rules-v1'});
-    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,mapping:MARKET_OVERVIEW_TABLE_CATALOG_VERSION,planner:'market-overview-flow/rules-v1',model:null,prompt:null,configuration:null});
+    assert.deepEqual(saved.run.params,{...PARAMS,flow:'market-overview-flow/rules-v2'});
+    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:'market-overview-flow/rules-v2',model:null,prompt:null,configuration:null});
+    assert.equal(saved.steps.filter(step=>step.kind==='collect-overview-month'&&(step.input as {operation:string}).operation==='market_product_concentration').length,1);
   });
 
   await t.test('missing model identity does not block a rules-only start',async()=>{

@@ -8,10 +8,10 @@ import {buildMarketOverviewSourceCatalog,MarketOverviewCatalogVersionSchema} fro
 import {inspectMarketOverviewContinuation,marketOverviewFlowInitialSteps,MarketOverviewFlowParamsSchema,MarketOverviewCatalogStepInputSchema} from '../domain/market-research/overview-flow';
 import {MarketOverviewSourceStepInputSchema} from '../services/market-overview-source-collector';
 import {MarketOverviewDistributionStepInputSchema} from '../services/market-overview-distribution-collector';
-import {buildMarketOverviewCompleteCatalog,MARKET_OVERVIEW_TABLE_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
+import {buildMarketOverviewCompleteCatalog,MARKET_OVERVIEW_TABLE_CATALOG_VERSION,MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {buildOverviewRuleBaseline} from '../domain/market-research/overview-rule-baseline';
 import {buildMarketOverviewExpandedCatalog} from '../domain/market-research/overview-expanded-catalog';
-import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION,type MarketOverviewExpandedSourceFailure} from '../../shared/market-overview-distribution-contracts';
+import {MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION,type MarketOverviewExpandedSourceFailureV2} from '../../shared/market-overview-distribution-contracts';
 import {MarketOverviewSourceFailureSchema} from '../domain/market-research/overview-source-catalog';
 import {canonicalJsonSha256 as digest} from './model-request-accounting';
 import type {MarketStepHandler} from './market-module-step-worker';
@@ -51,7 +51,7 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
       if(!s||!a||a.stepId!==s.id||s.inputHash!==digest(d))invalid();
       return mode==='current'?s:{...s,latestAttemptId:a.id,status:a.status==='interrupted'?'failed' as const:a.status};});
     if(sourceSteps.some((s,i)=>!s||s.inputHash!==digest(expected[i]))||digest(sourceSteps.map(s=>s.latestAttemptId))!==digest(input.sourceAttemptIds)||digest(definition.inputRefs)!==digest(sourceSteps.filter(s=>s.status==='succeeded'||s.status==='empty').map(s=>({kind:'step-output',id:s.latestAttemptId}))))invalid();
-    const sources:MarketSourceEvidence[]=[],failures:MarketOverviewExpandedSourceFailure[]=[],receipts:unknown[]=[];
+    const sources:MarketSourceEvidence[]=[],failures:MarketOverviewExpandedSourceFailureV2[]=[],receipts:unknown[]=[];
     for(const sourceStep of sourceSteps){
       signal.throwIfAborted();const a=view.attempts.find(a=>a.id===sourceStep.latestAttemptId&&a.stepId===sourceStep.id);if(!a)invalid();
       const {month,operation,headTopN,newProductMonths}=z.union([MarketOverviewSourceStepInputSchema,MarketOverviewDistributionStepInputSchema]).parse(sourceStep.input);
@@ -69,7 +69,7 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
       sources.push(source.evidence);receipts.push({month,operation,attemptId:a.id,status:output.collectionStatus,sourceRef:ref,inputSnapshotId:id});
     }
     const common={scope:view.run.scope,parameters:{headTopN:params.headTopN,newProductMonths:params.newProductMonths},dataCutoffAt:input.dataCutoffAt,sources};
-    const catalog=view.run.versions.rule===MARKET_OVERVIEW_TABLE_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true}):view.run.versions.rule===MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION?buildMarketOverviewExpandedCatalog({...common,failures}):buildMarketOverviewSourceCatalog({...common,failures:failures.map(f=>MarketOverviewSourceFailureSchema.parse(f)),version:MarketOverviewCatalogVersionSchema.parse(view.run.versions.rule)});signal.throwIfAborted();
+    const catalog=view.run.versions.rule===MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true,productRows:true}):view.run.versions.rule===MARKET_OVERVIEW_TABLE_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true}):view.run.versions.rule===MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION?buildMarketOverviewExpandedCatalog({...common,failures}):buildMarketOverviewSourceCatalog({...common,failures:failures.map(f=>MarketOverviewSourceFailureSchema.parse(f)),version:MarketOverviewCatalogVersionSchema.parse(view.run.versions.rule)});signal.throwIfAborted();
     const output:Record<string,unknown>={catalogVersion:catalog.version,numericInputSnapshotId:catalog.numericSnapshot.snapshotId,semanticInputSnapshotId:catalog.semanticSnapshot?.snapshotId??null,semanticStatus:catalog.semanticSnapshot?'pending':'no-input',sourceRefs:catalog.sourceRefs,sourceReceipts:receipts,sourceAttemptIds:input.sourceAttemptIds,dataCutoffAt:input.dataCutoffAt,failures};
     if(includeRuleBaseline)output.ruleBaseline=buildOverviewRuleBaseline(catalog);
     return {catalog,sources,output:MarketInputRecordSchema.shape.data.parse(output)};

@@ -13,21 +13,22 @@ const share=(value:number|null,total:number|null)=>value!==null&&total!==null&&t
 export function normalizeMarketOverviewDistribution(operation:MarketOverviewDistributionOperation,payload:unknown,options:{currency?:MarketCurrency}={}):MarketOverviewDistribution{
   operation=MarketOverviewDistributionOperationSchema.parse(operation);const envelope=obj(payload);
   if(envelope.isError===true||envelope.code!==undefined&&envelope.code!=='OK'||!Array.isArray(envelope.data)||envelope.data.length>2000)throw new TypeError('Invalid distribution response');
-  const brand=operation==='market_brand_concentration',seller=operation==='market_seller_concentration',type=operation==='market_seller_type_concentration',content=operation==='market_ebc_distribution';
-  const labelField=brand?'brand':seller?'sellerName':'label',unitsField=brand||seller?'totalUnits':'units',revenueField=brand||seller?'totalRevenue':'revenue';
+  const brand=operation==='market_brand_concentration',seller=operation==='market_seller_concentration',product=operation==='market_product_concentration',type=operation==='market_seller_type_concentration',content=operation==='market_ebc_distribution';
+  const labelField=brand?'brand':seller?'sellerName':product?'asin':'label',unitsField=brand||seller||product?'totalUnits':'units',revenueField=brand||seller||product?'totalRevenue':'revenue';
   const rows:MarketOverviewDistribution['rows']=envelope.data.map((raw,index)=>{
     const r=obj(raw),issues:string[]=[],label=typeof r[labelField]==='string'&&r[labelField].trim().length&&r[labelField].length<=500?r[labelField].trim():'';
     if(!label)issues.push('invalid-label');
     let group:MarketOverviewDistribution['rows'][number]['group']='sample';
     if(content)group=contentLabels.includes(label)?'sample':contentLabels.some(l=>`新品${l}`===label)?'new-products':['A+','视频'].includes(label)?'summary':'unclassified';
     if(group==='unclassified')issues.push('unrecognized-content-group');
-    let products=number(r[type?'asinNum':'products'],true);const units=number(r[unitsField],true),reportedRevenue=number(r[revenueField]);
+    let products=product?1:number(r[type?'asinNum':'products'],true);const units=number(r[unitsField],true),reportedRevenue=number(r[revenueField]);
     if(type&&r.productNum!==undefined&&number(r.productNum,true)!==products){products=null;issues.push('conflicting-product-count');}
     if(products===null)issues.push('invalid-products');if(units===null)issues.push('invalid-units');
     const revenue=options.currency?reportedRevenue:null;
     if(r[revenueField]!==undefined&&r[revenueField]!==null&&(reportedRevenue===null||!options.currency))issues.push(reportedRevenue===null?'invalid-revenue':'revenue-currency-unverified');
     let asins:string[]=[];
-    if(!content&&!type){if(!Array.isArray(r.asins)||r.asins.some(a=>typeof a!=='string'||!/^[A-Z0-9]{10}$/.test(a)))issues.push('invalid-membership');else asins=r.asins;
+    if(!content&&!type){if(product){if(!/^[A-Z0-9]{10}$/.test(label))issues.push('invalid-membership');else asins=[label];}
+      else if(!Array.isArray(r.asins)||r.asins.some(a=>typeof a!=='string'||!/^[A-Z0-9]{10}$/.test(a)))issues.push('invalid-membership');else asins=r.asins;
       if(new Set(asins).size!==asins.length||products!==asins.length)issues.push('membership-count-mismatch');}
     const reportedRates=Object.fromEntries(Object.entries(r).filter(([key])=>key.endsWith('Ratio')).map(([key,v])=>{const parsed=MarketInputRecordSchema.shape.data.safeParse(v);return [key,parsed.success?parsed.data:null];}));
     return {id:`row-${index}`,sourceIndex:index,label:label||`来源行 ${index+1}`,group,asins,products,units,revenue,reportedRevenue,reportedRates,productsSharePct:null,unitsSharePct:null,revenueSharePct:null,issues};

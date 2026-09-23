@@ -8,7 +8,8 @@ export const MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS=[
   'market_listing_date_distribution','market_listing_trend_distribution','market_brand_concentration',
   'market_seller_concentration','market_seller_country_distribution','market_seller_type_concentration','market_ebc_distribution',
 ] as const;
-export const MarketOverviewDistributionOperationSchema=z.enum(MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS);
+export const MARKET_OVERVIEW_PRODUCT_OPERATION='market_product_concentration' as const;
+export const MarketOverviewDistributionOperationSchema=z.enum([...MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION]);
 export type MarketOverviewDistributionOperation=z.infer<typeof MarketOverviewDistributionOperationSchema>;
 const number=z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),count=number.int(),percent=z.number().finite().min(0).max(100).nullable();
 const group=z.enum(['sample','new-products','summary','unclassified']);
@@ -28,10 +29,14 @@ export type MarketOverviewDistribution=z.infer<typeof MarketOverviewDistribution
 export const MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION='market-overview-source-catalog/v4';
 export const MARKET_OVERVIEW_ADDITIONAL_OPERATIONS=[...MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,'market_product_demand_trend'] as const;
 export const MARKET_OVERVIEW_ALL_OPERATIONS=['market_research','market_research_statistics',...MARKET_OVERVIEW_ADDITIONAL_OPERATIONS] as const;
+export const MARKET_OVERVIEW_ADDITIONAL_OPERATIONS_V2=[...MARKET_OVERVIEW_ADDITIONAL_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION] as const;
+export const MARKET_OVERVIEW_ALL_OPERATIONS_V2=[...MARKET_OVERVIEW_ALL_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION] as const;
 export const MarketOverviewExpandedSourceFailureSchema=z.object({month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS),attemptId:z.string().uuid(),code:z.string().min(1).max(100)}).strict();
 export type MarketOverviewExpandedSourceFailure=z.infer<typeof MarketOverviewExpandedSourceFailureSchema>;
+export const MarketOverviewExpandedSourceFailureV2Schema=MarketOverviewExpandedSourceFailureSchema.extend({operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS_V2)}).strict();
+export type MarketOverviewExpandedSourceFailureV2=z.infer<typeof MarketOverviewExpandedSourceFailureV2Schema>;
 export const MarketOverviewDistributionEntrySchema=z.object({
-  month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),operation:z.enum(MARKET_OVERVIEW_ADDITIONAL_OPERATIONS),
+  month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),operation:z.enum(MARKET_OVERVIEW_ADDITIONAL_OPERATIONS_V2),
   status:z.enum(['ready','partial','empty','failed','not-collected']),sourceRef:z.string().nullable(),fetchedAt:z.string().datetime().nullable(),
   scopeBasis:z.enum(['request-bound','response-verified']).nullable(),distribution:MarketOverviewDistributionSchema.nullable(),
   issues:z.array(z.object({code:z.string(),retryable:z.boolean()}).strict()),

@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {performance} from 'node:perf_hooks';
 import {MarketAnalysisScopeSchema,MarketInputRecordSchema,type MarketAnalysisScope} from '../../shared/market-analysis-contracts';
-import {MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,type MarketOverviewDistribution} from '../../shared/market-overview-distribution-contracts';
+import {MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION,type MarketOverviewDistribution} from '../../shared/market-overview-distribution-contracts';
 import {MarketSourceIdentityValueSchemas,type MarketSourceEvidence,type MarketSourcePayloadPath,type MarketSourceUnit} from '../../shared/market-source-contracts';
 import {ConnectorError,type RemoteMcpConnector} from '../connectors/connector-contract';
 import {ResourceGovernorAdmissionError} from '../db/concurrency-control-repository';
@@ -9,7 +9,7 @@ import {createMarketSourceEvidence} from '../domain/market-research/source-evide
 import {normalizeMarketOverviewDistribution} from '../domain/market-research/overview-distributions';
 
 export const MarketOverviewDistributionStepInputSchema=z.object({month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
-  operation:z.enum([...MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,'market_product_demand_trend']),
+  operation:z.enum([...MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION,'market_product_demand_trend']),
   headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]),
 }).strict();
 type Params=z.infer<typeof MarketOverviewDistributionStepInputSchema>;

@@ -12,7 +12,7 @@ test('reference result row opens current-backend report inline and reopening is 
  const origin=server.resolvedUrls!.local[0],page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(10000);
  const writes:Array<{path:string;body:Record<string,unknown>}>=[],errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  const run=overviewRun(),details=overviewDistributionDetails();
- run.run.scope.fromMonth='2026-08';for(const entry of [...run.run.history,run.run.currentReport!,run.run.latestSavedReport!])entry.report.scope.fromMonth='2026-08';details.entry.report.scope.fromMonth='2026-08';
+ run.run.scope.fromMonth='2026-06';for(const entry of [...run.run.history,run.run.currentReport!,run.run.latestSavedReport!])entry.report.scope.fromMonth='2026-06';details.entry.report.scope.fromMonth='2026-06';
  // The legacy collector accepts a bare node and returns its canonical path in
  // the report. Opening the new flow must carry that returned path forward.
  const scope={marketplace:'US',nodeQuery:'456',month:'2026-08',headTopN:10,newProductMonths:6};
@@ -39,7 +39,7 @@ test('reference result row opens current-backend report inline and reopening is 
  assert.equal(await page.getByRole('button',{name:'开始总览分析',exact:true}).isVisible(),false,'auxiliary workflow is initially collapsed');
  await page.getByLabel('类目节点或路径').fill('999:888');
  await open.click();try{await page.getByRole('region',{name:'已保存总览报告'}).waitFor();}catch(error){console.log('reference-flow',writes,errors,await page.locator('body').innerText());throw error;}
- assert.equal(writes.length,3);assert.equal(writes[1].body.nodeIdPath,'123:456','report is bound to selected result, not edited filter');assert.equal(writes[1].body.fromMonth,'2026-08');
+ assert.equal(writes.length,3);assert.equal(writes[1].body.nodeIdPath,'123:456','report is bound to selected result, not edited filter');assert.equal(writes[1].body.fromMonth,'2026-06');
  await page.locator('.ss-report-kpis article').first().waitFor();assert.equal(await page.locator('.ss-report-kpis article').count(),3);
  await page.getByText('本报告的分析规则',{exact:true}).click();
  const rules=page.locator('details').filter({has:page.locator('summary').filter({hasText:'本报告的分析规则'})}).last();

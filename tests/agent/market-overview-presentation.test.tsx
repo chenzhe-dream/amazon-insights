@@ -9,6 +9,14 @@ import {MarketOverviewSynthesis} from '../../app/market-overview-synthesis';
 import {MarketOverviewReportSchema} from '../../shared/market-overview-report-contracts';
 import {MarketOverviewDetailsResponseSchema} from '../../shared/market-overview-report-contracts';
 import {synthesisDetails} from './helpers/market-overview-synthesis-page-fixture';
+import {overviewReportStartMonth} from '../../app/lib/market-overview-period';
+import {normalizeMarketOverviewDistribution} from '../../server/domain/market-research/overview-distributions';
+
+test('opening a monthly result retains a chosen range or requests three completed months',()=>{
+ assert.equal(overviewReportStartMonth('2026-08','2026-06'),'2026-06');
+ assert.equal(overviewReportStartMonth('2026-08','2026-08'),'2026-06');
+ assert.equal(overviewReportStartMonth('2026-01','2026-01'),'2025-11');
+});
 
 test('saved report keeps all fifteen original chapters in original order with visible missing states',()=>{
  const detail=overviewDistributionDetails();
@@ -26,13 +34,25 @@ test('presentation selection preserves source entry identity and deterministic m
  assert.equal(selected[0],earlier);assert.equal(selected[1],entry);assert.equal(input[0],entry);
  assert.deepEqual(selectOverviewDistributionEntries(input,'market_brand_concentration'),[]);
 });
-test('sales chart only consumes known saved calendar-month facts; unknown period is not a trend',()=>{
+test('sales chart consumes saved monthly numeric facts without inventing missing months',()=>{
  const detail=overviewDistributionDetails();
- assert.deepEqual(selectOverviewSalesPoints(detail,'totalUnits'),[{month:'2026-08',value:42,metricId:'2026-08/totalUnits'}]);
- const missing=overviewAnalysisDetails();assert.deepEqual(selectOverviewSalesPoints(missing,'totalUnits'),[]);
+ assert.deepEqual(selectOverviewSalesPoints(detail,'totalUnits'),[{month:'2026-08',value:42,metricId:'2026-08/totalUnits',requestBound:false}]);
+ const missing=overviewAnalysisDetails();assert.deepEqual(selectOverviewSalesPoints(missing,'totalUnits'),[{month:'2026-08',value:0,metricId:'2026-08/totalUnits',requestBound:false}]);
  const html=renderToStaticMarkup(<MarketOverviewReportView entry={missing.entry} detail={missing} error={null} onRetry={()=>{}}/>);
  assert.match(html,/来源没有确认月份/);assert.match(html,/已保存的分段解释/);
  assert.doesNotMatch(html,/NaN|Infinity/);
+});
+
+test('monthly chart uses saved numeric source values when the semantic layer is skipped',()=>{
+ const detail=overviewDistributionDetails();
+ detail.semantic=null;
+ const row=detail.numbers.months[0];
+ row.metrics.totalUnits.observations[0].scopeBasis='request-bound';
+ detail.numbers.months.push({...structuredClone(row),month:'2026-07',metrics:{...structuredClone(row.metrics),totalUnits:{...structuredClone(row.metrics.totalUnits),value:30}}});
+ assert.deepEqual(selectOverviewSalesPoints(detail,'totalUnits'),[
+  {month:'2026-07',value:30,metricId:'2026-07/totalUnits',requestBound:true},
+  {month:'2026-08',value:42,metricId:'2026-08/totalUnits',requestBound:true},
+ ]);
 });
 
 test('reported samples reject units that do not match the saved metric and scope',()=>{
@@ -59,9 +79,21 @@ test('rule-only report shows saved sample facts and unconverted concentration ra
  const concentration=html.match(/data-report-section="product-crn"[\s\S]*?(?=data-report-section="brand-crn")/)?.[0]??'';
  assert.match(overview,/<dt>样本商品数<\/dt><dd>100<\/dd>/);
  assert.match(overview,/<dt>样本销量<\/dt><dd>42<\/dd>/);
- assert.match(sales,/42/);assert.match(sales,/单月样本|不能形成趋势/);
+ assert.match(sales,/42/);assert.match(sales,/单月样本|只有一个月/);
  assert.match(concentration,/0\.3583/);assert.match(concentration,/单位未确认/);
  assert.doesNotMatch(concentration,/35\.83%/);
+});
+
+test('product concentration uses its own returned-product denominator and preserves source limits',()=>{
+ const detail=overviewDistributionDetails();
+ const distribution=normalizeMarketOverviewDistribution('market_product_concentration',{code:'OK',data:[{asin:'B000000001',totalUnits:30},{asin:'B000000002',totalUnits:70}]});
+ detail.numbers.distributions!.push({month:'2026-08',operation:'market_product_concentration',status:'partial',sourceRef:'market-source:example',fetchedAt:'2026-09-12T06:00:00.000Z',scopeBasis:'request-bound',distribution,issues:[{code:'identity-request-bound',retryable:false}]});
+ const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={MarketOverviewDetailsResponseSchema.parse(detail)} error={null} onRetry={()=>{}} headTopN={1}/>);
+ const product=html.match(/data-report-section="product-crn"[\s\S]*?(?=data-report-section="brand-crn")/)?.[0]??'';
+ assert.match(html,/头部 Top 1 · 返回商品/);assert.match(html,/该商品接口返回样本的月销量占比/);
+ assert.match(product,/B000000001/);assert.doesNotMatch(product,/B000000002/);
+ assert.match(product,/30%/);assert.match(product,/2 条商品/);
+ assert.match(product,/来源未回显类目和月份/);
 });
 
 test('section synthesis matches exact dimensions or colon-delimited groups and retains original evidence',()=>{

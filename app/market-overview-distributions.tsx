@@ -2,7 +2,7 @@
 import React from 'react';
 import {MarketOverviewDistributionChart} from './market-overview-distribution-chart';
 import type {MarketOverviewDistributionEntry} from '../shared/market-overview-distribution-contracts';
-export const overviewSourceLabels:Record<string,string>={market_research:'市场基础报告',market_research_statistics:'市场基础统计',market_product_demand_trend:'需求趋势',market_brand_concentration:'品牌份额',market_seller_concentration:'卖家份额',market_seller_type_concentration:'发货类型',market_seller_country_distribution:'卖家所属地',market_ebc_distribution:'A+ 与视频配置',market_listing_date_distribution:'上架年龄',market_listing_trend_distribution:'上架年份',market_ratings_count_distribution:'评分数分布',market_rating_distribution:'评分分布',market_price_distribution:'价格分布'};
+export const overviewSourceLabels:Record<string,string>={market_research:'市场基础报告',market_research_statistics:'市场基础统计',market_product_demand_trend:'需求趋势',market_product_concentration:'商品份额',market_brand_concentration:'品牌份额',market_seller_concentration:'卖家份额',market_seller_type_concentration:'发货类型',market_seller_country_distribution:'卖家所属地',market_ebc_distribution:'A+ 与视频配置',market_listing_date_distribution:'上架年龄',market_listing_trend_distribution:'上架年份',market_ratings_count_distribution:'评分数分布',market_rating_distribution:'评分分布',market_price_distribution:'价格分布'};
 const statusLabels={ready:'已保存',partial:'部分可用',empty:'本次无数据',failed:'采集失败','not-collected':'尚未采集'};
 const groupLabels={sample:'返回全样本','new-products':'新品子样本',summary:'重叠汇总（不参与分母）',unclassified:'分组尚未识别'};
 const text=(n:number|null)=>n===null?'未知':new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(n);

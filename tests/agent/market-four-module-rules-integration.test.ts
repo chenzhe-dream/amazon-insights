@@ -44,7 +44,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   const store = new PostgresMarketModuleExecutionStore(context);
   const started = [overview.run.id, shapes.run.id, keywords.run.id, themes.run.id];
   const expected = new Map([
-    [overview.run.id, 'market-overview-flow/rules-v1'],
+    [overview.run.id, 'market-overview-flow/rules-v2'],
     [shapes.run.id, 'market-shape-price-flow/rules-v1'],
     [keywords.run.id, 'market-keyword-flow/rules-v1'],
     [themes.run.id, 'market-theme-flow/rules-v1'],
@@ -67,10 +67,9 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
     execute: async request => {
       sourceCalls++;
       const input = ((request.input as Record<string, unknown>).request ?? request.input) as Record<string, unknown>;
-      const asin = String(input.asin ?? 'B000000001');
       const month = String(input.month ?? '2026-08');
       const data = request.operation === 'market_product_concentration'
-        ? [{ asin, title: 'Synthetic shelf lamp', totalUnits: 20, totalRevenue: 400, price: 20, ranking: 1 }]
+        ? Array.from({length:100},(_,index)=>({asin:`B${String(index+1).padStart(9,'0')}`,title:'Synthetic shelf lamp',totalUnits:20+index,totalRevenue:400+index,price:20,ranking:index+1}))
         : request.operation === 'market_research'
           ? { items: [{ marketplace: 'US', currency: 'USD', nodeIdPath: '12:34', month, topProducts: 1, products: 1, totalUnits: 20, totalRevenue: 400 }] }
           : request.operation === 'market_research_statistics'
@@ -107,4 +106,12 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
     assert.equal(view.steps.some(step => step.kind === 'model-batch' || step.kind === 'prepare-model-batches'), false);
     assert.ok(view.attempts.some(attempt => attempt.status === 'succeeded' && attempt.output && typeof attempt.output === 'object' && 'ruleBaseline' in attempt.output), `${id} did not persist a rule baseline`);
   }
+  const overviewReport=await service.findOverview(actor,overview.run.id);
+  assert.ok(overviewReport.run.currentReport);
+  const overviewDetails=await service.overviewDetails(actor,overview.run.id,overviewReport.run.currentReport.attemptId);
+  assert.equal(overviewDetails.numbers.distributions?.filter(row=>row.operation==='market_product_concentration').length,2);
+  const latestProducts=overviewDetails.numbers.distributions?.find(row=>row.operation==='market_product_concentration'&&row.month==='2026-08');
+  assert.equal(latestProducts?.distribution?.rows.length,100);
+  assert.equal(overviewDetails.numbers.distributions?.find(row=>row.operation==='market_product_concentration'&&row.month==='2026-07')?.status,'not-collected');
+  assert.ok(Buffer.byteLength(JSON.stringify(overviewDetails))<8*1_048_576);
 });

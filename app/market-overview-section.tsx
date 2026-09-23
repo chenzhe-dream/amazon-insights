@@ -8,6 +8,7 @@ import type {MarketOverviewRunResponse} from '../shared/market-overview-report-c
 import {createOverviewStudy,startOverviewRun,readOverviewRun,retryOverviewSteps,cancelOverviewRun} from './lib/market-overview-browser';
 import {MarketOverviewReport} from './market-overview-report';
 import {overviewSourceLabels} from './market-overview-distributions';
+import {overviewReportStartMonth} from './lib/market-overview-period';
 type Run=MarketOverviewRunResponse['run'];
 const active=(run:Run)=>run.status!=='cancelled'&&run.steps.some(s=>s.current&&['queued','running'].includes(s.status));
 const labels:Partial<Record<Run['steps'][number]['kind'],string>>={'collect-overview-month':'采集月度来源',rules:'整理数字','prepare-members':'规划分析分段','prepare-model-batches':'准备分析输入','model-batch':'解释证据',report:'保存报告'};
@@ -24,9 +25,10 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   function show(open:boolean){setExpanded(open);onExpandedChange?.(open);}
   useImperativeHandle(controller,()=>({openReport(requestScope){
     if(runId&&!run){show(true);if(readError)setReload(n=>n+1);return;}
-    const matches=run&&run.scope.marketplace===requestScope.marketplace&&run.scope.nodeIdPath===requestScope.nodeQuery&&run.scope.fromMonth===requestScope.month&&run.scope.toMonth===requestScope.month&&run.params.headTopN===requestScope.headTopN&&run.params.newProductMonths===requestScope.newProductMonths;
+    const startMonth=overviewReportStartMonth(requestScope.month,fromMonth);
+    const matches=run&&run.scope.marketplace===requestScope.marketplace&&run.scope.nodeIdPath===requestScope.nodeQuery&&run.scope.fromMonth===startMonth&&run.scope.toMonth===requestScope.month&&run.params.headTopN===requestScope.headTopN&&run.params.newProductMonths===requestScope.newProductMonths;
     if(matches){show(!expanded);return;}
-    show(true);void start(requestScope,requestScope.month);
+    onFromMonth(startMonth);show(true);void start(requestScope,startMonth);
   }}));
   useEffect(()=>{if(!runId)return;const abort=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
     const poll=async()=>{const version=revision.current;try{const next=await readOverviewRun(runId,abort.signal);if(abort.signal.aborted)return;if(writing.current||version!==revision.current){timer=setTimeout(()=>void poll(),3000);return;}

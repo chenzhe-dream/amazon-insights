@@ -24,14 +24,14 @@ export const overviewPresentationSections:readonly Section[]=[
 export function selectOverviewDistributionEntries(entries:readonly MarketOverviewDistributionEntry[],operation:MarketOverviewDistributionEntry['operation']){
  return entries.filter(e=>e.operation===operation).sort((a,b)=>a.month.localeCompare(b.month));
 }
-/** Select only saved known values with an explicit single calendar month. */
+/** Display saved monthly numeric facts; request-bound months remain explicitly marked. */
 export function selectOverviewSalesPoints(detail:Details,metric:'totalUnits'|'totalRevenue'){
- const semantic=detail.semantic;if(!semantic||semantic.task!=='market-overview-explanation')return [];
- return semantic.metrics.flatMap(m=>{
-  if(m.metricId.split('/').at(-1)!==metric||m.state!=='known'||m.value===null||m.unit.status!=='known'||m.period.kind!=='calendar-months'||m.period.fromMonth!==m.period.toMonth)return [];
-  if(metric==='totalUnits'&&m.unit.unit!=='count'||metric==='totalRevenue'&&(m.unit.unit!=='currency'||m.unit.currency!==detail.entry.report.scope.currency))return [];
-  if(m.period.fromMonth<detail.entry.report.scope.fromMonth||m.period.toMonth>detail.entry.report.scope.toMonth)return [];
-  return [{month:m.period.fromMonth,value:m.value,metricId:m.metricId}];
+ return detail.numbers.months.flatMap(row=>{
+  const saved=row.metrics[metric];
+  if(!saved||saved.state!=='known'||saved.value===null||saved.unit?.status!=='known'||!saved.observations.length)return [];
+  if(metric==='totalUnits'&&saved.unit.unit!=='count'||metric==='totalRevenue'&&(saved.unit.unit!=='currency'||saved.unit.currency!==detail.entry.report.scope.currency))return [];
+  if(row.month<detail.entry.report.scope.fromMonth||row.month>detail.entry.report.scope.toMonth)return [];
+  return [{month:row.month,value:saved.value,metricId:`${row.month}/${metric}`,requestBound:saved.observations.some(o=>o.scopeBasis==='request-bound')}];
  }).sort((a,b)=>a.month.localeCompare(b.month));
 }
 

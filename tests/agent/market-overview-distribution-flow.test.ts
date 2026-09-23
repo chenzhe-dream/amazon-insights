@@ -27,7 +27,7 @@ test('native overview collects all distributions, keeps partial reports and retr
     return {data:{code:'OK',...identities,data},source:{connectorId:'sellerSprite',operation:op,fetchedAt:new Date().toISOString(),attemptCount:1}};
   }};
   const service=new MarketModuleService({context:f.context,modelIdentity:()=>null}),key=randomUUID();
-  const started=await service.startOverview(f.actor,f.scope.researchId,{},key);assert.equal(started.run.steps.length,26);
+  const started=await service.startOverview(f.actor,f.scope.researchId,{},key);assert.equal(started.run.steps.length,27);
   const repeated=await service.startOverview(f.actor,f.scope.researchId,{},key);assert.equal(repeated.run.id,started.run.id);
   const id=started.run.id,view=async()=>(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:id}))!;
   const makeWorker=()=>new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector,sorftime:connector}}),rules:createMarketOverviewCatalogStep(f.context),'prepare-members':createMarketOverviewWindowsStep(f.context,null),report:createMarketOverviewReportStep(f.context)}});
@@ -39,17 +39,17 @@ test('native overview collects all distributions, keeps partial reports and retr
   const reportSnapshotReads=snapshotReads()-beforeRead;assert.ok(reportSnapshotReads>0);
   assert.equal(first.report.analysisStatus,'partial');assert.equal(first.report.dataReady,true);assert.equal(first.report.coverage.find(c=>c.dimension==='price-distribution')?.status,'missing');
   assert.equal(first.report.coverage.find(c=>c.dimension==='rating-distribution')?.status,'available');
-  assert.ok(first.report.reasons.includes('distribution-synthesis-not-integrated'));assert.equal(calls.length,26);
+  assert.ok(first.report.reasons.includes('distribution-synthesis-not-integrated'));assert.equal(calls.length,27);
   const beforeDetail=snapshotReads();
   const detail=await reports.details({actor:f.actor,moduleRunId:id,attemptId:first.attemptId});assert.ok(detail);
   assert.equal(snapshotReads()-beforeDetail,reportSnapshotReads,'Details must reuse the same-request verified report without another evidence replay');
   querySpy.mock.restore();
-  assert.equal(detail.numbers.distributions!.length,22);assert.equal(detail.numbers.distributions!.find(d=>d.month==='2026-08'&&d.operation==='market_product_demand_trend')!.status,'empty');
+  assert.equal(detail.numbers.distributions!.length,24);assert.equal(detail.numbers.distributions!.find(d=>d.month==='2026-08'&&d.operation==='market_product_demand_trend')!.status,'empty');
   const priorHash=digest(first.report),saved=await view(),successes=saved.steps.filter(s=>s.kind==='collect-overview-month'&&s.status!=='failed'),failed=saved.steps.find(s=>s.kind==='collect-overview-month'&&s.status==='failed')!;
   failPrice=false;await service.retry(f.actor,id,{steps:[{stepId:failed.id,failedAttemptId:failed.latestAttemptId}]},randomUUID());for(let i=0;i<10&&await worker.tick();i++){}
   const next=(await reports.read({actor:f.actor,moduleRunId:id}))!.currentReport!;assert.notEqual(next.attemptId,first.attemptId);assert.equal(next.report.coverage.find(c=>c.dimension==='price-distribution')?.status,'available');
-  assert.equal(calls.length,27);for(const step of successes)assert.equal((await view()).steps.find(s=>s.id===step.id)!.latestAttemptId,step.latestAttemptId);
+  assert.equal(calls.length,28);for(const step of successes)assert.equal((await view()).steps.find(s=>s.id===step.id)!.latestAttemptId,step.latestAttemptId);
   const old=await reports.details({actor:f.actor,moduleRunId:id,attemptId:first.attemptId});assert.equal(digest(old!.entry.report),priorHash);assert.equal(old!.numbers.distributions!.find(d=>d.month==='2026-08'&&d.operation==='market_price_distribution')!.status,'failed');
   const current=await reports.details({actor:f.actor,moduleRunId:id,attemptId:next.attemptId});assert.equal(current!.numbers.distributions!.find(d=>d.month==='2026-08'&&d.operation==='market_price_distribution')!.distribution!.groups[0].units,10);
-  t.diagnostic(JSON.stringify({sourceCalls:calls.length,months:2,endpointCount:13,historyPreserved:true,modelCalls:0}));
+  t.diagnostic(JSON.stringify({sourceCalls:calls.length,months:2,latestMonthProductRows:true,historyPreserved:true,modelCalls:0}));
 });
