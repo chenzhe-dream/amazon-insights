@@ -287,8 +287,7 @@ export async function publishWebBuild(
   } = {},
 ) {
   const initialJob = readJob(jobId);
-  const recovery = Array.isArray(initialJob?.resumeStages) &&
-    initialJob.resumeStages.length === 1 && initialJob.resumeStages[0] === "build";
+  const recovery = isPersistedOutputRecovery(initialJob);
   const hashesFor = recovery ? projectRecoveredStageHashes :
     (currentJobId, job) => projectFinalStageHashes(currentJobId, job, projectOutput);
   const expectedHashes = hashesFor(jobId, initialJob);
@@ -658,7 +657,7 @@ export function projectFinalStageHashes(jobId, job, projectOutput) {
 export function projectRecoveredStageHashes(jobId, job) {
   if (
     !job || job.jobId !== jobId || !Number.isSafeInteger(job.jobVersion) || job.jobVersion < 1 ||
-    !Array.isArray(job.resumeStages) || job.resumeStages.length !== 1 || job.resumeStages[0] !== "build" ||
+    !isPersistedOutputRecovery(job) ||
     !job.scope?.organizationId || !job.scope?.projectId || !job.scope?.runId
   ) throw publicationContentMismatch("Build recovery identity is unavailable");
   const expected = new Map((job.stages ?? [])
@@ -689,6 +688,14 @@ export function projectRecoveredStageHashes(jobId, job) {
     throw publicationContentMismatch("Build recovery projection set is incomplete");
   }
   return Object.freeze(Object.fromEntries(Object.entries(hashes).sort(([left], [right]) => left.localeCompare(right))));
+}
+
+function isPersistedOutputRecovery(job) {
+  const stages = job?.resumeStages;
+  return Array.isArray(stages) && (
+    (stages.length === 1 && stages[0] === "build") ||
+    (stages.length === 2 && stages[0] === "image_remarks" && stages[1] === "build")
+  );
 }
 
 function stageHashesMatch(candidate, expected) {

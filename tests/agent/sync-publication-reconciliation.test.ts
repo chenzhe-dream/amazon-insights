@@ -209,13 +209,16 @@ test("failed build recovery uses the verified persisted report when generated fi
   };
   await publish(job.jobId, options);
   assert.equal(builds, 1);
+  await publish(job.jobId, { ...options,
+    readJob: () => ({ ...job, resumeStages: ["image_remarks", "build"] }) });
+  assert.equal(builds, 2);
 
   const tampered = { ...job, outputs: outputs.map(output => output.stage === "child_sales"
     ? { ...output, data: { rowsByAsin: { B0TEST0001: [{ sales: 999 }] } } } : output) };
   await assert.rejects(() => publish(job.jobId, { ...options, readJob: () => tampered }),
     (error: unknown) => error instanceof Error &&
       (error as Error & { code?: string }).code === "WEB_PUBLICATION_CONTENT_MISMATCH");
-  assert.equal(builds, 1);
+  assert.equal(builds, 2);
 });
 
 test("the final build is refused when worker persistence has not acknowledged the projection set", async () => {
