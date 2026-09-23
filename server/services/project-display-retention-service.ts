@@ -1,5 +1,7 @@
 type Cleanup = (input: { now?: string; limit?: number }) => Promise<{ purgedCount: number }>;
 
+export const PROJECT_DISPLAY_RETENTION_SWEEP_INTERVAL_MS = 60_000;
+
 /** Sweeps retired report bodies after their 24-hour rollback window. */
 export class ProjectDisplayRetentionService {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -14,7 +16,7 @@ export class ProjectDisplayRetentionService {
   start(): void {
     if (this.timer) return;
     this.sweep();
-    this.timer = setInterval(() => this.sweep(), this.options.intervalMs ?? 60 * 60 * 1000);
+    this.timer = setInterval(() => this.sweep(), this.options.intervalMs ?? PROJECT_DISPLAY_RETENTION_SWEEP_INTERVAL_MS);
     this.timer.unref?.();
   }
 
