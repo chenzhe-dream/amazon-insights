@@ -1,5 +1,5 @@
 "use client";
-import {readHistoricalSyncPointer,sourceProjectIdForSave} from "./lib/image-source-project";
+import {priorityRecoveryProjectId,readHistoricalSyncPointer,sourceProjectIdForSave} from "./lib/image-source-project";
 import {ListingImageSourceProject} from "./listing-image-source-project";
 import {ComparisonOverviewCard} from "./comparison-overview-card";
 import {publishUsagePage} from "./lib/usage-analytics-browser";
@@ -2165,7 +2165,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         monthlyTrend: {},
         meta: sifListingTrafficMeta,
       },
-    }, { authoritative: Boolean(stageOutputJobId && resumedProjectId) }),
+    }, { authoritative: Boolean(stageOutputJobId && resumedProjectId === priorityRecoveryProjectId) }),
     [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId],
   );
   const {

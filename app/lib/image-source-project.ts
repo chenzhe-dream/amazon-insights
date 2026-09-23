@@ -3,6 +3,8 @@ import {isSyncJobScopeMatch} from './asin-sync-session';
 
 type ProjectScope={id:string;kind?:string;marketplace:string;asins:string[];sourceProjectId?:string|null};
 export type HistoricalSyncPointer=Readonly<{projectId:string;runId:string;jobId:string}>;
+// Incident recovery stays scoped until the remaining saved projects are inventoried.
+export const priorityRecoveryProjectId='75a3f965-07e8-468e-aec7-bce265515023';
 type Fetcher=(path:string)=>Promise<Response>;
 class SyncPointerError extends Error {}
 async function readJson(fetcher:Fetcher,path:string,label:string){
@@ -21,9 +23,11 @@ export async function readHistoricalSyncPointer(project:ProjectScope,options:{fe
   const fetcher=options.fetcher??localAgentFetch;
   const {project:p}=await readJson(fetcher,`/v1/projects/${encodeURIComponent(project.id)}`,'分析项目');
   if(p?.id!==project.id)throw new SyncPointerError('分析项目与当前页面不匹配');
-  const currentResponse=await fetcher(`/v1/local-data/projects/${encodeURIComponent(project.id)}/current-sync-job`);
+  const currentResponse=project.id===priorityRecoveryProjectId
+   ? await fetcher(`/v1/local-data/projects/${encodeURIComponent(project.id)}/current-sync-job`)
+   : null;
   let runId:string,jobId:string;
-  if(currentResponse.status===404){
+  if(!currentResponse||currentResponse.status===404){
    if(p.currentRunId===null)return null;
    if(typeof p.currentRunId!=='string'||!p.currentRunId)throw new SyncPointerError('分析项目缺少有效运行编号');
    runId=p.currentRunId;
