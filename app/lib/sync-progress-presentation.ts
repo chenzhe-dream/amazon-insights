@@ -183,10 +183,12 @@ function remainingAutomaticSeconds(stages: readonly SyncStage[], now: number) {
   }, 0);
 }
 
-function automaticStatusCopy(status: string, progress?: AuthoritativeStageProgress) {
+function automaticStatusCopy(status: string, progress?: AuthoritativeStageProgress, imageStage = false) {
   if (status === "done") return "已完成";
   if (status === "skipped") return "已跳过";
-  if (status === "active" && progress) return `处理中 · ${progress.completed}/${progress.total} ${progress.unit}`;
+  if (status === "active" && progress) return imageStage
+    ? `处理中 · 本次待处理图片 ${progress.completed}/${progress.total} 张`
+    : `处理中 · ${progress.completed}/${progress.total} ${progress.unit}`;
   if (status === "active") return "处理中";
   if (status === "failed") return "失败";
   if (status === "partial") return "部分缺口";
@@ -211,14 +213,19 @@ function presentStage(job: SyncJob, stage: SyncStage): SyncProgressRow {
   const imageRepairScope = stage.id === "image_remarks" && stage.imageAction && stage.repairAsins?.length
     ? `本次仅处理 ${stage.repairAsins.join("、")} 的图片；其他 ASIN 沿用上次结果。`
     : null;
+  const imageQueueScope = stage.id === "image_remarks" && stage.status === "active" && imageStageProgress(stage.detail)
+    ? "进度仅统计本次待处理图片，图库总数请看主辅图。"
+    : null;
   return {
     id: stage.id,
     label: stage.label,
-    detail: imageRepairScope ? `${imageRepairScope}${stage.detail ? ` ${stage.detail}` : ""}` : stage.detail,
+    detail: imageRepairScope || imageQueueScope
+      ? [imageRepairScope, imageQueueScope, stage.detail].filter(Boolean).join(" ")
+      : stage.detail,
     status: stage.status,
     mode: "automatic",
     executionPercent: terminalGap ? 0 : automaticStagePercent(job, stage),
-    statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status, activeProgress),
+    statusCopy: terminalGap ? "流程已结束 · 数据缺口" : automaticStatusCopy(stage.status, activeProgress, stage.id === "image_remarks"),
     finishAt: automaticStageFinishAt(stage),
   };
 }

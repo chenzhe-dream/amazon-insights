@@ -119,7 +119,8 @@ test("image progress uses the persisted completed-total detail and never reports
 
   assert.equal(partial.executionPercent, 15);
   assert.equal(partial.rows[0]?.executionPercent, 15);
-  assert.equal(partial.rows[0]?.statusCopy, "处理中 · 3/20 张");
+  assert.equal(partial.rows[0]?.statusCopy, "处理中 · 本次待处理图片 3/20 张");
+  assert.match(partial.rows[0]?.detail ?? "", /进度仅统计本次待处理图片，图库总数请看主辅图。/);
   assert.equal(awaitingStageCommit.executionPercent, 99);
   assert.equal(awaitingStageCommit.rows[0]?.executionPercent, 99);
 });
@@ -135,8 +136,9 @@ test("single-ASIN image refresh labels the seven images as this run's scope", ()
   snapshot.stages[0]!.repairAsins = [ASINS[0]];
 
   const row = presentSyncProgress(snapshot, Date.parse(NOW)).rows[0];
-  assert.equal(row?.statusCopy, "处理中 · 6/7 张");
+  assert.equal(row?.statusCopy, "处理中 · 本次待处理图片 6/7 张");
   assert.match(row?.detail ?? "", /本次仅处理 B000000001 的图片；其他 ASIN 沿用上次结果。/);
+  assert.match(row?.detail ?? "", /进度仅统计本次待处理图片，图库总数请看主辅图。/);
   assert.match(row?.detail ?? "", /已完成 6\/7 张/);
 });
 

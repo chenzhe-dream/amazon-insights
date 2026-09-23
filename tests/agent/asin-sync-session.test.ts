@@ -1352,8 +1352,8 @@ test("image remarks automatic stage contributes to the global remaining time", (
 
   assert.equal(result.remainingSeconds, 90);
   assert.equal(result.rows[0]?.mode, "automatic");
-  assert.equal(result.rows[0]?.statusCopy, "处理中 · 3/20 张");
-  assert.equal(result.rows[0]?.detail, "图片 AI 备注：已完成 3/20 张");
+  assert.equal(result.rows[0]?.statusCopy, "处理中 · 本次待处理图片 3/20 张");
+  assert.equal(result.rows[0]?.detail, "进度仅统计本次待处理图片，图库总数请看主辅图。 图片 AI 备注：已完成 3/20 张");
 });
 
 test("SIF discovery destinations come only from ready status", () => {
@@ -1472,8 +1472,8 @@ test("terminal execution copy separates finished flow from truthful data complet
     await runningPage.goto(`${baseUrl}/tests/agent/helpers/asin-sync-funnel-browser-harness.html?tab=overview&run=${runId}&syncJob=job-1`);
     const imageRow = runningPage.getByTestId("sync-stage-image_remarks");
     await imageRow.waitFor();
-    assert.equal(await imageRow.getByText("图片 AI 备注：已完成 3/20 张", { exact: true }).count(), 1);
-    assert.equal(await imageRow.getByText("处理中 · 3/20 张", { exact: true }).count(), 1);
+    assert.equal(await imageRow.getByText("进度仅统计本次待处理图片，图库总数请看主辅图。 图片 AI 备注：已完成 3/20 张", { exact: true }).count(), 1);
+    assert.equal(await imageRow.getByText("处理中 · 本次待处理图片 3/20 张", { exact: true }).count(), 1);
     assert.equal(await imageRow.getByText("已停用，待后续分析", { exact: true }).count(), 0);
   } finally {
     await runningPage.close();
