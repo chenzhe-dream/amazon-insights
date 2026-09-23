@@ -1,5 +1,7 @@
 import { runSorftimeCommand } from "./lib/sorftime-stream.mjs";
 import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -52,6 +54,7 @@ import {
 } from "./lib/provider-diagnostics.mjs";
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
+import { listingInputFromPersistedJob } from "./lib/image-remark-listing-input.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -1340,7 +1343,19 @@ async function main() {
       });
       patchSyncJob(jobId, { message: "正在自动生成图片 AI 备注…" });
       let latestImageStageDetail = null;
-      const imageProcess = await runImageRemarkProcess({
+      const persistedImageJob = readSyncJob(jobId);
+      let imageListingInputDir;
+      let imageListingInputFile;
+      if (persistedImageJob?.scope?.organizationId) {
+        // Verify provenance before handing the captured gallery to the image subprocess.
+        listingInputFromPersistedJob(persistedImageJob, imageAsins);
+        imageListingInputDir = fs.mkdtempSync(path.join(os.tmpdir(), "amazon-image-listing-"));
+        imageListingInputFile = path.join(imageListingInputDir, "listing.json");
+        fs.writeFileSync(imageListingInputFile, JSON.stringify({ jobId, job: persistedImageJob }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+      }
+      let imageProcess;
+      try {
+        imageProcess = await runImageRemarkProcess({
         command: "npm",
         args: ["run", "image-remarks:sync"],
         cwd: root,
@@ -1349,6 +1364,7 @@ async function main() {
           REMARK_ASINS: imageAsins.join(","),
           AGENT_SYNC_JOB_ID: jobId,
           AGENT_SYNC_STAGE_ID: "image_remarks",
+          ...(imageListingInputFile ? { AGENT_SYNC_LISTING_STAGE_FILE: imageListingInputFile } : {}),
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
         }),
         onProgress: (event) => {
@@ -1359,7 +1375,10 @@ async function main() {
           });
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
-      });
+        });
+      } finally {
+        if (imageListingInputDir) fs.rmSync(imageListingInputDir, { recursive: true, force: true });
+      }
       finalizeProcessedStageCohort(jobId, "image_remarks", imageAsins, asins, {
         initialJob: job,
         commandSucceeded: imageProcess.succeeded,

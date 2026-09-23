@@ -17,6 +17,7 @@ import {
   requestImageRemark,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
+import { readListingInputFile } from "./lib/image-remark-listing-input.mjs";
 
 loadLocalEnv();
 
@@ -215,13 +216,15 @@ async function main() {
       .map(item => item.trim())
       .filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const listing = readCachedDataExport(listingPath, "sorftimeListingContentData");
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
+  const listing = process.env.AGENT_SYNC_LISTING_STAGE_FILE
+    ? readListingInputFile(process.env.AGENT_SYNC_LISTING_STAGE_FILE, jobId, asins)
+    : readCachedDataExport(listingPath, "sorftimeListingContentData");
   const existing = readCachedDataExport(outPath, "listingImageRemarks");
   const existingMeta = readCachedDataExport(outPath, "listingImageRemarksMeta");
   const remarks = { ...existing };
   const hasOpenAI = hasOpenAiKey();
   const force = isForceRefresh();
-  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const explicitImageAction = ["refresh", "analyze"].includes(process.env.AGENT_SYNC_IMAGE_ACTION);
 
   if (!hasOpenAI) {
