@@ -9,11 +9,11 @@ type Entry=z.infer<typeof MarketOverviewReportEntrySchema>;
 type Details=z.infer<typeof MarketOverviewDetailsResponseSchema>;
 
 /** Request ownership stays here. The original-style view receives saved data only. */
-export function MarketOverviewReport({entry,headTopN,newProductMonths}:{entry:Entry;headTopN?:number;newProductMonths?:number}){
+export function MarketOverviewReport({entry,headTopN,newProductMonths,categoryName}:{entry:Entry;headTopN?:number;newProductMonths?:number;categoryName?:string|null}){
  const [response,setResponse]=useState<{key:string;detail:Details|null;error:string|null}|null>(null),[reload,setReload]=useState(0);
  const key=`${entry.report.moduleRunId}/${entry.attemptId}/${entry.report.reportHash}/${reload}`;
  useEffect(()=>{const owner=new AbortController();void readOverviewDetails(entry.report.moduleRunId,entry.attemptId,entry.report.reportHash,owner.signal).then(detail=>{if(!owner.signal.aborted)setResponse({key,detail,error:null});}).catch(e=>{if(!owner.signal.aborted)setResponse({key,detail:null,error:e instanceof Error?e.message:'报告读取失败'});});return()=>owner.abort();},[entry.attemptId,entry.report.moduleRunId,entry.report.reportHash,key]);
  const current=response?.key===key?response:null;
  const owned=current?.detail?.entry.report.reportHash===entry.report.reportHash&&current.detail.entry.attemptId===entry.attemptId?current.detail:null;
- return <MarketOverviewReportView entry={entry} detail={owned} error={current?.error??null} onRetry={()=>setReload(n=>n+1)} headTopN={headTopN} newProductMonths={newProductMonths}/>;
+ return <MarketOverviewReportView entry={entry} detail={owned} error={current?.error??null} onRetry={()=>setReload(n=>n+1)} headTopN={headTopN} newProductMonths={newProductMonths} categoryName={categoryName}/>;
 }

@@ -20,7 +20,8 @@ test('opening a monthly result retains a chosen range or requests three complete
 
 test('saved report keeps all fifteen original chapters in original order with visible missing states',()=>{
  const detail=overviewDistributionDetails();
- const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}}/>);
+ const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}} categoryName="Floor Lamps"/>);
+ assert.match(html,/美国站\(com\)Floor Lamps市场分析报告/);
  const sections=[...html.matchAll(/data-report-section="([^"]+)"/g)].map(m=>m[1]);
  assert.deepEqual(sections,overviewPresentationSections.map(s=>s.id));
  for(const text of ['行业需求及趋势','行业销售趋势','商品集中度','A+视频分布','商品需求趋势','价格分布','尚未提供关键词搜索量序列','42'])assert.ok(html.includes(text),text);
@@ -37,6 +38,11 @@ test('presentation selection preserves source entry identity and deterministic m
 test('sales chart consumes saved monthly numeric facts without inventing missing months',()=>{
  const detail=overviewDistributionDetails();
  assert.deepEqual(selectOverviewSalesPoints(detail,'totalUnits'),[{month:'2026-08',value:42,metricId:'2026-08/totalUnits',requestBound:false}]);
+ const saved=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}}/>);
+ const salesSection=saved.match(/data-report-section="sales-trend"[\s\S]*?(?=data-report-section="product-crn")/)?.[0]??'';
+ assert.match(salesSection,/ss-report-trend-legend/);
+ assert.equal((salesSection.match(/ss-report-trend-stage/g)??[]).length,1);
+ assert.match(salesSection,/月销量/);assert.match(salesSection,/月销售额/);
  const missing=overviewAnalysisDetails();assert.deepEqual(selectOverviewSalesPoints(missing,'totalUnits'),[{month:'2026-08',value:0,metricId:'2026-08/totalUnits',requestBound:false}]);
  const html=renderToStaticMarkup(<MarketOverviewReportView entry={missing.entry} detail={missing} error={null} onRetry={()=>{}}/>);
  assert.match(html,/来源没有确认月份/);assert.match(html,/已保存的分段解释/);
@@ -90,10 +96,24 @@ test('product concentration uses its own returned-product denominator and preser
  detail.numbers.distributions!.push({month:'2026-08',operation:'market_product_concentration',status:'partial',sourceRef:'market-source:example',fetchedAt:'2026-09-12T06:00:00.000Z',scopeBasis:'request-bound',distribution,issues:[{code:'identity-request-bound',retryable:false}]});
  const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={MarketOverviewDetailsResponseSchema.parse(detail)} error={null} onRetry={()=>{}} headTopN={1}/>);
  const product=html.match(/data-report-section="product-crn"[\s\S]*?(?=data-report-section="brand-crn")/)?.[0]??'';
- assert.match(html,/头部 Top 1 · 返回商品/);assert.match(html,/该商品接口返回样本的月销量占比/);
- assert.match(product,/B000000001/);assert.doesNotMatch(product,/B000000002/);
+ assert.match(html,/头部 Top1/);assert.match(html,/返回商品前 1 条销量占该接口样本/);
+ assert.match(product,/ss-crn-tabs/);assert.match(product,/ss-crn-layout/);
+ assert.match(product,/销量分布/);assert.match(product,/销售额分布/);
+ assert.match(product,/B000000001/);assert.match(product,/B000000002/);
+ const table=product.match(/<div class="market-overview-distribution-table"[\s\S]*?<\/table>/)?.[0]??'';
+ assert.match(table,/B000000001/);assert.doesNotMatch(table,/B000000002/);
  assert.match(product,/30%/);assert.match(product,/2 条商品/);
  assert.match(product,/来源未回显类目和月份/);
+});
+
+test('brand concentration uses the supplied concentration layout for a saved source group',()=>{
+ const detail=overviewDistributionDetails();
+ const distribution=normalizeMarketOverviewDistribution('market_brand_concentration',{data:[{brand:'Acme',asins:['B000000001'],products:1,totalUnits:30}]});
+ detail.numbers.distributions!.push({month:'2026-08',operation:'market_brand_concentration',status:'partial',sourceRef:'market-source:example',fetchedAt:'2026-09-12T06:00:00.000Z',scopeBasis:'request-bound',distribution,issues:[]});
+ const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={MarketOverviewDetailsResponseSchema.parse(detail)} error={null} onRetry={()=>{}}/>);
+ const brand=html.match(/data-report-section="brand-crn"[\s\S]*?(?=data-report-section="seller-crn")/)?.[0]??'';
+ assert.match(brand,/ss-crn-tabs/);assert.match(brand,/ss-crn-layout/);
+ assert.match(brand,/Acme/);
 });
 
 test('section synthesis matches exact dimensions or colon-delimited groups and retains original evidence',()=>{

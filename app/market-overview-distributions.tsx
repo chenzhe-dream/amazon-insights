@@ -1,6 +1,7 @@
 "use client";
 import React from 'react';
 import {MarketOverviewDistributionChart} from './market-overview-distribution-chart';
+import {MarketOverviewConcentrationChart} from './market-overview-concentration-chart';
 import type {MarketOverviewDistributionEntry} from '../shared/market-overview-distribution-contracts';
 export const overviewSourceLabels:Record<string,string>={market_research:'市场基础报告',market_research_statistics:'市场基础统计',market_product_demand_trend:'需求趋势',market_product_concentration:'商品份额',market_brand_concentration:'品牌份额',market_seller_concentration:'卖家份额',market_seller_type_concentration:'发货类型',market_seller_country_distribution:'卖家所属地',market_ebc_distribution:'A+ 与视频配置',market_listing_date_distribution:'上架年龄',market_listing_trend_distribution:'上架年份',market_ratings_count_distribution:'评分数分布',market_rating_distribution:'评分分布',market_price_distribution:'价格分布'};
 const statusLabels={ready:'已保存',partial:'部分可用',empty:'本次无数据',failed:'采集失败','not-collected':'尚未采集'};
@@ -12,7 +13,9 @@ export function MarketOverviewDistributions({entries,currency="USD",embedded=fal
     {entries.map(entry=>{const title=overviewSourceLabels[entry.operation],d=entry.distribution;return <section key={`${entry.month}/${entry.operation}`} className={embedded?'market-reference-source':'ss-report-block'} data-report-section={embedded?undefined:entry.operation}>{embedded?<p className="market-research-note">{entry.month} · {statusLabels[entry.status]}</p>:<header><div><h4>{title}</h4><small>{entry.month} · {statusLabels[entry.status]}</small></div></header>}
       {entry.scopeBasis==='request-bound'&&<p className="market-research-note">按所选类目和月份请求；数据源未回显完整范围，尚未获得响应范围确认。</p>}
       {!d||!d.rows.length?<p className="ss-report-empty">{entry.status==='failed'?'该来源采集失败，可展开上方任务管理重试。':entry.status==='not-collected'?'该来源尚未采集。':entry.status==='empty'?'来源本次没有返回可展示数据。':'来源结果已保存，但尚未提供可展示的序列或分组。'}</p>:null}
-      {d?.groups.map(group=><div key={group.id}><h5>{groupLabels[group.id]}</h5><MarketOverviewDistributionChart rows={d.rows.filter(row=>row.group===group.id)} title={title}/></div>)}
+      {d?.groups.map(group=><div key={group.id}><h5>{groupLabels[group.id]}</h5>{(entry.operation==='market_brand_concentration'||entry.operation==='market_seller_concentration')
+        ?<MarketOverviewConcentrationChart rows={d.rows.filter(row=>row.group===group.id)} kind={entry.operation==='market_brand_concentration'?'brand':'seller'} headTopN={10} currency={d.currency}/>
+        :<MarketOverviewDistributionChart rows={d.rows.filter(row=>row.group===group.id)} title={title}/>}</div>)}
       <details className="market-research-boundaries"><summary>{entry.month} · {title} · {statusLabels[entry.status]}</summary>
       {entry.scopeBasis==='request-bound'&&<p className="market-research-notice">按所选类目和月份请求；数据源未回显完整范围，尚未获得响应范围确认。</p>}
       {entry.status==='failed'||entry.status==='not-collected'?<p>该来源尚无可用结果，可在上方任务列表重试对应月份与来源。其他来源和历史报告继续保留。</p>:!d?<p>{entry.status==='empty'?'来源本次未返回需求数据，未生成趋势或填零。':'已保存需求来源，返回结构尚未接入分析。'}</p>:d.rows.length===0?<p>该分布本次未返回分组数据。</p>:<>

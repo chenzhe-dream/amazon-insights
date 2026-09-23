@@ -15,13 +15,17 @@ test('overview preserves supplied chip rows, search field and filter actions',()
 
 test('reference KPI groups use saved metrics and retain unknown head values and units',()=>{
  const metrics=overviewDetails().numbers.months[0].metrics;
+ metrics.sampleProducts={...metrics.totalUnits,value:100};
  metrics.newCount={...metrics.totalUnits,value:0};
  metrics.productConcentrationRaw={...metrics.totalUnits,value:0.6,unit:{status:'unknown',rawUnit:null,reason:'unit-unknown'},reason:'unit-unknown'};
  const html=renderToStaticMarkup(<MarketOverviewMetricCards metrics={metrics} headTopN={20} newProductMonths={3}/>);
  assert.equal((html.match(/<article>/g)??[]).length,3);
- assert.match(html,/头部 Top 20/);assert.match(html,/上架 3 个月内/);
- assert.match(html,/<dd>42<\/dd>/);assert.match(html,/<b>0<\/b>/);
- assert.match(html,/头部平均价格尚无已保存指标/);
+ assert.match(html,/样本商品 100/);assert.match(html,/头部 Top20/);assert.match(html,/新品 3 个月内/);
+ assert.match(html,/样本月销 42 · 样本月销额 未知/);assert.match(html,/<b>0<\/b>/);
+ assert.match(html,/单品均月销 未知 · 评分 未知/);
+ assert.match(html,/均 BSR 未知/);
+ assert.match(html,/头部均价尚无已保存指标/);
+ assert.doesNotMatch(html,/<dl>|<dt>|<dd>/);
  assert.doesNotMatch(html,/60%|0\.6%/);
 });
 test('overview restores original table columns without manufacturing unavailable numbers',()=>{

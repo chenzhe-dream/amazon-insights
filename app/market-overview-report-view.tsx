@@ -6,6 +6,7 @@ import {MarketOverviewAnalysis} from './market-overview-analysis';
 import {MarketOverviewReferenceSections} from './market-overview-reference-sections';
 import {MarketOverviewSynthesis} from './market-overview-synthesis';
 import {MarketOverviewRuleExplanation} from './market-overview-rule-explanation';
+import {marketSites} from '../shared/market-sites';
 type Entry=z.infer<typeof MarketOverviewReportEntrySchema>;
 type Details=z.infer<typeof MarketOverviewDetailsResponseSchema>;
 const metricLabels:Record<string,string>={sampleProducts:'样本商品数',brands:'品牌数',sellers:'卖家数',totalUnits:'样本销量',totalRevenue:'样本销售额',avgPrice:'平均价格',avgUnits:'平均单品销量',avgRatings:'平均评分数',avgRating:'平均评分',productConcentrationRaw:'商品集中度',brandConcentrationRaw:'品牌集中度',sellerConcentrationRaw:'卖家集中度',newCount:'新品数',newAvgPrice:'新品平均价格',newAvgUnits:'新品平均销量',totalUnitsChangePct:'样本销量环比',totalRevenueChangePct:'样本销售额环比'};
@@ -16,13 +17,30 @@ function value(number:number|null,unit:{status:string;unit?:string;currency?:str
 export function MarketOverviewMetricCards({metrics,headTopN=10,newProductMonths=6,topProducts}:{metrics:Details['numbers']['months'][number]['metrics'];headTopN?:number;newProductMonths?:number;topProducts?:{count:number;unitsSharePct:number}|null}){
   const show=(id:string)=>{const metric=metrics[id];return metric?value(metric.value,metric.unit):'未知';};
   return <div className="ss-report-kpis" aria-label="市场报告核心指标">
-    <article><span>全样本 · 商品 {show('sampleProducts')}</span><b>{show('avgPrice')}</b><small>平均价格</small><dl><dt>品牌 / 卖家</dt><dd>{show('brands')} / {show('sellers')}</dd><dt>样本销量</dt><dd>{show('totalUnits')}</dd><dt>样本销售额</dt><dd>{show('totalRevenue')}</dd><dt>平均单品销量</dt><dd>{show('avgUnits')}</dd><dt>评分 / 评分数</dt><dd>{show('avgRating')} / {show('avgRatings')}</dd></dl></article>
-    <article><span>头部 Top {topProducts?.count??headTopN}{topProducts?' · 返回商品':''}</span><b>{topProducts?`${new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(topProducts.unitsSharePct)}%`:'未知'}</b><small>{topProducts?'该商品接口返回样本的月销量占比':'头部平均价格尚无已保存指标'}</small><dl><dt>商品集中度</dt><dd>{show('productConcentrationRaw')}</dd><dt>品牌集中度</dt><dd>{show('brandConcentrationRaw')}</dd><dt>卖家集中度</dt><dd>{show('sellerConcentrationRaw')}</dd></dl><small>各接口分母独立；单位未确认的原值不转换为百分比。</small></article>
-    <article><span>新品 · 上架 {newProductMonths} 个月内</span><b>{show('newCount')}</b><small>新品数量</small><dl><dt>平均价格</dt><dd>{show('newAvgPrice')}</dd><dt>平均销量</dt><dd>{show('newAvgUnits')}</dd></dl></article>
+    <article><span>样本商品 {show('sampleProducts')}</span><b>{show('avgPrice')}</b><small>
+      品牌 {show('brands')} / 卖家 {show('sellers')}<br/>
+      样本月销 {show('totalUnits')} · 样本月销额 {show('totalRevenue')}<br/>
+      单品均月销 {show('avgUnits')} · 评分 {show('avgRating')} · {show('avgRatings')} 评<br/>
+      均 BSR 未知 · 均卖家数 未知<br/>
+      毛利率、重量、体积：当前来源未保存
+    </small></article>
+    <article><span>头部 Top{headTopN}</span><b>未知</b><small>
+      头部均价尚无已保存指标<br/>
+      头部均月销、均月销额、BSR、评分：未知<br/>
+      商品集中度 {show('productConcentrationRaw')} · 品牌 {show('brandConcentrationRaw')} · 卖家 {show('sellerConcentrationRaw')}
+      {topProducts&&<><br/>返回商品前 {topProducts.count} 条销量占该接口样本 {new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(topProducts.unitsSharePct)}%</>}
+      <br/>各接口分母独立，原始比例单位未确认时不换算。
+    </small></article>
+    <article><span>新品 {newProductMonths} 个月内</span><b>{show('newCount')}</b><small>
+      均价 {show('newAvgPrice')} · 均月销 {show('newAvgUnits')}<br/>
+      占比、均月销额、评分、最早与最新上架日：当前来源未保存
+    </small></article>
   </div>;
 }
-export function MarketOverviewReportView({entry,detail,error,onRetry,headTopN,newProductMonths}:{entry:Entry;detail:Details|null;error:string|null;onRetry:()=>void;headTopN?:number;newProductMonths?:number}){
+export function MarketOverviewReportView({entry,detail,error,onRetry,headTopN,newProductMonths,categoryName}:{entry:Entry;detail:Details|null;error:string|null;onRetry:()=>void;headTopN?:number;newProductMonths?:number;categoryName?:string|null}){
   const r=entry.report,semantic=detail?.semantic?.task==='market-overview-explanation'?detail.semantic:null;
+  const site=marketSites.find(site=>site.code===r.scope.marketplace);
+  const siteTitle=site?`${site.label}(${site.amazonDomain.replace(/^amazon\./,'')})`:r.scope.marketplace;
   const productSample=detail?.numbers.distributions?.find(d=>d.month===r.scope.toMonth&&d.operation==='market_product_concentration')?.distribution;
   const productRows=productSample?.rows.slice(0,headTopN??10)??[];
   const topProducts=productSample?.groups.find(g=>g.id==='sample')?.membership==='asin-disjoint'&&productRows.length&&productRows.every(row=>row.unitsSharePct!==null)
@@ -30,7 +48,7 @@ export function MarketOverviewReportView({entry,detail,error,onRetry,headTopN,ne
   const fact=(id:string)=>{const f=semantic?.facts.find(f=>f.factId===id);if(!f)return '对应事实尚不可显示';const refs=f.kind==='trend'?f.metricRefs.filter(id=>id.endsWith('ChangePct')):f.metricRefs;return refs.map(ref=>{const m=semantic!.metrics.find(m=>m.metricId===ref);return m?`${ref.split('/')[0]} · ${metricLabels[ref.split('/').at(-1)!]??'来源指标'}：${value(m.value,m.unit)}`:'指标未知';}).join('；');};
   const option=(id:string)=>{const o=semantic?.interpretationOptions.find(o=>o.optionId===id);if(o?.kind==='risk')return '证据缺失限制了结论，需要补充核实。';if(o?.templateId.includes('not-causal'))return '样本成交变化提供趋势线索，不能据此推断原因或整个市场变化。';return '该解释尚未提供可展示的模板。';};
   return <section className="market-research-result ss-report-page" aria-label="已保存总览报告">
-    <div className="ss-report-hero"><div className="ss-report-hero-title"><h3>{r.scope.marketplace} · 类目 {r.scope.nodeIdPath.split(':').at(-1)} 市场分析报告</h3><span>{entry.current?'当前报告':'历史报告'} · {r.scope.fromMonth} 至 {r.scope.toMonth}</span></div>
+    <div className="ss-report-hero"><div className="ss-report-hero-title"><h3>{siteTitle}{categoryName||`类目 ${r.scope.nodeIdPath.split(':').at(-1)}`}市场分析报告</h3><span>{entry.current?'当前报告':'历史报告'} · {r.scope.fromMonth} 至 {r.scope.toMonth}</span></div>
       {detail&&<MarketOverviewMetricCards metrics={detail.numbers.months.find(m=>m.month===r.scope.toMonth)?.metrics??{}} headTopN={headTopN} newProductMonths={newProductMonths} topProducts={topProducts}/>}
     </div>
     <p>{r.scope.marketplace} · 类目 {r.scope.nodeIdPath} · {r.scope.fromMonth} 至 {r.scope.toMonth}</p><p className="market-research-note">数据截止：{r.dataCutoffAt}。样本指标不代表整个市场，缺失不会当作零。</p>
