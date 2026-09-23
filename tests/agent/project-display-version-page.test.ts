@@ -28,6 +28,16 @@ function stage(stage: string, data: Record<string, unknown>) {
 }
 const stageOutputs: Record<string, Record<string, unknown>> = Object.fromEntries(stages.map(name => [name,
   { stage: name, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }]));
+const catalog = asins.map((asin, index) => ({
+  asin, brand: index < 4 ? `核实品牌 ${index + 1}` : null, image: gallery[0],
+  title: index < 4 ? `核实商品 ${index + 1}` : `Sorftime 基础商品 ${index + 1}`,
+  price: index < 4 ? 99 : null, sales: null, rating: null, reviews: null, rank: null, subRank: null,
+  rankCategory: "—", subRankCategory: "—", buyBoxSeller: "—", fulfillment: "—",
+  packageSize: "—", packageWeight: "—", specifications: [], launch: "—", format: "—", variants: "—",
+  history: [], prices: [], ranks: [], variantShare: [], variantDetails: [], sellingPoints: [], strengths: [],
+  weaknesses: [], unmet: [], scenarios: [], audiences: [], keywords: [], traffic: { natural: 0, sponsored: 0, recommendation: 0 },
+  catalogSource: index < 4 ? "sellerSprite" : "sorftime-fallback", synced: index < 4,
+}));
 stageOutputs.listing = stage("listing", { contentByAsin: { B07YGQVKDY: {
   asin: "B07YGQVKDY", status: "ready", fetchedAt: "2026-09-18", mainImage: gallery[0],
   galleryImages: gallery, secondaryImages: gallery.slice(1), imageCount: 7,
@@ -36,7 +46,11 @@ stageOutputs.image_remarks = stage("image_remarks", { remarksByAsin: {
   B07YGQVKDY: gallery.map((_, index) => ({ remark: `核实图片备注 ${index + 1}`, confidence: "high", image_types: [] })),
 }, outcomesByAsin: {} });
 const version = { versionId: "12345678-1234-4234-8234-123456789abc", organizationId, projectId,
-  runId, jobId, marketplace: "US", asins, catalog: [], stageOutputs, gaps: [],
+  runId, jobId, marketplace: "US", asins, catalog, stageOutputs,
+  gaps: asins.slice(4).map(asin => ({ asin, field: "catalog.sellerSprite", reasonCode: "UPSTREAM_EMPTY" })),
+  catalogEvidence: { sourceKind: "generated-file", sourceRef: "app/competitor-data.ts#refreshedCatalog",
+    sourceSha256: "c".repeat(64), sourceUpdatedAt: "2026-09-23T05:44:00.000Z",
+    capturedAt: "2026-09-23T06:00:00.000Z", sourceJobId: "6eea1111-1111-4111-8111-111111111111" },
   contentHash: "b".repeat(64), sourceCompletedAt: "2026-09-21T03:12:47.080Z",
   publishedAt: "2026-09-23T05:00:00.000Z" };
 
@@ -105,6 +119,8 @@ test("production page shows waiting, current-version success, and read failure w
   mode = "success";
   release();
   await page.getByText(/Provider 返回 7 张 · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 });
+  await page.getByText("4 个 ASIN 目录未验证（上游空值）").waitFor();
+  await page.getByText(/来源任务 6eea1111/).waitFor();
   assert.equal(await page.locator('tr:has-text("B07YGQVKDY") .listing-image-frame').count(), 7);
   await capture("success");
   mode = "failure";

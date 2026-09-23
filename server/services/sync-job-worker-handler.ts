@@ -20,6 +20,7 @@ import {
   type SyncJobRepository,
   type SyncJobStageRecord,
   type StageOutputDraft,
+  type SyncCatalogCapture,
 } from "../db/sync-job-repository";
 import { WorkerTaskError } from "../runtime/retry-policy";
 import {
@@ -209,6 +210,7 @@ export class SyncJobWorkerHandler {
         result?.message ?? mirrored?.message ?? "同步任务已完成",
       );
       if (terminalSuccessStatuses.has(status)) {
+        const catalogCapture = catalogCaptureFromMirror(mirrored);
         await ignoreLeaseLoss(() =>
           this.#syncJobs.complete({
             jobId: lease.job.jobId,
@@ -216,6 +218,7 @@ export class SyncJobWorkerHandler {
             workerId,
             completedAt: this.#now(),
             message,
+            ...(catalogCapture ? { catalogCapture } : {}),
           }),
         );
       } else if (status === "failed") {
@@ -352,7 +355,7 @@ export class SyncJobWorkerHandler {
     await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) => {
       const diagnostic = toDiagnosticMirror(job);
       const resetFields = new Set([
-        "outputs", "persistedStageContentHashes", "publication", "needsReload", "jobVersion",
+        "outputs", "persistedStageContentHashes", "publication", "needsReload", "jobVersion", "catalogCapture",
       ]);
       const preserved = Object.fromEntries(
         Object.entries(current ?? {}).filter(([key]) => !resetFields.has(key)),
@@ -607,6 +610,15 @@ async function readMirror(mirrorPath: string): Promise<Record<string, unknown> |
   } catch {
     return null;
   }
+}
+
+function catalogCaptureFromMirror(mirror: Record<string, unknown> | null): SyncCatalogCapture | undefined {
+  const value = mirror?.catalogCapture;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const capture = value as Record<string, unknown>;
+  const evidence = capture.evidence;
+  if (!Array.isArray(capture.catalog) || !evidence || typeof evidence !== "object" || Array.isArray(evidence)) return undefined;
+  return capture as SyncCatalogCapture;
 }
 
 function stagePatch(

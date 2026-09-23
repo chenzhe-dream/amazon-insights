@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { after, before, test } from "node:test";
 
 import type { Pool } from "pg";
+
+import { reviseProjectDisplayCatalog } from "../../scripts/revise-project-display-catalog";
 
 import { LocalDataStageOutputResponseSchema } from "../../shared/agent-contracts";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { PostgresProjectDisplayVersionStore, StaleProjectDisplayCandidateError } from "../../server/db/postgres/project-display-version-store";
+import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
 import { startPostgresTestContainer, type PostgresTestContainer } from "./helpers/postgres-test-container";
 
 const NOW = "2026-09-21T10:00:00.000Z";
@@ -193,6 +199,97 @@ test("CAS publication retains old body for 24 hours, then purges it and returns 
   assert.equal(audit?.body_json, null);
   assert.ok(audit?.body_purged_at);
   assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, second.versionId);
+});
+
+test("catalog revision creates an audited immutable version and keeps shared job outputs after old body expiry", async () => {
+  const { pool, ids, store } = await fixture();
+  const first = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: NOW });
+  const sourceJob = await addJob(pool, ids, "2026-09-23T05:50:00.000Z", "completed", "2026-09-23T05:40:00.000Z");
+  const evidence = { sourceKind: "generated-file" as const,
+    sourceRef: "app/competitor-data.ts#refreshedCatalog" as const, sourceSha256: "a".repeat(64),
+    sourceUpdatedAt: "2026-09-23T05:44:00.000Z", capturedAt: "2026-09-23T12:00:00.000Z",
+    sourceJobId: sourceJob.jobId };
+  const revised = await store.reviseCurrentCatalog({ organizationId: ids.organizationId,
+    projectId: ids.projectId, expectedCurrentVersionId: first.versionId,
+    publishedAt: "2026-09-23T12:00:00.000Z", evidence,
+    catalog: [{ asin: ASINS[0], catalogSource: "sellerSprite", synced: true, brand: "Verified brand", title: "Verified title", price: 99 },
+      { asin: ASINS[1], catalogSource: "sorftime-fallback", synced: false, brand: null, title: "Partial title",
+        price: null, sales: null, rating: null, reviews: null, image: null }] });
+  assert.notEqual(revised.versionId, first.versionId);
+  assert.equal(revised.jobId, first.jobId);
+  assert.deepEqual(revised.stageOutputs, first.stageOutputs);
+  assert.equal(revised.catalog[1]?.price, null);
+  for (const field of ["catalog.sellerSprite", "catalog.brand", "catalog.price", "catalog.sales", "catalog.rating", "catalog.reviews", "catalog.image"]) {
+    assert.ok(revised.gaps.some(gap => gap.asin === ASINS[1] && gap.field === field), field);
+  }
+  assert.equal(revised.catalogEvidence?.sourceJobId, sourceJob.jobId);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+  await assert.rejects(store.reviseCurrentCatalog({ organizationId: ids.organizationId,
+    projectId: ids.projectId, expectedCurrentVersionId: first.versionId, evidence, catalog: [] }), /Current display version changed/);
+  const oldAudit = (await pool.query(`SELECT revision_kind,supersedes_version_id,body_expires_at FROM project_display_versions WHERE id=$1`, [first.versionId])).rows[0];
+  assert.equal(oldAudit?.revision_kind, "job-publication");
+  assert.equal(new Date(oldAudit.body_expires_at).toISOString(), "2026-09-24T12:00:00.000Z");
+  const revisedAudit = (await pool.query(`SELECT revision_kind,supersedes_version_id,catalog_evidence_json FROM project_display_versions WHERE id=$1`, [revised.versionId])).rows[0];
+  assert.equal(revisedAudit?.revision_kind, "catalog-revision");
+  assert.equal(revisedAudit?.supersedes_version_id, first.versionId);
+  assert.equal(revisedAudit?.catalog_evidence_json.sourceSha256, evidence.sourceSha256);
+  assert.deepEqual(await store.cleanupExpiredBodies({ now: "2026-09-24T12:00:00.000Z" }), { purgedCount: 1, imageUrls: [] });
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [ids.jobId])).rows[0]?.n, 10);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+});
+
+test("catalog recovery CLI previews exact 8 ASIN provenance and requires reviewed file hash to apply", async () => {
+  const { pool, ids, store } = await fixture();
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: NOW });
+  const sourceJob = await addJob(pool, ids, "2026-09-23T05:50:00.000Z", "completed", "2026-09-23T05:40:00.000Z");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "catalog-revision-cli-"));
+  try {
+    const catalogPath = path.join(directory, "competitor-data.ts");
+    const catalog = ASINS.map((asin, index) => index < 4
+      ? { asin, catalogSource: "sellerSprite", synced: true, brand: `Brand ${index}`, title: `Title ${index}`, price: 99 }
+      : { asin, catalogSource: "sorftime-fallback", synced: false, brand: null, title: `Fallback ${index}`,
+        price: null, sales: null, rating: null, reviews: null });
+    await writeFile(catalogPath, `export const refreshedCatalog = ${JSON.stringify(catalog)};\n`);
+    await utimes(catalogPath, new Date("2026-09-23T05:44:00.000Z"), new Date("2026-09-23T05:44:00.000Z"));
+    const args = ["--organization-id", ids.organizationId, "--project-id", ids.projectId,
+      "--expected-version-id", current.versionId, "--catalog-path", catalogPath,
+      "--source-job-id", sourceJob.jobId];
+    const preview = await reviseProjectDisplayCatalog(args, {}, pool);
+    assert.deepEqual(preview.counts, { sellerSpriteSynced: 4, unverified: 4, absent: 0 });
+    assert.equal(preview.mode, "dry-run");
+    assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+    await assert.rejects(reviseProjectDisplayCatalog([...args, "--apply"], {}, pool), /requires --expected-source-sha256/);
+    const result = await reviseProjectDisplayCatalog([...args, "--expected-source-sha256", preview.sourceSha256, "--apply"], {}, pool);
+    assert.equal(result.mode, "applied");
+    const revised = await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId });
+    assert.notEqual(revised?.versionId, current.versionId);
+    assert.equal(revised?.catalog.length, 8);
+    assert.equal(revised?.catalog[4]?.price, null);
+    assert.equal(revised?.gaps.filter(gap => gap.field === "catalog.sellerSprite").length, 4);
+    assert.equal(revised?.catalogEvidence?.sourceJobId, sourceJob.jobId);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("expired retired stage outputs are unreadable before the retention sweep deletes them", async () => {
+  const { pool, ids, store } = await fixture();
+  await pool.query(`UPDATE sync_jobs SET stages=$2::jsonb WHERE job_id=$1`,
+    [ids.jobId, JSON.stringify([{ id: "image_remarks", status: "done" }])]);
+  const first = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: NOW });
+  const reader = new PostgresSyncJobStore(new PostgresQueryContext(pool));
+  const scope = { organizationId: ids.organizationId, projectId: ids.projectId, runId: ids.runId,
+    jobId: ids.jobId, stage: "image_remarks" as const };
+  assert.equal((await reader.readStageOutput(scope))?.stageStatus, "done");
+  const next = await addJob(pool, ids, "2026-09-24T10:00:00.000Z");
+  await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: next.jobId, expectedCurrentVersionId: first.versionId });
+  await pool.query(`UPDATE project_display_versions SET body_expires_at=now() - interval '1 second' WHERE id=$1`, [first.versionId]);
+  assert.equal(await reader.readStageOutput(scope), null);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM sync_job_stage_outputs WHERE job_id=$1`, [ids.jobId])).rows[0]?.n, 10);
 });
 
 test("corrupt persisted stage output cannot publish and an outer transaction rollback keeps the old pointer", async () => {

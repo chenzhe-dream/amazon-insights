@@ -21,6 +21,9 @@ function version() {
     marketplace: scope.marketplace,
     asins: [...scope.asins].reverse(),
     catalog: [],
+    catalogEvidence: { sourceKind: "generated-file", sourceRef: "app/competitor-data.ts#refreshedCatalog",
+      sourceSha256: "b".repeat(64), sourceUpdatedAt: "2026-09-23T05:44:00.000Z",
+      capturedAt: "2026-09-23T06:00:00.000Z", sourceJobId: "55555555-5555-4555-8555-555555555555" },
     stageOutputs: Object.fromEntries(ProjectableSyncStageSchema.options.map(stage => [stage,
       { stage, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }])),
     gaps: [{ asin: "B0DPQGFM8Q", field: "child_sales", reasonCode: "CONNECTOR_FAILED" }],
@@ -36,6 +39,7 @@ test("current project display version validates project and exact ASIN scope", a
     return Response.json(version());
   });
   assert.equal(read?.versionId, version().versionId);
+  assert.equal(read?.catalogEvidence?.sourceJobId, "55555555-5555-4555-8555-555555555555");
   assert.equal(read?.stageOutputs.image_remarks?.stageStatus, "missing-output");
   await assert.rejects(readCurrentProjectDisplayVersion(scope, async () => Response.json({
     ...version(), asins: [scope.asins[0]],

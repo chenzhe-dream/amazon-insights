@@ -522,6 +522,10 @@ function sellerSpriteOnlyFieldsUnavailable(product: Product) {
   return product.catalogSource === "sorftime-fallback" || !product.synced;
 }
 
+function catalogSourceTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+}
+
 export function ReviewAnalysisMatrixSection({
   title,
   description,
@@ -1907,6 +1911,18 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     displayVersionScopeKey, setMessage]);
   const currentDisplayVersion = displayVersionReceipt?.scopeKey === displayVersionScopeKey
     ? displayVersionReceipt.version : null;
+  const catalogMissingCount = currentDisplayVersion
+    ? new Set(currentDisplayVersion.gaps.filter(gap => gap.field === "catalog").map(gap => gap.asin)).size : 0;
+  const catalogUnverifiedCount = currentDisplayVersion
+    ? new Set(currentDisplayVersion.gaps.filter(gap => gap.field === "catalog.sellerSprite").map(gap => gap.asin)).size : 0;
+  const catalogStatusLabel = [
+    ...(catalogMissingCount ? [`${catalogMissingCount} 个 ASIN 目录结果缺失`] : []),
+    ...(catalogUnverifiedCount ? [`${catalogUnverifiedCount} 个 ASIN 目录未验证（上游空值）`] : []),
+  ].join(" · ");
+  const catalogSourceLabel = currentDisplayVersion?.catalogEvidence
+    ? `目录文件 ${catalogSourceTime(currentDisplayVersion.catalogEvidence.sourceUpdatedAt)}（北京时间） · ${currentDisplayVersion.catalogEvidence.sourceJobId
+        ? `来源任务 ${currentDisplayVersion.catalogEvidence.sourceJobId.slice(0, 8)}` : "来源任务未关联"}`
+    : currentDisplayVersion ? "目录来源待核验" : "卖家精灵更新 2026-08-03";
   const displayVersionReadFailed = displayVersionReceipt?.scopeKey === displayVersionScopeKey
     && displayVersionReceipt.failed;
   const displayVersionPending = Boolean(currentProjectId && !authSession.logoutPending
@@ -3174,7 +3190,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       </nav>
       <div className="sidebar-bottom">
         <HelpFeedbackDrawer user={authSession.user} />
-        {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status"><i/>数据源状态正常</div>}
+        {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status">{catalogStatusLabel || <><i/>数据源状态正常</>}</div>}
         {activeTab === "market-overview" ? <p>{activeMarketSite} · 类目调研</p> : <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>}
       </div>
     </aside>
@@ -3269,7 +3285,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         </div>
       </header>
       <ConcurrencyAdminPanel user={authSession.user} />
-      {activeTab !== "market-overview" && <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>卖家精灵更新 2026-08-03</SourceBadge></div>}
+      {activeTab !== "market-overview" && <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>{catalogSourceLabel}</SourceBadge></div>}
 
       {activeLeaf.parent ? (
         <div className="voc-tertiary-bar" data-nav-dim={activeTab} aria-label={`${activeLeaf.parent} 当前位置`}>

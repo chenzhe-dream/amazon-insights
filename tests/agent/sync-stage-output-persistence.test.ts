@@ -408,11 +408,48 @@ test("sync completion publishes a validated current display version in the same 
     recordedAt: NOW, stage: { id: "image_remarks", status: "done", completedAt: NOW },
     outputs: [{ ...imageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
   await store.complete({ jobId, leaseGeneration: lease.leaseGeneration, workerId: "version-worker",
-    completedAt: NOW, message: "done" });
+    completedAt: NOW, message: "done", catalogCapture: {
+      catalog: [{ asin, catalogSource: "sellerSprite", synced: true, brand: "Verified brand", title: "Verified title" }],
+      evidence: { sourceKind: "generated-file", sourceRef: "app/competitor-data.ts#refreshedCatalog",
+        sourceSha256: "f".repeat(64), sourceUpdatedAt: NOW, capturedAt: NOW },
+    } });
   const current = await versions.readCurrent({ organizationId, projectId });
   assert.equal(current?.jobId, jobId);
+  assert.equal(current?.catalog[0]?.brand, "Verified brand");
+  assert.equal(current?.catalogEvidence?.sourceSha256, "f".repeat(64));
   assert.equal(current?.stageOutputs.image_remarks.stageStatus, "done");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM project_display_versions WHERE project_id=$1", [projectId])).rows[0]?.n, 1);
+
+  const imageRetryJobId = randomUUID();
+  const later = "2026-08-26T09:00:00.000Z";
+  await store.admit({ jobId: imageRetryJobId, organizationId, projectId, runId, actorId: null,
+    fingerprint: `image-retry:${imageRetryJobId}`, asins: [asin], marketplace: "US", createdAt: later,
+    currentStageId: "image_remarks", message: "Queued",
+    stages: projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 })),
+  });
+  const retryLease = await store.claimNext({ workerId: "image-retry-worker", leaseMs: 30_000,
+    wholeJobLimit: 1, claimedAt: later });
+  assert.ok(retryLease);
+  const newerImageDraft = projectStageOutput("image_remarks", [asin], {
+    organizationId, projectId, runId, updatedAt: later,
+    readExport: (_file: string, name: string) => name === "listingImageRemarks"
+      ? { [asin]: [{ remark: "New verified image", confidence: "high" }] }
+      : { imageOutcomesByAsin: { [asin]: [{ status: "ready" }] } },
+  });
+  await store.recordProgress({ jobId: imageRetryJobId, leaseGeneration: retryLease.leaseGeneration,
+    workerId: "image-retry-worker", recordedAt: later,
+    stage: { id: "image_remarks", status: "done", completedAt: later },
+    outputs: [{ ...newerImageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
+  await store.complete({ jobId: imageRetryJobId, leaseGeneration: retryLease.leaseGeneration,
+    workerId: "image-retry-worker", completedAt: later, message: "done" });
+  const afterImageRetry = await versions.readCurrent({ organizationId, projectId });
+  assert.equal(afterImageRetry?.jobId, imageRetryJobId, "a catalog-skipped image retry still switches current");
+  assert.deepEqual(afterImageRetry?.catalog, current?.catalog, "the verified catalog is inherited without new capture claims");
+  assert.deepEqual(afterImageRetry?.catalogEvidence, current?.catalogEvidence);
+  const imageOutput = afterImageRetry?.stageOutputs.image_remarks;
+  assert.ok(imageOutput && imageOutput.stageStatus !== "missing-output");
+  assert.match(JSON.stringify(imageOutput.data), /New verified image/);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM project_display_versions WHERE project_id=$1", [projectId])).rows[0]?.n, 2);
 });
 
 test("worker discards an invalid output draft instead of forwarding its terminal stage", async () => {

@@ -11,6 +11,18 @@ export type CatalogProviderPlan = Readonly<{
   unavailableConnectorIds: readonly ("sellerSprite" | "sorftime")[];
 }>;
 
+export type SyncCatalogCapture = Readonly<{
+  catalog: readonly Record<string, unknown>[];
+  evidence: Readonly<{
+    sourceKind: "generated-file";
+    sourceRef: "app/competitor-data.ts#refreshedCatalog";
+    sourceSha256: string;
+    sourceUpdatedAt: string;
+    capturedAt: string;
+    sourceJobId?: string;
+  }>;
+}>;
+
 export interface SyncJobStageRecord {
   readonly id: string;
   readonly label: string;
@@ -254,6 +266,7 @@ export interface SyncJobRepository {
     workerId?: string;
     completedAt: string;
     message: string;
+    catalogCapture?: SyncCatalogCapture;
   }): Promise<SyncJobRecord>;
   fail(input: {
     jobId: string;

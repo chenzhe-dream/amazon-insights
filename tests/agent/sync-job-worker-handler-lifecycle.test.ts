@@ -108,6 +108,34 @@ function repositoryForLifecycle(input: {
   } as unknown as SyncJobRepository;
 }
 
+test("worker completes from the job mirror catalog capture instead of rereading a later global file", async () => {
+  const mirrorDirectory = await mkdtemp(join(tmpdir(), "sync-catalog-mirror-"));
+  const lease = runningLease();
+  const capture = { catalog: [{ asin: lease.job.asins[0], catalogSource: "sorftime-fallback", synced: false, price: null }],
+    evidence: { sourceKind: "generated-file" as const, sourceRef: "app/competitor-data.ts#refreshedCatalog" as const,
+      sourceSha256: "a".repeat(64), sourceUpdatedAt: NOW, capturedAt: NOW } };
+  let received: unknown = null;
+  const repository = {
+    ...repositoryForLifecycle({ events: [] }),
+    async complete(input: Parameters<SyncJobRepository["complete"]>[0]) {
+      received = input.catalogCapture;
+      return { ...lease.job, status: "completed" as const };
+    },
+  } as SyncJobRepository;
+  const handler = new SyncJobWorkerHandler({ syncJobs: repository, mirrorDirectory,
+    heartbeatIntervalMs: 60_000, progressPollMs: 60_000,
+    runner: async (_job, context) => {
+      await context.writeMirror({ catalogCapture: capture });
+      return { status: "completed" };
+    } });
+  try {
+    await handler.handle(lease);
+    assert.deepEqual(received, capture);
+  } finally {
+    await rm(mirrorDirectory, { recursive: true, force: true });
+  }
+});
+
 test("background progress failure aborts and settles the runner before failing the database", async () => {
   const mirrorDirectory = await mkdtemp(join(tmpdir(), "sync-runner-background-failure-"));
   const events: string[] = [];

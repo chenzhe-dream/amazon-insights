@@ -1,14 +1,39 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./sellersprite-mcp-client.mjs";
 import { detectProductFamily } from "./product-family.mjs";
 import { localizeSellingPoints } from "./selling-point-zh.mjs";
 import { localizeSpecifications } from "./specification-zh.mjs";
-import { readCachedArrayExport } from "./sync-cache.mjs";
+import { extractExportArrayLiteral, readCachedArrayExport } from "./sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
 export const catalogPath = path.join(root, "app", "competitor-data.ts");
 const rufusPath = path.join(root, "app", "rufus-voc-data.ts");
+
+/** Captures the generated catalog at the catalog phase boundary in the job mirror. */
+export function captureCatalogForSyncJob(asins, filePath = catalogPath, capturedAt = new Date().toISOString()) {
+  const before = fs.statSync(filePath);
+  const bytes = fs.readFileSync(filePath);
+  const after = fs.statSync(filePath);
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || bytes.length !== after.size) {
+    throw new Error("Generated catalog changed while it was captured");
+  }
+  const literal = extractExportArrayLiteral(bytes.toString("utf8"), "refreshedCatalog");
+  if (!literal) throw new Error("Generated catalog export is missing");
+  const records = JSON.parse(literal);
+  if (!Array.isArray(records)) throw new Error("Generated catalog is not an array");
+  const requested = new Set(asins);
+  const catalog = records.filter(item => item && typeof item === "object" && !Array.isArray(item) && requested.has(item.asin));
+  if (new Set(catalog.map(item => item.asin)).size !== catalog.length) throw new Error("Generated catalog has duplicate requested ASINs");
+  return { catalog, evidence: {
+    sourceKind: "generated-file",
+    sourceRef: "app/competitor-data.ts#refreshedCatalog",
+    sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+    sourceUpdatedAt: after.mtime.toISOString(),
+    capturedAt: new Date(capturedAt).toISOString(),
+  } };
+}
 
 export function readCatalogAsins() {
   if (!fs.existsSync(catalogPath)) return [];

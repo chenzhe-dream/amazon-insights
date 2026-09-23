@@ -50,6 +50,7 @@ import {
   parseProviderDiagnosticOutput,
 } from "./lib/provider-diagnostics.mjs";
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
+import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -942,6 +943,7 @@ export function runCatalogPhase({
   finalizeCached = finalizeCachedStage,
   apply = (asin, commandSucceeded) => applyPersistedStagePostcondition(jobId, "catalog", [asin], { commandSucceeded }),
   runXydc = runOptionalXydcVariantEnrichment,
+  captureCatalog = captureCatalogForSyncJob,
 }) {
   if (shouldRun(job, "catalog") && catalogPending.length) {
     activate(jobId, "catalog");
@@ -949,6 +951,11 @@ export function runCatalogPhase({
     runCatalog({ asins, catalogPending, marketplace, catalogProviderPlan, providers, apply });
   } else if (shouldRun(job, "catalog")) {
     finalizeCached(jobId, "catalog", asins);
+  }
+  try {
+    patch(jobId, { catalogCapture: captureCatalog(asins) });
+  } catch {
+    patch(jobId, { catalogCapture: null });
   }
   const catalogStage = job?.stages?.find(stage => stage.id === "catalog");
   const xydcAsins = Array.isArray(catalogStage?.repairAsins)

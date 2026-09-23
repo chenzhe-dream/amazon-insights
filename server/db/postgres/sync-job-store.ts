@@ -4,7 +4,7 @@ import { z } from "zod";
 import { StageOutputGapSchema } from "../../../shared/agent-contracts";
 
 import type { PostgresQueryContext } from "./query-context";
-import { ProjectDisplayVersionConflictError } from "./project-display-version-store";
+import { StaleProjectDisplayCandidateError } from "./project-display-version-store";
 import {
   SyncJobDataError,
   SyncJobLeaseLostError,
@@ -14,6 +14,7 @@ import {
   type ProjectableSyncStage,
   type StageOutputDraft,
   type StageOutputProjection,
+  type SyncCatalogCapture,
   type SyncJobModuleRecord,
   type SyncJobRecord,
   type SyncJobRepository,
@@ -403,6 +404,12 @@ export class PostgresSyncJobStore implements SyncJobRepository {
          AND job.run_id = $3
          AND project.organization_id = $1
          AND run.project_id = $2
+         AND (
+           NOT EXISTS (SELECT 1 FROM project_display_versions version WHERE version.source_job_id=job.job_id)
+           OR EXISTS (SELECT 1 FROM project_display_versions version
+             WHERE version.source_job_id=job.job_id AND version.body_json IS NOT NULL
+               AND (version.body_expires_at IS NULL OR version.body_expires_at > now()))
+         )
          AND EXISTS (
            SELECT 1
              FROM jsonb_array_elements(job.stages) AS stage
@@ -1411,6 +1418,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
     workerId?: string;
     completedAt: string;
     message: string;
+    catalogCapture?: SyncCatalogCapture;
   }): Promise<SyncJobRecord> {
     assertPositiveInteger(input.leaseGeneration, "leaseGeneration");
     return await this.queries.transaction(async () => {
@@ -1467,9 +1475,11 @@ export class PostgresSyncJobStore implements SyncJobRepository {
             projectId: completed.projectId,
             jobId: completed.jobId,
             expectedCurrentVersionId: currentVersion?.versionId ?? null,
+            catalog: input.catalogCapture?.catalog ?? currentVersion?.catalog ?? [],
+            catalogEvidence: input.catalogCapture?.evidence ?? currentVersion?.catalogEvidence ?? undefined,
           });
         } catch (error) {
-          if (!(error instanceof ProjectDisplayVersionConflictError)) throw error;
+          if (!(error instanceof StaleProjectDisplayCandidateError)) throw error;
           // An invalid or older candidate cannot replace the last good report.
         }
       }

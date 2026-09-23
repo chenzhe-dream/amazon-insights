@@ -95,7 +95,7 @@ function extractExportObjectLiteral(source, exportName) {
 }
 
 /** 提取 `export const name ... = [ ... ]` 的数组字面量 */
-function extractExportArrayLiteral(source, exportName) {
+export function extractExportArrayLiteral(source, exportName) {
   const start = findExportConstStart(source, exportName);
   if (start === -1) return null;
 
@@ -104,8 +104,17 @@ function extractExportArrayLiteral(source, exportName) {
   const bracketStart = start + assignMatch.index + assignMatch[0].lastIndexOf("[");
 
   let depth = 0;
+  let quoted = false;
+  let escaped = false;
   for (let index = bracketStart; index < source.length; index += 1) {
     const char = source[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
     if (char === "[") depth += 1;
     if (char === "]") {
       depth -= 1;
