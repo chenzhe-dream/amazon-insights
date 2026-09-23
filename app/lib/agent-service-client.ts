@@ -135,6 +135,15 @@ export function agentRequestTimeoutMs(contractPath: string, override?: number) {
   return override ?? (ADMIN_READ_WRITE_ROUTES.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
 }
 const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
+// Overview responses include evidence-backed rule baselines and saved versions.
+// A real single-month run exceeds 1 MiB; give only these contracts a bounded
+// report budget, keeping the default and explicit caller limits unchanged.
+const OVERVIEW_MAX_RESPONSE_BYTES = 8 * DEFAULT_MAX_RESPONSE_BYTES;
+const OVERVIEW_REPORT_ROUTES = new Set([
+  'POST /v1/market-analysis/studies/:id/overview',
+  'GET /v1/market-analysis/runs/:id/overview',
+  'GET /v1/market-analysis/runs/:id/reports/:attemptId/overview',
+]);
 
 const serviceConfigSchema = z.strictObject({
   internalUrl: z.url(),
@@ -344,8 +353,6 @@ export function createAgentServiceClient(
 ): AgentServiceClient {
   const env = options.env ?? process.env;
   const fetchImplementation = options.fetchImplementation ?? fetch;
-  const maxResponseBytes =
-    options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
   return async (
     request: AgentServiceRequest,
@@ -377,6 +384,10 @@ export function createAgentServiceClient(
       );
     }
 
+    const maxResponseBytes = options.maxResponseBytes ?? (
+      OVERVIEW_REPORT_ROUTES.has(`${request.method} ${contract.path}`)
+        ? OVERVIEW_MAX_RESPONSE_BYTES : DEFAULT_MAX_RESPONSE_BYTES
+    );
     const secrets = [config.internalUrl, config.proxyToken];
     const headers = copyRequestHeaders(request.headers);
     if (request.body == null) {

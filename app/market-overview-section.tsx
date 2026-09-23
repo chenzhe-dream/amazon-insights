@@ -23,7 +23,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('overviewRun'));if(restored.success){setRunId(restored.data);setRestoreId(restored.data);setExpanded(true);}return()=>{abort.abort();owner.current=null;};},[]);
   function show(open:boolean){setExpanded(open);onExpandedChange?.(open);}
   useImperativeHandle(controller,()=>({openReport(requestScope){
-    if(runId&&!run){show(true);return;}
+    if(runId&&!run){show(true);if(readError)setReload(n=>n+1);return;}
     const matches=run&&run.scope.marketplace===requestScope.marketplace&&run.scope.nodeIdPath===requestScope.nodeQuery&&run.scope.fromMonth===requestScope.month&&run.scope.toMonth===requestScope.month&&run.params.headTopN===requestScope.headTopN&&run.params.newProductMonths===requestScope.newProductMonths;
     if(matches){show(!expanded);return;}
     show(true);void start(requestScope,requestScope.month);
