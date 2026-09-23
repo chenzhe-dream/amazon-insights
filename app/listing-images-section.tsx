@@ -141,6 +141,7 @@ export function ListingImagesSection({
 
   const pendingRemarkCount = products.reduce((count, product) => {
     const gallery = resolveGallery(product.asin, product.image, listingByAsin);
+    if (gallery.source !== "sorftime") return count;
     return (
       count +
       gallery.urls.filter((url, slotIndex) => Boolean(url) && !remarkForImage(product.asin, slotIndex)).length

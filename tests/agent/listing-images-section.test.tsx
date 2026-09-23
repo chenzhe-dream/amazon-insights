@@ -167,7 +167,7 @@ function isLoopbackHttpUrl(value: string) {
   return url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]" || url.hostname === "::1";
 }
 
-test("persisted Amazon gallery, product-header, and preview sources stay direct normalized CDN URLs", () => {
+test("persisted Amazon gallery, product-header, and preview sources use the normalized same-origin proxy", () => {
   const html = renderListingImages(
     { asin: fixtureAsin, brand: "Fixture brand", image: persistedZoomImage },
     listingFixture({
@@ -179,13 +179,14 @@ test("persisted Amazon gallery, product-header, and preview sources stay direct 
   const gallerySources = galleryImageSources(html);
   const previewSource = amazonMediaSrc(persistedZoomImage);
 
-  assert.equal(productHeaderImageSource(html), normalizedPersistedZoomImage);
-  assert.deepEqual(gallerySources, [normalizedPersistedZoomImage]);
-  assert.equal(previewSource, normalizedPersistedZoomImage);
+  const proxySource = amazonMediaSrc(normalizedPersistedZoomImage);
+  assert.equal(productHeaderImageSource(html), proxySource);
+  assert.deepEqual(gallerySources, [proxySource]);
+  assert.equal(previewSource, proxySource);
   assert.equal(amazonMediaSrc(persistedZoomImage.replace("https://", "http://")), "");
   for (const source of [productHeaderImageSource(html), ...gallerySources, previewSource]) {
-    assert.ok(source?.startsWith("https://"));
-    assert.doesNotMatch(source ?? "", /\/api\/amazon-image/);
+    assert.ok(source?.startsWith("/api/amazon-image?u="));
+    assert.equal(new URL(source!, "http://localhost").searchParams.get("u"), normalizedPersistedZoomImage);
   }
 });
 
@@ -244,6 +245,7 @@ test("injected catalog MCP fallback renders with SellerSprite provenance and a n
 
   assert.deepEqual(galleryImageSources(html), [amazonMediaSrc(sellerSpriteCatalogImage)]);
   assert.match(html, /SellerSprite MCP · 商品图 1 张/);
+  assert.doesNotMatch(html, /MCP 商品图已到位；1 张图缺少 AI 备注/);
   assert.doesNotMatch(html, /图册已从 Sorftime 拉回/);
   assert.match(html, /尚无图片分析结果/);
 });
@@ -268,13 +270,14 @@ test("injected empty MCP sources render a truthful no-image state without claimi
   assert.doesNotMatch(html, /已从.+拉回/);
 });
 
-test("interactive hover and pinned previews render direct normalized HTTPS CDN sources", async () => {
+test("interactive hover and pinned previews render same-origin proxy sources", async () => {
   let fixture: Awaited<ReturnType<typeof startBrowserFixtureServer>> | null = null;
   let browser: Browser | null = null;
   let page: Page | null = null;
   const pageErrors: string[] = [];
   const failedRequests: string[] = [];
   const blockedExternalRequests: string[] = [];
+  const proxyRequests: string[] = [];
   try {
     fixture = await startBrowserFixtureServer();
     browser = await chromium.launch({ headless: true, executablePath: browserExecutablePath() });
@@ -283,6 +286,12 @@ test("interactive hover and pinned previews render direct normalized HTTPS CDN s
     page.on("requestfailed", request => failedRequests.push(`${request.url()} · ${request.failure()?.errorText ?? "unknown"}`));
     await page.route("**/*", async route => {
       const requestUrl = route.request().url();
+      const parsedUrl = new URL(requestUrl);
+      if (parsedUrl.pathname === "/api/amazon-image") {
+        proxyRequests.push(parsedUrl.searchParams.get("u") ?? "");
+        await route.fulfill({ status: 200, contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>' });
+        return;
+      }
       if (!isLoopbackHttpUrl(requestUrl)) {
         blockedExternalRequests.push(requestUrl);
         await route.abort("blockedbyclient");
@@ -301,26 +310,17 @@ test("interactive hover and pinned previews render direct normalized HTTPS CDN s
     const hoverPreview = page.locator(".listing-image-hover-float img");
     await hoverPreview.waitFor({ state: "attached" });
     const hoverSource = await hoverPreview.getAttribute("src");
-    assert.equal(hoverSource, normalizedPersistedZoomImage);
-    assert.match(hoverSource ?? "", /^https:\/\//);
-    assert.doesNotMatch(hoverSource ?? "", /\/api\/amazon-image/);
+    assert.equal(hoverSource, amazonMediaSrc(normalizedPersistedZoomImage));
 
     await frame.click();
     const pinnedPreview = page.locator(".listing-image-focus-body img");
     await pinnedPreview.waitFor({ state: "attached" });
     const pinnedSource = await pinnedPreview.getAttribute("src");
-    assert.equal(pinnedSource, normalizedPersistedZoomImage);
-    assert.match(pinnedSource ?? "", /^https:\/\//);
-    assert.doesNotMatch(pinnedSource ?? "", /\/api\/amazon-image/);
+    assert.equal(pinnedSource, amazonMediaSrc(normalizedPersistedZoomImage));
     await page.waitForTimeout(100);
-    assert.ok(
-      blockedExternalRequests.some(requestUrl => requestUrl.startsWith("https://m.media-amazon.com/")),
-      `expected Amazon CDN request to be intercepted, got ${JSON.stringify(blockedExternalRequests)}`,
-    );
-    assert.ok(
-      blockedExternalRequests.every(requestUrl => !isLoopbackHttpUrl(requestUrl)),
-      `all intercepted HTTP(S) requests must be non-loopback: ${JSON.stringify(blockedExternalRequests)}`,
-    );
+    assert.ok(proxyRequests.length > 0);
+    assert.ok(proxyRequests.every(url => url === normalizedPersistedZoomImage));
+    assert.deepEqual(blockedExternalRequests, []);
   } finally {
     await page?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
