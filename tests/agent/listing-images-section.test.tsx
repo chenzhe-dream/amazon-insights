@@ -217,6 +217,60 @@ test("Sorftime gallery reports the exact count of ready AI remarks", () => {
   assert.match(html, /清晰展示产品/);
 });
 
+test("eight saved ASIN galleries render all 53 images and matching remarks without a missing-note warning", () => {
+  const asinCounts = [
+    ["B004FM8WY0", 6],
+    ["B00BCX842K", 6],
+    ["B07YGQVKDY", 7],
+    ["B09JB8CSXX", 7],
+    ["B0CB9LGMQY", 6],
+    ["B0CRMDJCF4", 7],
+    ["B0DPQGFM8Q", 7],
+    ["B0GY86VNQ2", 7],
+  ] as const;
+  const products: ComponentProps<typeof ListingImagesSection>["products"] = [];
+  const listingByAsin: Record<string, SorftimeListingContentRecord> = {};
+  const remarksByAsin: Record<string, Array<{
+    remark: string; imageUrl?: string; image_types: string[]; confidence: "high";
+  }>> = {};
+  const expectedImageSources: string[] = [];
+
+  for (const [asin, count] of asinCounts) {
+    const galleryImages = Array.from({ length: count }, (_, slot) =>
+      `https://m.media-amazon.com/images/I/fixture-${asin}-${slot}.jpg`);
+    products.push({ asin, brand: `Fixture ${asin}`, image: galleryImages[0]! });
+    listingByAsin[asin] = Object.assign(listingFixture({
+      asin,
+      mainImage: galleryImages[0]!,
+      galleryImages,
+      secondaryImages: galleryImages.slice(1),
+      imageCount: count,
+    }), asin === "B07YGQVKDY" ? { previousGalleryImages: [] } : {});
+    remarksByAsin[asin] = galleryImages.map((imageUrl, slot) => ({
+      remark: `Fixture remark ${asin} image ${slot + 1}`,
+      ...(asin === "B07YGQVKDY" && slot === 3 ? {} : { imageUrl }),
+      image_types: ["产品展示"],
+      confidence: "high",
+    }));
+    expectedImageSources.push(...galleryImages.map(amazonMediaSrc));
+  }
+
+  const html = renderToStaticMarkup(createElement(ListingImagesSection, {
+    products, market, colors, listingByAsin,
+    resolveImageRemark: (asin, slot) => remarksByAsin[asin]?.[slot] ?? null,
+  }));
+  assert.equal((html.match(/class="listing-images-slot-label"/g) ?? []).length, 7);
+  assert.deepEqual(galleryImageSources(html), expectedImageSources);
+  assert.equal((html.match(/class="listing-image-empty"/g) ?? []).length, 3);
+  assert.equal((html.match(/class="listing-image-remark"/g) ?? []).length, 53);
+  const b07Row = html.split("<tbody>")[1]?.split("</tr>").find(row => row.includes(">B07YGQVKDY<"));
+  assert.ok(b07Row);
+  assert.match(b07Row, /Sorftime MCP · Provider 返回 7 张 · AI 备注 7\/7 张/);
+  assert.equal((b07Row.match(/class="listing-image-remark"/g) ?? []).length, 7);
+  assert.doesNotMatch(html, /MCP 商品图已到位；\d+ 张图缺少 AI 备注/);
+  assert.doesNotMatch(html, /尚无图片分析结果/);
+});
+
 test("missing remarks display their fixed per-slot outcome reason", () => {
   const html = renderListingImages(
     { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
