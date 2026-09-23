@@ -172,6 +172,7 @@ export const ApiErrorCodeSchema = z.enum([
   "DINGTALK_UNAVAILABLE",
   "FORBIDDEN",
   "NOT_FOUND",
+  "PROJECT_REPORT_NOT_PUBLISHED",
   "CONFLICT",
   "IMMUTABLE_SCOPE",
   "IDEMPOTENCY_KEY_REUSED",
@@ -1535,6 +1536,43 @@ export const LocalDataStageOutputResponseSchema = z.union([
   dataProjection("image_remarks"), partialProjection("image_remarks"), failedProjection("image_remarks"),
 ]);
 export type StageOutputProjection = z.infer<typeof LocalDataStageOutputResponseSchema>;
+
+export const CurrentProjectDisplayVersionResponseSchema = strictObject({
+  versionId: EntityIdSchema,
+  organizationId: EntityIdSchema,
+  projectId: EntityIdSchema,
+  runId: EntityIdSchema,
+  jobId: EntityIdSchema,
+  marketplace: MarketplaceSchema,
+  asins: z.array(AsinSchema).min(1).refine(items => new Set(items).size === items.length),
+  catalog: z.array(z.unknown()),
+  catalogEvidence: strictObject({
+    sourceKind: z.literal("generated-file"),
+    sourceRef: z.literal("app/competitor-data.ts#refreshedCatalog"),
+    sourceSha256: Sha256Schema,
+    sourceUpdatedAt: DateTimeSchema,
+    capturedAt: DateTimeSchema,
+    sourceJobId: EntityIdSchema.optional(),
+  }).nullable().optional(),
+  stageOutputs: z.record(ProjectableSyncStageSchema, z.union([
+    LocalDataStageOutputResponseSchema,
+    strictObject({ stage: ProjectableSyncStageSchema, stageStatus: z.literal("missing-output"),
+      reasonCode: z.literal("OUTPUT_UNAVAILABLE") }),
+  ])),
+  gaps: z.array(strictObject({ asin: AsinSchema, field: z.string(), reasonCode: z.string() })),
+  contentHash: Sha256Schema,
+  sourceCompletedAt: DateTimeSchema,
+  publishedAt: DateTimeSchema,
+}).superRefine((version, ctx) => {
+  for (const stage of ProjectableSyncStageSchema.options) {
+    const output = version.stageOutputs[stage];
+    if (output.stage !== stage || (output.stageStatus !== "missing-output" &&
+      (output.projectId !== version.projectId || output.runId !== version.runId || output.jobId !== version.jobId))) {
+      ctx.addIssue({ code: "custom", path: ["stageOutputs", stage], message: "Report stage identity mismatch" });
+    }
+  }
+});
+export const CurrentProjectSyncJobResponseSchema = strictObject({ jobId: EntityIdSchema, runId: EntityIdSchema });
 type WithoutStageOutputMetadata<T> = T extends unknown ? Omit<T, keyof typeof ProjectionBase> : never;
 export type StageOutputDraft = WithoutStageOutputMetadata<StageOutputProjection>;
 
@@ -2044,6 +2082,20 @@ export const v1Contracts = [
     path: "/v1/local-data/projects",
     request: LocalDataCreateProjectRequestSchema,
     response: LocalDataProjectResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/local-data/projects/:id/current-display-version",
+    params: strictObject({ id: EntityIdSchema }),
+    response: CurrentProjectDisplayVersionResponseSchema,
+    error: ApiErrorResponseSchema,
+  },
+  {
+    method: "GET",
+    path: "/v1/local-data/projects/:id/current-sync-job",
+    params: strictObject({ id: EntityIdSchema }),
+    response: CurrentProjectSyncJobResponseSchema,
     error: ApiErrorResponseSchema,
   },
   {

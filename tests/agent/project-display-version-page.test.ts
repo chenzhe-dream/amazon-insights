@@ -124,7 +124,7 @@ test("saved report reads never fall back to generated data; first analysis still
     if (endpoint === `/api/agent/v1/local-data/projects/${projectId}/current-display-version`) {
       if (mode === "waiting") await gate;
       return mode === "failure" ? reply({ error: "unavailable" }, 503)
-        : mode === "absent" ? reply({ error: "not found" }, 404) : reply(version);
+        : mode === "absent" ? reply({ error: { code: "PROJECT_REPORT_NOT_PUBLISHED", message: "No current report", requestId: "test" } }, 404) : reply(version);
     }
     if (endpoint === `/api/agent/v1/local-data/sync-asins/${jobId}`)
       return reply({ jobId, jobVersion: 1, asins, marketplace: "US", status: jobStatus, message: "fixture job",

@@ -1,32 +1,11 @@
 import { z } from "zod";
 
-import { LocalDataStageOutputResponseSchema, ProjectableSyncStageSchema } from "../../shared/agent-contracts";
+import { ApiErrorResponseSchema, CurrentProjectDisplayVersionResponseSchema,
+  LocalDataStageOutputResponseSchema, ProjectableSyncStageSchema } from "../../shared/agent-contracts";
 import { localAgentFetch } from "./local-agent-browser";
 import type { StageOutputSnapshot } from "./stage-output-browser";
 
-const versionResponseSchema = z.object({
-  versionId: z.string().uuid(),
-  organizationId: z.string().uuid(),
-  projectId: z.string().uuid(),
-  runId: z.string().uuid(),
-  jobId: z.string().uuid(),
-  marketplace: z.string(),
-  asins: z.array(z.string()),
-  catalog: z.array(z.unknown()),
-  catalogEvidence: z.object({
-    sourceKind: z.literal("generated-file"),
-    sourceRef: z.literal("app/competitor-data.ts#refreshedCatalog"),
-    sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    sourceUpdatedAt: z.string().datetime(),
-    capturedAt: z.string().datetime(),
-    sourceJobId: z.string().uuid().optional(),
-  }).nullable().optional(),
-  stageOutputs: z.record(z.string(), z.unknown()),
-  gaps: z.array(z.object({ asin: z.string(), field: z.string(), reasonCode: z.string() })),
-  contentHash: z.string().regex(/^[a-f0-9]{64}$/i),
-  sourceCompletedAt: z.string(),
-  publishedAt: z.string(),
-});
+const versionResponseSchema = CurrentProjectDisplayVersionResponseSchema;
 
 export type CurrentProjectDisplayVersion = Omit<z.infer<typeof versionResponseSchema>, "stageOutputs"> & {
   stageOutputs: StageOutputSnapshot;
@@ -73,7 +52,12 @@ export async function readCurrentProjectDisplayVersion(
   fetcher: (path: string) => Promise<Response> = localAgentFetch,
 ): Promise<CurrentProjectDisplayVersion | null> {
   const response = await fetcher(`/v1/local-data/projects/${encodeURIComponent(scope.projectId)}/current-display-version`);
-  if (response.status === 404) return null;
+  if (response.status === 404) {
+    const payload = await response.json().catch(() => null);
+    const error = ApiErrorResponseSchema.safeParse(payload);
+    if (error.success && error.data.error.code === "PROJECT_REPORT_NOT_PUBLISHED") return null;
+    throw new Error("当前报告读取接口异常，请稍后重试");
+  }
   if (!response.ok) throw new Error(response.status === 401 ? "登录已失效，请重新登录" : "当前报告读取失败，请稍后重试");
   const parsed = versionResponseSchema.safeParse(await response.json());
   if (!parsed.success) throw new Error("当前报告格式无效");

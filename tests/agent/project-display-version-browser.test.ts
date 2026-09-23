@@ -47,5 +47,7 @@ test("current project display version validates project and exact ASIN scope", a
 });
 
 test("an unavailable version stays absent instead of adopting an old job", async () => {
-  assert.equal(await readCurrentProjectDisplayVersion(scope, async () => Response.json({}, { status: 404 })), null);
+  assert.equal(await readCurrentProjectDisplayVersion(scope, async () => Response.json({
+    error: { code: "PROJECT_REPORT_NOT_PUBLISHED", message: "No current report", requestId: "test" },
+  }, { status: 404 })), null);
 });

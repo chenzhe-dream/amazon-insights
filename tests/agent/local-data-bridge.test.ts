@@ -236,6 +236,27 @@ test("current display version read is scoped and never starts collection", async
   assert.deepEqual(calls, { reads: 2, starts: 0 });
 });
 
+test("missing report storage is a service error; an empty scoped read is explicitly unpublished", async (t) => {
+  const deps = fakeDeps();
+  delete deps.readCurrentDisplayVersion;
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "GET",
+    url: `/v1/local-data/projects/${project.id}/current-display-version`, headers: authenticatedHeaders() });
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.json().error.code, "CONFIGURATION_ERROR");
+  const empty = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: {
+      ...fakeDeps(), readCurrentDisplayVersion: async () => null,
+    } });
+  t.after(() => empty.close());
+  const missing = await empty.inject({ method: "GET",
+    url: `/v1/local-data/projects/${project.id}/current-display-version`, headers: authenticatedHeaders() });
+  assert.equal(missing.statusCode, 404);
+  assert.equal(missing.json().error.code, "PROJECT_REPORT_NOT_PUBLISHED");
+});
+
 test('collection source binding persists only an authorized analysis project with matching scope', async () => {
   const sourceId='30000000-0000-4000-8000-000000000001';
   const source={...project,id:sourceId};

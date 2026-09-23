@@ -472,7 +472,8 @@ export function registerLocalDataRoutes(
   app.get("/v1/local-data/projects/:id/current-sync-job", async (request) => {
     const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
     const principal = request.authPrincipal;
-    if (principal?.kind !== "user" || !deps.readLatestCompletedSyncJob) return missing("Current sync job not found");
+      if (principal?.kind !== "user") return missing("Current sync job not found");
+      if (!deps.readLatestCompletedSyncJob) throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Current sync job reader is unavailable");
     const current = await deps.readLatestCompletedSyncJob({ organizationId: principal.organizationId, projectId: id });
     if (!current) return missing("Current sync job not found");
     return { jobId: current.jobId, runId: current.runId };
@@ -481,9 +482,11 @@ export function registerLocalDataRoutes(
   app.get("/v1/local-data/projects/:id/current-display-version", async (request) => {
     const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
     const principal = request.authPrincipal;
-    if (principal?.kind !== "user" || !deps.readCurrentDisplayVersion) return missing("Current display version not found");
+      if (principal?.kind !== "user") return missing("Current display version not found");
+      if (!deps.readCurrentDisplayVersion) throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Current display version reader is unavailable");
     const version = await deps.readCurrentDisplayVersion({ organizationId: principal.organizationId, projectId: id });
-    if (!version || version.projectId !== id || version.organizationId !== principal.organizationId) {
+      if (!version) throw new ContractRouteError(404, "PROJECT_REPORT_NOT_PUBLISHED", "Current display version is not published");
+      if (version.projectId !== id || version.organizationId !== principal.organizationId) {
       return missing("Current display version not found");
     }
     return version;
