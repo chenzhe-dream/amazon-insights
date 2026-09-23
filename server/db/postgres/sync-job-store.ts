@@ -179,6 +179,32 @@ const jobColumns = `
 export class PostgresSyncJobStore implements SyncJobRepository {
   constructor(private readonly queries: PostgresQueryContext) {}
 
+  async findLatestCompletedForProject(input: { organizationId: string; projectId: string }) {
+    const result = await this.queries.query<{ job_id: string; run_id: string }>(
+      `SELECT job.job_id, job.run_id
+         FROM sync_jobs job
+         JOIN projects project ON project.id = job.project_id
+         JOIN analysis_runs run ON run.id = job.run_id AND run.project_id = project.id
+        WHERE project.id = $1
+          AND project.organization_id = $2
+          AND job.organization_id = $2
+          AND job.marketplace = project.marketplace
+          AND job.asins @> project.asins_json
+          AND job.asins <@ project.asins_json
+          AND job.status = 'completed'
+          AND (SELECT count(*) FROM sync_job_stage_outputs output
+                WHERE output.job_id = job.job_id
+                  AND output.organization_id = job.organization_id
+                  AND output.project_id = job.project_id
+                  AND output.run_id = job.run_id) = 10
+        ORDER BY job.completed_at DESC, job.job_id DESC
+        LIMIT 1`,
+      [input.projectId, input.organizationId],
+    );
+    const row = result.rows[0];
+    return row ? { jobId: row.job_id, runId: row.run_id } : null;
+  }
+
   async admit(input: AdmitSyncJobInput) {
     const normalized = normalizeAdmissionInput(input);
     return await retrySerializable(async () =>

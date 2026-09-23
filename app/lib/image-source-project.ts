@@ -21,12 +21,22 @@ export async function readHistoricalSyncPointer(project:ProjectScope,options:{fe
   const fetcher=options.fetcher??localAgentFetch;
   const {project:p}=await readJson(fetcher,`/v1/projects/${encodeURIComponent(project.id)}`,'分析项目');
   if(p?.id!==project.id)throw new SyncPointerError('分析项目与当前页面不匹配');
-  if(p.currentRunId===null)return null;
-  if(typeof p.currentRunId!=='string'||!p.currentRunId)throw new SyncPointerError('分析项目缺少有效运行编号');
-  const runId=p.currentRunId;
-  const {run}=await readJson(fetcher,`/v1/runs/${encodeURIComponent(runId)}`,'分析运行记录');
-  if(run?.id!==runId||run.projectId!==project.id||typeof run.idempotencyKey!=='string'||!run.idempotencyKey)throw new SyncPointerError('分析运行记录与当前项目不匹配');
-  const jobId=run.idempotencyKey;
+  const currentResponse=await fetcher(`/v1/local-data/projects/${encodeURIComponent(project.id)}/current-sync-job`);
+  let runId:string,jobId:string;
+  if(currentResponse.status===404){
+   if(p.currentRunId===null)return null;
+   if(typeof p.currentRunId!=='string'||!p.currentRunId)throw new SyncPointerError('分析项目缺少有效运行编号');
+   runId=p.currentRunId;
+   const {run}=await readJson(fetcher,`/v1/runs/${encodeURIComponent(runId)}`,'分析运行记录');
+   if(run?.id!==runId||run.projectId!==project.id||typeof run.idempotencyKey!=='string'||!run.idempotencyKey)throw new SyncPointerError('分析运行记录与当前项目不匹配');
+   jobId=run.idempotencyKey;
+  }else{
+   if(!currentResponse.ok)throw new SyncPointerError(`读取当前同步结果失败（${currentResponse.status}），请稍后重试`);
+   const current=await currentResponse.json();
+   if(typeof current?.runId!=='string'||!current.runId||typeof current?.jobId!=='string'||!current.jobId)throw new SyncPointerError('当前同步结果编号无效');
+   runId=current.runId;
+   jobId=current.jobId;
+  }
   const job=await readJson(fetcher,`/v1/local-data/sync-asins/${encodeURIComponent(jobId)}`,'基础同步任务');
   if(job?.jobId!==jobId||job.scope?.runId!==runId||!Array.isArray(job.asins)||!isSyncJobScopeMatch(job,{...project,projectId:project.id,runId}))throw new SyncPointerError('同步记录与当前项目、站点或商品范围不匹配');
   return {projectId:project.id,runId,jobId};

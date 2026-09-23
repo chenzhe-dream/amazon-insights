@@ -15,6 +15,20 @@ import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysi
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import type { XydcVariantFamily } from "../../shared/xydc-variant-contract";
 
+test("current job partial results do not inherit old generated values for missing ASINs", () => {
+  const fallback = {
+    keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {},
+    salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {}, childSalesByAsin: {},
+    priceStrategyByAsin: { B0DPQGFM8Q: { oldPrice: true } }, imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
+    trafficData: { overview: {}, monthlyTrend: {}, meta: sifListingTrafficMeta },
+  };
+  const view = buildStageOutputView({ price_strategy: {
+    stage: "price_strategy", stageStatus: "partial", data: { strategyByAsin: { B07YGQVKDY: { currentPrice: true } } },
+    gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [{ asin: "B0DPQGFM8Q", causeCode: "UPSTREAM_EMPTY" }] },
+  } } as never, fallback, { authoritative: true });
+  assert.deepEqual(view.priceStrategyByAsin, { B07YGQVKDY: { currentPrice: true } });
+});
+
 const projectId = "10000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000002";
 const userId = "10000000-0000-4000-8000-000000000003";

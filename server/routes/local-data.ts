@@ -90,6 +90,7 @@ export type LocalDataBridgeDeps = {
   fetchAsinDataStatus(asins: string[]): Promise<AsinModuleStatus[]>;
   startAsinSyncJob(input: SyncJobStartInput): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
+  readLatestCompletedSyncJob?(input: { organizationId: string; projectId: string }): Promise<{ jobId: string; runId: string } | null>;
   readStageOutput?(input: {
     organizationId: string;
     projectId: string;
@@ -174,6 +175,7 @@ export function createDefaultLocalDataBridgeDeps(
     readJob: syncJobService
       ? (jobId) => syncJobService.read(jobId)
       : async () => null,
+    readLatestCompletedSyncJob: repository?.syncJobs?.findLatestCompletedForProject?.bind(repository.syncJobs),
     readStageOutput: syncJobService
       ? (input) => syncJobService.readStageOutput(input)
       : async () => null,
@@ -449,6 +451,15 @@ export function registerLocalDataRoutes(
       if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
     }
+  });
+
+  app.get("/v1/local-data/projects/:id/current-sync-job", async (request) => {
+    const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
+    const principal = request.authPrincipal;
+    if (principal?.kind !== "user" || !deps.readLatestCompletedSyncJob) return missing("Current sync job not found");
+    const current = await deps.readLatestCompletedSyncJob({ organizationId: principal.organizationId, projectId: id });
+    if (!current) return missing("Current sync job not found");
+    return { jobId: current.jobId, runId: current.runId };
   });
 
   app.get("/v1/local-data/sync-asins", async (request) => {

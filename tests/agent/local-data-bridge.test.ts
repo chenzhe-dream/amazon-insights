@@ -189,6 +189,22 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
   };
 }
 
+test("current sync job read is organization scoped and returns the completed display job", async (t) => {
+  const deps = fakeDeps();
+  deps.readLatestCompletedSyncJob = async ({ organizationId, projectId }) => {
+    assert.equal(organizationId, memberPrincipal().organizationId);
+    assert.equal(projectId, project.id);
+    return { jobId: "new-job", runId: "run-1" };
+  };
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const current = await app.inject({ method: "GET",
+    url: `/v1/local-data/projects/${project.id}/current-sync-job`, headers: authenticatedHeaders() });
+  assert.equal(current.statusCode, 200);
+  assert.deepEqual(current.json(), { jobId: "new-job", runId: "run-1" });
+});
+
 test('collection source binding persists only an authorized analysis project with matching scope', async () => {
   const sourceId='30000000-0000-4000-8000-000000000001';
   const source={...project,id:sourceId};

@@ -175,6 +175,10 @@ export class SyncJobRunConflictError extends Error {
 }
 
 export interface SyncJobRepository {
+  findLatestCompletedForProject?(input: {
+    organizationId: string;
+    projectId: string;
+  }): Promise<{ jobId: string; runId: string } | null>;
   admit(input: AdmitSyncJobInput): Promise<{
     job: SyncJobRecord;
     disposition: "created" | "deduplicated";

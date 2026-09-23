@@ -2165,8 +2165,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         monthlyTrend: {},
         meta: sifListingTrafficMeta,
       },
-    }),
-    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData],
+    }, { authoritative: Boolean(stageOutputJobId && resumedProjectId) }),
+    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId],
   );
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, ratingByAsin,

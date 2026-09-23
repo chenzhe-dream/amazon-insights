@@ -18,7 +18,7 @@ type StageOutputFallbacks = {
   trafficData: TrafficDisplayData;
 };
 
-export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: StageOutputSnapshot, fallbacks: T) {
+export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: StageOutputSnapshot, fallbacks: T, options: { authoritative?: boolean } = {}) {
   const keywordOutput = availableData(snapshot, "keywords") as { analysisByAsin?: Record<string, unknown>; enrichmentByKeyword?: Record<string, unknown> } | null;
   const reviewOutput = availableData(snapshot, "reviews") as { analysisByAsin?: Record<string, unknown>; ratingByAsin?: Record<string, unknown> } | null;
   const salesOutput = availableData(snapshot, "sales_trend") as { trendByAsin?: Record<string, unknown> } | null;
@@ -48,18 +48,18 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   })) as TrafficDisplayData["monthlyTrend"];
 
   return {
-    keywordAnalysisByAsin: { ...fallbacks.keywordAnalysisByAsin, ...(keywordOutput?.analysisByAsin ?? {}) } as T["keywordAnalysisByAsin"],
-    keywordEnrichmentByKeyword: { ...fallbacks.keywordEnrichmentByKeyword, ...(keywordOutput?.enrichmentByKeyword ?? {}) } as T["keywordEnrichmentByKeyword"],
-    reviewAnalysisByAsin: { ...fallbacks.reviewAnalysisByAsin, ...(reviewOutput?.analysisByAsin ?? {}) } as T["reviewAnalysisByAsin"],
-    ratingByAsin: { ...fallbacks.ratingByAsin, ...(reviewOutput?.ratingByAsin ?? {}) } as T["ratingByAsin"],
-    salesTrendByAsin: { ...fallbacks.salesTrendByAsin, ...(salesOutput?.trendByAsin ?? {}) } as T["salesTrendByAsin"],
-    fbaFeeByAsin: { ...fallbacks.fbaFeeByAsin, ...(fbaOutput?.feeByAsin ?? {}) } as T["fbaFeeByAsin"],
-    listingContentByAsin: { ...fallbacks.listingContentByAsin, ...(listingOutput?.contentByAsin ?? {}) } as T["listingContentByAsin"],
-    categoryTrendByNode: { ...fallbacks.categoryTrendByNode, ...(categoryOutput?.trendByNode ?? {}) } as T["categoryTrendByNode"],
-    childSalesByAsin: { ...fallbacks.childSalesByAsin, ...(childSalesOutput?.rowsByAsin ?? {}) } as T["childSalesByAsin"],
-    priceStrategyByAsin: { ...fallbacks.priceStrategyByAsin, ...(priceStrategyOutput?.strategyByAsin ?? {}) } as T["priceStrategyByAsin"],
-    imageRemarksByAsin: { ...fallbacks.imageRemarksByAsin, ...(imageRemarksOutput?.remarksByAsin ?? {}) } as T["imageRemarksByAsin"],
-    imageRemarkOutcomesByAsin: { ...fallbacks.imageRemarkOutcomesByAsin, ...(imageRemarksOutput?.outcomesByAsin ?? {}) } as T["imageRemarkOutcomesByAsin"],
+    keywordAnalysisByAsin: scopedMap(fallbacks.keywordAnalysisByAsin, keywordOutput?.analysisByAsin, options.authoritative) as T["keywordAnalysisByAsin"],
+    keywordEnrichmentByKeyword: scopedMap(fallbacks.keywordEnrichmentByKeyword, keywordOutput?.enrichmentByKeyword, options.authoritative) as T["keywordEnrichmentByKeyword"],
+    reviewAnalysisByAsin: scopedMap(fallbacks.reviewAnalysisByAsin, reviewOutput?.analysisByAsin, options.authoritative) as T["reviewAnalysisByAsin"],
+    ratingByAsin: scopedMap(fallbacks.ratingByAsin, reviewOutput?.ratingByAsin, options.authoritative) as T["ratingByAsin"],
+    salesTrendByAsin: scopedMap(fallbacks.salesTrendByAsin, salesOutput?.trendByAsin, options.authoritative) as T["salesTrendByAsin"],
+    fbaFeeByAsin: scopedMap(fallbacks.fbaFeeByAsin, fbaOutput?.feeByAsin, options.authoritative) as T["fbaFeeByAsin"],
+    listingContentByAsin: scopedMap(fallbacks.listingContentByAsin, listingOutput?.contentByAsin, options.authoritative) as T["listingContentByAsin"],
+    categoryTrendByNode: scopedMap(fallbacks.categoryTrendByNode, categoryOutput?.trendByNode, options.authoritative) as T["categoryTrendByNode"],
+    childSalesByAsin: scopedMap(fallbacks.childSalesByAsin, childSalesOutput?.rowsByAsin, options.authoritative) as T["childSalesByAsin"],
+    priceStrategyByAsin: scopedMap(fallbacks.priceStrategyByAsin, priceStrategyOutput?.strategyByAsin, options.authoritative) as T["priceStrategyByAsin"],
+    imageRemarksByAsin: scopedMap(fallbacks.imageRemarksByAsin, imageRemarksOutput?.remarksByAsin, options.authoritative) as T["imageRemarksByAsin"],
+    imageRemarkOutcomesByAsin: scopedMap(fallbacks.imageRemarkOutcomesByAsin, imageRemarksOutput?.outcomesByAsin, options.authoritative) as T["imageRemarkOutcomesByAsin"],
     trafficData: {
       ...(baseTraffic.authoritativeListingAsins ? { authoritativeListingAsins: baseTraffic.authoritativeListingAsins } : {}),
       overview: { ...baseTraffic.overview, ...stageTrafficOverview },
@@ -68,6 +68,10 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
       detailAvailability,
     } satisfies TrafficDisplayData,
   };
+}
+
+function scopedMap(fallback: Record<string, unknown>, current: Record<string, unknown> | undefined, authoritative?: boolean) {
+  return authoritative ? current ?? {} : { ...fallback, ...current };
 }
 
 function availableData(snapshot: StageOutputSnapshot, stage: keyof StageOutputSnapshot): unknown | null {
