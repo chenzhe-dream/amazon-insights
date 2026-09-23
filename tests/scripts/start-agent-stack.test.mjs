@@ -116,6 +116,53 @@ for (const failure of [null, "preflight", "final", "commit", "manifest"]) {
   });
 }
 
+test("new supervisor starts an old code artifact and publishes the next code artifact", async () => {
+  const worktree = await mkdtemp(path.join(os.tmpdir(), "legacy-code-supervisor-"));
+  const target = createWebReloadTarget({ worktree, webHost: "127.0.0.1", webPort: 43123 });
+  const controlPath = webPublicationControlPath(worktree);
+  const oldRelease = { sourceCommit: "1".repeat(40), sourceHash: "2".repeat(64), baseArtifactId: ARTIFACT_A };
+  const nextRelease = { sourceCommit: "1".repeat(40), sourceHash: "3".repeat(64), baseArtifactId: ARTIFACT_B };
+  let launcher;
+  try {
+    const build = async () => { await mkdir(path.join(worktree, "dist"), { recursive: true }); await writeFile(path.join(worktree, "dist", "index.html"), "test build"); };
+    await publishImmutableWebArtifact({ worktree, ...reconciliation(ARTIFACT_A), build });
+    await commitWebPublicationControl({ controlPath, requestId: ARTIFACT_A,
+      payload: { ...reconciliation(ARTIFACT_A), target } });
+    await publishImmutableWebArtifact({ worktree, artifactId: ARTIFACT_B, kind: "code", codeRelease: oldRelease, build });
+    await commitWebPublicationControl({ controlPath, requestId: ARTIFACT_B,
+      payload: { artifactId: ARTIFACT_B, kind: "code", codeRelease: oldRelease, target } });
+    await publishImmutableWebArtifact({ worktree, artifactId: ARTIFACT_C, kind: "code", codeRelease: nextRelease, build });
+    await writeWebReloadRequest({ artifactId: ARTIFACT_C, kind: "code", codeRelease: nextRelease,
+      target, buildCompletedAt: new Date().toISOString() },
+    { spoolDir: path.join(worktree, "data", "web-reload-requests") });
+    const children = [];
+    launcher = createStackLauncherImplementation({
+      worktree, platform: "linux",
+      env: { WEB_HOST: "127.0.0.1", WEB_PORT: "43123" },
+      artifactStore: createWebArtifactStore({ worktree }),
+      spawn: () => { const child = new FakeChild(`child-${children.length}`); child.exitOnKill = true; children.push(child); return child; },
+      waitForHealth: async (url, options = {}) => {
+        if (!options.expectedArtifactId) return;
+        const release = options.expectedArtifactId === ARTIFACT_B ? oldRelease : nextRelease;
+        return waitForHealth(url, { ...options,
+          fetchImplementation: async () => Response.json({ status: "ok", artifactId: options.expectedArtifactId,
+            codeRelease: release,
+            ...(release === nextRelease ? { codeSource: { sourceCommit: release.sourceCommit, sourceHash: release.sourceHash } } : {}),
+          }), timeoutMs: 0, intervalMs: 0,
+        });
+      },
+      allocatePreflightPort: async () => 43124,
+      terminateProcessTree: async ({ child }) => { child.exit(); return true; },
+      publicationRecovery: async () => {},
+      setIntervalImplementation: () => ({ unref() {} }), clearIntervalImplementation: () => {},
+      onceProcessSignal: () => {},
+    });
+    await launcher.start();
+    assert.equal((await launcher.processReloadRequests()).status, "applied");
+    assert.equal((await readWebPublicationControl({ controlPath })).current.artifactId, ARTIFACT_C);
+  } finally { await launcher?.cleanup("SIGTERM"); await rm(worktree, { recursive: true, force: true }); }
+});
+
 function createControlledClock() {
   const sleepers = [];
   return {
@@ -1213,6 +1260,26 @@ test("health probing rejects an artifact whose running Web source differs from i
     }),
     /source/i,
   );
+});
+
+test("health probing accepts legacy code health only with its exact code release", async () => {
+  const codeRelease = { sourceCommit: "1".repeat(40), sourceHash: "2".repeat(64), baseArtifactId: ARTIFACT_A };
+  const legacyHealth = { status: "ok", artifactId: ARTIFACT_B, codeRelease };
+  assert.deepEqual(await waitForHealth("http://127.0.0.1:3001/api/health", {
+    expectedArtifactId: ARTIFACT_B, expectedCodeRelease: codeRelease,
+    fetchImplementation: async () => Response.json(legacyHealth), timeoutMs: 0, intervalMs: 0,
+  }), { artifactId: ARTIFACT_B });
+  await assert.rejects(() => waitForHealth("http://127.0.0.1:3001/api/health", {
+    expectedArtifactId: ARTIFACT_B, expectedCodeRelease: codeRelease,
+    fetchImplementation: async () => Response.json({ ...legacyHealth,
+      codeRelease: { ...codeRelease, baseArtifactId: ARTIFACT_C } }),
+    timeoutMs: 0, intervalMs: 0,
+  }), /source/i);
+  await assert.rejects(() => waitForHealth("http://127.0.0.1:3001/api/health", {
+    expectedArtifactId: ARTIFACT_B,
+    expectedCodeSource: { sourceCommit: codeRelease.sourceCommit, sourceHash: codeRelease.sourceHash },
+    fetchImplementation: async () => Response.json(legacyHealth), timeoutMs: 0, intervalMs: 0,
+  }), /source/i);
 });
 
 test("business current restores its verified Web build source after supervisor restart", async () => {

@@ -70,6 +70,7 @@ export async function waitForHealth(
     intervalMs = 250,
     expectedArtifactId,
     expectedCodeSource,
+    expectedCodeRelease,
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -89,9 +90,16 @@ export async function waitForHealth(
         }
         const payload = JSON.parse(text);
         const actualCodeSource = boundedCodeSource(payload?.codeSource?.sourceCommit, payload?.codeSource?.sourceHash);
+        const releaseMatches = expectedCodeRelease === undefined || (
+          codeReleasesMatch(payload?.codeRelease, expectedCodeRelease) &&
+          (!Object.hasOwn(payload, "codeSource") || (
+            actualCodeSource?.sourceCommit === expectedCodeRelease.sourceCommit &&
+            actualCodeSource?.sourceHash === expectedCodeRelease.sourceHash
+          ))
+        );
         if (payload?.artifactId === expectedArtifactId && (expectedCodeSource === undefined ||
           (actualCodeSource?.sourceCommit === expectedCodeSource.sourceCommit &&
-            actualCodeSource?.sourceHash === expectedCodeSource.sourceHash))) {
+            actualCodeSource?.sourceHash === expectedCodeSource.sourceHash)) && releaseMatches) {
           return Object.freeze({ artifactId: expectedArtifactId });
         }
         lastError = new Error(payload?.artifactId === expectedArtifactId
@@ -528,7 +536,8 @@ export function createStackLauncher({
       await candidate.spawnReady;
       await wait(webHealthUrl(preflightSpec), {
         expectedArtifactId: request.artifactId,
-        expectedCodeSource: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : candidateArtifact.codeSource,
+        expectedCodeSource: candidateArtifact.kind === "code" ? undefined : candidateArtifact.codeSource,
+        expectedCodeRelease: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : undefined,
       });
     } catch (error) {
       await stopChildForReplacement(candidate);
@@ -545,7 +554,8 @@ export function createStackLauncher({
       await replacement.spawnReady;
       await wait(webHealthUrl(configuredSpec), {
         expectedArtifactId: request.artifactId,
-        expectedCodeSource: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : candidateArtifact.codeSource,
+        expectedCodeSource: candidateArtifact.kind === "code" ? undefined : candidateArtifact.codeSource,
+        expectedCodeRelease: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : undefined,
       });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
       const nextKnownGoodArtifact = {
@@ -567,7 +577,8 @@ export function createStackLauncher({
         await restored.spawnReady;
         await wait(webHealthUrl(configuredSpec), {
           expectedArtifactId: recoveryArtifact.publicationArtifactId ?? recoveryArtifact.id,
-          expectedCodeSource: recoveryArtifact.kind === "code" ? recoveryArtifact.codeRelease : recoveryArtifact.codeSource,
+          expectedCodeSource: recoveryArtifact.kind === "code" ? undefined : recoveryArtifact.codeSource,
+          expectedCodeRelease: recoveryArtifact.kind === "code" ? recoveryArtifact.codeRelease : undefined,
         });
         if (committedArtifact) knownGoodArtifact = committedArtifact;
         armUnexpectedExit(restored);
@@ -657,7 +668,8 @@ export function createStackLauncher({
       await webChild.spawnReady;
       await wait(settings.web.healthUrl, {
         expectedArtifactId: initialArtifact.id,
-        expectedCodeSource: initialArtifact.kind === "code" ? initialArtifact.codeRelease : initialArtifact.codeSource,
+        expectedCodeSource: initialArtifact.kind === "code" ? undefined : initialArtifact.codeSource,
+        expectedCodeRelease: initialArtifact.kind === "code" ? initialArtifact.codeRelease : undefined,
       });
       if (artifactStore.isImmutable?.(initialArtifact)) {
         knownGoodArtifact = { ...initialArtifact, publicationArtifactId: initialArtifact.id };
