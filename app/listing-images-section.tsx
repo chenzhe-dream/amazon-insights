@@ -7,6 +7,7 @@ import type { SyncJob } from "./lib/sync-progress-presentation";
 import { ListingImageActions, type ListingImageAction } from "./listing-image-actions";
 import { getListingImageRemark, listingImageRemarksMeta } from "./listing-image-remarks";
 import { amazonMediaSrc } from "./lib/amazon-image";
+import type { ImageRemarkOverlayEntry } from "../shared/image-remark-overlay";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
@@ -82,6 +83,7 @@ type ListingImagesSectionProps = {
   reportUnavailableReason?: string;
   resolveImageRemark?: typeof getListingImageRemark;
   resolveImageOutcome?: (asin: string, slotIndex: number) => ImageRemarkOutcome | null;
+  resolveImageOverlay?: (asin: string, slotIndex: number) => ImageRemarkOverlayEntry | null;
 };
 
 export const LISTING_IMAGES_SOURCE_LABEL = "MCP 商品图";
@@ -113,6 +115,7 @@ export function ListingImagesSection({
   reportUnavailableReason,
   resolveImageRemark = getListingImageRemark,
   resolveImageOutcome = getListingImageOutcome,
+  resolveImageOverlay = () => null,
 }: ListingImagesSectionProps) {
   const listingDates = [...new Set(Object.values(listingByAsin).map(record => record.fetchedAt).filter(Boolean))].sort();
   const listingSourceDate = listingDates.length ? listingDates.join("、") : sorftimeListingContentMeta.updatedAt;
@@ -121,7 +124,12 @@ export function ListingImagesSection({
   const remarkForImage = (asin: string, slotIndex: number) => {
     const record = listingByAsin[asin] as (SorftimeListingContentRecord & {previousGalleryImages?: string[]}) | undefined;
     const url = record?.galleryImages?.[slotIndex];
-    return url ? resolveRemarkForGalleryImage(url, slotIndex, record?.previousGalleryImages, index => resolveImageRemark(asin, index)) : resolveImageRemark(asin, slotIndex);
+    const current = url ? resolveRemarkForGalleryImage(url, slotIndex, record?.previousGalleryImages, index => resolveImageRemark(asin, index)) : resolveImageRemark(asin, slotIndex);
+    if (current || !url) return current;
+    const overlay = resolveImageOverlay(asin, slotIndex);
+    return overlay?.asin === asin && overlay.index === slotIndex && overlay.imageUrl === url
+      ? { remark: overlay.remark, image_types: overlay.imageTypes, confidence: overlay.confidence }
+      : null;
   };
   const imageColumnCount = Math.min(
     MAX_IMAGE_COLUMNS,
@@ -259,6 +267,10 @@ export function ListingImagesSection({
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
                     const imageRemark = remarkForImage(product.asin, slotIndex);
+                    const imageOverlay = imageRemark && !resolveRemarkForGalleryImage(url ?? "", slotIndex,
+                      (listingByAsin[product.asin] as SorftimeListingContentRecord & {previousGalleryImages?: string[]})?.previousGalleryImages,
+                      imageIndex => resolveImageRemark(product.asin, imageIndex))
+                      ? resolveImageOverlay(product.asin, slotIndex) : null;
                     const imageOutcome = resolveImageOutcome(product.asin, slotIndex);
                     const imageOutcomeReason = imageOutcome
                       ? IMAGE_REMARK_OUTCOME_REASONS[imageOutcome.status]
@@ -300,6 +312,10 @@ export function ListingImagesSection({
                             </button>
                             {imageRemark ? (
                               <div className="listing-image-remark-block">
+                                {imageOverlay?.imageUrl === url ? <p className="listing-image-caption muted">
+                                  {imageOverlay.source.sourceKind === "supplemental-analysis" ? "补充分析" : "历史备注"} · {imageOverlay.source.capturedAt.slice(0, 10)}
+                                  {imageOverlay.videoThumbnail ? " · 视频封面说明" : ""}
+                                </p> : null}
                                 {imageOutcome && imageOutcome.status !== "ready" ? <p className="listing-image-caption muted">本次重新分析失败，暂显示上次结果 · {imageOutcomeReason}</p> : null}
                                 {imageRemark.image_types.length > 0 ? (
                                   <p className="listing-image-type-tags">

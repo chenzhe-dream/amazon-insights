@@ -3555,6 +3555,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
               const slots = imageRemarksByAsin[asin];
               return Array.isArray(slots) ? slots[slotIndex] as never ?? null : null;
             }}
+            resolveImageOverlay={(asin, slotIndex) => currentDisplayVersion?.imageRemarkOverlay?.find(
+              entry => entry.asin === asin && entry.index === slotIndex) ?? null}
             resolveImageOutcome={(asin, slotIndex) => {
               const slots = imageRemarkOutcomesByAsin[asin];
               const candidate = Array.isArray(slots) ? slots[slotIndex] : null;

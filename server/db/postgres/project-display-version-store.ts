@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
+import { ImageRemarkOverlayEntrySchema, type ImageRemarkOverlayEntry } from "../../../shared/image-remark-overlay";
+import {
+  imageRemarkEvidenceSummary,
+  inheritedImageRemarkOverlay,
+  mergedImageRemarkOverlay,
+  validateImageRemarkCandidate,
+  type ImageRemarkEvidenceSummary,
+} from "../../services/project-image-remark-overlay";
 import type { PostgresQueryContext } from "./query-context";
 import type { ProjectableSyncStage, StageOutputProjection, SyncCatalogCapture } from "../sync-job-repository";
 
@@ -43,6 +51,9 @@ export type CurrentProjectDisplayVersion = Readonly<{
   asins: readonly string[];
   catalog: readonly Record<string, unknown>[];
   catalogEvidence: ProjectCatalogEvidence | null;
+  revisionKind: "job-publication" | "catalog-revision" | "image-remarks-revision";
+  imageRemarkOverlay: readonly ImageRemarkOverlayEntry[];
+  imageRemarkEvidence: ImageRemarkEvidenceSummary | null;
   stageOutputs: Readonly<Record<ProjectableSyncStage, DisplayStageOutput>>;
   gaps: readonly ProjectDisplayGap[];
   contentHash: string;
@@ -66,11 +77,20 @@ export type ReviseCurrentCatalogInput = Readonly<{
   evidence: ProjectCatalogEvidence;
   publishedAt?: string;
 }>;
+export type ReviseCurrentImageRemarksInput = Readonly<{
+  organizationId: string;
+  projectId: string;
+  expectedCurrentVersionId: string;
+  manifest: unknown;
+  sourceRef: string;
+  sourceManifestSha256: string;
+  publishedAt?: string;
+}>;
 
 type ProjectRow = { id: string; organization_id: string; marketplace: string; asins_json: unknown; current_display_version_id: string | null };
 type JobRow = { job_id: string; organization_id: string; project_id: string; run_id: string; marketplace: string; asins: unknown; status: string; created_at: Date | string; completed_at: Date | string | null };
 type OutputRow = { job_id: string; organization_id: string; project_id: string; run_id: string; stage_id: string; stage_status: string; output_version: number; job_version: number; content_hash: string; data_json: unknown; gap_json: unknown; updated_at: Date | string };
-type VersionRow = { id: string; organization_id: string; project_id: string; source_run_id: string; source_job_id: string; marketplace: string; asins_json: unknown; content_hash: string; body_json: unknown; source_completed_at: Date | string; published_at: Date | string; revision_kind: "job-publication" | "catalog-revision"; supersedes_version_id: string | null; catalog_evidence_json: unknown };
+type VersionRow = { id: string; organization_id: string; project_id: string; source_run_id: string; source_job_id: string; marketplace: string; asins_json: unknown; content_hash: string; body_json: unknown; source_completed_at: Date | string; published_at: Date | string; revision_kind: "job-publication" | "catalog-revision" | "image-remarks-revision"; supersedes_version_id: string | null; catalog_evidence_json: unknown; image_remark_evidence_json?: unknown };
 
 export class ProjectDisplayVersionConflictError extends Error {
   constructor(message: string) { super(message); this.name = "ProjectDisplayVersionConflictError"; }
@@ -337,22 +357,32 @@ function imageUrls(value: unknown): Set<string> {
 function fromRow(row: VersionRow): CurrentProjectDisplayVersion {
   if (!row.body_json) throw new ProjectDisplayVersionConflictError("Current display version body was purged");
   const body = record(row.body_json);
+  const overlay = Array.isArray(body.imageRemarkOverlay)
+    ? body.imageRemarkOverlay.map(entry => ImageRemarkOverlayEntrySchema.parse(entry)) : [];
+  const imageEvidence = imageRemarkEvidenceSummary(overlay);
   const view: CurrentProjectDisplayVersion = {
     versionId: row.id, organizationId: row.organization_id, projectId: row.project_id,
     runId: row.source_run_id, jobId: row.source_job_id, marketplace: row.marketplace,
     asins: asins(row.asins_json),
     catalog: Array.isArray(body.catalog) ? body.catalog as Record<string, unknown>[] : [],
     catalogEvidence: body.catalogEvidence ? catalogEvidence(body.catalogEvidence as ProjectCatalogEvidence) : null,
+    revisionKind: row.revision_kind,
+    imageRemarkOverlay: overlay,
+    imageRemarkEvidence: imageEvidence,
     stageOutputs: body.stageOutputs as CurrentProjectDisplayVersion["stageOutputs"],
     gaps: body.gaps as ProjectDisplayGap[],
     contentHash: row.content_hash,
     sourceCompletedAt: dateTime(row.source_completed_at), publishedAt: dateTime(row.published_at),
   };
   if (!view.stageOutputs || !Array.isArray(view.gaps) ||
-      hash(row.catalog_evidence_json) !== hash(view.catalogEvidence) || hash({
+      hash(row.catalog_evidence_json) !== hash(view.catalogEvidence) ||
+      hash(row.image_remark_evidence_json ?? null) !== hash(imageEvidence) ||
+      (body.imageRemarkEvidence !== undefined && hash(body.imageRemarkEvidence) !== hash(imageEvidence)) || hash({
     organizationId: view.organizationId, projectId: view.projectId, runId: view.runId, jobId: view.jobId,
     marketplace: view.marketplace, asins: view.asins, catalog: view.catalog,
     ...(view.catalogEvidence ? { catalogEvidence: view.catalogEvidence } : {}),
+    ...(body.imageRemarkOverlay !== undefined ? { imageRemarkOverlay: overlay } : {}),
+    ...(body.imageRemarkEvidence !== undefined ? { imageRemarkEvidence: imageEvidence } : {}),
     stageOutputs: view.stageOutputs, gaps: view.gaps, sourceCompletedAt: view.sourceCompletedAt,
   }) !== view.contentHash) throw new ProjectDisplayVersionConflictError("Current display version hash mismatch");
   return view;
@@ -385,6 +415,69 @@ export class PostgresProjectDisplayVersionStore {
       WHERE project.id = $1 AND project.organization_id = $2 AND version.organization_id = $2 AND version.project_id = $1`,
     [scope.projectId, scope.organizationId]);
     return result.rows[0] ? fromRow(result.rows[0]) : null;
+  }
+
+  async previewImageRemarkRevision(input: ReviseCurrentImageRemarksInput): Promise<Readonly<{
+    currentVersionId: string; addedSlots: number; totalOverlaySlots: number;
+    evidence: ImageRemarkEvidenceSummary | null;
+  }>> {
+    const current = await this.readCurrent({ organizationId: input.organizationId, projectId: input.projectId });
+    if (!current || current.versionId !== input.expectedCurrentVersionId) {
+      throw new ProjectDisplayVersionConflictError("Current display version changed");
+    }
+    const added = validateImageRemarkCandidate(current, { ...input,
+      publishedAt: dateTime(input.publishedAt ?? new Date().toISOString()) });
+    const merged = mergedImageRemarkOverlay(current.imageRemarkOverlay, added);
+    return { currentVersionId: current.versionId, addedSlots: added.length,
+      totalOverlaySlots: merged.length, evidence: imageRemarkEvidenceSummary(merged) };
+  }
+
+  async reviseCurrentImageRemarks(input: ReviseCurrentImageRemarksInput): Promise<CurrentProjectDisplayVersion> {
+    return this.queries.transaction(async () => {
+      const project = (await this.queries.query<ProjectRow>(`SELECT id,organization_id,marketplace,asins_json,current_display_version_id
+        FROM projects WHERE id=$1 AND organization_id=$2 FOR UPDATE`, [input.projectId,input.organizationId])).rows[0];
+      if (!project || project.current_display_version_id !== input.expectedCurrentVersionId) {
+        throw new ProjectDisplayVersionConflictError("Current display version changed");
+      }
+      const current = await this.readCurrent({ organizationId: input.organizationId, projectId: input.projectId });
+      if (!current || current.versionId !== input.expectedCurrentVersionId ||
+          current.marketplace !== project.marketplace || !sameSet(current.asins, asins(project.asins_json))) {
+        throw new ProjectDisplayVersionConflictError("Current display version scope changed");
+      }
+      const publishedAt = dateTime(input.publishedAt ?? new Date().toISOString());
+      const added = validateImageRemarkCandidate(current, { ...input, publishedAt });
+      const overlay = mergedImageRemarkOverlay(current.imageRemarkOverlay, added);
+      const imageEvidence = imageRemarkEvidenceSummary(overlay);
+      const body = { catalog: current.catalog, stageOutputs: current.stageOutputs, gaps: current.gaps,
+        ...(current.catalogEvidence ? { catalogEvidence: current.catalogEvidence } : {}),
+        imageRemarkOverlay: overlay, imageRemarkEvidence: imageEvidence };
+      const contentHash = hash({ organizationId: current.organizationId, projectId: current.projectId,
+        runId: current.runId, jobId: current.jobId, marketplace: current.marketplace, asins: current.asins,
+        ...body, sourceCompletedAt: current.sourceCompletedAt });
+      const versionId = randomUUID();
+      await this.queries.query(`INSERT INTO project_display_versions
+        (id,organization_id,project_id,source_run_id,source_job_id,marketplace,asins_json,content_hash,body_json,
+          source_completed_at,published_at,revision_kind,supersedes_version_id,catalog_evidence_json,image_remark_evidence_json)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,'image-remarks-revision',$12,$13::jsonb,$14::jsonb)`,
+      [versionId,current.organizationId,current.projectId,current.runId,current.jobId,current.marketplace,
+        JSON.stringify(current.asins),contentHash,JSON.stringify(body),current.sourceCompletedAt,publishedAt,
+        current.versionId,current.catalogEvidence ? JSON.stringify(current.catalogEvidence) : null,
+        JSON.stringify(imageEvidence)]);
+      const expired = await this.queries.query(`UPDATE project_display_versions SET body_expires_at=$2::timestamptz + interval '24 hours'
+        WHERE id=$1 AND project_id=$3 AND organization_id=$4 AND body_json IS NOT NULL AND body_expires_at IS NULL`,
+      [current.versionId,publishedAt,input.projectId,input.organizationId]);
+      if (expired.rowCount !== 1) throw new ProjectDisplayVersionConflictError("Current report cannot be retained for rollback");
+      const switched = await this.queries.query(`UPDATE projects SET current_display_version_id=$1
+        WHERE id=$2 AND organization_id=$3 AND current_display_version_id=$4 RETURNING id`,
+      [versionId,input.projectId,input.organizationId,input.expectedCurrentVersionId]);
+      if (switched.rowCount !== 1) throw new ProjectDisplayVersionConflictError("Current display version changed");
+      return fromRow({ id: versionId, organization_id: current.organizationId, project_id: current.projectId,
+        source_run_id: current.runId, source_job_id: current.jobId, marketplace: current.marketplace,
+        asins_json: current.asins, content_hash: contentHash, body_json: body,
+        source_completed_at: current.sourceCompletedAt, published_at: publishedAt,
+        revision_kind: "image-remarks-revision", supersedes_version_id: current.versionId,
+        catalog_evidence_json: current.catalogEvidence, image_remark_evidence_json: imageEvidence });
+    });
   }
 
   async publishFromCompletedJob(input: PublishProjectDisplayVersionInput): Promise<CurrentProjectDisplayVersion> {
@@ -447,16 +540,19 @@ export class PostgresProjectDisplayVersionStore {
         : null;
       assertNoCoverageRegression(current, catalog, stageOutputs, asins(job.asins));
       const gaps = gapsFor(asins(job.asins), catalog, stageOutputs);
-      const body = { catalog, stageOutputs, gaps, ...(evidence ? { catalogEvidence: evidence } : {}) };
+      const overlay = inheritedImageRemarkOverlay(current?.imageRemarkOverlay ?? [], stageOutputs);
+      const imageEvidence = imageRemarkEvidenceSummary(overlay);
+      const body = { catalog, stageOutputs, gaps, ...(evidence ? { catalogEvidence: evidence } : {}),
+        ...(imageEvidence ? { imageRemarkOverlay: overlay, imageRemarkEvidence: imageEvidence } : {}) };
       const contentHash = hash({ organizationId: input.organizationId, projectId: input.projectId,
         runId: job.run_id, jobId: input.jobId, marketplace: job.marketplace, asins: asins(job.asins),
         ...body, sourceCompletedAt });
       const publishedAt = dateTime(input.publishedAt ?? new Date().toISOString());
       const versionId = randomUUID();
       await this.queries.query(`INSERT INTO project_display_versions
-        (id,organization_id,project_id,source_run_id,source_job_id,marketplace,asins_json,content_hash,body_json,source_completed_at,published_at,revision_kind,catalog_evidence_json)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,'job-publication',$12::jsonb)`,
-      [versionId,input.organizationId,input.projectId,job.run_id,input.jobId,job.marketplace,JSON.stringify(job.asins),contentHash,JSON.stringify(body),sourceCompletedAt,publishedAt,evidence ? JSON.stringify(evidence) : null]);
+        (id,organization_id,project_id,source_run_id,source_job_id,marketplace,asins_json,content_hash,body_json,source_completed_at,published_at,revision_kind,catalog_evidence_json,image_remark_evidence_json)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,'job-publication',$12::jsonb,$13::jsonb)`,
+      [versionId,input.organizationId,input.projectId,job.run_id,input.jobId,job.marketplace,JSON.stringify(job.asins),contentHash,JSON.stringify(body),sourceCompletedAt,publishedAt,evidence ? JSON.stringify(evidence) : null,imageEvidence ? JSON.stringify(imageEvidence) : null]);
       if (project.current_display_version_id) {
         await this.queries.query(`UPDATE project_display_versions SET body_expires_at=$2::timestamptz + interval '24 hours'
           WHERE id=$1 AND organization_id=$3 AND project_id=$4 AND body_expires_at IS NULL`,
@@ -470,7 +566,8 @@ export class PostgresProjectDisplayVersionStore {
         source_run_id: job.run_id, source_job_id: input.jobId, marketplace: job.marketplace,
         asins_json: job.asins, content_hash: contentHash, body_json: body,
         source_completed_at: sourceCompletedAt, published_at: publishedAt,
-        revision_kind: "job-publication", supersedes_version_id: null, catalog_evidence_json: evidence });
+        revision_kind: "job-publication", supersedes_version_id: null, catalog_evidence_json: evidence,
+        image_remark_evidence_json: imageEvidence });
     });
   }
 
@@ -497,18 +594,20 @@ export class PostgresProjectDisplayVersionStore {
       const stageOutputs = current.stageOutputs as Record<ProjectableSyncStage, DisplayStageOutput>;
       assertNoCoverageRegression(current, catalog, stageOutputs, current.asins);
       const gaps = gapsFor(current.asins, catalog, stageOutputs);
-      const body = { catalog, stageOutputs, gaps, catalogEvidence: evidence };
+      const imageEvidence = current.imageRemarkEvidence;
+      const body = { catalog, stageOutputs, gaps, catalogEvidence: evidence,
+        ...(imageEvidence ? { imageRemarkOverlay: current.imageRemarkOverlay, imageRemarkEvidence: imageEvidence } : {}) };
       const contentHash = hash({ organizationId: current.organizationId, projectId: current.projectId,
         runId: current.runId, jobId: current.jobId, marketplace: current.marketplace, asins: current.asins,
         ...body, sourceCompletedAt: current.sourceCompletedAt });
       const versionId = randomUUID();
       await this.queries.query(`INSERT INTO project_display_versions
         (id,organization_id,project_id,source_run_id,source_job_id,marketplace,asins_json,content_hash,body_json,
-          source_completed_at,published_at,revision_kind,supersedes_version_id,catalog_evidence_json)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,'catalog-revision',$12,$13::jsonb)`,
+          source_completed_at,published_at,revision_kind,supersedes_version_id,catalog_evidence_json,image_remark_evidence_json)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,'catalog-revision',$12,$13::jsonb,$14::jsonb)`,
       [versionId,current.organizationId,current.projectId,current.runId,current.jobId,current.marketplace,
         JSON.stringify(current.asins),contentHash,JSON.stringify(body),current.sourceCompletedAt,publishedAt,
-        current.versionId,JSON.stringify(evidence)]);
+        current.versionId,JSON.stringify(evidence),imageEvidence ? JSON.stringify(imageEvidence) : null]);
       const expired = await this.queries.query(`UPDATE project_display_versions SET body_expires_at=$2::timestamptz + interval '24 hours'
         WHERE id=$1 AND project_id=$3 AND organization_id=$4 AND body_json IS NOT NULL AND body_expires_at IS NULL`,
       [current.versionId,publishedAt,input.projectId,input.organizationId]);
@@ -522,7 +621,7 @@ export class PostgresProjectDisplayVersionStore {
         asins_json: current.asins, content_hash: contentHash, body_json: body,
         source_completed_at: current.sourceCompletedAt, published_at: publishedAt,
         revision_kind: "catalog-revision", supersedes_version_id: current.versionId,
-        catalog_evidence_json: evidence });
+        catalog_evidence_json: evidence, image_remark_evidence_json: imageEvidence });
     });
   }
 

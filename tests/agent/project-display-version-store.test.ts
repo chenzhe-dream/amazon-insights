@@ -12,7 +12,7 @@ import { reviseProjectDisplayCatalog } from "../../scripts/revise-project-displa
 import { LocalDataStageOutputResponseSchema } from "../../shared/agent-contracts";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
-import { PostgresProjectDisplayVersionStore, StaleProjectDisplayCandidateError } from "../../server/db/postgres/project-display-version-store";
+import { PostgresProjectDisplayVersionStore, StaleProjectDisplayCandidateError, type CurrentProjectDisplayVersion } from "../../server/db/postgres/project-display-version-store";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
 import { startPostgresTestContainer, type PostgresTestContainer } from "./helpers/postgres-test-container";
 
@@ -48,6 +48,12 @@ function hash(value: unknown) {
   const canonical = (item: unknown): unknown => Array.isArray(item) ? item.map(canonical)
     : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical((item as Record<string, unknown>)[key])])) : item;
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+}
+
+function listingHash(version: CurrentProjectDisplayVersion): string {
+  const listing = version.stageOutputs.listing;
+  if (!("contentHash" in listing)) assert.fail("Expected listing stage output");
+  return listing.contentHash;
 }
 
 async function imageOutput(pool: Pool, ids: Awaited<ReturnType<typeof fixture>>["ids"], imageCount = 7) {
@@ -483,4 +489,98 @@ test("a project with a display version remains deletable", async () => {
     projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
   await pool.query("DELETE FROM projects WHERE id=$1", [ids.projectId]);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM project_display_versions WHERE project_id=$1", [ids.projectId])).rows[0]?.n, 0);
+});
+
+test("image remark revision validates source and slots, switches by CAS, and retains old body for 24 hours", async () => {
+  const { pool, ids, asins, store } = await fixture();
+  const asin = asins[1]!;
+  const gallery = ["https://example.test/main.jpg", "https://example.test/side.jpg"];
+  const listing = { contentByAsin: { [asin]: { mainImage: gallery[0], galleryImages: gallery,
+    secondaryImages: [gallery[1]], imageCount: 2 } } };
+  await replaceDoneOutput(pool, ids, "listing", listing);
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: NOW });
+  const capturedAt = "2026-09-21T11:00:00.000Z";
+  const manifest = { schemaVersion: 1, organizationId: ids.organizationId, projectId: ids.projectId,
+    runId: ids.runId, originalJobId: ids.jobId, listingStageContentHash: listingHash(current),
+    sourceKind: "supplemental-analysis", capturedAt, sourceArtifactSha256: "a".repeat(64),
+    asins, staticReady: 2, videoThumbnails: 0, slots: gallery.map((imageUrl, index) => ({ asin,
+      index, imageUrl, remark: `Supplemental ${index}`, imageTypes: ["产品展示"], confidence: "high",
+      videoThumbnail: false })) };
+  const request = { organizationId: ids.organizationId, projectId: ids.projectId,
+    expectedCurrentVersionId: current.versionId, manifest,
+    sourceRef: "round3-listing-image-remarks.ts", sourceManifestSha256: "b".repeat(64),
+    publishedAt: "2026-09-21T12:00:00.000Z" };
+  assert.equal((await store.previewImageRemarkRevision(request)).addedSlots, 2);
+  await assert.rejects(store.reviseCurrentImageRemarks({ ...request,
+    manifest: { ...manifest, originalJobId: randomUUID() } }), /source scope/);
+  await assert.rejects(store.reviseCurrentImageRemarks({ ...request,
+    manifest: { ...manifest, slots: [{ ...manifest.slots[0], imageUrl: "https://example.test/other.jpg" }, manifest.slots[1]] } }), /gallery URL or index/);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+  const revised = await store.reviseCurrentImageRemarks(request);
+  assert.equal(revised.revisionKind, "image-remarks-revision");
+  assert.equal(revised.imageRemarkOverlay.length, 2);
+  assert.equal(listingHash(revised), listingHash(current));
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+  await assert.rejects(store.reviseCurrentImageRemarks(request), /Current display version changed/);
+  const prior = (await pool.query("SELECT body_expires_at,body_json FROM project_display_versions WHERE id=$1", [current.versionId])).rows[0];
+  assert.equal(new Date(prior.body_expires_at).toISOString(), "2026-09-22T12:00:00.000Z");
+  assert.ok(prior.body_json);
+  const cleanup = await store.cleanupExpiredBodies({ now: "2026-09-22T12:00:01.000Z" });
+  assert.equal(cleanup.purgedCount, 1);
+  assert.equal((await pool.query("SELECT body_json FROM project_display_versions WHERE id=$1", [current.versionId])).rows[0]?.body_json, null);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+  const newest = await addJob(pool, ids, "2026-09-22T13:00:00.000Z");
+  await replaceDoneOutput(pool, newest, "listing", listing);
+  const inherited = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: newest.jobId, expectedCurrentVersionId: revised.versionId,
+    publishedAt: "2026-09-22T14:00:00.000Z" });
+  assert.equal(inherited.imageRemarkOverlay.length, 2);
+  assert.equal(inherited.imageRemarkOverlay[0]?.source.originalJobId, ids.jobId);
+  assert.equal(inherited.imageRemarkOverlay[0]?.displayListingStageContentHash, listingHash(inherited));
+  assert.equal(inherited.imageRemarkOverlay[0]?.source.listingStageContentHash, listingHash(current));
+  const verified = await addJob(pool, ids, "2026-09-23T10:00:00.000Z");
+  await replaceDoneOutput(pool, verified, "listing", listing);
+  await replaceDoneOutput(pool, verified, "image_remarks", { remarksByAsin: {
+    [asins[0]!]: Array.from({ length: 7 }, (_, index) => ({ slotIndex: index, remark: `Image ${index + 1}` })),
+    [asin]: gallery.map((imageUrl, index) => ({ imageUrl, remark: `New verified ${index}` })),
+  }, outcomesByAsin: {} });
+  const replaced = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: verified.jobId, expectedCurrentVersionId: inherited.versionId,
+    publishedAt: "2026-09-23T11:00:00.000Z" });
+  assert.equal(replaced.imageRemarkOverlay.length, 0);
+  assert.equal(replaced.imageRemarkEvidence, null);
+});
+
+test("historical image remarks require exact old gallery and cannot replace a current successful note", async () => {
+  const { pool, ids, asins, store } = await fixture();
+  const asin = asins[1]!;
+  const imageUrl = "https://example.test/same.jpg";
+  await replaceDoneOutput(pool, ids, "listing", { contentByAsin: { [asin]: { galleryImages: [imageUrl] } } });
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  const base = { schemaVersion: 1, organizationId: ids.organizationId, projectId: ids.projectId,
+    runId: ids.runId, originalJobId: ids.jobId, listingStageContentHash: listingHash(current),
+    sourceKind: "historical-generated-file", capturedAt: NOW, sourceArtifactSha256: "a".repeat(64),
+    sourceListingSha256: "c".repeat(64), sourceGalleryByAsin: { [asin]: [imageUrl] },
+    asins, staticReady: 1, videoThumbnails: 0,
+    slots: [{ asin, index: 0, imageUrl, remark: "Historical note", imageTypes: [],
+      confidence: "medium", videoThumbnail: false }] };
+  const input = { organizationId: ids.organizationId, projectId: ids.projectId,
+    expectedCurrentVersionId: current.versionId, manifest: base, sourceRef: "listing-image-remarks.ts",
+    sourceManifestSha256: "b".repeat(64), publishedAt: "2026-09-21T13:00:00.000Z" };
+  await assert.rejects(store.previewImageRemarkRevision({ ...input,
+    manifest: { ...base, sourceGalleryByAsin: { [asin]: ["https://example.test/old.jpg"] } } }), /gallery URL or index/);
+  const next = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  await replaceDoneOutput(pool, next, "listing", { contentByAsin: { [asin]: { galleryImages: [imageUrl] } } });
+  await replaceDoneOutput(pool, next, "image_remarks", { remarksByAsin: {
+    [asins[0]!]: Array.from({ length: 7 }, (_, index) => ({ slotIndex: index, remark: `Image ${index + 1}` })),
+    [asin]: [{ remark: "New successful note", imageUrl }],
+  }, outcomesByAsin: {} });
+  const updated = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: next.jobId, expectedCurrentVersionId: current.versionId });
+  await assert.rejects(store.previewImageRemarkRevision({ ...input,
+    expectedCurrentVersionId: updated.versionId,
+    manifest: { ...base, runId: next.runId, originalJobId: next.jobId,
+      listingStageContentHash: listingHash(updated) } }), /Current successful image remark/);
 });

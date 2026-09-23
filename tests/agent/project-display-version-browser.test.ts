@@ -51,3 +51,24 @@ test("an unavailable version stays absent instead of adopting an old job", async
     error: { code: "PROJECT_REPORT_NOT_PUBLISHED", message: "No current report", requestId: "test" },
   }, { status: 404 })), null);
 });
+
+test("browser accepts a source-tagged overlay only for the exact current gallery URL and slot", async () => {
+  const response = version();
+  const imageUrl = "https://example.test/image.jpg";
+  const stage = (name: string, data: unknown) => ({ stage: name, stageStatus: "done", data,
+    projectId: response.projectId, runId: response.runId, jobId: response.jobId,
+    jobVersion: 1, outputVersion: 1, contentHash: "c".repeat(64), updatedAt: response.publishedAt });
+  response.stageOutputs.listing = stage("listing", { contentByAsin: { [scope.asins[0]!]: { galleryImages: [imageUrl] } } });
+  response.stageOutputs.image_remarks = stage("image_remarks", { remarksByAsin: {}, outcomesByAsin: {} });
+  const entry = { asin: scope.asins[0]!, index: 0, imageUrl, remark: "补充备注", imageTypes: [],
+    confidence: "high", videoThumbnail: false, displayListingStageContentHash: "c".repeat(64),
+    source: { sourceKind: "supplemental-analysis", sourceRef: "source.ts",
+      sourceArtifactSha256: "a".repeat(64), sourceManifestSha256: "b".repeat(64),
+      listingStageContentHash: "c".repeat(64), originalJobId: response.jobId,
+      capturedAt: response.publishedAt } };
+  const valid = { ...response, imageRemarkOverlay: [entry] };
+  assert.equal((await readCurrentProjectDisplayVersion(scope, async () => Response.json(valid)))?.imageRemarkOverlay?.length, 1);
+  await assert.rejects(readCurrentProjectDisplayVersion(scope, async () => Response.json({
+    ...valid, imageRemarkOverlay: [{ ...entry, imageUrl: "https://example.test/other.jpg" }],
+  })), /来源不匹配/);
+});

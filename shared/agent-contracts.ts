@@ -20,6 +20,7 @@ import {UsageReportSchema,UsagePeopleResponseSchema} from "./usage-analytics-con
 import { VocAutomationRequestSchema, VocAutomationStatusSchema } from "./voc-automation-contracts";
 import { TrafficListingCollectionSchema } from './traffic-listing-contract';
 import { AnalysisFavoriteResponseSchema, AnalysisFavoritesResponseSchema, FavoriteEmptySchema, FavoriteMutationRequestSchema, FavoriteParamsSchema } from "./analysis-project-favorite-contracts";
+import { ImageRemarkOverlayEntrySchema } from "./image-remark-overlay";
 
 import {
   createAdminUserPresenceContracts,
@@ -1554,6 +1555,9 @@ export const CurrentProjectDisplayVersionResponseSchema = strictObject({
     capturedAt: DateTimeSchema,
     sourceJobId: EntityIdSchema.optional(),
   }).nullable().optional(),
+  revisionKind: z.enum(["job-publication", "catalog-revision", "image-remarks-revision"]).optional(),
+  imageRemarkOverlay: z.array(ImageRemarkOverlayEntrySchema).optional(),
+  imageRemarkEvidence: z.unknown().nullable().optional(),
   stageOutputs: z.record(ProjectableSyncStageSchema, z.union([
     LocalDataStageOutputResponseSchema,
     strictObject({ stage: ProjectableSyncStageSchema, stageStatus: z.literal("missing-output"),

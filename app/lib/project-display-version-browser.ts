@@ -46,6 +46,34 @@ function parseStageOutputs(raw: Record<string, unknown>, identity: { projectId: 
   return snapshot as StageOutputSnapshot;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function validateOverlay(version: z.infer<typeof versionResponseSchema>, outputs: StageOutputSnapshot): void {
+  const listing = outputs.listing;
+  const remarks = outputs.image_remarks;
+  const listingData = listing && "data" in listing ? asRecord(listing.data) : {};
+  const remarkData = remarks && "data" in remarks ? asRecord(remarks.data) : {};
+  const galleryByAsin = asRecord(listingData.contentByAsin);
+  const remarksByAsin = asRecord(remarkData.remarksByAsin);
+  const seen = new Set<string>();
+  for (const entry of version.imageRemarkOverlay ?? []) {
+    const key = `${entry.asin}:${entry.index}`;
+    const gallery = asRecord(galleryByAsin[entry.asin]).galleryImages;
+    const note = remarksByAsin[entry.asin];
+    const currentNote = Array.isArray(note) ? asRecord(note[entry.index]) : {};
+    if (seen.has(key) || !version.asins.includes(entry.asin) ||
+        listing?.stageStatus === "missing-output" || listing?.contentHash !== entry.displayListingStageContentHash ||
+        !Array.isArray(gallery) || gallery[entry.index] !== entry.imageUrl ||
+        (typeof currentNote.remark === "string" && currentNote.remark.trim() &&
+          (typeof currentNote.imageUrl !== "string" || currentNote.imageUrl === entry.imageUrl))) {
+      throw new Error("当前报告图片补充备注来源不匹配");
+    }
+    seen.add(key);
+  }
+}
+
 /** Reads an immutable published report. It never starts, repairs, or publishes a sync job. */
 export async function readCurrentProjectDisplayVersion(
   scope: Scope,
@@ -66,5 +94,7 @@ export async function readCurrentProjectDisplayVersion(
     || version.marketplace !== scope.marketplace || !sameAsins(version.asins, scope.asins)) {
     throw new Error("当前报告与项目范围不匹配");
   }
-  return { ...version, stageOutputs: parseStageOutputs(version.stageOutputs, version) };
+  const stageOutputs = parseStageOutputs(version.stageOutputs, version);
+  validateOverlay(version, stageOutputs);
+  return { ...version, stageOutputs };
 }

@@ -451,3 +451,30 @@ test("failed reanalysis keeps the previous note visible with an explicit failure
   const html=renderListingImages({asin:fixtureAsin,brand:"Fixture brand",image:sorftimeMainImage},listingFixture(),()=>({status:"connector-failed",reason:"图片分析连接器失败"}),()=>({remark:"上次成功分析",image_types:["产品展示"],confidence:"high"}));
   assert.match(html,/上次成功分析/);assert.match(html,/本次重新分析失败，暂显示上次结果/);
 });
+
+test("supplemental image remarks fill only matching missing slots and carry a visible source label", () => {
+  const source = { sourceKind: "supplemental-analysis" as const, sourceRef: "round3-listing-image-remarks.ts",
+    sourceArtifactSha256: "a".repeat(64), sourceManifestSha256: "b".repeat(64),
+    listingStageContentHash: "c".repeat(64), originalJobId: "11111111-1111-4111-8111-111111111111",
+    capturedAt: "2026-09-23T10:32:34.463Z" };
+  const entry = { asin: fixtureAsin, index: 1, imageUrl: sorftimeSecondaryImage,
+    remark: "补充的辅图备注", imageTypes: ["使用场景"], confidence: "high" as const,
+    videoThumbnail: false, source, displayListingStageContentHash: "c".repeat(64) };
+  const props: ComponentProps<typeof ListingImagesSection> = {
+    products: [{ asin: fixtureAsin, brand: "Fixture", image: sorftimeMainImage }], market, colors,
+    listingByAsin: { [fixtureAsin]: listingFixture() },
+    resolveImageRemark: (_asin, index) => index === 0 ? { remark: "本次成功主图备注", image_types: [], confidence: "high" } : null,
+    resolveImageOverlay: (_asin, index) => index === 1 ? entry : null,
+    resolveImageOutcome: () => null,
+  };
+  const html = renderToStaticMarkup(createElement(ListingImagesSection, props));
+  assert.match(html, /本次成功主图备注/);
+  assert.match(html, /补充的辅图备注/);
+  assert.match(html, /补充分析 · 2026-09-23/);
+  assert.doesNotMatch(html, /张图缺少 AI 备注/);
+  const mismatched = renderToStaticMarkup(createElement(ListingImagesSection, {
+    ...props, resolveImageOverlay: () => ({ ...entry, imageUrl: "https://example.test/other.jpg" }),
+  }));
+  assert.doesNotMatch(mismatched, /补充的辅图备注/);
+  assert.match(mismatched, /1 张图缺少 AI 备注/);
+});
