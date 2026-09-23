@@ -34,3 +34,23 @@ export function selectOverviewSalesPoints(detail:Details,metric:'totalUnits'|'to
   return [{month:m.period.fromMonth,value:m.value,metricId:m.metricId}];
  }).sort((a,b)=>a.month.localeCompare(b.month));
 }
+
+/** Single saved source value, labelled as a returned sample rather than a trend. */
+export function selectOverviewReportedMetric(detail:Details,metric:string){
+ const month=detail.entry.report.scope.toMonth;
+ const saved=detail.numbers.months.find(row=>row.month===month)?.metrics[metric];
+ if(!saved||saved.state!=='known'||saved.value===null||saved.unit?.status!=='known')return null;
+ if(['sampleProducts','totalUnits','brands','sellers','newCount'].includes(metric)&&saved.unit.unit!=='count')return null;
+ if(metric==='totalRevenue'&&(saved.unit.unit!=='currency'||saved.unit.currency!==detail.entry.report.scope.currency))return null;
+ if(saved.observations.length===0)return null;
+ return {month,value:saved.value,unit:saved.unit,requestBound:saved.observations.some(o=>o.scopeBasis==='request-bound')};
+}
+
+/** The upstream concentration number is visible without interpreting its unknown ratio/percent unit. */
+export function selectOverviewRawConcentration(detail:Details){
+ const saved=detail.numbers.months.find(row=>row.month===detail.entry.report.scope.toMonth)?.metrics.productConcentrationRaw;
+ if(!saved||saved.state!=='missing'||saved.reason!=='unit-unknown'||saved.value!==null||saved.observations.length===0)return null;
+ const values=saved.observations.map(o=>o.raw);
+ if(!values.every(value=>typeof value==='number'&&Number.isFinite(value)&&value===values[0]))return null;
+ return values[0] as number;
+}

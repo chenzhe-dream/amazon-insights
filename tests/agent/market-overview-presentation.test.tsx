@@ -3,10 +3,11 @@ import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {overviewDistributionDetails,overviewAnalysisDetails} from './helpers/market-overview-page-fixture';
-import {overviewPresentationSections,selectOverviewDistributionEntries,selectOverviewSalesPoints} from '../../app/lib/market-overview-presentation';
+import {overviewPresentationSections,selectOverviewDistributionEntries,selectOverviewSalesPoints,selectOverviewReportedMetric} from '../../app/lib/market-overview-presentation';
 import {MarketOverviewReportView} from '../../app/market-overview-report-view';
 import {MarketOverviewSynthesis} from '../../app/market-overview-synthesis';
 import {MarketOverviewReportSchema} from '../../shared/market-overview-report-contracts';
+import {MarketOverviewDetailsResponseSchema} from '../../shared/market-overview-report-contracts';
 import {synthesisDetails} from './helpers/market-overview-synthesis-page-fixture';
 
 test('saved report keeps all fifteen original chapters in original order with visible missing states',()=>{
@@ -32,6 +33,35 @@ test('sales chart only consumes known saved calendar-month facts; unknown period
  const html=renderToStaticMarkup(<MarketOverviewReportView entry={missing.entry} detail={missing} error={null} onRetry={()=>{}}/>);
  assert.match(html,/来源没有确认月份/);assert.match(html,/已保存的分段解释/);
  assert.doesNotMatch(html,/NaN|Infinity/);
+});
+
+test('reported samples reject units that do not match the saved metric and scope',()=>{
+ const detail=overviewDistributionDetails(),metric=detail.numbers.months[0].metrics.totalUnits;
+ assert.ok(selectOverviewReportedMetric(detail,'totalUnits'));
+ metric.unit={status:'known',unit:'currency',rawUnit:'currency',currency:'EUR'};
+ assert.equal(selectOverviewReportedMetric(detail,'totalUnits'),null);
+});
+
+test('rule-only report shows saved sample facts and unconverted concentration raw value in the original chapters',()=>{
+ const detail=overviewDistributionDetails();
+ const report=detail.entry.report;
+ report.semanticStatus='skipped';
+ report.ruleStatus='partial';
+ detail.semantic!.metrics[0].period={kind:'unknown',reason:'Source did not confirm the requested month'};
+ const sample=detail.numbers.months[0].metrics.totalUnits;
+ detail.numbers.months[0].metrics.sampleProducts={...structuredClone(sample),value:100,observations:sample.observations.map(o=>({...o,raw:100,value:100,field:'sampleProducts'}))};
+ detail.numbers.months[0].metrics.productConcentrationRaw={state:'missing',value:null,unit:null,reason:'unit-unknown',observations:sample.observations.map(o=>({...o,raw:0.3583,value:0.3583,field:'productConcentrationRaw',unit:{status:'unknown',rawUnit:null,reason:'ratio or percent not confirmed'},reason:'unit-unknown'}))};
+ const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={MarketOverviewDetailsResponseSchema.parse(detail)} error={null} onRetry={()=>{}}/>);
+ assert.match(html,/本地规则结果已保存/);
+ assert.doesNotMatch(html,/当前输入的分析分段已执行完成/);
+ const overview=html.match(/data-report-section="overview"[\s\S]*?(?=data-report-section="demand-keywords")/)?.[0]??'';
+ const sales=html.match(/data-report-section="sales-trend"[\s\S]*?(?=data-report-section="product-crn")/)?.[0]??'';
+ const concentration=html.match(/data-report-section="product-crn"[\s\S]*?(?=data-report-section="brand-crn")/)?.[0]??'';
+ assert.match(overview,/<dt>样本商品数<\/dt><dd>100<\/dd>/);
+ assert.match(overview,/<dt>样本销量<\/dt><dd>42<\/dd>/);
+ assert.match(sales,/42/);assert.match(sales,/单月样本|不能形成趋势/);
+ assert.match(concentration,/0\.3583/);assert.match(concentration,/单位未确认/);
+ assert.doesNotMatch(concentration,/35\.83%/);
 });
 
 test('section synthesis matches exact dimensions or colon-delimited groups and retains original evidence',()=>{
