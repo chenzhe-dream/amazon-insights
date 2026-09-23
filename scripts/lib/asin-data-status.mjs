@@ -99,12 +99,17 @@ function hasUsableTrendPoint(record) {
   );
 }
 
-export function hasCompleteImageRemarks(listingRecord, remarkSlots) {
+export function hasCompleteImageRemarks(listingRecord, remarkSlots, previousUrls = []) {
   const requiredSlots = (listingRecord?.galleryImages ?? [])
     .map((url, slotIndex) => ({ url, slotIndex }))
     .filter(item => !isVideoThumb(item.url));
   return requiredSlots.length > 0 && requiredSlots.every(
-    item => Boolean(remarkSlots?.[item.slotIndex]?.remark?.trim()),
+    item => {
+      const remark = remarkSlots?.[item.slotIndex];
+      const listedUrl = String(item.url ?? "").trim();
+      const boundUrl = String(remark?.imageUrl ?? previousUrls?.[item.slotIndex] ?? "").trim();
+      return Boolean(remark?.remark?.trim() && listedUrl && boundUrl === listedUrl);
+    },
   );
 }
 
@@ -114,7 +119,11 @@ export function countPendingImageRemarks(asins, sources = readAsinStatusSources(
     if (listingRecord?.status !== "ready" || !Array.isArray(listingRecord.galleryImages)) return total;
     const pending = listingRecord.galleryImages.reduce((count, url, slotIndex) => {
       const validStaticImage = typeof url === "string" && url.trim().length > 0 && !isVideoThumb(url);
-      if (!validStaticImage || sources.imageRemarks?.[asin]?.[slotIndex]?.remark?.trim()) return count;
+      if (!validStaticImage || hasCompleteImageRemarks(
+        { galleryImages: [url] },
+        [sources.imageRemarks?.[asin]?.[slotIndex]],
+        [sources.imageRemarkUrls?.[asin]?.[slotIndex]],
+      )) return count;
       return count + 1;
     }, 0);
     return total + pending;
@@ -122,6 +131,7 @@ export function countPendingImageRemarks(asins, sources = readAsinStatusSources(
 }
 
 export function readAsinStatusSources() {
+  const imageRemarksMeta = readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta");
   return {
     catalogAsins: readCatalogAsins(),
     catalogProducts: readCachedArrayExport(paths.catalog, "refreshedCatalog"),
@@ -134,7 +144,8 @@ export function readAsinStatusSources() {
     fbaFees: readCachedDataExport(paths.fbaFees, "sorftimeFbaFeeData"),
     listing: readCachedDataExport(paths.listing, "sorftimeListingContentData"),
     imageRemarks: readCachedDataExport(paths.imageRemarks, "listingImageRemarks"),
-    imageRemarkStatuses: readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta").imageStatusByAsin ?? {},
+    imageRemarkStatuses: imageRemarksMeta.imageStatusByAsin ?? {},
+    imageRemarkUrls: imageRemarksMeta.imageUrlsByAsin ?? {},
     categoryTrends: readCachedDataExport(paths.categoryTrends, "sorftimeCategoryTrendData"),
     traffic: readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin"),
     vocSource: fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
@@ -172,7 +183,7 @@ export function deriveAsinModuleStatus(asin, sources) {
     priceStrategy: sources.priceStrategies[asin]?.status === "ready" && positiveMoneyOrNull(sources.priceStrategies[asin].currentPrice) != null ? "ready" : "missing",
     fba: fbaRecord?.status === "ready" && positiveMoneyOrNull(fbaRecord.fbaFee) != null ? "ready" : "missing",
     listing: listingRecord?.status === "ready" && analyzableGalleryImages(listingRecord).length > 0 ? "ready" : "missing",
-    imageRemarks: hasCompleteImageRemarks(listingRecord, sources.imageRemarks[asin]) ? "ready" : "missing",
+    imageRemarks: hasCompleteImageRemarks(listingRecord, sources.imageRemarks[asin], sources.imageRemarkUrls?.[asin]) ? "ready" : "missing",
     category: categoryReady ? "ready" : "missing",
     traffic: trafficRecord?.overview?.total > 0 && trafficRecord?.structure?.chars?.dims?.length ? "ready" : "missing",
     voc: vocBlock.test(sources.vocSource) ? "ready" : "missing",

@@ -49,6 +49,19 @@ function startGenerator(fixtureRoot, fixtureScripts, asin, env = {}) {
   });
   return { child, closed };
 }
+
+function writeJobListingFixture(fixtureRoot, jobId, asin, galleryImages) {
+  const jobs = path.join(fixtureRoot, "data", "sync-jobs");
+  fs.mkdirSync(jobs, { recursive: true });
+  fs.writeFileSync(path.join(fixtureRoot, "app", "competitor-data.ts"), "export const refreshedCatalog = [];\n");
+  fs.writeFileSync(path.join(jobs, `${jobId}.json`), JSON.stringify({
+    jobId,
+    asins: [asin],
+    outputs: [{ stage: "listing", stageStatus: "done", data: {
+      contentByAsin: { [asin]: { status: "ready", galleryImages } },
+    } }],
+  }));
+}
 test("generator emits a nullable slot type that matches inherited sparse remarks", () => {
   const nullableDeclaration = "Record<string, Array<ListingImageRemark | null>>";
   assert.match(generatorSource, new RegExp(nullableDeclaration.replace(/[|[\]().*+?{}\\]/g, "\\$&")));
@@ -250,7 +263,7 @@ test("fully cached generator run persists ready without fabricating a new remark
   fs.writeFileSync(
     path.join(fixtureApp, "listing-image-remarks.ts"),
     `export const listingImageRemarks = ${JSON.stringify({
-      [asin]: [{ remark: existingRemark, image_types: ["产品展示"], confidence: "high" }],
+      [asin]: [{ remark: existingRemark, imageUrl: "https://example.test/cached.jpg", image_types: ["产品展示"], confidence: "high" }],
     })};\n`,
     "utf8",
   );
@@ -644,7 +657,7 @@ test("atomic rename failure reports integrity failure and preserves the publishe
   }
 });
 
-test("generator persists fixed outcomes by static slot without retaining image URLs", () => {
+test("generator persists fixed outcomes and exact image identities by static slot", () => {
   const fixtureRoot = fs.mkdtempSync(path.join(root, ".tmp-image-remarks-outcomes-"));
   const fixtureScripts = path.join(fixtureRoot, "scripts");
   const fixtureApp = path.join(fixtureRoot, "app");
@@ -670,12 +683,15 @@ test("generator persists fixed outcomes by static slot without retaining image U
   );
   fs.writeFileSync(
     path.join(fixtureApp, "listing-image-remarks.ts"),
-    "export const listingImageRemarksMeta = {};\n"
+    "export const listingImageRemarksMeta = " + JSON.stringify({
+      imageUrlsByAsin: { [asin]: [cachedUrl, "https://example.test/play-button.jpg", failedUrl] },
+    }) + ";\n"
       + "export const listingImageRemarks = " + JSON.stringify({
-        [asin]: [{ remark: "cached", image_types: ["产品展示"], confidence: "high" }],
+        [asin]: [{ remark: "cached", imageUrl: cachedUrl, image_types: ["产品展示"], confidence: "high" }],
       }) + ";\n",
     "utf8",
   );
+  writeJobListingFixture(fixtureRoot, "outcome-fixture-job-a", asin, [cachedUrl, "https://example.test/play-button.jpg", failedUrl]);
 
   try {
     const result = spawnSync(process.execPath, [path.join(fixtureScripts, "build-listing-image-remarks.mjs")], {
@@ -701,7 +717,9 @@ test("generator persists fixed outcomes by static slot without retaining image U
         attemptJobId: "outcome-fixture-job-a",
       },
     ]);
-    assert.doesNotMatch(source, /secret\.test|cached\.jpg|failed\.jpg/);
+    assert.deepEqual(meta.imageUrlsByAsin[asin], [cachedUrl, "https://example.test/play-button.jpg", failedUrl]);
+    assert.equal(readCachedDataExport(outputPath, "listingImageRemarks")[asin][0].imageUrl, cachedUrl);
+    assert.doesNotMatch(source, /fixture-key/);
   } finally {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
@@ -756,6 +774,7 @@ test("a valid sync job adopts a legacy failed image slot before later-job retry"
   fs.writeFileSync(
     outputPath,
     "export const listingImageRemarksMeta = " + JSON.stringify({
+      imageUrlsByAsin: { [asin]: [readyUrl, retryUrl] },
       imageOutcomesByAsin: {
         [asin]: [
           { status: "ready", reason: "图片备注已就绪" },
@@ -764,10 +783,12 @@ test("a valid sync job adopts a legacy failed image slot before later-job retry"
       },
     }) + ";\n"
       + "export const listingImageRemarks = " + JSON.stringify({
-        [asin]: [{ remark: "cached ready sibling", image_types: ["产品展示"], confidence: "high" }],
+        [asin]: [{ remark: "cached ready sibling", imageUrl: readyUrl, image_types: ["产品展示"], confidence: "high" }],
       }) + ";\n",
     "utf8",
   );
+  writeJobListingFixture(fixtureRoot, "image-retry-job-a", asin, [readyUrl, retryUrl]);
+  writeJobListingFixture(fixtureRoot, "image-retry-job-b", asin, [readyUrl, retryUrl]);
   await new Promise((resolve, reject) => {
     provider.once("error", reject);
     provider.listen(0, "127.0.0.1", resolve);
@@ -821,5 +842,7 @@ test("a valid sync job adopts a legacy failed image slot before later-job retry"
     { status: "ready", reason: "图片备注已就绪" },
   ]);
   const serialized = fs.readFileSync(outputPath, "utf8");
-  assert.doesNotMatch(serialized, /secret\.test|fixture-key|retry-slot\.jpg/);
+  assert.match(serialized, /ready-sibling\.jpg/);
+  assert.match(serialized, /retry-slot\.jpg/);
+  assert.doesNotMatch(serialized, /fixture-key/);
 });

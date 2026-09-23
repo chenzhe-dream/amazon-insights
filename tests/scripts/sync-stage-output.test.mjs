@@ -315,3 +315,17 @@ test("traffic accepts only the explicitly whitelisted legacy normalized overview
   });
   assert.deepEqual(draft.data.listingByAsin[asin], { total: 7, natural: 5, advertising: 2 });
 });
+
+test("image projection uses the job candidate without reading the shared generated file", () => {
+  const asin = "B0TEST0014";
+  const imageUrl = "https://images.test/job.jpg";
+  const data = {
+    remarksByAsin: { [asin]: [{ remark: "This job", imageUrl }] },
+    outcomesByAsin: { [asin]: [{ status: "ready", reason: "图片备注已就绪" }] },
+  };
+  const output = projectStageOutput("image_remarks", [asin], {
+    imageRemarksData: data,
+    readExport: () => { throw new Error("shared generated file must not be read"); },
+  });
+  assert.deepEqual(output.data, data);
+});

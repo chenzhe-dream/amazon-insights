@@ -63,3 +63,10 @@ test('does not mutate URL arrays, remarks array or nested remark objects', () =>
   assert.deepEqual(nextUrls, ['new', 'first']);
   assert.deepEqual(remarks, [remark, null]);
 });
+
+test('a conflicting remark imageUrl cannot be reused from an old gallery index', () => {
+  const wrong = { remark: 'belongs to another image', imageUrl: 'https://images.test/other.jpg' };
+  assert.deepEqual(reconcileListingImageRemarks(
+    ['https://images.test/old.jpg'], ['https://images.test/old.jpg'], [wrong],
+  ), [null]);
+});

@@ -10,7 +10,9 @@ export function reconcileListingImageRemarks(previousUrls, nextUrls, previousRem
   for (let index = 0; index < oldUrls.length; index += 1) {
     const url = imageUrl(oldUrls[index]);
     if (!url) continue;
-    byUrl.set(url, byUrl.has(url) ? null : remarks[index] ?? null);
+    const remark = remarks[index] ?? null;
+    const boundUrl = imageUrl(remark?.imageUrl);
+    byUrl.set(url, byUrl.has(url) ? null : boundUrl && boundUrl !== url ? null : remark);
   }
 
   return Array.from(newUrls, (value) => byUrl.get(imageUrl(value)) ?? null);

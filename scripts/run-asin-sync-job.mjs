@@ -1,7 +1,6 @@
 import { runSorftimeCommand } from "./lib/sorftime-stream.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -33,6 +32,13 @@ import {
   persistedStageOutputContentHash,
   projectStageOutput,
 } from "./lib/sync-stage-output.mjs";
+import {
+  imageCandidateReadiness,
+  imageCandidateResultStatuses,
+  mergeImageRemarkStageData,
+  readImageRemarkCandidate,
+  validatePersistedImageStageOutput,
+} from "./lib/image-remark-job-candidate.mjs";
 import { readCachedDataExport } from "./lib/sync-cache.mjs";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
@@ -55,6 +61,7 @@ import {
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
 import { listingInputFromPersistedJob } from "./lib/image-remark-listing-input.mjs";
+import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -427,6 +434,7 @@ export function applyPersistedStagePostcondition(
     gapReasonCode = null,
     stageDetail = null,
     diagnostics = [],
+    imageRemarksData = null,
   } = {},
 ) {
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
@@ -535,6 +543,12 @@ export function applyPersistedStagePostcondition(
         gapItems: projectionGapItems,
         dataAsins: status === "partial" ? projectionReadyAsins : projectionAsins,
         updatedAt: completedAt,
+        ...(stageId === "image_remarks"
+          ? { imageRemarksData: mergeImageRemarkStageData(
+            currentJob, previousOutput, asins,
+            imageRemarksData ?? { remarksByAsin: {}, outcomesByAsin: {} },
+          ) }
+          : {}),
       }),
     });
   } else {
@@ -555,6 +569,19 @@ export function finalizeCachedStage(
   } = {},
 ) {
   if (isProjectableSyncStage(stageId)) {
+    if (stageId === "image_remarks" && finalizeProjectable === applyPersistedStagePostcondition) {
+      const job = readSyncJob(jobId);
+      const previous = job?.outputs?.find(output => output.stage === stageId);
+      if (previous) validatePersistedImageStageOutput(job, previous);
+      const data = previous?.data ?? { remarksByAsin: {}, outcomesByAsin: {} };
+      const savedAsins = Object.keys(data.remarksByAsin ?? {});
+      const listing = savedAsins.length ? listingInputFromPersistedJob(job, savedAsins) : {};
+      return finalizeProjectable(jobId, stageId, asins, {
+        imageRemarksData: data,
+        readReadiness: (_stage, cohort) => imageCandidateReadiness(data, listing, cohort),
+        resultStatusesByAsin: imageCandidateResultStatuses(data, listing, asins),
+      });
+    }
     return finalizeProjectable(jobId, stageId, asins);
   }
   const readiness = markProgress(jobId, stageId, asins);
@@ -634,6 +661,12 @@ export function projectFinalStageHashes(jobId, job, projectOutput) {
     ) {
       throw publicationContentMismatch(`Persisted ${stageId} projection is missing`);
     }
+    if (stageId === "image_remarks") {
+      try { validatePersistedImageStageOutput(job, persisted); }
+      catch { throw publicationContentMismatch("Persisted image_remarks projection does not match its listing"); }
+      stageContentHashes[stageId] = persisted.contentHash;
+      continue;
+    }
     let projected;
     try {
       projected = projectOutput(stageId, job.asins ?? [], {
@@ -684,6 +717,10 @@ export function projectRecoveredStageHashes(jobId, job) {
     catch { throw publicationContentMismatch(`Persisted ${output.stage} recovery projection is invalid`); }
     if (actualHash !== output.contentHash) {
       throw publicationContentMismatch(`Persisted ${output.stage} recovery projection content differs from its hash`);
+    }
+    if (output.stage === "image_remarks") {
+      try { validatePersistedImageStageOutput(job, output); }
+      catch { throw publicationContentMismatch("Persisted image_remarks recovery projection does not match its listing"); }
     }
     hashes[output.stage] = output.contentHash;
   }
@@ -1271,6 +1308,12 @@ async function main() {
       finalizeProcessedStageCohort(jobId, "image_remarks", refreshFailures, asins, {
         initialJob: job,
         commandSucceeded: false,
+        imageRemarksData: { remarksByAsin: {}, outcomesByAsin: {} },
+        readReadiness: (_stage, cohort) => ({
+          stageId: "image_remarks", ready: false,
+          items: cohort.map(asin => ({ asin, imageRemarks: "missing" })),
+          missingAsins: cohort,
+        }),
         resultStatusesByAsin: Object.fromEntries(refreshFailures.map(asin => [asin, "connector-failed"])),
         unavailableReason: "本次图片抓取失败，未重新分析，保留原图和分析结果",
       });
@@ -1346,14 +1389,23 @@ async function main() {
       const persistedImageJob = readSyncJob(jobId);
       let imageListingInputDir;
       let imageListingInputFile;
+      let imageCandidateFile;
+      let imageListingByAsin;
       if (persistedImageJob?.scope?.organizationId) {
         // Verify provenance before handing the captured gallery to the image subprocess.
-        listingInputFromPersistedJob(persistedImageJob, imageAsins);
-        imageListingInputDir = fs.mkdtempSync(path.join(os.tmpdir(), "amazon-image-listing-"));
+        imageListingByAsin = listingInputFromPersistedJob(persistedImageJob, imageAsins);
+        const { dataRoot } = resolveRuntimeRoots({
+          codeRoot: root, formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT), env: process.env,
+        });
+        const candidateRoot = path.join(dataRoot, "sync-image-candidates");
+        fs.mkdirSync(candidateRoot, { recursive: true, mode: 0o700 });
+        imageListingInputDir = fs.mkdtempSync(path.join(candidateRoot, "image-"));
         imageListingInputFile = path.join(imageListingInputDir, "listing.json");
+        imageCandidateFile = path.join(imageListingInputDir, "image-candidate.json");
         fs.writeFileSync(imageListingInputFile, JSON.stringify({ jobId, job: persistedImageJob }), { encoding: "utf8", flag: "wx", mode: 0o600 });
       }
       let imageProcess;
+      let imageStagePersisted = false;
       try {
         imageProcess = await runImageRemarkProcess({
         command: "npm",
@@ -1365,6 +1417,10 @@ async function main() {
           AGENT_SYNC_JOB_ID: jobId,
           AGENT_SYNC_STAGE_ID: "image_remarks",
           ...(imageListingInputFile ? { AGENT_SYNC_LISTING_STAGE_FILE: imageListingInputFile } : {}),
+          ...(imageCandidateFile ? {
+            AGENT_SYNC_IMAGE_CANDIDATE_FILE: imageCandidateFile,
+            AGENT_SYNC_LISTING_STAGE_HASH: persistedImageJob.outputs.find(output => output.stage === "listing").contentHash,
+          } : {}),
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
         }),
         onProgress: (event) => {
@@ -1376,16 +1432,37 @@ async function main() {
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
         });
+        let imageRemarksData = { remarksByAsin: {}, outcomesByAsin: {} };
+        if (imageCandidateFile && fs.existsSync(imageCandidateFile)) {
+          imageRemarksData = readImageRemarkCandidate(imageCandidateFile, { job: persistedImageJob, asins: imageAsins });
+        } else if (imageCandidateFile && imageProcess.succeeded) {
+          throw new Error("Successful image worker did not persist its job candidate");
+        }
+        const scopedImageStatuses = imageCandidateFile
+          ? imageCandidateResultStatuses(imageRemarksData, imageListingByAsin, imageAsins)
+          : readImageRemarkStatuses();
+        finalizeProcessedStageCohort(jobId, "image_remarks", imageAsins, asins, {
+          initialJob: job,
+          commandSucceeded: imageProcess.succeeded,
+          ...(imageCandidateFile ? {
+            imageRemarksData,
+            readReadiness: (_stage, cohort) => imageCandidateReadiness(imageRemarksData, imageListingByAsin, cohort),
+          } : {}),
+          resultStatusesByAsin: scopedImageStatuses,
+          unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
+          stageDetail: latestImageStageDetail,
+        });
+        if (imageCandidateFile) {
+          const committedJob = readSyncJob(jobId);
+          const committedOutput = committedJob?.outputs?.find(output => output.stage === "image_remarks");
+          validatePersistedImageStageOutput(committedJob, committedOutput);
+          imageStagePersisted = true;
+        }
       } finally {
-        if (imageListingInputDir) fs.rmSync(imageListingInputDir, { recursive: true, force: true });
+        if (imageListingInputDir && imageStagePersisted) {
+          fs.rmSync(imageListingInputDir, { recursive: true, force: true });
+        }
       }
-      finalizeProcessedStageCohort(jobId, "image_remarks", imageAsins, asins, {
-        initialJob: job,
-        commandSucceeded: imageProcess.succeeded,
-        resultStatusesByAsin: readImageRemarkStatuses(),
-        unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
-        stageDetail: latestImageStageDetail,
-      });
     }
 
     if (shouldRunSyncStage(job, "build") && shouldBuildForSync(process.env)) {

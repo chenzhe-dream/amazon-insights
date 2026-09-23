@@ -71,6 +71,7 @@ export function isProjectableSyncStage(stageId) {
  *   updatedAt?: string;
  *   now?: () => string;
  *   readExport?: (filePath: string, exportName: string) => unknown;
+ *   imageRemarksData?: { remarksByAsin: object; outcomesByAsin: object };
  *   organizationId?: string;
  *   projectId?: string;
  *   runId?: string;
@@ -84,6 +85,7 @@ export function projectStageOutput(stageId, asins, {
   updatedAt,
   now = () => new Date().toISOString(),
   readExport = readCachedDataExport,
+  imageRemarksData,
   organizationId,
   projectId,
   runId,
@@ -111,7 +113,7 @@ export function projectStageOutput(stageId, asins, {
     const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, readyAsins);
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
-  const data = projectDoneData(stageId, source, projectedAsins, readExport);
+  const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData);
   if (stageStatus === "partial") {
     const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
     const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, readyAsins);
@@ -120,7 +122,7 @@ export function projectStageOutput(stageId, asins, {
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
 }
 
-function projectDoneData(stageId, source, asins, readExport) {
+function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {
   if (stageId === "keywords") {
     const analysisByAsin = pickRequestedAsins(readSource(source.analysis, readExport), asins);
     const requestedKeywords = new Set(Object.values(analysisByAsin)
@@ -154,7 +156,10 @@ function projectDoneData(stageId, source, asins, readExport) {
   if (stageId === "price_strategy") return {
     strategyByAsin: pickRequestedAsins(readSource(source, readExport), asins),
   };
-  if (stageId === "image_remarks") return {
+  if (stageId === "image_remarks") return imageRemarksData ? {
+    remarksByAsin: pickRequestedAsins(imageRemarksData.remarksByAsin, asins),
+    outcomesByAsin: pickRequestedAsins(imageRemarksData.outcomesByAsin, asins),
+  } : {
     remarksByAsin: pickRequestedAsins(readSource(source.remarks, readExport), asins),
     outcomesByAsin: pickRequestedAsins(readImageOutcomes(source.outcomes, readExport), asins),
   };

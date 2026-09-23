@@ -25,7 +25,7 @@ const sources = {
   priceStrategies: { [asin]: { status: "ready", currentPrice: 19.99, anchor: "price" } },
   fbaFees: { [asin]: { status: "ready", fbaFee: 5.2 } },
   listing: { [asin]: listingRecord },
-  imageRemarks: { [asin]: [{ remark: "one" }, { remark: "video" }, { remark: "" }] },
+  imageRemarks: { [asin]: [{ remark: "one", imageUrl: listingRecord.galleryImages[0] }, { remark: "video" }, { remark: "" }] },
   categoryTrends: { node: { status: "ready", asins: [asin], volume: [{ month: "2026-01", value: 1 }] } },
   traffic: { [asin]: { overview: { total: 1 }, structure: { chars: { dims: ["search"] } } } },
   vocSource: "export const rufusVocData = {};",
@@ -59,7 +59,7 @@ test("sales needs a usable point and image remarks need every analyzable slot", 
   const readySources = {
     ...sources,
     sales: { [asin]: { status: "ready", volume: [{ month: "2026-01", value: 12 }], amount: [], price: [], rank: [] } },
-    imageRemarks: { [asin]: [{ remark: "one" }, { remark: "video" }, { remark: "two" }] },
+    imageRemarks: { [asin]: [{ remark: "one", imageUrl: listingRecord.galleryImages[0] }, { remark: "video" }, { remark: "two", imageUrl: listingRecord.galleryImages[2] }] },
   };
   const status = deriveAsinModuleStatus(asin, readySources);
   assert.equal(status.sales, "ready");

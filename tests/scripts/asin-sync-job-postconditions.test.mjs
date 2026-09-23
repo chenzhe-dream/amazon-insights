@@ -178,6 +178,26 @@ test("zero exit plus incomplete image remarks records image_remarks as upstream-
   assert.equal(modules[0][3].status, "upstream-empty");
 });
 
+test("image postcondition projects the job candidate without reading global remarks", () => {
+  const imageUrl = "https://images.test/job-owned.jpg";
+  const imageRemarksData = {
+    remarksByAsin: { [asin]: [{ remark: "Owned", imageUrl }] },
+    outcomesByAsin: { [asin]: [{ status: "ready" }] },
+  };
+  let committed;
+  applyPersistedStagePostcondition("job-owned", "image_remarks", [asin], {
+    imageRemarksData,
+    readReadiness: () => ({ items: [{ asin, imageRemarks: "ready" }], missingAsins: [], ready: true }),
+    markModule: () => undefined,
+    readJob: () => ({ asins: [asin], asinProgress: { [asin]: { image_remarks: { status: "ready" } } } }),
+    commitStage: (_jobId, input) => { committed = input.output; },
+    projectOutput: (stage, asins, options) => projectStageOutput(stage, asins, {
+      ...options, readExport: () => { throw new Error("global remarks read"); },
+    }),
+  });
+  assert.equal(committed.data.remarksByAsin[asin][0].imageUrl, imageUrl);
+});
+
 test("canonical ready data completes and records the same stage key", () => {
   const { result, modules, stages } = harness({ ...base, sales: "ready" });
   assert.deepEqual(result, { status: "done", missingAsins: [] });
@@ -374,7 +394,8 @@ test("release runner activates the image remarks child and reconciles authoritat
   assert.match(source, /args: \["run", "image-remarks:sync"\]/);
   assert.match(source, /REMARK_ASINS: imageAsins\.join\(","\)/);
   assert.match(source, /AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1"/);
-  assert.match(source, /resultStatusesByAsin: readImageRemarkStatuses\(\)/);
+  assert.match(source, /resultStatusesByAsin: scopedImageStatuses/);
+  assert.match(source, /readImageRemarkCandidate\(imageCandidateFile/);
 });
 
 test("release runner removes the disabled-image fallback", async () => {
