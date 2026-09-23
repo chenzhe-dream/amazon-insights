@@ -91,6 +91,36 @@ test("prepare reserves without submitting; submit and exact ack reconcile code a
   });
 });
 
+test("a later business artifact keeps its own exact build source across restart", async () => {
+  await operatorFixture(async ({ worktree, env, built, target, spoolDir, controlPath, prepareCodeWebPublication, submitCodeWebPublication }) => {
+    const prepared = await prepareCodeWebPublication({ worktree, env, build: built });
+    await submitCodeWebPublication({ worktree, env, artifactId: prepared.artifactId });
+    assert.equal((await consumeWebReloadRequest({ spoolDir, expectedTarget: target,
+      apply: async (_, control) => control.commitHighWater() })).status, "applied");
+    const codeControl = await readWebPublicationControl({ controlPath });
+    await fs.writeFile(path.join(worktree, "app", "source.js"), "business data changed");
+    const businessId = "e".repeat(64);
+    const business = { artifactId: businessId, jobId: "new-business", jobVersion: 3, stageContentHashes: { keywords: "f".repeat(64) } };
+    await publishImmutableWebArtifact({ worktree, ...business, build: built, captureSourceIdentity: true });
+    await writeWebReloadRequest({ ...business, target, buildCompletedAt: new Date().toISOString() }, { spoolDir });
+    assert.equal((await consumeWebReloadRequest({ spoolDir, expectedTarget: target,
+      apply: async (_, control) => control.commitHighWater() })).status, "applied");
+    const control = await readWebPublicationControl({ controlPath });
+    const restarted = createWebArtifactStore({ worktree }).current(target);
+    assert.equal(control.current.artifactId, businessId);
+    assert.equal(control.current.kind, undefined);
+    assert.equal(restarted.id, businessId);
+    assert.equal(restarted.codeSource.sourceCommit, prepared.codeRelease.sourceCommit);
+    assert.notEqual(restarted.codeSource.sourceHash, prepared.codeRelease.sourceHash);
+    assert.equal(restarted.codeSource.sourceHash,
+      JSON.parse(await fs.readFile(path.join(restarted.root, "build-fingerprint.json"), "utf8")).sourceHash);
+    assert.deepEqual(control.streams, codeControl.streams);
+    await fs.writeFile(path.join(restarted.root, "build-fingerprint.json"),
+      JSON.stringify({ version: 1, sourceHash: "0".repeat(64) }));
+    assert.throws(() => createWebArtifactStore({ worktree }).current(target), /manifest/i);
+  });
+});
+
 test("operator rejects source drift, target mismatch and build failure without changing current", async () => {
   await operatorFixture(async ({ worktree, env, built, controlPath, previous, prepareCodeWebPublication, submitCodeWebPublication }) => {
     await assert.rejects(prepareCodeWebPublication({ worktree, env, build: async () => { throw new Error("build failed"); } }), /build failed/);

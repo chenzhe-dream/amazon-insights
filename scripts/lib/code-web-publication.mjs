@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { runStableBuild } from "../run-stable-build.mjs";
-import { createBuildSourceFingerprint } from "./build-fingerprint.mjs";
+import { readCodeSourceIdentity, assertBuiltCodeSource as assertBuiltSource } from "./code-source-identity.mjs";
 import { acquireInterprocessLock } from "./interprocess-lock.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
 import { codeReleasesMatch } from "./code-publication-identity.mjs";
@@ -11,14 +10,7 @@ import { createWebArtifactStore, createWebPublicationArtifactId, publishImmutabl
 import { readWebPublicationControl, webPublicationControlPath } from "./web-publication-control.mjs";
 import { configuredWebReloadTarget, createWebReloadRequestPayload, webReloadRequestId, writeWebReloadRequestSync, readWebReloadPublication } from "./web-reload-request.mjs";
 
-export async function readCodeSourceIdentity(worktree) {
-  const git = process.platform === "win32" && fsSync.existsSync("D:/Git/cmd/git.exe") ? "D:/Git/cmd/git.exe" : "git";
-  let sourceCommit;
-  try { sourceCommit = execFileSync(git, ["-C", path.resolve(worktree), "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }).trim(); }
-  catch { throw new Error("Code source commit is unavailable"); }
-  if (!/^[a-f0-9]{40}$/.test(sourceCommit)) throw new Error("Invalid code source commit");
-  return Object.freeze({ sourceCommit, sourceHash: await createBuildSourceFingerprint(worktree) });
-}
+export { readCodeSourceIdentity } from "./code-source-identity.mjs";
 
 function spool(worktree) { return path.join(path.resolve(worktree), "data", "web-reload-requests"); }
 function recordPath(worktree, artifactId) {
@@ -37,15 +29,6 @@ export async function assertCodePublicationIdle(worktree) {
     catch (error) { if (error?.code === "ENOENT") continue; throw error; }
     if (files.some((name) => name.endsWith(".json"))) throw new Error("Web publication is active");
   }
-}
-
-async function assertBuiltSource(worktree, expected) {
-  const actual = await readCodeSourceIdentity(worktree);
-  let built;
-  try { built = JSON.parse(await fs.readFile(path.join(worktree, "dist", "build-fingerprint.json"), "utf8")); }
-  catch { throw new Error("Code build source fingerprint is unavailable"); }
-  if (actual.sourceCommit !== expected.sourceCommit || actual.sourceHash !== expected.sourceHash
-    || built.version !== 1 || built.sourceHash !== expected.sourceHash) throw new Error("Code source changed or build fingerprint mismatched");
 }
 
 async function readPrepared(worktree, env, artifactId) {

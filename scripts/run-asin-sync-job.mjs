@@ -330,7 +330,7 @@ export async function publishWebBuild(
     throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");
   }
   const artifactId = createArtifactId();
-  await publishArtifact({ worktree, artifactId, ...reconciliation, build, writeManifest });
+  await publishArtifact({ worktree, artifactId, ...reconciliation, build, writeManifest, captureSourceIdentity: true });
   completeBuildStage(jobId);
   const requestedAt = now();
   const target = configuredTarget(env, worktree);

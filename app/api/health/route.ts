@@ -1,6 +1,6 @@
 import { AgentReadinessResponseSchema } from "../../../shared/agent-contracts";
 import { webArtifactId } from "../../lib/web-artifact-id";
-import { boundedWebCodeRelease } from "../../../scripts/lib/code-publication-identity.mjs";
+import { boundedCodeSource, boundedWebCodeRelease } from "../../../scripts/lib/code-publication-identity.mjs";
 
 type WebHealthEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -101,6 +101,8 @@ function webHealth(
       service: "web",
       agent,
       artifactId: webArtifactId(env),
+      ...(boundedCodeSource(env.WEB_BUILD_SOURCE_COMMIT, env.WEB_BUILD_SOURCE_HASH)
+        ? { codeSource: boundedCodeSource(env.WEB_BUILD_SOURCE_COMMIT, env.WEB_BUILD_SOURCE_HASH) } : {}),
       ...(boundedWebCodeRelease(env) ? { codeRelease: boundedWebCodeRelease(env) } : {}),
     },
     { status },

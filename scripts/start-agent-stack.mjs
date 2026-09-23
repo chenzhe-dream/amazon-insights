@@ -13,7 +13,7 @@ import { createWebArtifactStore } from "./lib/web-artifact-store.mjs";
 import { recoverAlexaPublicationWorkerOnStartup } from "./lib/alexa-publication-worker.mjs";
 import { createProcessTreeIdentity, terminateBoundedProcessTree } from "./lib/bounded-process.mjs";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
-import { assertCodeOnly, codeReleasesMatch } from "./lib/code-publication-identity.mjs";
+import { assertCodeOnly, boundedCodeSource, codeReleasesMatch } from "./lib/code-publication-identity.mjs";
 import { readCodeSourceIdentity } from "./lib/code-web-publication.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -69,6 +69,7 @@ export async function waitForHealth(
     timeoutMs = 30_000,
     intervalMs = 250,
     expectedArtifactId,
+    expectedCodeSource,
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -87,10 +88,14 @@ export async function waitForHealth(
           throw new Error("Health response is too large");
         }
         const payload = JSON.parse(text);
-        if (payload?.artifactId === expectedArtifactId) {
+        const actualCodeSource = boundedCodeSource(payload?.codeSource?.sourceCommit, payload?.codeSource?.sourceHash);
+        if (payload?.artifactId === expectedArtifactId && (expectedCodeSource === undefined ||
+          (actualCodeSource?.sourceCommit === expectedCodeSource.sourceCommit &&
+            actualCodeSource?.sourceHash === expectedCodeSource.sourceHash))) {
           return Object.freeze({ artifactId: expectedArtifactId });
         }
-        lastError = new Error("Health artifact identity mismatch");
+        lastError = new Error(payload?.artifactId === expectedArtifactId
+          ? "Health Web source identity mismatch" : "Health artifact identity mismatch");
       } else {
         lastError = new Error(`Health check returned ${response.status}`);
       }
@@ -456,12 +461,17 @@ export function createStackLauncher({
       WEB_ARTIFACT_ROOT: artifactPath,
       WEB_PUBLICATION_ARTIFACT_ID: artifact.publicationArtifactId ?? artifact.id,
     };
-    for (const key of ["WEB_CODE_SOURCE_COMMIT", "WEB_CODE_SOURCE_HASH", "WEB_CODE_BASE_ARTIFACT_ID"]) delete childEnv[key];
+    for (const key of ["WEB_CODE_SOURCE_COMMIT", "WEB_CODE_SOURCE_HASH", "WEB_CODE_BASE_ARTIFACT_ID", "WEB_BUILD_SOURCE_COMMIT", "WEB_BUILD_SOURCE_HASH"]) delete childEnv[key];
     if (artifact.kind === "code") {
       const identity = assertCodeOnly(artifact);
       childEnv.WEB_CODE_SOURCE_COMMIT = identity.sourceCommit;
       childEnv.WEB_CODE_SOURCE_HASH = identity.sourceHash;
       childEnv.WEB_CODE_BASE_ARTIFACT_ID = identity.baseArtifactId;
+    }
+    const source = artifact.kind === "code" ? artifact.codeRelease : artifact.codeSource;
+    if (source) {
+      childEnv.WEB_BUILD_SOURCE_COMMIT = source.sourceCommit;
+      childEnv.WEB_BUILD_SOURCE_HASH = source.sourceHash;
     }
     delete childEnv.AGENT_SERVICE_READINESS_ORIGIN;
     if (readinessOrigin !== undefined) {
@@ -488,6 +498,11 @@ export function createStackLauncher({
       error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
       throw error;
     }
+    if (env.AGENT_FORMAL_WORKTREE_ROOT && candidateArtifact.kind !== "code" && !candidateArtifact.codeSource) {
+      const error = new Error("Formal Web artifact has no verified build source");
+      error.code = "WEB_PUBLICATION_CONTENT_MISMATCH";
+      throw error;
+    }
     const candidateHashes = candidateArtifact.stageContentHashes;
     const requestedHashes = request?.stageContentHashes;
     const codeMatches = request?.kind === "code" && candidateArtifact.kind === "code"
@@ -511,7 +526,10 @@ export function createStackLauncher({
 
     try {
       await candidate.spawnReady;
-      await wait(webHealthUrl(preflightSpec), { expectedArtifactId: request.artifactId });
+      await wait(webHealthUrl(preflightSpec), {
+        expectedArtifactId: request.artifactId,
+        expectedCodeSource: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : candidateArtifact.codeSource,
+      });
     } catch (error) {
       await stopChildForReplacement(candidate);
       if (candidate.spawnError === error) throw error;
@@ -525,7 +543,10 @@ export function createStackLauncher({
     let committedArtifact = null;
     try {
       await replacement.spawnReady;
-      await wait(webHealthUrl(configuredSpec), { expectedArtifactId: request.artifactId });
+      await wait(webHealthUrl(configuredSpec), {
+        expectedArtifactId: request.artifactId,
+        expectedCodeSource: candidateArtifact.kind === "code" ? candidateArtifact.codeRelease : candidateArtifact.codeSource,
+      });
       if (!isChildRunning(replacement)) throw new Error("Web child exited before validation completed");
       const nextKnownGoodArtifact = {
         ...candidateArtifact,
@@ -546,6 +567,7 @@ export function createStackLauncher({
         await restored.spawnReady;
         await wait(webHealthUrl(configuredSpec), {
           expectedArtifactId: recoveryArtifact.publicationArtifactId ?? recoveryArtifact.id,
+          expectedCodeSource: recoveryArtifact.kind === "code" ? recoveryArtifact.codeRelease : recoveryArtifact.codeSource,
         });
         if (committedArtifact) knownGoodArtifact = committedArtifact;
         armUnexpectedExit(restored);
@@ -633,7 +655,10 @@ export function createStackLauncher({
       const initialArtifact = artifactStore.current(expectedReloadTarget);
       webChild = spawnWeb(settings.web, baseEnv, initialArtifact);
       await webChild.spawnReady;
-      await wait(settings.web.healthUrl, { expectedArtifactId: initialArtifact.id });
+      await wait(settings.web.healthUrl, {
+        expectedArtifactId: initialArtifact.id,
+        expectedCodeSource: initialArtifact.kind === "code" ? initialArtifact.codeRelease : initialArtifact.codeSource,
+      });
       if (artifactStore.isImmutable?.(initialArtifact)) {
         knownGoodArtifact = { ...initialArtifact, publicationArtifactId: initialArtifact.id };
       } else {

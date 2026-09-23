@@ -1190,6 +1190,71 @@ test("durable immutable current starts directly without snapshot or quota mainte
   assert.deepEqual(artifacts.events, ["spawn:A"]);
 });
 
+test("health probing rejects an artifact whose running Web source differs from its manifest", async () => {
+  const expectedCodeSource = { sourceCommit: "1".repeat(40), sourceHash: "2".repeat(64) };
+  const matching = await waitForHealth("http://127.0.0.1:3001/api/health", {
+    expectedArtifactId: ARTIFACT_B,
+    expectedCodeSource,
+    fetchImplementation: async () => Response.json({
+      status: "ok", artifactId: ARTIFACT_B, codeSource: expectedCodeSource,
+    }),
+    timeoutMs: 0, intervalMs: 0,
+  });
+  assert.deepEqual(matching, { artifactId: ARTIFACT_B });
+  await assert.rejects(
+    () => waitForHealth("http://127.0.0.1:3001/api/health", {
+      expectedArtifactId: ARTIFACT_B,
+      expectedCodeSource,
+      fetchImplementation: async () => Response.json({
+        status: "ok", artifactId: ARTIFACT_B,
+        codeSource: { ...expectedCodeSource, sourceHash: "3".repeat(64) },
+      }),
+      timeoutMs: 0, intervalMs: 0,
+    }),
+    /source/i,
+  );
+});
+
+test("business current restores its verified Web build source after supervisor restart", async () => {
+  const codeSource = { sourceCommit: "1".repeat(40), sourceHash: "2".repeat(64) };
+  const artifact = { id: ARTIFACT_A, root: "business-artifact", ...reconciliation(ARTIFACT_A), codeSource };
+  const store = {
+    current: () => artifact,
+    isImmutable: () => true,
+    resolveArtifactPath: item => item.root,
+    prune: async () => undefined,
+  };
+  for (let restart = 0; restart < 2; restart += 1) {
+    const environments = [];
+    const children = [];
+    const launcher = createStackLauncher({
+      env: { WEB_PORT: "43123", AGENT_SERVICE_PORT: "43124" },
+      argv: ["prod"], artifactStore: store,
+      spawn(_command, _args, options) {
+        const child = new FakeChild(children.length ? "web" : "agent");
+        child.exitOnKill = true;
+        children.push(child);
+        environments.push(options.env);
+        return child;
+      },
+      waitForHealth: async () => undefined,
+      onceProcessSignal: () => undefined,
+      setIntervalImplementation: () => ({ unref() {} }),
+      clearIntervalImplementation: () => undefined,
+      platform: "linux",
+    });
+    try {
+      await launcher.start();
+      assert.equal(environments[1].WEB_PUBLICATION_ARTIFACT_ID, ARTIFACT_A);
+      assert.equal(environments[1].WEB_BUILD_SOURCE_COMMIT, codeSource.sourceCommit);
+      assert.equal(environments[1].WEB_BUILD_SOURCE_HASH, codeSource.sourceHash);
+      assert.equal(environments[1].WEB_CODE_BASE_ARTIFACT_ID, undefined);
+    } finally {
+      await launcher.cleanup("SIGTERM");
+    }
+  }
+});
+
 test("a durable applied-generation commit failure rolls back the healthy candidate before known-good advances", async () => {
   const children = [];
   const artifacts = createFakeArtifactStore([ARTIFACT_A, ARTIFACT_B]);

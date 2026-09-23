@@ -307,7 +307,7 @@ function New-ManagerState(
   }
 }
 
-function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$TargetRuntimeRoot, [string]$Commit, [string]$StatePath) {
+function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$TargetRuntimeRoot, [string]$Commit, [string]$StatePath, [switch]$RequireSourceMatch) {
   $logs = Join-Path $TargetRuntimeRoot 'logs'
   New-Item -ItemType Directory -Path $logs -Force | Out-Null
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -334,7 +334,12 @@ function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$Targ
     $webOk = Test-HttpOk 'http://127.0.0.1:31900/api/health'
     $agentOk = Test-HttpOk 'http://127.0.0.1:31901/health'
     if ($webOk -and $agentOk -and (Get-ListenerProcessIds 3000).Count -eq 0) {
-      return $state
+      if (-not $RequireSourceMatch) { return $state }
+      try {
+        $web = Read-CodeRuntimeHealth 'http://127.0.0.1:31900/api/health'
+        $agent = Read-CodeRuntimeHealth 'http://127.0.0.1:31901/health'
+        if (Test-CodeSourceMatch $web $agent $Commit) { return $state }
+      } catch {}
     }
     Start-Sleep -Milliseconds 300
     $process.Refresh()
@@ -377,6 +382,16 @@ function Test-CodeReleaseMatch($Actual, $Expected) {
     $Actual.baseArtifactId -cmatch '^[a-f0-9]{64}$' -and
     $Actual.sourceCommit -ceq $Expected.sourceCommit -and $Actual.sourceHash -ceq $Expected.sourceHash -and
     $Actual.baseArtifactId -ceq $Expected.baseArtifactId)
+}
+
+function Test-CodeSourceMatch($Web, $Agent, [string]$ExpectedCommit) {
+  return ($null -ne $Web -and $null -ne $Agent -and
+    $Web.status -eq 'ok' -and $Agent.status -eq 'ok' -and
+    $Web.codeSource.sourceCommit -cmatch '^[a-f0-9]{40}$' -and
+    $Web.codeSource.sourceHash -cmatch '^[a-f0-9]{64}$' -and
+    $Web.codeSource.sourceCommit -ceq $ExpectedCommit -and
+    $Agent.codeSource.sourceCommit -ceq $Web.codeSource.sourceCommit -and
+    $Agent.codeSource.sourceHash -ceq $Web.codeSource.sourceHash)
 }
 
 function Wait-CodePublication([string]$Root, $Prepared, [int]$TimeoutSeconds = 90) {
@@ -461,7 +476,7 @@ function Invoke-FormalStackManager {
 
   $commit = (& git -C $resolvedRoot rev-parse HEAD).Trim()
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commit)) { throw '无法解析正式代码版本' }
-  $newState = Start-FormalStack $resolvedRoot $resolvedData $resolvedRuntime $commit $statePath
+  $newState = Start-FormalStack $resolvedRoot $resolvedData $resolvedRuntime $commit $statePath -RequireSourceMatch:(-not $PublishCode)
   if ($prepared) {
     $agent = Read-CodeRuntimeHealth 'http://127.0.0.1:31901/health'
     if ($newState.commit -cne $prepared.codeRelease.sourceCommit -or $agent.status -ne 'ok' -or

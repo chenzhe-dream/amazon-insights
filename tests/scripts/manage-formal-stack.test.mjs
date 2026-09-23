@@ -91,6 +91,24 @@ test("missing configuration fails closed", () => {
   assert.match(result.stderr, /正式配置文件不存在/);
 });
 
+test("ordinary formal restart requires the Web and Agent to report the same exact source", () => {
+  const result = invokePowerShell(`
+    $commit='${"c".repeat(40)}'; $hash='${"b".repeat(64)}'; $other='${"d".repeat(64)}'
+    $web=@{status='ok';artifactId=('a'*64);codeSource=@{sourceCommit=$commit;sourceHash=$hash}}
+    $agent=@{status='ok';codeSource=@{sourceCommit=$commit;sourceHash=$hash}}
+    $matching=Test-CodeSourceMatch $web $agent $commit
+    $agent.codeSource.sourceHash=$other
+    $mismatched=Test-CodeSourceMatch $web $agent $commit
+    $agent.codeSource.sourceHash=$hash; $web.Remove('codeSource')
+    $missing=Test-CodeSourceMatch $web $agent $commit
+    @{matching=$matching;mismatched=$mismatched;missing=$missing} | ConvertTo-Json -Compress
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    matching: true, mismatched: false, missing: false,
+  });
+});
+
 test("missing shared formal config fails closed and requires explicit migration", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "formal-stack-shared-missing-"));
   const sharedRoot = path.join(directory, "shared");

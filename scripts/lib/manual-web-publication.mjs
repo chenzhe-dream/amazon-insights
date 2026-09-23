@@ -67,6 +67,7 @@ export async function publishManualWebUpdate(options) {
     artifactId,
     ...descriptor,
     build: options.build,
+    captureSourceIdentity: options.captureSourceIdentity === true,
   });
   const reloadPayload = {
     ...descriptor,

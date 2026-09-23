@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assertCodeOnly, codeReleasesMatch, validateCodeRelease } from "./code-publication-identity.mjs";
+import { assertCodeOnly, boundedCodeSource, codeReleasesMatch, validateCodeRelease } from "./code-publication-identity.mjs";
+import { assertBuiltCodeSource, readCodeSourceIdentity } from "./code-source-identity.mjs";
 import {
   acquireInterprocessLock,
   acquireInterprocessLockSync,
@@ -690,9 +691,12 @@ function parseManifest(value) {
     assertArtifactId(value.artifactId);
     return Object.freeze({ artifactId: value.artifactId, kind: "code", codeRelease: validateCodeRelease(value.codeRelease) });
   }
+  const hasCodeSource = value.version === 4;
   if (
-    Object.keys(value).sort().join(",") !== "artifactId,jobId,jobVersion,stageContentHashes,version" ||
-    value.version !== 2
+    Object.keys(value).sort().join(",") !== (hasCodeSource
+      ? "artifactId,codeSource,jobId,jobVersion,stageContentHashes,version"
+      : "artifactId,jobId,jobVersion,stageContentHashes,version") ||
+    ![2, 4].includes(value.version)
   ) {
     throw new Error("Invalid Web artifact manifest");
   }
@@ -701,11 +705,16 @@ function parseManifest(value) {
     if (typeof value.jobId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(value.jobId)) throw new Error();
     if (!Number.isSafeInteger(value.jobVersion) || value.jobVersion < 1) throw new Error();
     const stageContentHashes = validateStageContentHashes(value.stageContentHashes, "Invalid Web artifact manifest");
+    const codeSource = hasCodeSource
+      ? boundedCodeSource(value.codeSource?.sourceCommit, value.codeSource?.sourceHash)
+      : null;
+    if (hasCodeSource && (!codeSource || Object.keys(value.codeSource).sort().join(",") !== "sourceCommit,sourceHash")) throw new Error();
     return Object.freeze({
       artifactId: value.artifactId,
       jobId: value.jobId,
       jobVersion: value.jobVersion,
       stageContentHashes,
+      ...(codeSource ? { codeSource } : {}),
     });
   } catch {
     throw new Error("Invalid Web artifact manifest");
@@ -805,6 +814,7 @@ async function existingExactArtifact(runtimeDir, destination, expected) {
       || manifest.jobId !== expected.jobId
       || manifest.jobVersion !== expected.jobVersion
       || JSON.stringify(manifest.stageContentHashes) !== JSON.stringify(expected.stageContentHashes)
+      || JSON.stringify(manifest.codeSource) !== JSON.stringify(expected.codeSource)
     ) throw new Error("Web publication artifact already exists with different content");
     return Object.freeze({
       id: expected.artifactId,
@@ -819,16 +829,17 @@ async function existingExactArtifact(runtimeDir, destination, expected) {
 
 function artifactMetadata(value) {
   return value.kind === "code" ? { kind: "code", codeRelease: value.codeRelease }
-    : { jobId: value.jobId, jobVersion: value.jobVersion, stageContentHashes: value.stageContentHashes };
+    : { jobId: value.jobId, jobVersion: value.jobVersion, stageContentHashes: value.stageContentHashes,
+      ...(value.codeSource ? { codeSource: value.codeSource } : {}) };
 }
 
 export { durablePublishSync as writeWebArtifactPrivateRecordSync };
 
-export async function writeCurrentWebArtifact({ worktree, artifactId, jobId, jobVersion, stageContentHashes, kind, codeRelease }) {
+export async function writeCurrentWebArtifact({ worktree, artifactId, jobId, jobVersion, stageContentHashes, kind, codeRelease, codeSource }) {
   assertArtifactId(artifactId);
   if (kind !== undefined || codeRelease !== undefined) assertCodeOnly({ kind, codeRelease, jobId, jobVersion, stageContentHashes });
-  const version = kind === "code" ? 3 : 2;
-  const manifest = parseManifest({ version, artifactId, ...artifactMetadata({ kind, codeRelease, jobId, jobVersion, stageContentHashes }) });
+  const version = kind === "code" ? 3 : codeSource ? 4 : 2;
+  const manifest = parseManifest({ version, artifactId, ...artifactMetadata({ kind, codeRelease, codeSource, jobId, jobVersion, stageContentHashes }) });
   const artifactRoot = await resolveWritableArtifactRoot(worktree);
   const destination = path.join(artifactRoot, "web-artifact.json");
   const temporary = `${destination}.tmp-${randomUUID()}`;
@@ -854,6 +865,7 @@ export async function publishImmutableWebArtifact({
   stageContentHashes,
   kind,
   codeRelease,
+  captureSourceIdentity = false,
   stream,
   generation,
   build,
@@ -874,10 +886,8 @@ export async function publishImmutableWebArtifact({
   }
   const resolvedWorktree = path.resolve(worktree);
   const runtimeDir = path.join(resolvedWorktree, "data", "web-runtime-artifacts");
+  if (kind === "code" && captureSourceIdentity) throw new Error("Code artifact identity is already explicit");
   if (kind !== undefined || codeRelease !== undefined) assertCodeOnly({ kind, codeRelease, jobId, jobVersion, stageContentHashes, stream, generation });
-  const expected = parseManifest(kind === "code"
-    ? { version: 3, artifactId, kind, codeRelease }
-    : { version: 2, artifactId, jobId, jobVersion, stageContentHashes });
   const release = await acquireInterprocessLock(artifactLockPath(resolvedWorktree), {
     attempts: Math.ceil(buildLockWaitMs / buildLockRetryMs),
     retryMs: buildLockRetryMs,
@@ -887,6 +897,11 @@ export async function publishImmutableWebArtifact({
   let reservationToken = null;
   try {
     assertNoManualRecovery(resolvedWorktree);
+    const codeSource = captureSourceIdentity ? await readCodeSourceIdentity(resolvedWorktree) : null;
+    const expected = parseManifest(kind === "code"
+      ? { version: 3, artifactId, kind, codeRelease }
+      : { version: codeSource ? 4 : 2, artifactId, jobId, jobVersion, stageContentHashes,
+        ...(codeSource ? { codeSource } : {}) });
     reservationToken = await createReservation(resolvedWorktree, artifactId, path.basename(temporary));
     const existing = await existingExactArtifact(runtimeDir, destination, expected);
     if (existing) return Object.freeze({ ...existing, reservationToken });
@@ -894,6 +909,7 @@ export async function publishImmutableWebArtifact({
     const runtimeArtifacts = await managedRuntimeArtifacts(runtimeDir);
     if (runtimeArtifacts.length >= MAX_WEB_RUNTIME_ARTIFACTS) throw new Error("Web runtime artifact quota exceeded");
     await build();
+    if (codeSource) await assertBuiltCodeSource(resolvedWorktree, codeSource);
     const artifactRoot = await resolveWritableArtifactRoot(resolvedWorktree);
     const existingBytes = (await Promise.all(runtimeArtifacts.map((entry) => directoryBytes(entry.root))))
       .reduce((sum, size) => sum + size, 0);
@@ -1003,6 +1019,7 @@ export function createWebArtifactStore({
         id: parsed.artifactId,
         root: resolvedArtifactRoot,
         ...(parsed.kind === "code" ? artifactMetadata(parsed) : {}),
+        ...(parsed.codeSource ? { codeSource: parsed.codeSource } : {}),
         ...(parsed.jobId ? {
           jobId: parsed.jobId,
           jobVersion: parsed.jobVersion,
@@ -1080,6 +1097,10 @@ export function createWebArtifactStore({
       const resolvedRoot = fsSync.realpathSync(root);
       assertWithin(resolvedRuntimeDir, resolvedRoot);
       const parsed = parseManifest(JSON.parse(fsSync.readFileSync(manifest, "utf8")));
+      if (parsed.codeSource) {
+        const fingerprint = JSON.parse(fsSync.readFileSync(path.join(resolvedRoot, "build-fingerprint.json"), "utf8"));
+        if (fingerprint.version !== 1 || fingerprint.sourceHash !== parsed.codeSource.sourceHash) throw new Error();
+      }
       return Object.freeze({
         id: parsed.artifactId,
         root: resolvedRoot,

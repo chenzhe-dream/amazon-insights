@@ -113,6 +113,7 @@ export async function runBackgroundRebuild({
               worktree: formalWorktree,
               env,
               build: buildFormal,
+              captureSourceIdentity: true,
               token: owner,
               ...generation,
             });

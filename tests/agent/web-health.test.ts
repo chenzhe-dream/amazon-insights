@@ -14,6 +14,15 @@ test("Web health exposes the running code artifact identity without arbitrary en
   assert.equal("codeRelease" in await (await probeAgentReadiness({ env: { ...env, WEB_CODE_SOURCE_HASH: "secret garbage" } })).json(), false);
 });
 
+test("Web health exposes a business artifact's verified build source without inventing a code release", async () => {
+  const env = { WEB_BUILD_SOURCE_COMMIT: "d".repeat(40), WEB_BUILD_SOURCE_HASH: "e".repeat(64) };
+  const healthy = await (await probeAgentReadiness({ env })).json();
+  assert.deepEqual(healthy.codeSource, { sourceCommit: env.WEB_BUILD_SOURCE_COMMIT, sourceHash: env.WEB_BUILD_SOURCE_HASH });
+  assert.equal("codeRelease" in healthy, false);
+  const malformed = await (await probeAgentReadiness({ env: { ...env, WEB_BUILD_SOURCE_HASH: "invalid secret" } })).json();
+  assert.equal("codeSource" in malformed, false);
+});
+
 function readyReadiness() {
   return {
     schemaVersion: "1.0.0",
