@@ -1399,7 +1399,7 @@ async function main() {
         });
         const candidateRoot = path.join(dataRoot, "sync-image-candidates");
         fs.mkdirSync(candidateRoot, { recursive: true, mode: 0o700 });
-        imageListingInputDir = fs.mkdtempSync(path.join(candidateRoot, "image-"));
+        imageListingInputDir = fs.mkdtempSync(path.join(candidateRoot, `image-${process.pid}-`));
         imageListingInputFile = path.join(imageListingInputDir, "listing.json");
         imageCandidateFile = path.join(imageListingInputDir, "image-candidate.json");
         fs.writeFileSync(imageListingInputFile, JSON.stringify({ jobId, job: persistedImageJob }), { encoding: "utf8", flag: "wx", mode: 0o600 });

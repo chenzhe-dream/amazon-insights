@@ -19,6 +19,7 @@ import {createMarketOverviewReportStep} from './runtime/market-overview-report-s
 import { PostgresMarketModuleExecutionStore } from './db/postgres/market-module-execution-store';
 import type { OpenAIProviderOptions } from './runtime/openai-provider';
 import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
+import path from "node:path";
 import { VocAutomationService } from "./services/voc-automation-service";
 import { TrafficDetailRecoveryService } from './services/traffic-detail-recovery-service';
 
@@ -92,6 +93,7 @@ import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quot
 import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service.node.js";
 import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service.node.js";
 import { ProjectDisplayRetentionService } from "./services/project-display-retention-service";
+import { ImageRemarkCandidateRetentionService } from "./services/image-remark-candidate-retention-service";
 import { resolveMarketNodePath } from './services/market-node-path-resolver';
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
@@ -244,6 +246,12 @@ export async function createAgentService(
       ? new ProjectDisplayRetentionService({
           cleanup: input => repository.projectDisplayVersions!.cleanupExpiredBodies(input),
           onError: error => app.log.error({ err: error }, "Project display retention sweep failed"),
+        }) : null;
+    const candidateDataRoot = env.AGENT_DATA_ROOT?.trim();
+    const imageRemarkCandidateRetentionRuntime = candidateDataRoot && path.isAbsolute(candidateDataRoot)
+      ? new ImageRemarkCandidateRetentionService({
+          dataRoot: candidateDataRoot,
+          onError: error => app.log.error({ err: error }, "Image remark candidate retention sweep failed"),
         }) : null;
     const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
     const openaiCapability: OpenAiRuntimeCapability =
@@ -499,6 +507,7 @@ export async function createAgentService(
         vocQueueRuntime.start();
         manualAlexaVocRetentionRuntime?.start();
         projectDisplayRetentionRuntime?.start();
+        imageRemarkCandidateRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
           concurrencyControl:
@@ -635,6 +644,7 @@ export async function createAgentService(
             manualAlexaVocPublicationRuntime,
             manualAlexaVocRetentionRuntime,
             projectDisplayRetentionRuntime,
+            imageRemarkCandidateRetentionRuntime,
             vocRuntime,
             normalizationRuntime,
             trafficRuntime,
