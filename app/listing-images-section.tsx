@@ -316,7 +316,9 @@ export function ListingImagesSection({
                                   {imageOverlay.source.sourceKind === "supplemental-analysis" ? "补充分析" : "历史备注"} · {imageOverlay.source.capturedAt.slice(0, 10)}
                                   {imageOverlay.videoThumbnail ? " · 视频封面说明" : ""}
                                 </p> : null}
-                                {imageOutcome && imageOutcome.status !== "ready" ? <p className="listing-image-caption muted">本次重新分析失败，暂显示上次结果 · {imageOutcomeReason}</p> : null}
+                                {imageOutcome && imageOutcome.status !== "ready" ? <p className="listing-image-caption muted">
+                                  {imageOverlay?.imageUrl === url ? "原任务图片分析未完成，已显示补充备注" : "本次重新分析失败，暂显示上次结果"} · {imageOutcomeReason}
+                                </p> : null}
                                 {imageRemark.image_types.length > 0 ? (
                                   <p className="listing-image-type-tags">
                                     {imageRemark.image_types.slice(0, 2).join(" · ")}
