@@ -461,6 +461,16 @@ function Invoke-FormalStackManager {
     Assert-CodePublicationQueueIdle $resolvedRoot
   }
 
+  if (-not $PublishCode -and $decision.action -eq 'restart') {
+    $expectedCommit = (& git -C $resolvedRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $expectedCommit -cnotmatch '^[a-f0-9]{40}$') { throw '无法解析正式代码版本' }
+    $web = Read-CodeRuntimeHealth 'http://127.0.0.1:31900/api/health'
+    $agent = Read-CodeRuntimeHealth 'http://127.0.0.1:31901/health'
+    if (-not (Test-CodeSourceMatch $web $agent $expectedCommit)) {
+      throw '现有服务源码身份不匹配，已保留运行中的服务'
+    }
+  }
+
   switch ($decision.action) {
     'refuse-active' { throw '存在正在运行的分析任务，已拒绝重启' }
     'refuse-foreign' { throw '现有 Web/Agent 不属于本启动器，请先在原终端停止服务' }

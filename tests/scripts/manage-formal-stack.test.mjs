@@ -34,7 +34,7 @@ function invokeDecision({ owned, healthy, active }) {
   return JSON.parse(result.stdout.trim());
 }
 
-for (const scenario of ["success", "prepare-failure", "active-after-build", "foreign-after-build", "activation-failure", "wrong-runtime-identity", "old-supervisor", "default"]) {
+for (const scenario of ["success", "prepare-failure", "active-after-build", "foreign-after-build", "activation-failure", "wrong-runtime-identity", "old-supervisor", "default", "default-source-mismatch", "default-legacy-v2"]) {
   test(`code manager guarded handoff: ${scenario}`, async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "code-manager-"));
     const dataRoot = path.join(directory, "data"), runtimeRoot = path.join(directory, "runtime");
@@ -49,7 +49,8 @@ for (const scenario of ["success", "prepare-failure", "active-after-build", "for
     try {
       const result = invokePowerShell(`
         $ProjectRoot=${psLiteral(root)}; $SharedRoot=${psLiteral(directory)}; $DataRoot=${psLiteral(dataRoot)}; $RuntimeRoot=${psLiteral(runtimeRoot)}
-        $PublishCode=$${scenario !== "default"}; $script:events=@(); $script:prepared=$false
+        $PublishCode=$${!scenario.startsWith("default")}; $script:events=@(); $script:prepared=$false
+        $formalCommit=(& git -C $ProjectRoot rev-parse HEAD).Trim()
         function Invoke-PostgresPreflight { if ($script:prepared -and '${scenario}' -eq 'active-after-build') { return @{active=1} }; return @{active=0} }
         function Get-ListenerProcessIds([int]$Port) { if ($Port -eq 3000) { return @() }; return @(123) }
         function Test-ManagedStackIdentity { return -not ($script:prepared -and '${scenario}' -eq 'foreign-after-build') }
@@ -65,7 +66,11 @@ for (const scenario of ["success", "prepare-failure", "active-after-build", "for
         function Read-CodeRuntimeHealth([string]$Url) {
           if ('${scenario}' -eq 'old-supervisor') { return @{status='ok'} }
           $hash=if('${scenario}' -eq 'wrong-runtime-identity'){'f'*64}else{'b'*64}
-          return @{status='ok';artifactId=('a'*64);codeRelease=@{sourceCommit=('c'*40);sourceHash=$hash;baseArtifactId=('e'*64)};codeSource=@{sourceCommit=('c'*40);sourceHash=('b'*64)}}
+          $sourceCommit=if('${scenario}'.StartsWith('default')){$formalCommit}else{'c'*40}
+          $sourceHash=if('${scenario}' -eq 'default-source-mismatch' -and $Url -match '31900'){'f'*64}else{'b'*64}
+          $health=@{status='ok';artifactId=('a'*64);codeRelease=@{sourceCommit=('c'*40);sourceHash=$hash;baseArtifactId=('e'*64)};codeSource=@{sourceCommit=$sourceCommit;sourceHash=$sourceHash}}
+          if ('${scenario}' -eq 'default-legacy-v2' -and $Url -match '31900') { $health.Remove('codeSource') }
+          return $health
         }
         $script:realWait = (Get-Command Wait-CodePublication).ScriptBlock
         function Wait-CodePublication { & $script:realWait @args -TimeoutSeconds 0 }
@@ -77,6 +82,7 @@ for (const scenario of ["success", "prepare-failure", "active-after-build", "for
       const observed = JSON.parse(result.stdout.trim());
       assert.equal(observed.failed, !["success", "default"].includes(scenario));
       if (["prepare-failure", "active-after-build", "foreign-after-build"].includes(scenario)) assert.deepEqual(observed.events, ["prepare"]);
+      else if (["default-source-mismatch", "default-legacy-v2"].includes(scenario)) assert.deepEqual(observed.events, []);
       else if (scenario === "default") assert.deepEqual(observed.events, ["stop", "start"]);
       else if (scenario === "old-supervisor") assert.deepEqual(observed.events, ["prepare", "stop", "start"]);
       else assert.deepEqual(observed.events, ["prepare", "stop", "start", "submit", "status"]);
