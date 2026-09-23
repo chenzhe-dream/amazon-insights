@@ -217,6 +217,22 @@ test("Sorftime gallery reports the exact count of ready AI remarks", () => {
   assert.match(html, /清晰展示产品/);
 });
 
+test("video thumbnail is counted and labelled separately from static secondary images", () => {
+  const video = "https://m.media-amazon.com/images/I/video.PKplay-button-mb-image-grid-small_.jpg";
+  const html = renderListingImages(
+    { asin: fixtureAsin, brand: "Fixture brand", image: sellerSpriteCatalogImage },
+    listingFixture({
+      galleryImages: [sorftimeMainImage, sorftimeSecondaryImage, video],
+      secondaryImages: [sorftimeSecondaryImage, video],
+      imageCount: 3,
+    }),
+  );
+
+  assert.match(html, /Provider 返回 3 张（含 1 个视频位缩略图）/);
+  assert.match(html, /图片2 · 辅图/);
+  assert.match(html, /图片3 · 视频位缩略图/);
+});
+
 test("eight saved ASIN galleries render all 53 images and matching remarks without a missing-note warning", () => {
   const asinCounts = [
     ["B004FM8WY0", 6],

@@ -97,6 +97,10 @@ function resolveGallery(
   return { urls: [], source: null };
 }
 
+function isVideoThumbnail(url: string) {
+  return /PKplay-button/i.test(url);
+}
+
 export function ListingImagesSection({
   products,
   onImageAction,
@@ -200,6 +204,7 @@ export function ListingImagesSection({
                 (count, _, slotIndex) => count + (remarkForImage(product.asin, slotIndex) ? 1 : 0),
                 0,
               );
+              const videoThumbnailCount = gallery.urls.filter(isVideoThumbnail).length;
 
               return (
                 <tr key={product.asin}>
@@ -231,7 +236,7 @@ export function ListingImagesSection({
                         </a>
                         {gallery.source === "sorftime" ? (
                           <small className="listing-images-count">
-                            Sorftime MCP · Provider 返回 {gallery.urls.length} 张 · AI 备注 {readyRemarkCount}/{gallery.urls.length} 张
+                            Sorftime MCP · Provider 返回 {gallery.urls.length} 张{videoThumbnailCount ? `（含 ${videoThumbnailCount} 个视频位缩略图）` : ""} · AI 备注 {readyRemarkCount}/{gallery.urls.length} 张
                             {readyRemarkCount < gallery.urls.length ? " · 分析待处理" : ""}
                           </small>
                         ) : gallery.source === "sellerSpriteCatalog" ? (
@@ -247,7 +252,8 @@ export function ListingImagesSection({
                   </th>
                   {imageColumns.map(slotIndex => {
                     const url = gallery.urls[slotIndex] ?? null;
-                    const label = `${product.brand} · 图片${slotIndex + 1}${slotIndex === 0 ? " · 主图" : " · 辅图"}`;
+                    const imageKind = slotIndex === 0 ? "主图" : url && isVideoThumbnail(url) ? "视频位缩略图" : "辅图";
+                    const label = `${product.brand} · 图片${slotIndex + 1} · ${imageKind}`;
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
                     const imageRemark = remarkForImage(product.asin, slotIndex);
@@ -304,7 +310,7 @@ export function ListingImagesSection({
                               </div>
                             ) : (
                               <p className="listing-image-caption muted">
-                                {slotIndex === 0 ? "主图" : "辅图"} · {imageOutcomeReason}
+                                {imageKind} · {imageOutcomeReason}
                               </p>
                             )}
                           </div>
