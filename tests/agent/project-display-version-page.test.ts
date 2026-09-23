@@ -9,7 +9,10 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 import { refreshedCatalog } from "../../app/competitor-data";
 
-const organizationId = "018f1f5c-60f0-4b7a-8000-000000000002";
+const realVersion = process.env.DISPLAY_REAL_VERSION_FILE
+  ? JSON.parse(readFileSync(process.env.DISPLAY_REAL_VERSION_FILE, "utf8"))
+  : null;
+const organizationId = realVersion?.organizationId ?? "018f1f5c-60f0-4b7a-8000-000000000002";
 const projectId = "75a3f965-07e8-468e-aec7-bce265515023";
 const runId = "01674bb8-de2b-4e02-a3d7-d73de3c347b3";
 const jobId = "ff4f8ade-e1dd-42fd-a62c-4415ec9a5c87";
@@ -49,7 +52,7 @@ stageOutputs.listing = stage("listing", { contentByAsin: { B07YGQVKDY: {
 stageOutputs.image_remarks = stage("image_remarks", { remarksByAsin: {
   B07YGQVKDY: gallery.map((_, index) => ({ remark: `核实图片备注 ${index + 1}`, confidence: "high", image_types: [] })),
 }, outcomesByAsin: {} });
-const version = { versionId: "12345678-1234-4234-8234-123456789abc", organizationId, projectId,
+const version = realVersion ?? { versionId: "12345678-1234-4234-8234-123456789abc", organizationId, projectId,
   runId, jobId, marketplace: "US", asins, catalog, stageOutputs,
   gaps: asins.slice(4).map(asin => ({ asin, field: "catalog.sellerSprite", reasonCode: "UPSTREAM_EMPTY" })),
   catalogEvidence: { sourceKind: "generated-file", sourceRef: "app/competitor-data.ts#refreshedCatalog",
@@ -73,6 +76,7 @@ test("saved report reads never fall back to generated data; first analysis still
   const browser = await chromium.launch({ headless: true, args: ["--disable-features=LocalNetworkAccessChecks"] });
   t.after(async () => { await browser.close(); await server.close(); });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  if (realVersion) await page.addInitScript(value => { window.__fixtureOrganizationId = value; }, organizationId);
   const pageErrors: string[] = [], writes: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   let mode: "waiting" | "success" | "failure" | "absent" = "waiting";
@@ -83,6 +87,9 @@ test("saved report reads never fall back to generated data; first analysis still
   const stageReads: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
+  let releaseHistoricalPointer!: () => void;
+  const historicalPointerGate = new Promise<void>(resolve => { releaseHistoricalPointer = resolve; });
+  let historicalPointerPending = true;
   await page.route("**/*", async route => {
     if (!route.request().isNavigationRequest()) return route.continue();
     const html = readFileSync("tests/agent/helpers/primary-admin-browser-harness.html", "utf8")
@@ -94,14 +101,22 @@ test("saved report reads never fall back to generated data; first analysis still
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (request.method() !== "GET") writes.push(`${request.method()} ${endpoint}`);
     if (endpoint === "/api/amazon-image") {
+      if (realVersion) {
+        const response = await fetch(`http://127.0.0.1:31900${url.pathname}${url.search}`);
+        return route.fulfill({ status: response.status,
+          contentType: response.headers.get("content-type") ?? "application/octet-stream",
+          body: Buffer.from(await response.arrayBuffer()) });
+      }
       const index = Math.max(0, gallery.indexOf(url.searchParams.get("u") ?? ""));
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="hsl(${index * 42 + 180} 45% 82%)"/><text x="160" y="130" text-anchor="middle" font-size="48">${index + 1}</text></svg>`;
       return route.fulfill({ status: 200, contentType: "image/svg+xml", body: svg });
     }
     if (endpoint === `/api/agent/v1/local-data/projects/${project.slug}` || endpoint === `/api/agent/v1/local-data/projects/${projectId}`)
       return reply({ project });
-    if (endpoint === `/api/agent/v1/projects/${projectId}`)
+    if (endpoint === `/api/agent/v1/projects/${projectId}`) {
+      if (historicalPointerPending) await historicalPointerGate;
       return reply({ project: { ...project, organizationId, currentRunId: exposeJob ? runId : null } });
+    }
     if (endpoint === `/api/agent/v1/runs/${runId}`)
       return reply({ run: { id: runId, projectId, idempotencyKey: jobId } });
     if (endpoint === `/api/agent/v1/local-data/projects/${projectId}/current-sync-job`)
@@ -144,11 +159,22 @@ test("saved report reads never fall back to generated data; first analysis still
   assert.ok((await page.locator("body").innerText()).length > 0, `Waiting page did not render: ${pageErrors.join("; ")}`);
   mode = "success";
   release();
-  await page.getByText(/Provider 返回 7 张（含 1 个视频位缩略图） · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 });
+  await page.locator('tr:has-text("B07YGQVKDY")').getByText(/Provider 返回 7 张（含 1 个视频位缩略图） · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 })
+    .catch(async error => { throw new Error(`Current version did not render: ${pageErrors.join("; ")}\n${(await page.locator("body").innerText()).slice(0, 2200)}`, { cause: error }); });
   await page.getByText("4 个 ASIN 目录未验证（上游空值）").waitFor();
-  await page.getByText(/来源任务 6eea1111/).waitFor();
+  await page.getByText(realVersion ? /来源任务 6eea5873/ : /来源任务 6eea1111/).waitFor();
   assert.equal(await page.locator('tr:has-text("B07YGQVKDY") .listing-image-frame').count(), 7);
+  if (realVersion) {
+    assert.equal(await page.locator(".listing-image-frame").count(), 53);
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>(".listing-image-frame img")]
+      .filter(image => image.complete && image.naturalWidth > 0).length >= 52, undefined, { timeout: 30_000 });
+    if (screenshotRoot) await page.locator('tr:has-text("B07YGQVKDY")').screenshot({
+      path: path.join(screenshotRoot, "b07-real-gallery.png"), timeout: 30_000,
+    });
+  }
   await capture("success");
+  historicalPointerPending = false;
+  releaseHistoricalPointer();
   mode = "failure";
   await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1200);

@@ -2582,6 +2582,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         } else {
           setWorkspaceLabel("");
         }
+        if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
         void readHistoricalSyncPointer(project).then(pointer => {
           if (cancelled) return;
           const currentLocation = appLocationRef.current;
@@ -2600,7 +2601,6 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           const href = workspaceHref(project.slug, params);
           const current = `${currentLocation.pathname}${currentLocation.search ? `?${currentLocation.search}` : ""}`;
           if (current !== href) router.replace(href);
-          if (workspaceKey) setHydratedWorkspaceKey(workspaceKey);
         });
       })
       .catch(() => {

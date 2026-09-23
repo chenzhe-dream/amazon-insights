@@ -13,7 +13,7 @@ const nativeHistoryReplaceState = window.history.replaceState.bind(window.histor
 const authSession = {
   user: {
     id: "018f1f5c-60f0-4b7a-8000-000000000001",
-    organizationId: "018f1f5c-60f0-4b7a-8000-000000000002",
+    organizationId: window.__fixtureOrganizationId ?? "018f1f5c-60f0-4b7a-8000-000000000002",
     email: "test-admin@amazon-insights.local",
     displayName: "Test admin",
     role: "admin" as const,
@@ -31,6 +31,7 @@ const authSession = {
 
 declare global {
   interface Window {
+    __fixtureOrganizationId?: string;
     appLocation?: string;
     navigateAuthenticatedApp?: (href: string) => void;
     remountAuthenticatedApp?: () => void;
