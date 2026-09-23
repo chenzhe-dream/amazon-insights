@@ -370,16 +370,36 @@ test("legacy eligibility is principal-scoped and visitor reads never bind owners
   const foreignLegacyId = "91000000-0000-4000-8000-000000000011";
   const boundLegacyId = "91000000-0000-4000-8000-000000000012";
   const unownedLegacyId = "91000000-0000-4000-8000-000000000013";
+  const labeledBoundId = "91000000-0000-4000-8000-000000000014";
+  const labeledOtherOwnerId = "91000000-0000-4000-8000-000000000015";
+  const labeledUnboundId = "91000000-0000-4000-8000-000000000016";
   const legacyProjects = new Map([
     [ownedLegacyId, { id: ownedLegacyId, createdBy: memberA }],
     [foreignLegacyId, { id: foreignLegacyId, createdBy: memberB }],
     [boundLegacyId, { id: boundLegacyId, createdBy: null }],
     [unownedLegacyId, { id: unownedLegacyId, createdBy: null }],
+    [labeledBoundId, { id: labeledBoundId, createdBy: "IVANYAO" }],
+    [labeledOtherOwnerId, { id: labeledOtherOwnerId, createdBy: "IVANYAO" }],
+    [labeledUnboundId, { id: labeledUnboundId, createdBy: "IVANYAO" }],
   ]);
   await repository.bindLegacyProjectOwnerOnce({
     legacyProjectId: boundLegacyId,
     organizationId: organizationA,
     ownerUserId: memberA,
+    operatorUserId: operatorA,
+    boundAt: now,
+  });
+  await repository.bindLegacyProjectOwnerOnce({
+    legacyProjectId: labeledBoundId,
+    organizationId: organizationA,
+    ownerUserId: memberA,
+    operatorUserId: operatorA,
+    boundAt: now,
+  });
+  await repository.bindLegacyProjectOwnerOnce({
+    legacyProjectId: labeledOtherOwnerId,
+    organizationId: organizationA,
+    ownerUserId: operatorA,
     operatorUserId: operatorA,
     boundAt: now,
   });
@@ -400,7 +420,7 @@ test("legacy eligibility is principal-scoped and visitor reads never bind owners
     rmSync(directory, { recursive: true, force: true });
   });
 
-  for (const legacyProjectId of [ownedLegacyId, boundLegacyId]) {
+  for (const legacyProjectId of [ownedLegacyId, boundLegacyId, labeledBoundId]) {
     const eligible = await app.inject({
       method: "GET",
       url: `/v1/legacy-projects/${legacyProjectId}/eligibility`,
@@ -413,7 +433,7 @@ test("legacy eligibility is principal-scoped and visitor reads never bind owners
       importAllowed: true,
     });
   }
-  for (const legacyProjectId of [foreignLegacyId, unownedLegacyId]) {
+  for (const legacyProjectId of [foreignLegacyId, unownedLegacyId, labeledOtherOwnerId, labeledUnboundId]) {
     const hidden = await app.inject({
       method: "GET",
       url: `/v1/legacy-projects/${legacyProjectId}/eligibility`,
@@ -421,9 +441,13 @@ test("legacy eligibility is principal-scoped and visitor reads never bind owners
     });
     assert.equal(hidden.statusCode, 404);
     assert.equal(hidden.json().error.code, "NOT_FOUND");
+  }
+  for (const legacyProjectId of [foreignLegacyId, unownedLegacyId, labeledUnboundId]) {
     assert.equal(await repository.findLegacyProjectOwnerBinding(legacyProjectId), null);
   }
-  assert.equal(reads, 4);
+  assert.equal((await repository.findLegacyProjectOwnerBinding(labeledBoundId))?.ownerUserId, memberA);
+  assert.deepEqual(legacyProjects.get(labeledBoundId), { id: labeledBoundId, createdBy: "IVANYAO" });
+  assert.equal(reads, 7);
 });
 
 async function exerciseComparisonProjectRepository(

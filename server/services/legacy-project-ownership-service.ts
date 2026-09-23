@@ -2,6 +2,7 @@ import type {
   ApiErrorCode,
   LegacyProjectEligibilityResponse,
 } from "../../shared/agent-contracts";
+import { EntityIdSchema } from "../../shared/agent-contracts";
 import type { RequestPrincipal } from "../auth/authorization";
 import {
   LegacyProjectOwnerBindingError,
@@ -36,25 +37,22 @@ export class LegacyProjectOwnershipService {
     if (input.principal.kind !== "user" || !project || typeof project !== "object") {
       throw notFound();
     }
+    if (!("id" in project) || project.id !== input.legacyProjectId) throw notFound();
     const createdBy = "createdBy" in project ? project.createdBy : null;
-    if (typeof createdBy === "string" && createdBy.length > 0) {
-      if (createdBy !== input.principal.userId) throw notFound();
-      const owner = await this.repository.findUserById(createdBy);
-      if (!owner || owner.status !== "active" || owner.organizationId !== input.principal.organizationId) {
-        throw notFound();
-      }
-    } else {
-      const find = this.repository.findLegacyProjectOwnerBinding;
-      const binding = find
-        ? await find.call(this.repository, input.legacyProjectId)
-        : null;
-      if (!binding || binding.organizationId !== input.principal.organizationId) {
-        throw notFound();
-      }
-      const owner = await this.repository.findUserById(binding.ownerUserId);
-      if (!owner || owner.status !== "active" || owner.organizationId !== binding.organizationId) {
-        throw notFound();
-      }
+    const creatorId = EntityIdSchema.safeParse(createdBy);
+    const find = this.repository.findLegacyProjectOwnerBinding;
+    const binding = find ? await find.call(this.repository, input.legacyProjectId) : null;
+    if (binding && (
+      binding.legacyProjectId !== input.legacyProjectId
+      || binding.organizationId !== input.principal.organizationId
+      || binding.ownerUserId !== input.principal.userId
+      || (creatorId.success && creatorId.data !== binding.ownerUserId)
+    )) throw notFound();
+    const ownerId = binding?.ownerUserId ?? (creatorId.success ? creatorId.data : null);
+    if (ownerId !== input.principal.userId) throw notFound();
+    const owner = await this.repository.findUserById(ownerId);
+    if (!owner || owner.status !== "active" || owner.organizationId !== input.principal.organizationId) {
+      throw notFound();
     }
     return {
       legacyProjectId: input.legacyProjectId,
