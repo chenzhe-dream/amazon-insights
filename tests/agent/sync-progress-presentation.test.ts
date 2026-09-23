@@ -124,6 +124,22 @@ test("image progress uses the persisted completed-total detail and never reports
   assert.equal(awaitingStageCommit.rows[0]?.executionPercent, 99);
 });
 
+test("single-ASIN image refresh labels the seven images as this run's scope", () => {
+  const snapshot = job({
+    stageId: "image_remarks",
+    stageStatus: "active",
+    moduleStatuses: ASINS.map(() => "pending"),
+    detail: "图片 AI 备注：已完成 6/7 张 · 就绪 6 · 上游无结果 0 · 超时 0 · 连接失败 0",
+  });
+  snapshot.stages[0]!.imageAction = "refresh";
+  snapshot.stages[0]!.repairAsins = [ASINS[0]];
+
+  const row = presentSyncProgress(snapshot, Date.parse(NOW)).rows[0];
+  assert.equal(row?.statusCopy, "处理中 · 6/7 张");
+  assert.match(row?.detail ?? "", /本次仅处理 B000000001 的图片；其他 ASIN 沿用上次结果。/);
+  assert.match(row?.detail ?? "", /已完成 6\/7 张/);
+});
+
 test("terminal failure outcomes count as executed work without inflating data completeness", () => {
   const active = presentSyncProgress(job({
     stageStatus: "active",

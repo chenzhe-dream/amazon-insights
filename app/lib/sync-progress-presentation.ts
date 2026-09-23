@@ -208,10 +208,13 @@ function presentStage(job: SyncJob, stage: SyncStage): SyncProgressRow {
   }
   const terminalGap = stage.status === "partial" || stage.status === "skipped";
   const activeProgress = stage.status === "active" ? activeStageProgress(job, stage) : undefined;
+  const imageRepairScope = stage.id === "image_remarks" && stage.imageAction && stage.repairAsins?.length
+    ? `本次仅处理 ${stage.repairAsins.join("、")} 的图片；其他 ASIN 沿用上次结果。`
+    : null;
   return {
     id: stage.id,
     label: stage.label,
-    detail: stage.detail,
+    detail: imageRepairScope ? `${imageRepairScope}${stage.detail ? ` ${stage.detail}` : ""}` : stage.detail,
     status: stage.status,
     mode: "automatic",
     executionPercent: terminalGap ? 0 : automaticStagePercent(job, stage),
