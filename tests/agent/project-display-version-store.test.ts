@@ -71,6 +71,13 @@ async function seedAllOutputs(pool: Pool, ids: Awaited<ReturnType<typeof fixture
   await imageOutput(pool, ids);
 }
 
+async function replaceDoneOutput(pool: Pool, ids: Awaited<ReturnType<typeof fixture>>["ids"], stage: string, data: unknown) {
+  const result = await pool.query(`UPDATE sync_job_stage_outputs SET stage_status='done',data_json=$3::jsonb,
+    gap_json=NULL,content_hash=$4 WHERE job_id=$1 AND stage_id=$2`,
+  [ids.jobId, stage, JSON.stringify(data), hash({ stage, data })]);
+  assert.equal(result.rowCount, 1);
+}
+
 test("completed job publishes one scoped durable display version with persisted image remarks and explicit gaps", async () => {
   const { pool, ids, store } = await fixture();
   await imageOutput(pool, ids);
@@ -171,6 +178,88 @@ test("a completed job missing one stage output cannot replace the current versio
   assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
 });
 
+test("a same-URL image remark cannot disappear when a newer candidate is published", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const gallery = ["https://example.test/main.jpg", "https://example.test/secondary.jpg"];
+  const listing = (urls: string[]) => ({ contentByAsin: { [asin]: {
+    status: "ready", mainImage: urls[0], galleryImages: urls,
+    secondaryImages: urls.slice(1), imageCount: urls.length,
+  } } });
+  const notes = (urls: string[], secondRemark = "Verified secondary") => ({ remarksByAsin: { [asin]: [
+    { imageUrl: urls[0], remark: "Verified main", image_types: ["main"] },
+    { imageUrl: urls[1], remark: secondRemark, image_types: ["secondary"] },
+  ] }, outcomesByAsin: {} });
+  await replaceDoneOutput(pool, ids, "listing", listing(gallery));
+  await replaceDoneOutput(pool, ids, "image_remarks", notes(gallery));
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+
+  const losing = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  await replaceDoneOutput(pool, losing, "listing", listing(gallery));
+  await replaceDoneOutput(pool, losing, "image_remarks", notes(gallery, ""));
+  await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: losing.jobId, expectedCurrentVersionId: current.versionId }),
+  /Candidate would lose verified data: image_remarks/);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+
+  const reordered = await addJob(pool, ids, "2026-09-23T10:00:00.000Z");
+  await replaceDoneOutput(pool, reordered, "listing", listing([...gallery].reverse()));
+  await replaceDoneOutput(pool, reordered, "image_remarks", notes([...gallery].reverse()));
+  const next = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: reordered.jobId, expectedCurrentVersionId: current.versionId });
+  assert.equal(next.jobId, reordered.jobId, "a fully remarked gallery may be reordered");
+});
+
+test("a partial result cannot replace an existing successful ASIN field with null", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const reviews = (rating: number | null) => ({ analysisByAsin: { [asin]: { summary: "Verified review" } },
+    ratingByAsin: { [asin]: { rating, reviewCount: 100 } } });
+  await replaceDoneOutput(pool, ids, "reviews", reviews(4.6));
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  const losing = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  await replaceDoneOutput(pool, losing, "reviews", reviews(null));
+  await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: losing.jobId, expectedCurrentVersionId: current.versionId }),
+  /Candidate would lose verified data: reviews.ratingByAsin/);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+
+  const failedStage = await addJob(pool, ids, "2026-09-22T11:00:00.000Z");
+  await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: failedStage.jobId, expectedCurrentVersionId: current.versionId }),
+  /Candidate would lose verified data: reviews.analysisByAsin/);
+
+  const refreshed = await addJob(pool, ids, "2026-09-23T10:00:00.000Z");
+  await replaceDoneOutput(pool, refreshed, "reviews", reviews(4.8));
+  const next = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: refreshed.jobId, expectedCurrentVersionId: current.versionId });
+  assert.equal(next.jobId, refreshed.jobId);
+  const reviewStage = next.stageOutputs.reviews;
+  assert.notEqual(reviewStage.stageStatus, "missing-output");
+  if (reviewStage.stageStatus === "missing-output") assert.fail("review stage missing");
+  assert.equal(((reviewStage.data as Record<string, unknown>).ratingByAsin as Record<string, { rating: number }>)[asin]?.rating, 4.8);
+});
+
+test("a verified catalog field cannot regress to an upstream null", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const product = (price: number | null) => [{ asin, catalogSource: "sellerSprite", synced: true,
+    brand: "Verified brand", title: "Verified title", price }];
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, catalog: product(99) });
+  const losing = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: losing.jobId, expectedCurrentVersionId: current.versionId, catalog: product(null) }),
+  /Candidate would lose verified data: catalog.*price/);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+  const improved = await addJob(pool, ids, "2026-09-23T10:00:00.000Z");
+  const next = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: improved.jobId, expectedCurrentVersionId: current.versionId, catalog: product(95) });
+  assert.equal(next.catalog[0]?.price, 95);
+});
+
 test("CAS publication retains old body for 24 hours, then purges it and returns orphan image URLs", async () => {
   const { pool, ids, store } = await fixture();
   await imageOutput(pool, ids);
@@ -225,6 +314,11 @@ test("catalog revision creates an audited immutable version and keeps shared job
   }
   assert.equal(revised.catalogEvidence?.sourceJobId, sourceJob.jobId);
   assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
+  await assert.rejects(store.reviseCurrentCatalog({ organizationId: ids.organizationId,
+    projectId: ids.projectId, expectedCurrentVersionId: revised.versionId,
+    publishedAt: "2026-09-23T12:01:00.000Z", evidence: { ...evidence, capturedAt: "2026-09-23T12:01:00.000Z" },
+    catalog: revised.catalog.map((item, index) => index === 0 ? { ...item, price: null } : item) }),
+  /Candidate would lose verified data: catalog.*price/);
   await assert.rejects(store.reviseCurrentCatalog({ organizationId: ids.organizationId,
     projectId: ids.projectId, expectedCurrentVersionId: first.versionId, evidence, catalog: [] }), /Current display version changed/);
   const oldAudit = (await pool.query(`SELECT revision_kind,supersedes_version_id,body_expires_at FROM project_display_versions WHERE id=$1`, [first.versionId])).rows[0];

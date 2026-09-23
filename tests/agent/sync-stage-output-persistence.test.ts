@@ -471,17 +471,43 @@ test("sync completion publishes a validated current display version in the same 
     workerId: "empty-catalog-worker", recordedAt: afterRefresh,
     stage: { id: "image_remarks", status: "done", completedAt: afterRefresh },
     outputs: [{ ...newerImageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
-  await store.complete({ jobId: emptyCatalogJobId, leaseGeneration: emptyCatalogLease.leaseGeneration,
+  await assert.rejects(store.complete({ jobId: emptyCatalogJobId, leaseGeneration: emptyCatalogLease.leaseGeneration,
     workerId: "empty-catalog-worker", completedAt: afterRefresh, message: "done",
     catalogCapture: { catalog: [], evidence: { sourceKind: "generated-file",
       sourceRef: "app/competitor-data.ts#refreshedCatalog", sourceSha256: "d".repeat(64),
       sourceUpdatedAt: afterRefresh, capturedAt: afterRefresh } },
+  }), /Candidate would lose verified data: catalog/);
+  assert.equal((await versions.readCurrent({ organizationId, projectId }))?.versionId, afterImageRetry?.versionId,
+    "an executed empty catalog cannot erase a previously verified catalog");
+  await store.fail({ jobId: emptyCatalogJobId, leaseGeneration: emptyCatalogLease.leaseGeneration,
+    workerId: "empty-catalog-worker", failedAt: afterRefresh,
+    message: "Candidate lost verified catalog data", error: { code: "COVERAGE_REGRESSION" } });
+
+  const losingImageJobId = randomUUID();
+  const afterLoss = "2026-08-28T09:00:00.000Z";
+  await store.admit({ jobId: losingImageJobId, organizationId, projectId, runId, actorId: null,
+    fingerprint: `losing-image:${losingImageJobId}`, asins: [asin], marketplace: "US", createdAt: afterLoss,
+    currentStageId: "image_remarks", message: "Queued",
+    stages: [{ id: "catalog", label: "Catalog", kind: "auto", status: "skipped", estimatedSeconds: 1 },
+      ...projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 }))],
   });
-  const afterEmptyCatalog = await versions.readCurrent({ organizationId, projectId });
-  assert.equal(afterEmptyCatalog?.jobId, emptyCatalogJobId);
-  assert.deepEqual(afterEmptyCatalog?.catalog, [], "an executed empty catalog retains honest gaps");
-  assert.equal(afterEmptyCatalog?.catalogEvidence?.sourceSha256, "d".repeat(64));
-  assert.ok(afterEmptyCatalog?.gaps.some(gap => gap.asin === asin && gap.field === "catalog"));
+  const losingLease = await store.claimNext({ workerId: "losing-image-worker", leaseMs: 30_000,
+    wholeJobLimit: 1, claimedAt: afterLoss });
+  assert.ok(losingLease);
+  const emptyImageDraft = projectStageOutput("image_remarks", [asin], {
+    organizationId, projectId, runId, updatedAt: afterLoss,
+    readExport: (_file: string, name: string) => name === "listingImageRemarks"
+      ? { [asin]: [] } : { imageOutcomesByAsin: {} },
+  });
+  await store.recordProgress({ jobId: losingImageJobId, leaseGeneration: losingLease.leaseGeneration,
+    workerId: "losing-image-worker", recordedAt: afterLoss,
+    stage: { id: "image_remarks", status: "done", completedAt: afterLoss },
+    outputs: [{ ...emptyImageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
+  await assert.rejects(store.complete({ jobId: losingImageJobId,
+    leaseGeneration: losingLease.leaseGeneration, workerId: "losing-image-worker",
+    completedAt: afterLoss, message: "done" }), /Candidate would lose verified data: image_remarks/);
+  assert.equal((await store.findById(losingImageJobId))?.status, "running", "failed publication rolls back job completion");
+  assert.equal((await versions.readCurrent({ organizationId, projectId }))?.versionId, afterImageRetry?.versionId);
 });
 
 test("worker discards an invalid output draft instead of forwarding its terminal stage", async () => {

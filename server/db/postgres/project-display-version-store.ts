@@ -78,6 +78,12 @@ export class ProjectDisplayVersionConflictError extends Error {
 export class StaleProjectDisplayCandidateError extends ProjectDisplayVersionConflictError {
   constructor() { super("Older sync job cannot replace the current display version"); this.name = "StaleProjectDisplayCandidateError"; }
 }
+export class ProjectDisplayCoverageRegressionError extends ProjectDisplayVersionConflictError {
+  constructor(readonly field: string) {
+    super(`Candidate would lose verified data: ${field}`);
+    this.name = "ProjectDisplayCoverageRegressionError";
+  }
+}
 export type ExpiredDisplayBodyCleanup = Readonly<{ purgedCount: number; imageUrls: readonly string[] }>;
 
 function dateTime(value: Date | string | null): string {
@@ -210,6 +216,108 @@ function gapReason(gap: StageOutputProjection["gap"] | undefined, asin: string):
   return typeof item?.causeCode === "string" ? item.causeCode : gap?.reasonCode ?? "OUTPUT_UNAVAILABLE";
 }
 
+function hasValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return !["", "—", "等待同步"].includes(value.trim());
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function lostCoverage(previous: unknown, candidate: unknown, field: string): string | null {
+  if (!hasValue(previous)) return null;
+  if (!hasValue(candidate)) return field;
+  if (Array.isArray(previous)) {
+    if (!Array.isArray(candidate) || candidate.length < previous.length) return field;
+    for (let index = 0; index < previous.length; index += 1) {
+      const lost = lostCoverage(previous[index], candidate[index], `${field}[${index}]`);
+      if (lost) return lost;
+    }
+  } else if (previous && typeof previous === "object") {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return field;
+    const oldRecord = record(previous), nextRecord = record(candidate);
+    if (oldRecord.status === "ready" && nextRecord.status !== "ready") return `${field}.status`;
+    if (oldRecord.synced === true && nextRecord.synced !== true) return `${field}.synced`;
+    for (const [key, value] of Object.entries(oldRecord)) {
+      const lost = lostCoverage(value, nextRecord[key], `${field}.${key}`);
+      if (lost) return lost;
+    }
+  }
+  return null;
+}
+
+function stageData(output: DisplayStageOutput): Record<string, unknown> {
+  return output.stageStatus === "missing-output" ? {} : record(output.data);
+}
+
+function galleryFor(outputs: Readonly<Record<ProjectableSyncStage, DisplayStageOutput>>, asin: string): string[] {
+  const listing = record(record(stageData(outputs.listing).contentByAsin)[asin]);
+  return Array.isArray(listing.galleryImages)
+    ? listing.galleryImages.filter((url): url is string => typeof url === "string") : [];
+}
+
+function assertRemarkCoverage(current: CurrentProjectDisplayVersion,
+  candidate: Record<ProjectableSyncStage, DisplayStageOutput>, asin: string): void {
+  const oldNotes = record(stageData(current.stageOutputs.image_remarks).remarksByAsin)[asin];
+  if (!Array.isArray(oldNotes) || !oldNotes.length) return;
+  const newNotes = record(stageData(candidate.image_remarks).remarksByAsin)[asin];
+  const field = `image_remarks.remarksByAsin.${asin}`;
+  if (!Array.isArray(newNotes) || newNotes.length < oldNotes.length) {
+    throw new ProjectDisplayCoverageRegressionError(field);
+  }
+  const oldGallery = galleryFor(current.stageOutputs, asin);
+  const newGallery = galleryFor(candidate, asin);
+  for (let index = 0; index < oldNotes.length; index += 1) {
+    const oldNote = record(oldNotes[index]);
+    if (hasValue(oldNote.remark) && !hasValue(record(newNotes[index]).remark)) {
+      throw new ProjectDisplayCoverageRegressionError(`${field}[${index}].remark`);
+    }
+    const oldUrl = typeof oldNote.imageUrl === "string" ? oldNote.imageUrl : oldGallery[index];
+    if (!oldUrl) {
+      const lost = lostCoverage(oldNote, newNotes[index], `${field}[${index}]`);
+      if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
+      continue;
+    }
+    const newIndex = newGallery.indexOf(oldUrl);
+    if (newIndex < 0) continue;
+    const matched = newNotes.find(note => record(note).imageUrl === oldUrl)
+      ?? (record(newNotes[newIndex]).imageUrl ? undefined : newNotes[newIndex]);
+    const lost = lostCoverage(oldNote, matched, `${field}[${newIndex}]`);
+    if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
+  }
+}
+
+function assertNoCoverageRegression(current: CurrentProjectDisplayVersion | null,
+  catalog: readonly Record<string, unknown>[], candidate: Record<ProjectableSyncStage, DisplayStageOutput>,
+  requestedAsins: readonly string[]): void {
+  if (!current) return;
+  const oldCatalog = new Map(current.catalog.map(item => [item.asin, item]));
+  const newCatalog = new Map(catalog.map(item => [item.asin, item]));
+  for (const asin of requestedAsins) {
+    if (!current.asins.includes(asin)) continue;
+    const oldProduct = oldCatalog.get(asin);
+    if (oldProduct?.catalogSource === "sellerSprite" && oldProduct.synced === true) {
+      const lost = lostCoverage(oldProduct, newCatalog.get(asin), `catalog.${asin}`);
+      if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
+    }
+    for (const stage of stages) {
+      const fields = perAsinFields[stage] ?? [];
+      for (const field of fields) {
+        if (stage === "image_remarks" && field === "remarksByAsin") continue;
+        const previous = record(stageData(current.stageOutputs[stage])[field])[asin];
+        const next = record(stageData(candidate[stage])[field])[asin];
+        const lost = lostCoverage(previous, next, `${stage}.${field}.${asin}`);
+        if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
+      }
+    }
+    assertRemarkCoverage(current, candidate, asin);
+  }
+  const oldCategory = stageData(current.stageOutputs.category).trendByNode;
+  if (hasValue(oldCategory) && !hasValue(stageData(candidate.category).trendByNode)) {
+    throw new ProjectDisplayCoverageRegressionError("category.trendByNode");
+  }
+}
+
 function imageUrls(value: unknown): Set<string> {
   const urls = new Set<string>();
   const visit = (item: unknown, key = "") => {
@@ -297,8 +405,9 @@ export class PostgresProjectDisplayVersionStore {
         throw new ProjectDisplayVersionConflictError("Completed sync job does not match the project scope");
       }
       const sourceCompletedAt = dateTime(job.completed_at);
+      let current: CurrentProjectDisplayVersion | null = null;
       if (project.current_display_version_id) {
-        const current = await this.readCurrent({ organizationId: input.organizationId, projectId: input.projectId });
+        current = await this.readCurrent({ organizationId: input.organizationId, projectId: input.projectId });
         const currentJob = current && (await this.queries.query<{ created_at: Date | string }>(`SELECT created_at FROM sync_jobs
           WHERE job_id=$1 AND organization_id=$2 AND project_id=$3`,
         [current.jobId,input.organizationId,input.projectId])).rows[0];
@@ -336,6 +445,7 @@ export class PostgresProjectDisplayVersionStore {
         ? await this.validatedEvidence(input.catalogEvidence, { organizationId: input.organizationId,
           projectId: input.projectId, marketplace: job.marketplace, asins: asins(job.asins) })
         : null;
+      assertNoCoverageRegression(current, catalog, stageOutputs, asins(job.asins));
       const gaps = gapsFor(asins(job.asins), catalog, stageOutputs);
       const body = { catalog, stageOutputs, gaps, ...(evidence ? { catalogEvidence: evidence } : {}) };
       const contentHash = hash({ organizationId: input.organizationId, projectId: input.projectId,
@@ -385,6 +495,7 @@ export class PostgresProjectDisplayVersionStore {
         throw new ProjectDisplayVersionConflictError("Catalog evidence was captured after publication");
       }
       const stageOutputs = current.stageOutputs as Record<ProjectableSyncStage, DisplayStageOutput>;
+      assertNoCoverageRegression(current, catalog, stageOutputs, current.asins);
       const gaps = gapsFor(current.asins, catalog, stageOutputs);
       const body = { catalog, stageOutputs, gaps, catalogEvidence: evidence };
       const contentHash = hash({ organizationId: current.organizationId, projectId: current.projectId,
