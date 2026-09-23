@@ -1469,14 +1469,18 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           organizationId: completed.organizationId,
           projectId: completed.projectId,
         });
+        const inheritCatalog = completed.stages.some(stage => stage.id === "catalog" && stage.status === "skipped")
+          && currentVersion?.marketplace === completed.marketplace
+          && currentVersion.asins.length === completed.asins.length
+          && currentVersion.asins.every(asin => completed.asins.includes(asin));
         try {
           await this.displayVersions.publishFromCompletedJob({
             organizationId: completed.organizationId,
             projectId: completed.projectId,
             jobId: completed.jobId,
             expectedCurrentVersionId: currentVersion?.versionId ?? null,
-            catalog: input.catalogCapture?.catalog ?? currentVersion?.catalog ?? [],
-            catalogEvidence: input.catalogCapture?.evidence ?? currentVersion?.catalogEvidence ?? undefined,
+            catalog: inheritCatalog ? currentVersion.catalog : input.catalogCapture?.catalog ?? [],
+            catalogEvidence: inheritCatalog ? currentVersion.catalogEvidence ?? undefined : input.catalogCapture?.evidence,
           });
         } catch (error) {
           if (!(error instanceof StaleProjectDisplayCandidateError)) throw error;

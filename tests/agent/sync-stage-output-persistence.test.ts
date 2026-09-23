@@ -425,7 +425,8 @@ test("sync completion publishes a validated current display version in the same 
   await store.admit({ jobId: imageRetryJobId, organizationId, projectId, runId, actorId: null,
     fingerprint: `image-retry:${imageRetryJobId}`, asins: [asin], marketplace: "US", createdAt: later,
     currentStageId: "image_remarks", message: "Queued",
-    stages: projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 })),
+    stages: [{ id: "catalog", label: "Catalog", kind: "auto" as const, status: "skipped" as const, estimatedSeconds: 1 },
+      ...projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 }))],
   });
   const retryLease = await store.claimNext({ workerId: "image-retry-worker", leaseMs: 30_000,
     wholeJobLimit: 1, claimedAt: later });
@@ -441,7 +442,11 @@ test("sync completion publishes a validated current display version in the same 
     stage: { id: "image_remarks", status: "done", completedAt: later },
     outputs: [{ ...newerImageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
   await store.complete({ jobId: imageRetryJobId, leaseGeneration: retryLease.leaseGeneration,
-    workerId: "image-retry-worker", completedAt: later, message: "done" });
+    workerId: "image-retry-worker", completedAt: later, message: "done",
+    catalogCapture: { catalog: [], evidence: { sourceKind: "generated-file",
+      sourceRef: "app/competitor-data.ts#refreshedCatalog", sourceSha256: "e".repeat(64),
+      sourceUpdatedAt: later, capturedAt: later } },
+  });
   const afterImageRetry = await versions.readCurrent({ organizationId, projectId });
   assert.equal(afterImageRetry?.jobId, imageRetryJobId, "a catalog-skipped image retry still switches current");
   assert.deepEqual(afterImageRetry?.catalog, current?.catalog, "the verified catalog is inherited without new capture claims");
@@ -450,6 +455,33 @@ test("sync completion publishes a validated current display version in the same 
   assert.ok(imageOutput && imageOutput.stageStatus !== "missing-output");
   assert.match(JSON.stringify(imageOutput.data), /New verified image/);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM project_display_versions WHERE project_id=$1", [projectId])).rows[0]?.n, 2);
+
+  const emptyCatalogJobId = randomUUID();
+  const afterRefresh = "2026-08-27T09:00:00.000Z";
+  await store.admit({ jobId: emptyCatalogJobId, organizationId, projectId, runId, actorId: null,
+    fingerprint: `empty-catalog:${emptyCatalogJobId}`, asins: [asin], marketplace: "US", createdAt: afterRefresh,
+    currentStageId: "image_remarks", message: "Queued",
+    stages: [{ id: "catalog", label: "Catalog", kind: "auto", status: "done", estimatedSeconds: 1 },
+      ...projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 }))],
+  });
+  const emptyCatalogLease = await store.claimNext({ workerId: "empty-catalog-worker", leaseMs: 30_000,
+    wholeJobLimit: 1, claimedAt: afterRefresh });
+  assert.ok(emptyCatalogLease);
+  await store.recordProgress({ jobId: emptyCatalogJobId, leaseGeneration: emptyCatalogLease.leaseGeneration,
+    workerId: "empty-catalog-worker", recordedAt: afterRefresh,
+    stage: { id: "image_remarks", status: "done", completedAt: afterRefresh },
+    outputs: [{ ...newerImageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
+  await store.complete({ jobId: emptyCatalogJobId, leaseGeneration: emptyCatalogLease.leaseGeneration,
+    workerId: "empty-catalog-worker", completedAt: afterRefresh, message: "done",
+    catalogCapture: { catalog: [], evidence: { sourceKind: "generated-file",
+      sourceRef: "app/competitor-data.ts#refreshedCatalog", sourceSha256: "d".repeat(64),
+      sourceUpdatedAt: afterRefresh, capturedAt: afterRefresh } },
+  });
+  const afterEmptyCatalog = await versions.readCurrent({ organizationId, projectId });
+  assert.equal(afterEmptyCatalog?.jobId, emptyCatalogJobId);
+  assert.deepEqual(afterEmptyCatalog?.catalog, [], "an executed empty catalog retains honest gaps");
+  assert.equal(afterEmptyCatalog?.catalogEvidence?.sourceSha256, "d".repeat(64));
+  assert.ok(afterEmptyCatalog?.gaps.some(gap => gap.asin === asin && gap.field === "catalog"));
 });
 
 test("worker discards an invalid output draft instead of forwarding its terminal stage", async () => {
