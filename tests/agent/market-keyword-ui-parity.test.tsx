@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {MarketKeywordFactsReport} from '../../app/market-keyword-report';
+import {MarketKeywordFactsReport,MarketKeywordRevisionReport} from '../../app/market-keyword-report';
 import {keywordAnnualVolume} from '../../app/market-keyword-table';
 import {MarketKeywordSection} from '../../app/market-keyword-section';
 import {keywordPageRun} from './helpers/market-keyword-page-fixture';
@@ -42,6 +42,22 @@ test('keyword result restores visible W5 facts, cluster expression and taxonomy 
  assert.match(empty,/关键词含义分类标准/);
  assert.match(empty,/W5 规则报告尚未取得/);
  assert.doesNotMatch(empty,/W1（[^）]*undefined/);
+});
+
+test('rules-only keyword report keeps W5 and labels W1–W4 as awaiting classification, not a running model',()=>{
+ const {response}=keywordRuleFixture();
+ const html=renderToStaticMarkup(<MarketKeywordFactsReport facts={response.run.facts!} ruleReport={response.run.ruleReport!} semanticSkipped/>);
+ assert.match(html,/W5 需求变化明细/);
+ assert.match(html,/W1–W4 待人工分类/);
+ assert.match(html,/语义分析未启用/);
+ assert.match(html,/保存目录未用于自动分类/);
+ assert.doesNotMatch(html,/语义证据待补齐|跨批语义结果尚未可用|模型原始建议/);
+ assert.doesNotMatch(html,/W1 语义建议，待校对/);
+ const historical=renderToStaticMarkup(<MarketKeywordFactsReport facts={response.run.facts!}/>);
+ assert.match(historical,/模型原始建议/);
+ const manual=renderToStaticMarkup(<MarketKeywordRevisionReport catalog={keywordRuleFixture().revision.catalog} semanticSkipped/>);
+ assert.match(manual,/人工分类与规则统计独立保存/);
+ assert.doesNotMatch(manual,/人工分类与模型原始建议独立保存/);
 });
 
 test('cluster expression selects only ready saved member labels and preserves partially unknown dimensions',()=>{

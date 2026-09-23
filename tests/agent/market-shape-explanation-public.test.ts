@@ -11,6 +11,7 @@ import {PostgresMarketShapeExplanationRunStore} from '../../server/db/postgres/m
 import {MarketModuleStepWorker} from '../../server/runtime/market-module-step-worker';
 import {createMarketSourceStepHandlers} from '../../server/runtime/market-source-step-handlers';
 import {createMarketShapeSelectionStep} from '../../server/runtime/market-shape-selection-step';
+import {MARKET_SHAPE_FLOW_VERSION,marketShapeFlowInitialSteps} from '../../server/domain/market-research/shape-price-flow';
 import {startPostgresTestContainer} from './helpers/postgres-test-container';
 import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {createMarketSemanticFixture} from './helpers/market-semantic-fixture';
@@ -27,8 +28,12 @@ test('public shape revision atomically queues its explanation and exposes only a
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null,shapeModelIdentity:()=>shapeIdentity});
  const app=Fastify();t.after(()=>app.close());app.decorateRequest('authPrincipal',null);app.addHook('preHandler',async req=>{req.authPrincipal=principal});registerMarketModuleRoutes(app,service);
  const labels=[{labelId:'shelf',label:'层架式',definition:'标题明确带层架的灯'}];
- async function parent(taxonomyVersion:string){const startBody={poolSize:100,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion,allowedLabels:labels}},response=await app.inject({method:'POST',url:`/v1/market-analysis/studies/${f.scope.researchId}/shape-price`,headers:{'idempotency-key':randomUUID()},payload:startBody});assert.equal(response.statusCode,201,response.body);for(let i=0;i<12&&await worker.tick();i++){}const body=response.json(),view=await service.findShapes(f.actor,body.run.id);assert.ok(view.run.source);return {id:body.run.id,view,taxonomyVersion};}
- const firstParent=await parent('test-shapes/v1'),source=firstParent.view.run.source!;
+ async function parent(taxonomyVersion:string,legacy=false){const startBody={poolSize:100,newProductMonths:6,catalog:{task:'market-product-shape-suggestion' as const,taxonomyVersion,allowedLabels:labels}};
+  let id:string;
+  if(legacy){const request={actor:f.actor,scope:f.scope,moduleKind:'shape-price' as const,params:{...startBody,flow:MARKET_SHAPE_FLOW_VERSION},versions:{source:'market-source-handlers/v1',rule:'market-shape-price-catalog/v1',mapping:taxonomyVersion,planner:MARKET_SHAPE_FLOW_VERSION,model:'market.semantic.text.v1',prompt:'shape-prompt/v1',configuration:'shape-config/v1'},collectionRevision:'initial/v1',idempotencyKey:randomUUID()};id=(await f.stores.steps.createModuleRun({...request,initialSteps:marketShapeFlowInitialSteps(request)})).run.id;}
+  else{const response=await app.inject({method:'POST',url:`/v1/market-analysis/studies/${f.scope.researchId}/shape-price`,headers:{'idempotency-key':randomUUID()},payload:startBody});assert.equal(response.statusCode,201,response.body);id=response.json().run.id;}
+  for(let i=0;i<12&&await worker.tick();i++){}const view=await service.findShapes(f.actor,id);assert.ok(view.run.source);return {id,view,taxonomyVersion};}
+ const firstParent=await parent('test-shapes/v1',true),source=firstParent.view.run.source!;
  const revision={referenceAttemptId:source.referenceAttemptId,historyAttemptIds:source.historyAttemptIds,expectedParentRevisionId:null,selectedAsins:['B000000001'],taxonomyVersion:firstParent.taxonomyVersion,labels,assignments:[{asin:'B000000001',labelId:'shelf'}],bands:[{id:'all',minInclusive:0,maxExclusive:null}]};
  const revisionUrl=`/v1/market-analysis/runs/${firstParent.id}/shape-price/revisions`,key=randomUUID();
  const save=()=>app.inject({method:'POST',url:revisionUrl,headers:{'idempotency-key':key},payload:revision});
@@ -58,8 +63,11 @@ test('public shape revision atomically queues its explanation and exposes only a
  assert.equal((await pg.pool.query('SELECT count(*) FROM market_analysis_commands')).rows[0].count,countBefore,'history GET must never create a command');
  principal={...principal,organizationId:randomUUID()};assert.equal((await app.inject({url:revisionReadUrl})).statusCode,404);principal={kind:'user',...f.actor};
 
- shapeIdentity=null;const secondParent=await parent('test-shapes/v2'),secondSource=secondParent.view.run.source!,offlineRevision={...revision,taxonomyVersion:secondParent.taxonomyVersion,referenceAttemptId:secondSource.referenceAttemptId,historyAttemptIds:secondSource.historyAttemptIds};
- const offline=await app.inject({method:'POST',url:`/v1/market-analysis/runs/${secondParent.id}/shape-price/revisions`,headers:{'idempotency-key':randomUUID()},payload:offlineRevision});assert.equal(offline.statusCode,201,offline.body);const offlineBody=MarketShapeRevisionResponseSchema.parse(offline.json());assert.equal(offlineBody.explanation,null);assert.match(offlineBody.explanationUnavailableReason!,/模型配置/);
+ shapeIdentity={configurationVersion:'shape-config/v1',promptVersion:'shape-prompt/v1'};const secondParent=await parent('test-shapes/v2'),secondSource=secondParent.view.run.source!,offlineRevision={...revision,taxonomyVersion:secondParent.taxonomyVersion,referenceAttemptId:secondSource.referenceAttemptId,historyAttemptIds:secondSource.historyAttemptIds};
+ const rulesKey=randomUUID(),rulesUrl=`/v1/market-analysis/runs/${secondParent.id}/shape-price/revisions`;
+ const offline=await app.inject({method:'POST',url:rulesUrl,headers:{'idempotency-key':rulesKey},payload:offlineRevision});assert.equal(offline.statusCode,201,offline.body);const offlineBody=MarketShapeRevisionResponseSchema.parse(offline.json());assert.equal(offlineBody.explanation,null);assert.match(offlineBody.explanationUnavailableReason!,/本地规则任务未启用模型解释/);
+ const replay=await app.inject({method:'POST',url:rulesUrl,headers:{'idempotency-key':rulesKey},payload:offlineRevision});assert.equal(replay.statusCode,200,replay.body);assert.equal(replay.json().revision.revisionId,offlineBody.revision.revisionId);assert.equal(replay.json().explanation,null);
+ assert.equal((await pg.pool.query('SELECT count(*) FROM market_shape_explanation_runs WHERE parent_run_id=$1',[secondParent.id])).rows[0].count,'0');
  const offlineRead=await app.inject({url:`/v1/market-analysis/runs/${secondParent.id}/shape-price/revisions/${encodeURIComponent(offlineBody.revision.revisionId)}`});assert.equal(offlineRead.statusCode,200,offlineRead.body);assert.deepEqual(offlineRead.json().explanations,[]);
  assert.equal((await app.inject({url:`/v1/market-analysis/runs/${secondParent.id}/shape-price/revisions/${encodeURIComponent(savedBody.revision.revisionId)}`})).statusCode,404);
  const before=(await pg.pool.query('SELECT count(*) FROM market_shape_price_revisions WHERE run_id=$1',[secondParent.id])).rows[0].count;

@@ -7,6 +7,7 @@ import react from '@vitejs/plugin-react';
 import {keywordPageRun,keywordUserId} from './helpers/market-keyword-page-fixture';
 import {buildMarketKeywordRevision} from '../../server/domain/market-research/keyword-revision';
 import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
+import {keywordRuleFixture} from './helpers/market-keyword-rule-fixture';
 
 test('facts and saved manual report browse all 45 keywords without changing the 440 search-volume denominator',{timeout:60000},async t=>{
  const facts=keywordPageRun().run.facts!;
@@ -15,6 +16,7 @@ test('facts and saved manual report browse all 45 keywords without changing the 
  const {factsId:_old,...basis}=facts;void _old;facts.factsId=`market-keyword-facts:${digest(basis)}`;
  const request={factsId:facts.factsId,expectedParentRevisionId:null,labels:{W1:[],W2:[],W3:[],W4:[]},clusters:[{clusterId:'one',label:'阅读',definition:'阅读照明'},{clusterId:'two',label:'装饰',definition:'装饰照明'}],assignments:facts.members.map((m,i)=>({keywordId:m.keywordId,W1:[],W2:[],W3:[],W4:[],clusterId:i<21?'one':'two'})),note:'45词合成报告'};
  const catalog=buildMarketKeywordRevision({facts,request,authorId:keywordUserId,createdAt:'2026-09-13T00:00:00.000Z'}),before=digest(catalog);
+ const rules=keywordRuleFixture().revision;
  const server=await createServer({configFile:false,cacheDir:'test-results/keyword-report-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
  const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});
  const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage({viewport:{width:1400,height:1100}}),errors:string[]=[],unexpected:string[]=[];page.setDefaultTimeout(6000);
@@ -22,7 +24,7 @@ test('facts and saved manual report browse all 45 keywords without changing the 
  await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin){unexpected.push(req.url());return route.abort();}
   if(req.method()!=='GET'){unexpected.push(`${req.method()} ${url.pathname}`);return route.abort();}
   if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body style="margin:20px"><div id="root"></div><script type="module" src="/tests/agent/helpers/market-keyword-report-harness.tsx"></script></body></html>`)});
-  if(url.pathname==='/__keyword_report_fixture')return route.fulfill({json:catalog});if(url.pathname.startsWith('/api/')){unexpected.push(url.pathname);return route.abort();}return route.continue();
+  if(url.pathname==='/__keyword_report_fixture')return route.fulfill({json:catalog});if(url.pathname==='/__keyword_rule_fixture')return route.fulfill({json:{catalog:rules.catalog,ruleReport:rules.ruleReport}});if(url.pathname.startsWith('/api/')){unexpected.push(url.pathname);return route.abort();}return route.continue();
  });
  await page.goto(origin);
  const source=page.getByRole('region',{name:'关键词来源事实报告',exact:true}),manual=page.getByRole('region',{name:'关键词人工修订报告',exact:true});await source.waitFor();await manual.waitFor();await source.getByRole('button',{name:'关键词',exact:true}).click();
@@ -43,5 +45,12 @@ test('facts and saved manual report browse all 45 keywords without changing the 
  await source.getByRole('button',{name:'清除搜索'}).click();assert.equal(await factsRows.count(),45);
  const output='test-results/market-research-goal/T17';await mkdir(output,{recursive:true});await page.screenshot({path:`${output}/keyword-report-desktop.png`,fullPage:true});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/keyword-report-mobile.png`,fullPage:true});
+ await page.setViewportSize({width:1400,height:1100});await page.goto(`${origin}/?rulesOnly=1`);
+ await page.getByRole('region',{name:'关键词来源事实报告'}).waitFor();
+ assert.match(await page.locator('body').innerText(),/W1–W4 待人工分类/);
+ assert.match(await page.locator('body').innerText(),/W5 需求变化/);
+ assert.equal(await page.getByText('模型原始建议').count(),0);
+ await page.screenshot({path:`${output}/keyword-rule-report-desktop.png`,fullPage:true});
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:`${output}/keyword-rule-report-mobile.png`,fullPage:true});
  assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);assert.equal(digest(catalog),before);
 });

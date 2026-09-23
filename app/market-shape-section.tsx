@@ -24,6 +24,15 @@ const stepNames: Record<string, string> = { 'collect-product-month': '商品采�
 const stepErrors: Record<string, string> = { timeout: '等待上游超时', 'upstream-temporary': '上游暂不可用', 'invalid-data': '数据校验未通过', 'scope-mismatch': '来源范围不匹配', authentication: '来源认证失败', governance: '额度或调用策略限制', interrupted: '任务中断', internal: '处理失败', cancelled: '已取消' };
 const statusNames: Record<string, string> = { queued: '排队中', running: '处理中', succeeded: '已完成', empty: '未返回数据', failed: '失败', cancelled: '已取消' };
 const messages: Record<string, string> = { 'not-ready': '等待商品来源', unavailable: '模型暂不可用，可先人工确认并保存统计结果', running: '正在生成形态建议', partial: '部分形态建议不可用，可查看失败步骤或人工确认', complete: '形态建议已返回，需人工确认后才参与分组' };
+export function shapeRunSummary(run: MarketShapeRun): string {
+    if (run.status === 'cancelled') return '任务已取消';
+    if (run.semanticStatus !== 'skipped') return messages[run.suggestions.status];
+    if (active(run)) return run.latestRevision ? '规则统计已保存，正在重试来源或规则步骤' : '正在采集商品并计算本地规则';
+    if (run.status === 'failed') return run.latestRevision ? '规则统计已保存；本次来源或规则步骤失败，可查看失败步骤并重试' : '商品来源或规则步骤失败，可查看失败步骤并重试';
+    if (run.latestRevision) return '本地规则统计已保存，语义解释未启用';
+    if (run.source?.products.length) return '商品来源已就绪，待人工确认并保存规则统计';
+    return '本次尚无可用商品来源，规则统计待完成';
+}
 function priceBands(value: string) { const n = value.split(/[,，]/).map(s => { if (!/^\d+(\.\d+)?$/.test(s.trim()))
     throw Error('价格带请输入逗号分隔的非负数字，例如 0,20,40。'); return Number(s.trim()); }); if (n.length > 32 || n.some((v, i) => !Number.isFinite(v) || i > 0 && v <= n[i - 1]))
     throw Error('价格带边界须从小到大排列且不能重复。'); return n.map((minInclusive, i) => ({ id: `band-${i + 1}`, minInclusive, maxExclusive: n[i + 1] ?? null })); }
@@ -92,7 +101,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
             const labels = taxonomy.split('\n').filter(s => s.trim()).map((line, i) => { const split = line.indexOf('|'); if (split < 1 || !line.slice(split + 1).trim())
                 throw Error('每行请填写“形态名称|判断依据”。'); return { labelId: `shape-${i + 1}`, label: line.slice(0, split).trim(), definition: line.slice(split + 1).trim() }; });
             if (!labels.length)
-                throw Error('请先填写本次形态目录，模型会据此提出建议。');
+                throw Error('请先填写本次形态目录，供人工确认和规则统计使用。');
             const scope = { ...selection, marketplace: selection.marketplace??'US', currency: marketSiteCurrency(selection.marketplace??'US') }, params = { poolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-taxonomy/v1', allowedLabels: labels } }, hash = JSON.stringify({ scope, params });
             const command = pendingStart.current?.hash === hash ? pendingStart.current : { hash, studyKey: browserRequestId(), runKey: browserRequestId() };
             pendingStart.current = command;
@@ -173,7 +182,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
    <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={busy}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!selection.nodeIdPath} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID，例如 13280971" required disabled={busy}/></div></div>
     <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><label>起始月 <input type="month" value={selection.fromMonth} max={selection.toMonth} onChange={e=>onSelectionChange({fromMonth:e.target.value})} required disabled={busy}/></label><label>结束月 <input type="month" value={selection.toMonth} max={maxMonth} onChange={e=>onSelectionChange({toMonth:e.target.value})} required disabled={busy}/></label></div>
     <details className="market-shape-query-options"><summary>形态目录与采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={100} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={busy}/></label><label>本次形态目录（每行：名称|判断依据）<textarea value={taxonomy} onChange={e=>setTaxonomy(e.target.value)} placeholder="例如：层架式|灯具带有储物或展示层架" rows={3} disabled={busy}/></label></details>
-    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={busy}>{busy?'提交中…':'采集商品并生成形态建议'}</button><button className="ss-market-reset-btn" type="button" disabled={busy} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setTaxonomy('');setPoolSize(100);}}>重置条件</button></div>
+    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={busy}>{busy?'提交中…':'采集商品并生成规则统计'}</button><button className="ss-market-reset-btn" type="button" disabled={busy} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setTaxonomy('');setPoolSize(100);}}>重置条件</button></div>
    </div></form>
   <div className="market-shape-query-footer"><details><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p></details>
   {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</div>
@@ -183,7 +192,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
  {run && <>{report && <MarketShapeDashboard report={report}/>}{!report && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>
- <details className="market-shape-task-details" open={active(run)||run.steps.some(s=>s.current&&s.canRetry)}><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{run.status === 'cancelled' ? '任务已取消' : messages[run.suggestions.status]}</summary>
+ <details className="market-shape-task-details" open={active(run)||run.steps.some(s=>s.current&&s.canRetry)}><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
   <p>本任务范围：{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p><p className="market-research-note">样本使用供应商返回的商品池，尚未核验为 BSR 前 {run.params.poolSize} 名。{run.sourcePolicy?'站点和月份按接口查询范围绑定；币种依据供应商站点定义，响应回显另行记录。':'来源未确认单位或周期的原值不参与可比统计。'}</p>
   <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.month ? `${s.month} · ` : ''}{stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
   {active(run) && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
@@ -194,8 +203,8 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
   </>}
  </section>
  {run.history.length > 0 && <label className="market-theme-version">形态报告版本 <select aria-label="形态报告版本" value={choice} onChange={e => setChoice(e.target.value)}><option value="latest">最新保存版本</option>{run.history.map(r => <option key={r.revisionId} value={r.revisionId}>版本 {r.ordinal} · {r.createdAt}</option>)}</select></label>}
- {historyError ? <p role="alert" className="market-research-error">{historyError}</p> : report ? <MarketShapeReport report={report} showDashboard={false} presentation={presentation?.revisionId === report.revisionId ? presentation : null}/> : <section className="card market-shape-report"><h3>形态价格带报告</h3><p>{choice !== 'latest' ? '正在读取此版本…' : run.source?.products.length ? '请选择商品与人工形态，确认后保存统计报告。' : '等待有效商品来源；报告位置保留。'}</p></section>}
- {report&&<MarketShapeExplanationSection key={`${run.id}/${report.revisionId}`} parentRunId={run.id} revisionId={report.revisionId} onPresentation={setPresentation} paused={!!readError} unavailableReason={analysisNotice?.runId===run.id&&analysisNotice.revisionId===report.revisionId?analysisNotice.reason:null}/>}
+ {historyError ? <p role="alert" className="market-research-error">{historyError}</p> : report ? <MarketShapeReport report={report} showDashboard={false} presentation={presentation?.revisionId === report.revisionId ? presentation : null} semanticSkipped={run.semanticStatus==='skipped'}/> : <section className="card market-shape-report"><h3>形态价格带报告</h3><p>{choice !== 'latest' ? '正在读取此版本…' : run.source?.products.length ? '请选择商品与人工形态，确认后保存统计报告。' : '等待有效商品来源；报告位置保留。'}</p></section>}
+ {report&&run.semanticStatus!=='skipped'&&<MarketShapeExplanationSection key={`${run.id}/${report.revisionId}`} parentRunId={run.id} revisionId={report.revisionId} onPresentation={setPresentation} paused={!!readError} unavailableReason={analysisNotice?.runId===run.id&&analysisNotice.revisionId===report.revisionId?analysisNotice.reason:null}/>}
  </>}
  </div>;
 }

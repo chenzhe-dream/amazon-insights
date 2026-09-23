@@ -196,13 +196,14 @@ export class MarketModuleService {
   }
   async saveShapeRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();
-    const identity=this.deps.shapeModelIdentity?.();
+    const rulesOnly=obj(view.run.params).flow===MARKET_SHAPE_RULES_FLOW_VERSION;
+    const identity=rulesOnly?null:this.deps.shapeModelIdentity?.();
     if(identity){
       const linked=await new PostgresMarketShapeExplanationRunStore(this.deps.context).saveRevisionAndEnsureExplanation({actor,parentRunId:id,request:body,idempotencyKey:MarketModuleIdSchema.parse(key),identity});
       return {created:linked.revision.created,revision:marketShapePublicRevision(linked.revision),explanation:{moduleRunId:linked.childRun.id,status:linked.childRun.status}};
     }
     const result=await new PostgresMarketShapePriceRevisionStore(this.deps.context).save({actor,moduleRunId:id,request:body,idempotencyKey:MarketModuleIdSchema.parse(key)});
-    return {created:result.created,revision:marketShapePublicRevision(result),explanation:null,explanationUnavailableReason:'模型配置暂不可用，人工修订已保存'};
+    return {created:result.created,revision:marketShapePublicRevision(result),explanation:null,explanationUnavailableReason:rulesOnly?'本地规则任务未启用模型解释，人工修订已保存':'模型配置暂不可用，人工修订已保存'};
   }
   async shapeRevision(actor:MarketExecutionActor,id:string,revisionId:string){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();
