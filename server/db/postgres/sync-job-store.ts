@@ -4,6 +4,7 @@ import { z } from "zod";
 import { StageOutputGapSchema } from "../../../shared/agent-contracts";
 
 import type { PostgresQueryContext } from "./query-context";
+import { ProjectDisplayVersionConflictError } from "./project-display-version-store";
 import {
   SyncJobDataError,
   SyncJobLeaseLostError,
@@ -177,7 +178,10 @@ const jobColumns = `
 `;
 
 export class PostgresSyncJobStore implements SyncJobRepository {
-  constructor(private readonly queries: PostgresQueryContext) {}
+  constructor(
+    private readonly queries: PostgresQueryContext,
+    private readonly displayVersions?: import("./project-display-version-store").PostgresProjectDisplayVersionStore,
+  ) {}
 
   async findLatestCompletedForProject(input: { organizationId: string; projectId: string }) {
     const result = await this.queries.query<{ job_id: string; run_id: string }>(
@@ -1451,7 +1455,25 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           outputChanged ? 1 : 0,
         ],
       );
-      return await this.requireFencedRow(result.rows[0]);
+      const completed = await this.requireFencedRow(result.rows[0]);
+      if (completed.projectId && this.displayVersions) {
+        const currentVersion = await this.displayVersions.readCurrent({
+          organizationId: completed.organizationId,
+          projectId: completed.projectId,
+        });
+        try {
+          await this.displayVersions.publishFromCompletedJob({
+            organizationId: completed.organizationId,
+            projectId: completed.projectId,
+            jobId: completed.jobId,
+            expectedCurrentVersionId: currentVersion?.versionId ?? null,
+          });
+        } catch (error) {
+          if (!(error instanceof ProjectDisplayVersionConflictError)) throw error;
+          // An invalid or older candidate cannot replace the last good report.
+        }
+      }
+      return completed;
     });
   }
 

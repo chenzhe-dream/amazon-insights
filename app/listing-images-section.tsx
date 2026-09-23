@@ -108,6 +108,8 @@ export function ListingImagesSection({
   resolveImageRemark = getListingImageRemark,
   resolveImageOutcome = getListingImageOutcome,
 }: ListingImagesSectionProps) {
+  const listingDates = [...new Set(Object.values(listingByAsin).map(record => record.fetchedAt).filter(Boolean))].sort();
+  const listingSourceDate = listingDates.length ? listingDates.join("、") : sorftimeListingContentMeta.updatedAt;
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const [pinnedPreview, setPinnedPreview] = useState<PinnedPreview | null>(null);
   const remarkForImage = (asin: string, slotIndex: number) => {
@@ -165,8 +167,8 @@ export function ListingImagesSection({
         <div>
           <h3>主辅图横向对比</h3>
           <p>
-            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底 · Sorftime Listing 同步至{" "}
-            {sorftimeListingContentMeta.updatedAt}
+            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底 · Listing 数据采集于{" "}
+            {listingSourceDate}
           </p>
         </div>
         <span className="source-badge">{LISTING_IMAGES_SOURCE_LABEL}</span>

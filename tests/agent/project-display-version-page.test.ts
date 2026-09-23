@@ -1,0 +1,118 @@
+import assert from "node:assert/strict";
+import { readFileSync, mkdirSync } from "node:fs";
+import { createServer as createTcpServer } from "node:net";
+import path from "node:path";
+import test from "node:test";
+import react from "@vitejs/plugin-react";
+import { chromium } from "playwright";
+import { createServer } from "vite";
+
+const organizationId = "018f1f5c-60f0-4b7a-8000-000000000002";
+const projectId = "75a3f965-07e8-468e-aec7-bce265515023";
+const runId = "01674bb8-de2b-4e02-a3d7-d73de3c347b3";
+const jobId = "ff4f8ade-e1dd-42fd-a62c-4415ec9a5c87";
+const asins = ["B07YGQVKDY", "B00BCX842K", "B09JB8CSXX", "B0DPQGFM8Q",
+  "B0CRMDJCF4", "B004FM8WY0", "B0GY86VNQ2", "B0CB9LGMQY"];
+const gallery = ["51T6x9KgnAL", "81rNtCtAqtL", "71MEAcmFlrL", "61AJEULM03L",
+  "61RR4gzbX2L", "6146A+4Xg4L", "519sfB1U+sL.PKplay-button-mb-image-grid-small_"]
+  .map(name => `https://m.media-amazon.com/images/I/${name}.jpg`);
+const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+  "child_sales", "price_strategy", "image_remarks"];
+const project = { id: projectId, kind: "analysis", slug: "project-us-20", name: "儿童漂移车",
+  majorCategory: null, categoryLabel: null, marketplace: "US", asins, note: null, createdBy: null,
+  createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" };
+
+function stage(stage: string, data: Record<string, unknown>) {
+  return { stage, stageStatus: "done", projectId, runId, jobId, jobVersion: 1, outputVersion: 1,
+    contentHash: "a".repeat(64), updatedAt: "2026-09-21T03:12:24.141Z", data };
+}
+const stageOutputs: Record<string, Record<string, unknown>> = Object.fromEntries(stages.map(name => [name,
+  { stage: name, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }]));
+stageOutputs.listing = stage("listing", { contentByAsin: { B07YGQVKDY: {
+  asin: "B07YGQVKDY", status: "ready", fetchedAt: "2026-09-18", mainImage: gallery[0],
+  galleryImages: gallery, secondaryImages: gallery.slice(1), imageCount: 7,
+} } });
+stageOutputs.image_remarks = stage("image_remarks", { remarksByAsin: {
+  B07YGQVKDY: gallery.map((_, index) => ({ remark: `核实图片备注 ${index + 1}`, confidence: "high", image_types: [] })),
+}, outcomesByAsin: {} });
+const version = { versionId: "12345678-1234-4234-8234-123456789abc", organizationId, projectId,
+  runId, jobId, marketplace: "US", asins, catalog: [], stageOutputs, gaps: [],
+  contentHash: "b".repeat(64), sourceCompletedAt: "2026-09-21T03:12:47.080Z",
+  publishedAt: "2026-09-23T05:00:00.000Z" };
+
+test("production page shows waiting, current-version success, and read failure without collecting", async t => {
+  const reservation = createTcpServer();
+  await new Promise<void>(resolve => reservation.listen(0, "127.0.0.1", resolve));
+  const reserved = reservation.address();
+  assert.ok(reserved && typeof reserved !== "string");
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
+  const server = await createServer({ configFile: false, define: { "process.env": "{}" },
+    plugins: [{ name: "fixture-css", enforce: "pre", load(id) {
+      if (id.endsWith("/app/globals.css")) return readFileSync(id, "utf8").replace('@import "tailwindcss";', "");
+    } }, react()], server: { host: "127.0.0.1", port: reserved.port, strictPort: true } });
+  await server.listen();
+  const browser = await chromium.launch({ headless: true, args: ["--disable-features=LocalNetworkAccessChecks"] });
+  t.after(async () => { await browser.close(); await server.close(); });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const pageErrors: string[] = [], writes: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  let mode: "waiting" | "success" | "failure" = "waiting";
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/*", async route => {
+    if (!route.request().isNavigationRequest()) return route.continue();
+    const html = readFileSync("tests/agent/helpers/primary-admin-browser-harness.html", "utf8")
+      .replace("primary-admin-browser-harness.tsx", "project-display-version-browser-harness.ts");
+    return route.fulfill({ contentType: "text/html", body: await server.transformIndexHtml(new URL(route.request().url()).pathname, html) });
+  });
+  await page.route("**/api/**", async route => {
+    const request = route.request(), url = new URL(request.url()), endpoint = url.pathname;
+    const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (request.method() !== "GET") writes.push(`${request.method()} ${endpoint}`);
+    if (endpoint === "/api/amazon-image") {
+      const index = Math.max(0, gallery.indexOf(url.searchParams.get("u") ?? ""));
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="hsl(${index * 42 + 180} 45% 82%)"/><text x="160" y="130" text-anchor="middle" font-size="48">${index + 1}</text></svg>`;
+      return route.fulfill({ status: 200, contentType: "image/svg+xml", body: svg });
+    }
+    if (endpoint === `/api/agent/v1/local-data/projects/${project.slug}` || endpoint === `/api/agent/v1/local-data/projects/${projectId}`)
+      return reply({ project });
+    if (endpoint === `/api/agent/v1/projects/${projectId}`)
+      return reply({ project: { ...project, organizationId, currentRunId: runId } });
+    if (endpoint === `/api/agent/v1/local-data/projects/${projectId}/current-display-version`) {
+      if (mode === "waiting") await gate;
+      return mode === "failure" ? reply({ error: "unavailable" }, 503) : reply(version);
+    }
+    if (endpoint === `/api/agent/v1/local-data/sync-asins/${jobId}`)
+      return reply({ jobId, asins, marketplace: "US", status: "completed", scope: { projectId, runId }, stages: [] });
+    if (endpoint === "/api/catalog") return reply({ items: [] });
+    if (endpoint === "/api/runtime-analysis-data") return reply({ catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+      reviews: { analysisByAsin: {}, ratingByAsin: {} }, salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} },
+      listing: { contentByAsin: {} }, category: { trendByNode: {} }, childSales: { rowsByAsin: {} },
+      priceStrategy: { strategyByAsin: {} }, imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} } });
+    if (endpoint === "/api/projects" || endpoint === "/api/agent/v1/local-data/projects") return reply({ projects: [project] });
+    if (endpoint.endsWith("/project-favorites")) return reply({ projectIds: [projectId] });
+    return reply({ error: "fixture endpoint unavailable" }, 404);
+  });
+  const screenshotRoot = process.env.DISPLAY_SCREENSHOT_ROOT;
+  if (screenshotRoot) mkdirSync(screenshotRoot, { recursive: true });
+  const capture = async (name: string) => {
+    if (screenshotRoot) await page.screenshot({ path: path.join(screenshotRoot, `${name}.png`), fullPage: true });
+  };
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1200);
+  await capture("waiting");
+  assert.ok((await page.locator("body").innerText()).length > 0, `Waiting page did not render: ${pageErrors.join("; ")}`);
+  mode = "success";
+  release();
+  await page.getByText(/Provider 返回 7 张 · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 });
+  assert.equal(await page.locator('tr:has-text("B07YGQVKDY") .listing-image-frame').count(), 7);
+  await capture("success");
+  mode = "failure";
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1200);
+  await capture("failure");
+  assert.ok((await page.locator("body").innerText()).includes("当前报告读取失败"),
+    `failure notice missing: ${(await page.locator("body").innerText()).slice(0, 600)}`);
+  assert.deepEqual(writes, [], "normal reads must not start collection");
+  assert.deepEqual(pageErrors, []);
+});

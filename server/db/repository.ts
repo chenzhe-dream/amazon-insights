@@ -774,5 +774,6 @@ export type RuntimeAgentRepository = AgentRepository &
     readonly vocAutomations: import('./voc-automation-repository').VocAutomationRepository;
     readonly trafficDetailRecoveries?: import('./traffic-detail-recovery-repository').TrafficDetailRecoveryRepository;
     readonly syncJobs: SyncJobRepository;
+    readonly projectDisplayVersions?: import('./postgres/project-display-version-store').PostgresProjectDisplayVersionStore;
     readonly concurrencyControl?: ConcurrencyControlRepository;
   };

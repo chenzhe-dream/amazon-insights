@@ -39,6 +39,7 @@ import { PostgresManualAlexaVocStore } from "./postgres/manual-alexa-voc-store";
 import { PostgresProductDependencyReconciler } from "./postgres/product-dependency-reconciler";
 import { PostgresQueryContext } from "./postgres/query-context";
 import { PostgresSyncJobStore } from "./postgres/sync-job-store";
+import { PostgresProjectDisplayVersionStore } from "./postgres/project-display-version-store";
 import { PostgresTrafficDataSnapshotStore } from "./postgres/traffic-data-snapshot-store";
 import { PostgresAdminUserPresenceStore } from "./postgres/admin-user-presence-store";
 import { PostgresTrafficDetailRecoveryStore } from './postgres/traffic-detail-recovery-store';
@@ -70,6 +71,7 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
   readonly manualAlexaVoc: PostgresManualAlexaVocStore;
   readonly vocAutomations: PostgresVocAutomationStore;
   readonly syncJobs: PostgresSyncJobStore;
+  readonly projectDisplayVersions: PostgresProjectDisplayVersionStore;
   readonly concurrencyControl: PostgresConcurrencyControlStore;
   readonly adminUserPresence: PostgresAdminUserPresenceStore;
   readonly usageAnalytics: PostgresUsageAnalyticsStore;
@@ -102,7 +104,8 @@ export class PostgresAgentRepository implements RuntimeAgentRepository {
       dependencyReconciler: productDependencyReconciler,
     });
     this.manualAlexaVoc = new PostgresManualAlexaVocStore(this.#queries);
-    this.syncJobs = new PostgresSyncJobStore(this.#queries);
+    this.projectDisplayVersions = new PostgresProjectDisplayVersionStore(this.#queries);
+    this.syncJobs = new PostgresSyncJobStore(this.#queries, this.projectDisplayVersions);
     this.concurrencyControl = new PostgresConcurrencyControlStore(
       this.#queries,
       { permitId: () => randomUUID() },

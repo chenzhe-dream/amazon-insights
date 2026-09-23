@@ -91,6 +91,7 @@ import { SyncJobWorkerHandler } from "./services/sync-job-worker-handler";
 import { SellerSpriteQuotaRefreshScheduler } from "./services/seller-sprite-quota-service";
 import { ManualAlexaVocPublicationService } from "./services/manual-alexa-voc-publication-service.node.js";
 import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-retention-service.node.js";
+import { ProjectDisplayRetentionService } from "./services/project-display-retention-service";
 import { resolveMarketNodePath } from './services/market-node-path-resolver';
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
@@ -239,6 +240,11 @@ export async function createAgentService(
           ...(options.clock ? { clock: options.clock } : {}),
         })
       : null;
+    const projectDisplayRetentionRuntime = repository.projectDisplayVersions
+      ? new ProjectDisplayRetentionService({
+          cleanup: input => repository.projectDisplayVersions!.cleanupExpiredBodies(input),
+          onError: error => app.log.error({ err: error }, "Project display retention sweep failed"),
+        }) : null;
     const resolution = resolveVocPositioningRuntimeConfig(runtimeEnv);
     const openaiCapability: OpenAiRuntimeCapability =
       resolution.status === "configured"
@@ -492,6 +498,7 @@ export async function createAgentService(
         marketUnavailableModelWorker?.start();
         vocQueueRuntime.start();
         manualAlexaVocRetentionRuntime?.start();
+        projectDisplayRetentionRuntime?.start();
         syncJobDispatcher = new SyncJobDispatcher({
           syncJobs: repository.syncJobs,
           concurrencyControl:
@@ -627,6 +634,7 @@ export async function createAgentService(
             syncJobDispatcher,
             manualAlexaVocPublicationRuntime,
             manualAlexaVocRetentionRuntime,
+            projectDisplayRetentionRuntime,
             vocRuntime,
             normalizationRuntime,
             trafficRuntime,

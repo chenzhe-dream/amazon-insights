@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
 import { PostgresQueryContext } from "../../server/db/postgres/query-context";
 import { PostgresSyncJobStore } from "../../server/db/postgres/sync-job-store";
+import { PostgresProjectDisplayVersionStore } from "../../server/db/postgres/project-display-version-store";
 import {
   SyncJobDataError,
   type StageOutputDraft,
@@ -374,6 +375,44 @@ test("multi-stage terminal fallbacks persist every gap and raise jobVersion once
       assert.equal(output?.gap?.state, "failed");
     }
   }
+});
+
+test("sync completion publishes a validated current display version in the same transaction", async () => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const queries = new PostgresQueryContext(pool);
+  const versions = new PostgresProjectDisplayVersionStore(queries);
+  const store = new PostgresSyncJobStore(queries, versions);
+  const organizationId = randomUUID(), projectId = randomUUID(), runId = randomUUID(), jobId = randomUUID();
+  const asin = "B0TEST0011";
+  await seedCanonicalScope(pool, { organizationId, projectId, runId });
+  await pool.query("UPDATE projects SET asins_json=$2::jsonb WHERE id=$1", [projectId, JSON.stringify([asin])]);
+  const projectable = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+    "child_sales", "price_strategy", "image_remarks"] as const;
+  await store.admit({ jobId, organizationId, projectId, runId, actorId: null,
+    fingerprint: `version:${jobId}`, asins: [asin], marketplace: "US", createdAt: NOW,
+    currentStageId: "image_remarks", message: "Queued",
+    stages: projectable.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 })),
+  });
+  const lease = await store.claimNext({ workerId: "version-worker", leaseMs: 30_000, wholeJobLimit: 1, claimedAt: NOW });
+  assert.ok(lease);
+  const imageDraft = projectStageOutput("image_remarks", [asin], {
+    organizationId, projectId, runId, updatedAt: NOW,
+    readExport: (_file: string, name: string) => name === "listingImageRemarks"
+      ? { [asin]: [{ remark: "Verified image", confidence: "high" }] }
+      : { imageOutcomesByAsin: { [asin]: [{ status: "ready" }] } },
+  });
+  await store.recordProgress({ jobId, leaseGeneration: lease.leaseGeneration, workerId: "version-worker",
+    recordedAt: NOW, stage: { id: "image_remarks", status: "done", completedAt: NOW },
+    outputs: [{ ...imageDraft, organizationId, projectId, runId, stage: "image_remarks" }] });
+  await store.complete({ jobId, leaseGeneration: lease.leaseGeneration, workerId: "version-worker",
+    completedAt: NOW, message: "done" });
+  const current = await versions.readCurrent({ organizationId, projectId });
+  assert.equal(current?.jobId, jobId);
+  assert.equal(current?.stageOutputs.image_remarks.stageStatus, "done");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM project_display_versions WHERE project_id=$1", [projectId])).rows[0]?.n, 1);
 });
 
 test("worker discards an invalid output draft instead of forwarding its terminal stage", async () => {

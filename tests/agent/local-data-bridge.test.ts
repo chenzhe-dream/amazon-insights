@@ -205,6 +205,37 @@ test("current sync job read is organization scoped and returns the completed dis
   assert.deepEqual(current.json(), { jobId: "new-job", runId: "run-1" });
 });
 
+test("current display version read is scoped and never starts collection", async (t) => {
+  const deps = fakeDeps();
+  const calls = { reads: 0, starts: 0 };
+  let returnForeign = false;
+  Object.assign(deps, {
+    async readCurrentDisplayVersion({ organizationId, projectId }: { organizationId: string; projectId: string }) {
+      calls.reads++;
+      assert.equal(organizationId, memberPrincipal().organizationId);
+      assert.equal(projectId, project.id);
+      return {
+        versionId: "version-1", organizationId: returnForeign ? "foreign-org" : organizationId, projectId, runId: "run-1", jobId: "job-1",
+        marketplace: "US", asins: projectAsins, catalog: [], stageOutputs: {}, gaps: [],
+        contentHash: "hash-1", sourceCompletedAt: "2026-09-21T00:00:00.000Z", publishedAt: "2026-09-21T00:00:01.000Z",
+      };
+    },
+    async startAsinSyncJob() { calls.starts++; throw new Error("GET must not start collection"); },
+  });
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "GET",
+    url: `/v1/local-data/projects/${project.id}/current-display-version`, headers: authenticatedHeaders() });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(response.json().versionId, "version-1");
+  returnForeign = true;
+  const foreign = await app.inject({ method: "GET",
+    url: `/v1/local-data/projects/${project.id}/current-display-version`, headers: authenticatedHeaders() });
+  assert.equal(foreign.statusCode, 404);
+  assert.deepEqual(calls, { reads: 2, starts: 0 });
+});
+
 test('collection source binding persists only an authorized analysis project with matching scope', async () => {
   const sourceId='30000000-0000-4000-8000-000000000001';
   const source={...project,id:sourceId};

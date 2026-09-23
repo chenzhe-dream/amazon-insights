@@ -23,11 +23,21 @@ export async function readHistoricalSyncPointer(project:ProjectScope,options:{fe
   const fetcher=options.fetcher??localAgentFetch;
   const {project:p}=await readJson(fetcher,`/v1/projects/${encodeURIComponent(project.id)}`,'分析项目');
   if(p?.id!==project.id)throw new SyncPointerError('分析项目与当前页面不匹配');
-  const currentResponse=project.id===priorityRecoveryProjectId
+  const versionResponse=await fetcher(`/v1/local-data/projects/${encodeURIComponent(project.id)}/current-display-version`);
+  if(versionResponse.status!==404&&!versionResponse.ok)throw new SyncPointerError(`读取当前报告失败（${versionResponse.status}），请稍后重试`);
+  const version=versionResponse.ok?await versionResponse.json():null;
+  if(version&&(version.projectId!==project.id||version.marketplace!==project.marketplace||!Array.isArray(version.asins)||
+    version.asins.length!==project.asins.length||!project.asins.every(asin=>version.asins.includes(asin))))
+    throw new SyncPointerError('当前报告与分析项目范围不匹配');
+  const currentResponse=!version&&project.id===priorityRecoveryProjectId
    ? await fetcher(`/v1/local-data/projects/${encodeURIComponent(project.id)}/current-sync-job`)
    : null;
   let runId:string,jobId:string;
-  if(!currentResponse||currentResponse.status===404){
+  if(version){
+   if(typeof version.runId!=='string'||!version.runId||typeof version.jobId!=='string'||!version.jobId)throw new SyncPointerError('当前报告编号无效');
+   runId=version.runId;
+   jobId=version.jobId;
+  }else if(!currentResponse||currentResponse.status===404){
    if(p.currentRunId===null)return null;
    if(typeof p.currentRunId!=='string'||!p.currentRunId)throw new SyncPointerError('分析项目缺少有效运行编号');
    runId=p.currentRunId;

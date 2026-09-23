@@ -91,6 +91,21 @@ export type LocalDataBridgeDeps = {
   startAsinSyncJob(input: SyncJobStartInput): Promise<StartAsinSyncResult>;
   readJob(jobId: string): Promise<SyncJob | null>;
   readLatestCompletedSyncJob?(input: { organizationId: string; projectId: string }): Promise<{ jobId: string; runId: string } | null>;
+  readCurrentDisplayVersion?(input: { organizationId: string; projectId: string }): Promise<{
+    versionId: string;
+    organizationId: string;
+    projectId: string;
+    runId: string;
+    jobId: string;
+    marketplace: string;
+    asins: readonly string[];
+    catalog: readonly unknown[];
+    stageOutputs: Readonly<Record<string, unknown>>;
+    gaps: readonly unknown[];
+    contentHash: string;
+    sourceCompletedAt: string;
+    publishedAt: string;
+  } | null>;
   readStageOutput?(input: {
     organizationId: string;
     projectId: string;
@@ -176,6 +191,7 @@ export function createDefaultLocalDataBridgeDeps(
       ? (jobId) => syncJobService.read(jobId)
       : async () => null,
     readLatestCompletedSyncJob: repository?.syncJobs?.findLatestCompletedForProject?.bind(repository.syncJobs),
+    readCurrentDisplayVersion: repository?.projectDisplayVersions?.readCurrent.bind(repository.projectDisplayVersions),
     readStageOutput: syncJobService
       ? (input) => syncJobService.readStageOutput(input)
       : async () => null,
@@ -460,6 +476,17 @@ export function registerLocalDataRoutes(
     const current = await deps.readLatestCompletedSyncJob({ organizationId: principal.organizationId, projectId: id });
     if (!current) return missing("Current sync job not found");
     return { jobId: current.jobId, runId: current.runId };
+  });
+
+  app.get("/v1/local-data/projects/:id/current-display-version", async (request) => {
+    const { id } = parseContract(LocalDataProjectIdParamsSchema, request.params);
+    const principal = request.authPrincipal;
+    if (principal?.kind !== "user" || !deps.readCurrentDisplayVersion) return missing("Current display version not found");
+    const version = await deps.readCurrentDisplayVersion({ organizationId: principal.organizationId, projectId: id });
+    if (!version || version.projectId !== id || version.organizationId !== principal.organizationId) {
+      return missing("Current display version not found");
+    }
+    return version;
   });
 
   app.get("/v1/local-data/sync-asins", async (request) => {

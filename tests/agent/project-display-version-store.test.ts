@@ -39,8 +39,8 @@ async function fixture(options: { status?: "queued" | "completed" | "failed"; as
 }
 
 function hash(value: unknown) {
-  const canonical = (item: any): any => Array.isArray(item) ? item.map(canonical)
-    : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])])) : item;
+  const canonical = (item: unknown): unknown => Array.isArray(item) ? item.map(canonical)
+    : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical((item as Record<string, unknown>)[key])])) : item;
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
@@ -78,11 +78,26 @@ test("completed job publishes one scoped durable display version with persisted 
   assert.equal(restored?.jobId, ids.jobId);
   assert.equal(restored?.stageOutputs.image_remarks.stageStatus, "done");
   assert.ok(LocalDataStageOutputResponseSchema.safeParse(restored?.stageOutputs.image_remarks).success);
-  assert.equal((restored?.stageOutputs.image_remarks.data as any).remarksByAsin[ASINS[0]!].length, 7);
+  assert.equal(((restored?.stageOutputs.image_remarks.data as Record<string, unknown>).remarksByAsin as Record<string, unknown[]>)[ASINS[0]!]?.length, 7);
   assert.ok(restored?.gaps.some(gap => gap.asin === ASINS[1] && gap.field === "image_remarks.remarksByAsin"));
   assert.ok(restored?.gaps.some(gap => gap.asin === ASINS[1] && gap.field === "catalog"));
   assert.deepEqual(restored?.catalog, [{ asin: ASINS[0], title: "Verified drift car" }]);
   assert.equal((await pool.query("SELECT current_display_version_id FROM projects WHERE id=$1", [ids.projectId])).rows[0]?.current_display_version_id, published.versionId);
+});
+
+test("a completed job with no usable stage data cannot replace the current report", async () => {
+  const { pool, ids, store } = await fixture();
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  const allFailed = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  const gap = { state: "failed", reasonCode: "CONNECTOR_FAILED" };
+  await pool.query(`UPDATE sync_job_stage_outputs SET stage_status='failed',data_json=NULL,
+    gap_json=$2::jsonb,content_hash=$3 WHERE job_id=$1 AND stage_id='image_remarks'`,
+  [allFailed.jobId, JSON.stringify(gap), hash({ stage: "image_remarks", gap })]);
+  await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: allFailed.jobId, expectedCurrentVersionId: current.versionId }),
+  /no usable stage data/);
+  assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
 });
 
 async function addJob(pool: Pool, ids: Awaited<ReturnType<typeof fixture>>["ids"], completedAt: string, status: "completed" | "failed" = "completed", createdAt = completedAt) {
@@ -125,7 +140,7 @@ test("completed retry sharing a run can become current despite an older run idem
   assert.equal(result.runId, ids.runId);
   const imageStage = result.stageOutputs.image_remarks;
   if (imageStage.stageStatus === "missing-output") assert.fail("Retry image output was not persisted");
-  assert.equal((imageStage.data as any).remarksByAsin[ASINS[0]!].length, 7);
+  assert.equal(((imageStage.data as Record<string, unknown>).remarksByAsin as Record<string, unknown[]>)[ASINS[0]!]?.length, 7);
 });
 
 test("an older-created job finishing late cannot replace a newer-created current job", async () => {

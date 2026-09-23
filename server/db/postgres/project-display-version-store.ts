@@ -260,6 +260,9 @@ export class PostgresProjectDisplayVersionStore {
       if (outputs.length !== stages.length) {
         throw new ProjectDisplayVersionConflictError("Completed sync job must have all 10 stage outputs");
       }
+      if (!outputs.some(output => output.stage_status === "done" || output.stage_status === "partial")) {
+        throw new ProjectDisplayVersionConflictError("Completed sync job has no usable stage data");
+      }
       const stageOutputs = {} as Record<ProjectableSyncStage, DisplayStageOutput>;
       for (const stage of stages) stageOutputs[stage] = { stage, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" };
       for (const output of outputs) {
