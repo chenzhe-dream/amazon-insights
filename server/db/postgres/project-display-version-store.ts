@@ -269,9 +269,6 @@ function assertRemarkCoverage(current: CurrentProjectDisplayVersion,
   const newGallery = galleryFor(candidate, asin);
   for (let index = 0; index < oldNotes.length; index += 1) {
     const oldNote = record(oldNotes[index]);
-    if (hasValue(oldNote.remark) && !hasValue(record(newNotes[index]).remark)) {
-      throw new ProjectDisplayCoverageRegressionError(`${field}[${index}].remark`);
-    }
     const oldUrl = typeof oldNote.imageUrl === "string" ? oldNote.imageUrl : oldGallery[index];
     if (!oldUrl) {
       const lost = lostCoverage(oldNote, newNotes[index], `${field}[${index}]`);
@@ -280,8 +277,11 @@ function assertRemarkCoverage(current: CurrentProjectDisplayVersion,
     }
     const newIndex = newGallery.indexOf(oldUrl);
     if (newIndex < 0) continue;
-    const matched = newNotes.find(note => record(note).imageUrl === oldUrl)
-      ?? (record(newNotes[newIndex]).imageUrl ? undefined : newNotes[newIndex]);
+    const matched = newNotes[newIndex];
+    const matchedUrl = record(matched).imageUrl;
+    if (hasValue(matchedUrl) && matchedUrl !== oldUrl) {
+      throw new ProjectDisplayCoverageRegressionError(`${field}[${newIndex}].imageUrl`);
+    }
     const lost = lostCoverage(oldNote, matched, `${field}[${newIndex}]`);
     if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
   }

@@ -211,6 +211,29 @@ test("a same-URL image remark cannot disappear when a newer candidate is publish
   assert.equal(next.jobId, reordered.jobId, "a fully remarked gallery may be reordered");
 });
 
+test("a partial gallery may reorder while its verified remark follows the image URL", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const main = "https://example.test/verified-main.jpg";
+  const secondary = "https://example.test/unremarked-secondary.jpg";
+  const listing = (urls: string[]) => ({ contentByAsin: { [asin]: {
+    status: "ready", mainImage: urls[0], galleryImages: urls,
+    secondaryImages: urls.slice(1), imageCount: urls.length,
+  } } });
+  const remark = { imageUrl: main, remark: "Verified main", image_types: ["main"] };
+  await replaceDoneOutput(pool, ids, "listing", listing([main, secondary]));
+  await replaceDoneOutput(pool, ids, "image_remarks", { remarksByAsin: { [asin]: [remark, null] }, outcomesByAsin: {} });
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+
+  const reordered = await addJob(pool, ids, "2026-09-23T10:00:00.000Z");
+  await replaceDoneOutput(pool, reordered, "listing", listing([secondary, main]));
+  await replaceDoneOutput(pool, reordered, "image_remarks", { remarksByAsin: { [asin]: [null, remark] }, outcomesByAsin: {} });
+  const next = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: reordered.jobId, expectedCurrentVersionId: current.versionId });
+  assert.equal(next.jobId, reordered.jobId);
+});
+
 test("a partial result cannot replace an existing successful ASIN field with null", async () => {
   const { pool, ids, store } = await fixture();
   const asin = ASINS[0]!;
