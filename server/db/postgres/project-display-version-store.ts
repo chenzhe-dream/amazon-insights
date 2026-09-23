@@ -338,6 +338,26 @@ function assertNoCoverageRegression(current: CurrentProjectDisplayVersion | null
   }
 }
 
+/** Stage outputs keep the original job gap; the current display gap reflects supplement coverage. */
+function effectiveImageRemarkGaps(gaps: readonly ProjectDisplayGap[],
+  outputs: Readonly<Record<ProjectableSyncStage, DisplayStageOutput>>,
+  overlay: readonly ImageRemarkOverlayEntry[]): ProjectDisplayGap[] {
+  const notesByAsin = record(stageData(outputs.image_remarks).remarksByAsin);
+  const supplemental = new Map(overlay.map(entry => [`${entry.asin}:${entry.index}`, entry]));
+  return gaps.filter(gap => {
+    if (gap.field !== "image_remarks" && gap.field !== "image_remarks.remarksByAsin") return true;
+    const gallery = galleryFor(outputs, gap.asin);
+    if (!gallery.length) return true;
+    const notes = notesByAsin[gap.asin];
+    const fullyCovered = gallery.every((url, index) => {
+      const note = record(Array.isArray(notes) ? notes[index] : null);
+      if (hasValue(note.remark) && (typeof note.imageUrl !== "string" || note.imageUrl === url)) return true;
+      return supplemental.get(`${gap.asin}:${index}`)?.imageUrl === url;
+    });
+    return !fullyCovered;
+  });
+}
+
 function imageUrls(value: unknown): Set<string> {
   const urls = new Set<string>();
   const visit = (item: unknown, key = "") => {
@@ -448,7 +468,8 @@ export class PostgresProjectDisplayVersionStore {
       const added = validateImageRemarkCandidate(current, { ...input, publishedAt });
       const overlay = mergedImageRemarkOverlay(current.imageRemarkOverlay, added);
       const imageEvidence = imageRemarkEvidenceSummary(overlay);
-      const body = { catalog: current.catalog, stageOutputs: current.stageOutputs, gaps: current.gaps,
+      const gaps = effectiveImageRemarkGaps(current.gaps, current.stageOutputs, overlay);
+      const body = { catalog: current.catalog, stageOutputs: current.stageOutputs, gaps,
         ...(current.catalogEvidence ? { catalogEvidence: current.catalogEvidence } : {}),
         imageRemarkOverlay: overlay, imageRemarkEvidence: imageEvidence };
       const contentHash = hash({ organizationId: current.organizationId, projectId: current.projectId,
@@ -539,8 +560,8 @@ export class PostgresProjectDisplayVersionStore {
           projectId: input.projectId, marketplace: job.marketplace, asins: asins(job.asins) })
         : null;
       assertNoCoverageRegression(current, catalog, stageOutputs, asins(job.asins));
-      const gaps = gapsFor(asins(job.asins), catalog, stageOutputs);
       const overlay = inheritedImageRemarkOverlay(current?.imageRemarkOverlay ?? [], stageOutputs);
+      const gaps = effectiveImageRemarkGaps(gapsFor(asins(job.asins), catalog, stageOutputs), stageOutputs, overlay);
       const imageEvidence = imageRemarkEvidenceSummary(overlay);
       const body = { catalog, stageOutputs, gaps, ...(evidence ? { catalogEvidence: evidence } : {}),
         ...(imageEvidence ? { imageRemarkOverlay: overlay, imageRemarkEvidence: imageEvidence } : {}) };
@@ -593,7 +614,8 @@ export class PostgresProjectDisplayVersionStore {
       }
       const stageOutputs = current.stageOutputs as Record<ProjectableSyncStage, DisplayStageOutput>;
       assertNoCoverageRegression(current, catalog, stageOutputs, current.asins);
-      const gaps = gapsFor(current.asins, catalog, stageOutputs);
+      const gaps = effectiveImageRemarkGaps(gapsFor(current.asins, catalog, stageOutputs), stageOutputs,
+        current.imageRemarkOverlay);
       const imageEvidence = current.imageRemarkEvidence;
       const body = { catalog, stageOutputs, gaps, catalogEvidence: evidence,
         ...(imageEvidence ? { imageRemarkOverlay: current.imageRemarkOverlay, imageRemarkEvidence: imageEvidence } : {}) };

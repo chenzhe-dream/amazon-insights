@@ -500,6 +500,7 @@ test("image remark revision validates source and slots, switches by CAS, and ret
   await replaceDoneOutput(pool, ids, "listing", listing);
   const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
     projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null, publishedAt: NOW });
+  assert.ok(current.gaps.some(gap => gap.asin === asin && gap.field === "image_remarks.remarksByAsin"));
   const capturedAt = "2026-09-21T11:00:00.000Z";
   const manifest = { schemaVersion: 1, organizationId: ids.organizationId, projectId: ids.projectId,
     runId: ids.runId, originalJobId: ids.jobId, listingStageContentHash: listingHash(current),
@@ -520,6 +521,9 @@ test("image remark revision validates source and slots, switches by CAS, and ret
   const revised = await store.reviseCurrentImageRemarks(request);
   assert.equal(revised.revisionKind, "image-remarks-revision");
   assert.equal(revised.imageRemarkOverlay.length, 2);
+  assert.ok(!revised.gaps.some(gap => gap.asin === asin && gap.field === "image_remarks.remarksByAsin"));
+  assert.deepEqual(revised.stageOutputs.image_remarks, current.stageOutputs.image_remarks,
+    "the source job stage stays unchanged for audit");
   assert.equal(listingHash(revised), listingHash(current));
   assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, revised.versionId);
   await assert.rejects(store.reviseCurrentImageRemarks(request), /Current display version changed/);
@@ -536,6 +540,7 @@ test("image remark revision validates source and slots, switches by CAS, and ret
     projectId: ids.projectId, jobId: newest.jobId, expectedCurrentVersionId: revised.versionId,
     publishedAt: "2026-09-22T14:00:00.000Z" });
   assert.equal(inherited.imageRemarkOverlay.length, 2);
+  assert.ok(!inherited.gaps.some(gap => gap.asin === asin && gap.field === "image_remarks.remarksByAsin"));
   assert.equal(inherited.imageRemarkOverlay[0]?.source.originalJobId, ids.jobId);
   assert.equal(inherited.imageRemarkOverlay[0]?.displayListingStageContentHash, listingHash(inherited));
   assert.equal(inherited.imageRemarkOverlay[0]?.source.listingStageContentHash, listingHash(current));
