@@ -29,7 +29,18 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
   const childSalesOutput = availableData(snapshot, "child_sales") as { rowsByAsin?: Record<string, unknown> } | null;
   const priceStrategyOutput = availableData(snapshot, "price_strategy") as { strategyByAsin?: Record<string, unknown> } | null;
   const imageRemarksOutput = availableData(snapshot, "image_remarks") as { remarksByAsin?: Record<string, unknown>; outcomesByAsin?: Record<string, unknown> } | null;
-  const baseTraffic = fallbacks.trafficData;
+  const baseTraffic: TrafficDisplayData = options.authoritative ? {
+    overview: {},
+    monthlyTrend: {},
+    detailAvailability: {},
+    meta: {
+      ...fallbacks.trafficData.meta,
+      source: "当前同步任务阶段结果",
+      period: "当前展示版本",
+      updatedThrough: null,
+      emptyMessage: "当前同步任务没有可用流量结果",
+    },
+  } : fallbacks.trafficData;
   const detailAvailability = { ...baseTraffic.detailAvailability };
   const stageTrafficOverview = Object.fromEntries(Object.entries(trafficOutput?.listingByAsin ?? {}).filter(([asin]) => !baseTraffic.authoritativeListingAsins?.includes(asin)).map(([asin, value]) => {
     const merged = mergeTrafficRecord(value, baseTraffic.overview[asin], baseTraffic.detailAvailability?.[asin]);

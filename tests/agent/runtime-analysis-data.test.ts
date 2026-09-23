@@ -29,6 +29,24 @@ test("current job partial results do not inherit old generated values for missin
   assert.deepEqual(view.priceStrategyByAsin, { B07YGQVKDY: { currentPrice: true } });
 });
 
+test("current job traffic does not inherit older run snapshot values", () => {
+  const fallback = {
+    keywordAnalysisByAsin: {}, keywordEnrichmentByKeyword: {}, reviewAnalysisByAsin: {}, ratingByAsin: {},
+    salesTrendByAsin: {}, fbaFeeByAsin: {}, listingContentByAsin: {}, categoryTrendByNode: {}, childSalesByAsin: {},
+    priceStrategyByAsin: {}, imageRemarksByAsin: {}, imageRemarkOutcomesByAsin: {},
+    trafficData: {
+      overview: { B0DPQGFM8Q: { totalScore: 999, naturalAd: [], adChannels: [], recommendationSources: [], children: [], updatedThrough: null } },
+      monthlyTrend: {}, meta: sifListingTrafficMeta,
+    },
+  };
+  const view = buildStageOutputView({ traffic: {
+    stage: "traffic", stageStatus: "partial", data: { listingByAsin: { B07YGQVKDY: { total: 12 } } },
+    gap: { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [{ asin: "B0DPQGFM8Q", causeCode: "UPSTREAM_EMPTY" }] },
+  } } as never, fallback, { authoritative: true });
+  assert.deepEqual(Object.keys(view.trafficData.overview), ["B07YGQVKDY"]);
+  assert.equal(view.trafficData.overview.B07YGQVKDY?.totalScore, 12);
+});
+
 const projectId = "10000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000002";
 const userId = "10000000-0000-4000-8000-000000000003";
