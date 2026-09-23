@@ -79,6 +79,7 @@ type ListingImagesSectionProps = {
   market: MarketInfo;
   colors: string[];
   listingByAsin?: Readonly<Record<string, SorftimeListingContentRecord>>;
+  reportUnavailableReason?: string;
   resolveImageRemark?: typeof getListingImageRemark;
   resolveImageOutcome?: (asin: string, slotIndex: number) => ImageRemarkOutcome | null;
 };
@@ -109,6 +110,7 @@ export function ListingImagesSection({
   market,
   colors,
   listingByAsin = sorftimeListingContentData,
+  reportUnavailableReason,
   resolveImageRemark = getListingImageRemark,
   resolveImageOutcome = getListingImageOutcome,
 }: ListingImagesSectionProps) {
@@ -172,8 +174,8 @@ export function ListingImagesSection({
         <div>
           <h3>主辅图横向对比</h3>
           <p>
-            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底 · Listing 数据采集于{" "}
-            {listingSourceDate}
+            纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底
+            {reportUnavailableReason ? ` · ${reportUnavailableReason}` : <> · Listing 数据采集于 {listingSourceDate}</>}
           </p>
         </div>
         <span className="source-badge">{LISTING_IMAGES_SOURCE_LABEL}</span>
@@ -244,7 +246,7 @@ export function ListingImagesSection({
                             SellerSprite MCP · 商品图 {gallery.urls.length} 张
                           </small>
                         ) : (
-                          <small className="listing-images-count muted">MCP 暂未返回商品图 · upstream-empty</small>
+                          <small className="listing-images-count muted">{reportUnavailableReason ?? "MCP 暂未返回商品图 · upstream-empty"}</small>
                         )}
                         <ListingImageActions asin={product.asin} onAction={onImageAction} job={imageActionJob} disabled={imageActionPending} />
                       </div>

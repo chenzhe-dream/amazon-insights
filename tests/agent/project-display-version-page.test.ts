@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync } from "node:fs";
 import { createServer as createTcpServer } from "node:net";
 import path from "node:path";
@@ -6,6 +7,7 @@ import test from "node:test";
 import react from "@vitejs/plugin-react";
 import { chromium } from "playwright";
 import { createServer } from "vite";
+import { refreshedCatalog } from "../../app/competitor-data";
 
 const organizationId = "018f1f5c-60f0-4b7a-8000-000000000002";
 const projectId = "75a3f965-07e8-468e-aec7-bce265515023";
@@ -23,8 +25,10 @@ const project = { id: projectId, kind: "analysis", slug: "project-us-20", name: 
   createdAt: "2026-09-18T00:00:00Z", updatedAt: "2026-09-21T00:00:00Z" };
 
 function stage(stage: string, data: Record<string, unknown>) {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
   return { stage, stageStatus: "done", projectId, runId, jobId, jobVersion: 1, outputVersion: 1,
-    contentHash: "a".repeat(64), updatedAt: "2026-09-21T03:12:24.141Z", data };
+    contentHash: createHash("sha256").update(JSON.stringify(canonical({ stage, data }))).digest("hex"), updatedAt: "2026-09-21T03:12:24.141Z", data };
 }
 const stageOutputs: Record<string, Record<string, unknown>> = Object.fromEntries(stages.map(name => [name,
   { stage: name, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }]));
@@ -54,13 +58,14 @@ const version = { versionId: "12345678-1234-4234-8234-123456789abc", organizatio
   contentHash: "b".repeat(64), sourceCompletedAt: "2026-09-21T03:12:47.080Z",
   publishedAt: "2026-09-23T05:00:00.000Z" };
 
-test("production page shows waiting, current-version success, and read failure without collecting", async t => {
+test("saved report reads never fall back to generated data; first analysis still shows scoped live results", async t => {
   const reservation = createTcpServer();
   await new Promise<void>(resolve => reservation.listen(0, "127.0.0.1", resolve));
   const reserved = reservation.address();
   assert.ok(reserved && typeof reserved !== "string");
   await new Promise<void>(resolve => reservation.close(() => resolve()));
   const server = await createServer({ configFile: false, define: { "process.env": "{}" },
+    cacheDir: path.resolve("node_modules/.cache/report-read", String(process.pid)),
     plugins: [{ name: "fixture-css", enforce: "pre", load(id) {
       if (id.endsWith("/app/globals.css")) return readFileSync(id, "utf8").replace('@import "tailwindcss";', "");
     } }, react()], server: { host: "127.0.0.1", port: reserved.port, strictPort: true } });
@@ -70,7 +75,12 @@ test("production page shows waiting, current-version success, and read failure w
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const pageErrors: string[] = [], writes: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
-  let mode: "waiting" | "success" | "failure" = "waiting";
+  let mode: "waiting" | "success" | "failure" | "absent" = "waiting";
+  let exposeJob = false;
+  let jobStatus = "completed";
+  const staleImage = "https://m.media-amazon.com/images/I/STALE-CATALOG.jpg";
+  const staleProduct = { ...refreshedCatalog[0], asin: asins[0], brand: "旧目录占位", image: staleImage };
+  const stageReads: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   await page.route("**/*", async route => {
@@ -91,18 +101,32 @@ test("production page shows waiting, current-version success, and read failure w
     if (endpoint === `/api/agent/v1/local-data/projects/${project.slug}` || endpoint === `/api/agent/v1/local-data/projects/${projectId}`)
       return reply({ project });
     if (endpoint === `/api/agent/v1/projects/${projectId}`)
-      return reply({ project: { ...project, organizationId, currentRunId: runId } });
+      return reply({ project: { ...project, organizationId, currentRunId: exposeJob ? runId : null } });
+    if (endpoint === `/api/agent/v1/runs/${runId}`)
+      return reply({ run: { id: runId, projectId, idempotencyKey: jobId } });
+    if (endpoint === `/api/agent/v1/local-data/projects/${projectId}/current-sync-job`)
+      return exposeJob ? reply({ jobId, runId }) : reply({}, 404);
     if (endpoint === `/api/agent/v1/local-data/projects/${projectId}/current-display-version`) {
       if (mode === "waiting") await gate;
-      return mode === "failure" ? reply({ error: "unavailable" }, 503) : reply(version);
+      return mode === "failure" ? reply({ error: "unavailable" }, 503)
+        : mode === "absent" ? reply({ error: "not found" }, 404) : reply(version);
     }
     if (endpoint === `/api/agent/v1/local-data/sync-asins/${jobId}`)
-      return reply({ jobId, asins, marketplace: "US", status: "completed", scope: { projectId, runId }, stages: [] });
-    if (endpoint === "/api/catalog") return reply({ items: [] });
-    if (endpoint === "/api/runtime-analysis-data") return reply({ catalog: [], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+      return reply({ jobId, jobVersion: 1, asins, marketplace: "US", status: jobStatus, message: "fixture job",
+        currentStageId: "image_remarks", asinProgress: {}, scope: { projectId, runId }, stages: ["listing", "image_remarks"].map(id => ({
+          id, label: id, kind: "auto", status: "done", estimatedSeconds: 1,
+        })) });
+    const stageMatch = endpoint.match(new RegExp(`/projects/${projectId}/runs/${runId}/sync-jobs/${jobId}/stages/(listing|image_remarks)/output$`));
+    if (stageMatch) {
+      stageReads.push(stageMatch[1]);
+      return reply(stageOutputs[stageMatch[1]]);
+    }
+    if (endpoint === "/api/catalog") return reply({ items: [staleProduct] });
+    if (endpoint === "/api/runtime-analysis-data") return reply({ catalog: [staleProduct], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
       reviews: { analysisByAsin: {}, ratingByAsin: {} }, salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} },
-      listing: { contentByAsin: {} }, category: { trendByNode: {} }, childSales: { rowsByAsin: {} },
-      priceStrategy: { strategyByAsin: {} }, imageRemarks: { remarksByAsin: {}, outcomesByAsin: {} } });
+      listing: { contentByAsin: { [asins[0]]: { asin: asins[0], status: "ready", mainImage: staleImage, galleryImages: [staleImage] } } },
+      category: { trendByNode: {} }, childSales: { rowsByAsin: {} },
+      priceStrategy: { strategyByAsin: {} }, imageRemarks: { remarksByAsin: { [asins[0]]: [{ remark: "旧生成文件备注", image_types: [], confidence: "high" }] }, outcomesByAsin: {} } });
     if (endpoint === "/api/projects" || endpoint === "/api/agent/v1/local-data/projects") return reply({ projects: [project] });
     if (endpoint.endsWith("/project-favorites")) return reply({ projectIds: [projectId] });
     return reply({ error: "fixture endpoint unavailable" }, 404);
@@ -110,10 +134,12 @@ test("production page shows waiting, current-version success, and read failure w
   const screenshotRoot = process.env.DISPLAY_SCREENSHOT_ROOT;
   if (screenshotRoot) mkdirSync(screenshotRoot, { recursive: true });
   const capture = async (name: string) => {
-    if (screenshotRoot) await page.screenshot({ path: path.join(screenshotRoot, `${name}.png`), fullPage: true });
+    if (screenshotRoot) await page.screenshot({ path: path.join(screenshotRoot, `${name}.png`) });
   };
   await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1200);
+  await page.getByText("正在读取项目当前报告…", { exact: true }).waitFor({ timeout: 15_000 }).catch(async error => {
+    throw new Error(`Waiting notice did not render: ${pageErrors.join("; ")}\n${(await page.locator("body").innerText()).slice(0, 1200)}`, { cause: error });
+  });
   await capture("waiting");
   assert.ok((await page.locator("body").innerText()).length > 0, `Waiting page did not render: ${pageErrors.join("; ")}`);
   mode = "success";
@@ -129,6 +155,52 @@ test("production page shows waiting, current-version success, and read failure w
   await capture("failure");
   assert.ok((await page.locator("body").innerText()).includes("当前报告读取失败"),
     `failure notice missing: ${(await page.locator("body").innerText()).slice(0, 600)}`);
+  assert.equal(await page.locator(".listing-image-frame").count(), 0);
+  mode = "absent";
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1000);
+  assert.equal(await page.locator(".listing-image-frame").count(), 0, "404 must not restore a catalog main image or generated gallery");
+  const missingGalleryText = await page.locator(".listing-images-card").innerText();
+  assert.ok(!missingGalleryText.includes("upstream-empty"), "missing report is not evidence of an upstream collection gap");
+  assert.ok(!missingGalleryText.includes("Listing 数据采集于"), "missing report must not display a generated file's collection date");
+  assert.ok((await page.locator(".comparison-context").innerText()).includes("暂无分析报告"), "missing report must not keep an old catalog date in the page context");
+  assert.ok((await page.locator(".sync-status").innerText()).includes("暂无分析报告"), "missing report cannot claim normal data availability");
+  await page.getByText("当前项目暂无可读取的分析报告", { exact: false }).waitFor({ timeout: 10_000 });
+  assert.ok(!(await page.locator("body").innerText()).includes("旧生成文件备注"));
+  await capture("unpublished");
+  exposeJob = true;
+  const openImages = () => page.evaluate(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "overview-images");
+    window.navigateAuthenticatedApp?.(`${url.pathname}${url.search}`);
+  });
+  for (const status of ["completed", "failed"]) {
+    jobStatus = status;
+    const oldStageResponse = page.waitForResponse(response => response.url().endsWith("/stages/listing/output"));
+    await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview`, { waitUntil: "domcontentloaded" });
+    await oldStageResponse;
+    await openImages();
+    await page.getByText("当前项目暂无可读取的分析报告", { exact: false }).waitFor();
+    await page.waitForTimeout(500);
+    assert.ok(stageReads.includes("listing"), "fixture must actually return old scoped stage data");
+    assert.equal(await page.locator(".listing-image-frame").count(), 0, `a ${status} historical job cannot substitute for a missing current report`);
+  }
+  jobStatus = "running";
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview`, { waitUntil: "domcontentloaded" });
+  await page.getByText("分析进行中，以下为本次任务已返回的结果", { exact: false }).waitFor({ timeout: 15_000 });
+  await openImages();
+  await page.getByText(/Provider 返回 7 张.*AI 备注 7\/7 张/).waitFor();
+  assert.equal(await page.locator('tr:has-text("B07YGQVKDY") .listing-image-frame').count(), 7);
+  assert.ok(!(await page.locator("body").innerText()).includes("旧生成文件备注"));
+  await capture("first-analysis");
+  // Derived collections have a separate source-project flow; this fix is scoped
+  // to saved analysis reports and must not change their existing read contract.
+  project.kind = "keyword-compare";
+  exposeJob = false;
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
+  await page.getByText("旧生成文件备注", { exact: true }).waitFor();
+  assert.equal(await page.locator(".listing-image-frame").count(), 1);
+  assert.ok(!(await page.locator("body").innerText()).includes("当前项目暂无可读取的分析报告"));
   assert.deepEqual(writes, [], "normal reads must not start collection");
   assert.deepEqual(pageErrors, []);
 });

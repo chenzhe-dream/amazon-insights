@@ -1778,6 +1778,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   }, []);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectParam);
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
+  const [reportProject, setReportProject] = useState<Pick<AnalysisProject, "id" | "kind"> | null>(null);
   const [imageProjectContext,setImageProjectContext] = useState<{projectId:string;kind:string}|null>(null);
   const [savingKeywordCompare, setSavingKeywordCompare] = useState(false);
   const [savingTrafficPromo, setSavingTrafficPromo] = useState(false);
@@ -1927,6 +1928,10 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     && displayVersionReceipt.failed;
   const displayVersionPending = Boolean(currentProjectId && !authSession.logoutPending
     && (!workspaceReady || displayVersionReceipt?.scopeKey !== displayVersionScopeKey));
+  const displayVersionMissing = Boolean(currentProjectId && reportProject?.id === currentProjectId
+    && (!reportProject.kind || reportProject.kind === "analysis") && !authSession.logoutPending
+    && displayVersionReceipt?.scopeKey === displayVersionScopeKey
+    && !displayVersionReceipt.failed && !displayVersionReceipt.version);
   useLayoutEffect(() => {
     const guard = terminalRepairScope.current;
     guard.activate(workspaceReady && !authSession.logoutPending && resumedSyncScope.canAdopt
@@ -2074,16 +2079,25 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   }, [stageOutputOwnerToken]);
   const currentImageJob = imageJobReceipt?.ownerToken === stageOutputOwnerToken ? imageJobReceipt.job : null;
   const currentStageReceipt = stageOutputReceipt?.ownerToken === stageOutputOwnerToken ? stageOutputReceipt : null;
+  // An unpublished first analysis may show its scoped live output. Historical terminal
+  // jobs and workspace-generated data must not stand in for a missing saved report.
+  const showUnpublishedProgress = displayVersionMissing
+    && (currentImageJob?.status === "queued" || currentImageJob?.status === "running");
+  const blockReportResults = displayVersionReadFailed || displayVersionPending
+    || (displayVersionMissing && !showUnpublishedProgress);
+  const reportReadStatus = displayVersionPending ? "正在读取报告"
+    : displayVersionReadFailed ? "报告读取失败"
+    : displayVersionMissing ? (showUnpublishedProgress ? "分析进行中" : "暂无分析报告") : null;
   const reviewScope = useMemo(() => !authSession.logoutPending && resumedProjectId && stageOutputRunId && stageOutputJobId ? {
     organizationId: authSession.user.organizationId, projectId: resumedProjectId,
     runId: stageOutputRunId, jobId: stageOutputJobId, marketplace: market, asins: activeAsins,
   } : null, [authSession.logoutPending, authSession.user.organizationId, resumedProjectId, stageOutputRunId, stageOutputJobId, market, activeAsins]);
   // VOC has no funnel. Only read here while that tab owns the review view.
   const { snapshot: pageReviewOutput, refreshFailed: reviewRefreshFailed } = useVocReviewOutput(stageOutputScopeKey, reviewScope, activeTab === "voc", currentStageReceipt?.snapshot.reviews);
-  const stageOutputSnapshot = useMemo<StageOutputSnapshot>(() => displayVersionReadFailed || displayVersionPending ? {} : currentDisplayVersion?.stageOutputs
+  const stageOutputSnapshot = useMemo<StageOutputSnapshot>(() => blockReportResults ? {} : currentDisplayVersion?.stageOutputs
     ?? (!authSession.logoutPending && currentStageReceipt
       ? { ...currentStageReceipt.snapshot, ...(activeTab === "voc" ? { reviews: pageReviewOutput.reviews } : {}) } : pageReviewOutput),
-    [currentDisplayVersion, displayVersionReadFailed, displayVersionPending, authSession.logoutPending, currentStageReceipt, pageReviewOutput, activeTab]);
+    [currentDisplayVersion, blockReportResults, authSession.logoutPending, currentStageReceipt, pageReviewOutput, activeTab]);
   const visibleTrafficStage = trafficStageFromReceipt(currentStageReceipt, {
     scopeKey: stageOutputScopeKey, projectId: resumedProjectId, runId: stageOutputRunId, jobId: stageOutputJobId,
     enabled: !authSession.logoutPending,
@@ -2120,7 +2134,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
 
   const products = useMemo(
     () => activeAsins.map(asin => {
-      if (displayVersionReadFailed || displayVersionPending) return placeholderProduct(asin);
+      if (displayVersionReadFailed || displayVersionPending || displayVersionMissing) return placeholderProduct(asin);
       if (!currentDisplayVersion) return catalogItems.find(p => p.asin === asin) ?? placeholderProduct(asin);
       const product = (currentDisplayVersion.catalog as Product[]).find(p => p.asin === asin) ?? placeholderProduct(asin);
       const listing = currentDisplayVersion.stageOutputs.listing;
@@ -2129,7 +2143,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       const mainImage = listingByAsin?.[asin]?.mainImage;
       return typeof mainImage === "string" ? { ...product, image: mainImage } : product;
     }),
-    [activeAsins, catalogItems, currentDisplayVersion, displayVersionReadFailed, displayVersionPending]
+    [activeAsins, catalogItems, currentDisplayVersion, displayVersionReadFailed, displayVersionPending, displayVersionMissing]
   );
   const manualVoc = useManualAlexaVoc({
     projectId: alexaVocPageScope.manualListProjectId,
@@ -2184,7 +2198,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     ? "dynamic" as const
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
   const stageOutputView = useMemo(
-    () => buildStageOutputView({ ...stageOutputSnapshot, traffic: currentDisplayVersion
+    () => buildStageOutputView({ ...stageOutputSnapshot, traffic: currentDisplayVersion || blockReportResults
       ? stageOutputSnapshot.traffic : visibleTrafficStage.traffic }, {
       keywordAnalysisByAsin: runtimeAnalysisData
         ? runtimeAnalysisData.keywords.analysisByAsin as typeof sifKeywordAnalysisData
@@ -2226,8 +2240,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         monthlyTrend: {},
         meta: sifListingTrafficMeta,
       },
-    }, { authoritative: Boolean(displayVersionPending || displayVersionReadFailed || currentDisplayVersion || (stageOutputJobId && resumedProjectId === priorityRecoveryProjectId)) }),
-    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId, currentDisplayVersion, displayVersionReadFailed, displayVersionPending],
+    }, { authoritative: Boolean(displayVersionPending || displayVersionReadFailed || displayVersionMissing || currentDisplayVersion || (stageOutputJobId && resumedProjectId === priorityRecoveryProjectId)) }),
+    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId, currentDisplayVersion, displayVersionReadFailed, displayVersionPending, displayVersionMissing, blockReportResults],
   );
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, ratingByAsin,
@@ -2483,6 +2497,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     if (options?.normalizeInput !== false) replaceInputAsins(project.asins);
     setCurrentProjectId(project.id);
     setCurrentProjectName(project.name);
+    setReportProject({ id: project.id, kind: project.kind });
     if (projectSegmentName(project)) {
       setWorkspaceLabel(project.name);
     } else {
@@ -2561,6 +2576,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         replaceInputAsins(project.asins);
         setCurrentProjectId(project.id);
         setCurrentProjectName(project.name);
+        setReportProject({ id: project.id, kind: project.kind });
         if (projectSegmentName(project)) {
           setWorkspaceLabel(project.name);
         } else {
@@ -3190,7 +3206,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       </nav>
       <div className="sidebar-bottom">
         <HelpFeedbackDrawer user={authSession.user} />
-        {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status">{catalogStatusLabel || <><i/>数据源状态正常</>}</div>}
+        {activeTab === "market-overview" ? <div className="sync-status">采集状态请查看任务记录</div> : <div className="sync-status">{reportReadStatus || catalogStatusLabel || <><i/>数据源状态正常</>}</div>}
         {activeTab === "market-overview" ? <p>{activeMarketSite} · 类目调研</p> : <p>{markets[market].label} · 当前对比<br/><b>{products.length} 个 ASIN</b></p>}
       </div>
     </aside>
@@ -3285,7 +3301,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         </div>
       </header>
       <ConcurrencyAdminPanel user={authSession.user} />
-      {activeTab !== "market-overview" && <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>{catalogSourceLabel}</SourceBadge></div>}
+      {activeTab !== "market-overview" && <div className="comparison-context"><span>目标市场 <b>{markets[market].label} {markets[market].short}</b></span><span>竞品数量 <b>{products.length} / 10</b></span><span>对比模式 <b>多 ASIN 同屏</b></span><SourceBadge>{reportReadStatus || catalogSourceLabel}</SourceBadge></div>}
 
       {activeLeaf.parent ? (
         <div className="voc-tertiary-bar" data-nav-dim={activeTab} aria-label={`${activeLeaf.parent} 当前位置`}>
@@ -3318,6 +3334,9 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
 
       {displayVersionPending ? <p className="stage-output-gap-notice" role="status">正在读取项目当前报告…</p> : null}
       {displayVersionReadFailed ? <p className="stage-output-gap-notice" role="alert">当前报告读取失败，请刷新后重试；页面不会显示未核实的历史数据。</p> : null}
+      {displayVersionMissing ? <p className="stage-output-gap-notice" role="status">{showUnpublishedProgress
+        ? "分析进行中，以下为本次任务已返回的结果；完整报告将在分析结束后显示。"
+        : "当前项目暂无可读取的分析报告。首次分析可正常启动；若此前已完成分析，请联系管理员恢复报告。"}</p> : null}
 
 
       {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} view={activeMarketView} onViewChange={view => router.push(marketViewHref(view, window.location.search), { scroll: false })} /></div>}
@@ -3529,6 +3548,9 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
             market={markets[market]}
             colors={colors}
             listingByAsin={listingContentByAsin}
+            reportUnavailableReason={displayVersionPending ? "正在读取图册所属报告"
+              : displayVersionReadFailed ? "图册所属报告读取失败"
+              : displayVersionMissing && !showUnpublishedProgress ? "暂无已发布图册，待分析完成或恢复报告" : undefined}
             resolveImageRemark={(asin, slotIndex) => {
               const slots = imageRemarksByAsin[asin];
               return Array.isArray(slots) ? slots[slotIndex] as never ?? null : null;
