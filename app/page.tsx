@@ -1444,7 +1444,7 @@ function MonthlyTrafficStackChart({
 
 function ProductHeader({ product, index, market, authoritativeImage = false }: { product: Product; index: number; market?: MarketCode; authoritativeImage?: boolean }) {
   const marketInfo = markets[market ?? "US"];
-  const image = amazonMediaSrc(authoritativeImage ? product.image : sorftimeListingContentData[product.asin]?.mainImage || product.image);
+  const image = amazonMediaSrc(authoritativeImage || !product.image ? product.image : sorftimeListingContentData[product.asin]?.mainImage || product.image);
   return <div className="compare-product-head">
     <span className="series-dot" style={{ background: colors[index] }}>{index + 1}</span>
     {image ? <img src={image} alt="" referrerPolicy="no-referrer" /> : <div className="image-placeholder">ASIN</div>}

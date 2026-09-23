@@ -168,6 +168,10 @@ test("saved report reads never fall back to generated data; first analysis still
   await page.getByText("当前项目暂无可读取的分析报告", { exact: false }).waitFor({ timeout: 10_000 });
   assert.ok(!(await page.locator("body").innerText()).includes("旧生成文件备注"));
   await capture("unpublished");
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview`, { waitUntil: "domcontentloaded" });
+  await page.getByText("当前项目暂无可读取的分析报告", { exact: false }).waitFor();
+  assert.equal(await page.locator(".compare-product-head img").count(), 0,
+    "a missing report must not show generated listing main images in other report tabs");
   exposeJob = true;
   const openImages = () => page.evaluate(() => {
     const url = new URL(window.location.href);
