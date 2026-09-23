@@ -16,3 +16,10 @@ test("legacy unchanged galleries retain their notes; duplicate previous URLs are
   assert.equal(resolveRemarkForGalleryImage("A",0,undefined,read)?.remark,"A");
   assert.equal(resolveRemarkForGalleryImage("A",0,["A","A"],read),null);
 });
+
+test("an empty previous gallery keeps unbound remarks on the current image slots",()=>{
+  const notes=[{remark:"main",imageUrl:"A"},{remark:"secondary"}];
+  assert.equal(resolveRemarkForGalleryImage("B",1,[],index=>notes[index]??null)?.remark,"secondary");
+  assert.equal(resolveRemarkForGalleryImage("C",1,[],index=>notes[index]??null)?.remark,"secondary");
+  assert.equal(resolveRemarkForGalleryImage("C",0,[],index=>notes[index]??null),null);
+});

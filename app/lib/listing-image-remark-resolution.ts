@@ -7,7 +7,7 @@ export function resolveRemarkForGalleryImage<T extends object>(
 ): T | null {
   const current = readRemark(slotIndex);
   if (current && "imageUrl" in current) return current.imageUrl === imageUrl ? current : null;
-  if (!previousUrls) return current;
+  if (!previousUrls?.length) return current;
   const matches = previousUrls.flatMap((url, index) => url.trim() === imageUrl.trim() ? [index] : []);
   if (matches.length !== 1) return null;
   const previous = readRemark(matches[0]);
