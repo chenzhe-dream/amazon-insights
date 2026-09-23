@@ -118,7 +118,7 @@ test("production page shows waiting, current-version success, and read failure w
   assert.ok((await page.locator("body").innerText()).length > 0, `Waiting page did not render: ${pageErrors.join("; ")}`);
   mode = "success";
   release();
-  await page.getByText(/Provider 返回 7 张 · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 });
+  await page.getByText(/Provider 返回 7 张（含 1 个视频位缩略图） · AI 备注 7\/7 张/).waitFor({ timeout: 20_000 });
   await page.getByText("4 个 ASIN 目录未验证（上游空值）").waitFor();
   await page.getByText(/来源任务 6eea1111/).waitFor();
   assert.equal(await page.locator('tr:has-text("B07YGQVKDY") .listing-image-frame').count(), 7);
