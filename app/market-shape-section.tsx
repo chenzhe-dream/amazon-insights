@@ -1,4 +1,6 @@
 'use client';
+import {MarketShapeCategoryDashboard} from './market-shape-category-dashboard';
+
 import { browserRequestId } from "./lib/browser-request-id";
 import {MarketSiteSelector} from './market-site-selector';
 import {marketSiteCurrency,marketSites,type MarketSite} from '../shared/market-sites';
@@ -21,7 +23,8 @@ type Selection = {
     toMonth: string;
 };
 const active = (run: MarketShapeRun) => run.steps.some(s => s.current && ['running', 'queued'].includes(s.status));
-const stepNames: Record<string, string> = { 'collect-product-month': '商品采集', 'collect-product-history':'商品月度历史', 'prepare-members': '固定商品池 / 准备形态输入', 'prepare-model-batches': '准备模型分析', 'model-batch': '形态建议' };
+const categoryNames:Record<string,string>={report:'类目近30天统计',SalesCount:'类目月销量',AvgPrice:'类目历史均价',Top3ProductSalesAmountShare:'Top3商品销售额占比',Top3BrandSalesAmountShare:'Top3品牌销售额占比',Top3SellerSalesAmountShare:'Top3卖家销售额占比'};
+const stepNames: Record<string, string> = { 'collect-product-month': '商品采集', 'collect-shape-category':'类目历史与指标', 'collect-product-history':'商品月度历史', 'prepare-members': '固定商品池 / 准备形态输入', 'prepare-model-batches': '准备模型分析', 'model-batch': '形态建议' };
 const stepErrors: Record<string, string> = { timeout: '等待上游超时', 'upstream-temporary': '上游暂不可用', 'invalid-data': '数据校验未通过', 'scope-mismatch': '来源范围不匹配', authentication: '来源认证失败', governance: '额度或调用策略限制', interrupted: '任务中断', internal: '处理失败', cancelled: '已取消' };
 const statusNames: Record<string, string> = { queued: '排队中', running: '处理中', succeeded: '已完成', empty: '未返回数据', failed: '失败', cancelled: '已取消' };
 const messages: Record<string, string> = { 'not-ready': '等待商品来源', unavailable: '模型暂不可用，可先人工确认并保存统计结果', running: '正在生成形态建议', partial: '部分形态建议不可用，可查看失败步骤或人工确认', complete: '形态建议已返回，需人工确认后才参与分组' };
@@ -188,13 +191,13 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，变更操作暂停。</p>}
  </section>
  {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>先采集商品，再在 TOP 销售表标注形态并保存价格带报告；缺失字段保持未知。</span></div></LaunchSection>}
- {run && <>{report && <MarketShapeDashboard report={report}/>}{!report && choice==='latest' && run.source?.summary && <MarketShapeDashboard report={run.source.summary}/>}
+ {run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
    {!report && !run.source?.summary && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>
  <details className="market-shape-task-details" open={active(run)||run.steps.some(s=>s.current&&s.canRetry)}><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
   <p>本任务范围：{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p><p className="market-research-note">样本使用供应商返回的商品池，尚未核验为 BSR 前 {run.params.poolSize} 名。{run.sourcePolicy?'站点和月份按接口查询范围绑定；币种依据供应商站点定义，响应回显另行记录。':'来源未确认单位或周期的原值不参与可比统计。'}</p>
-  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
+  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{s.categoryMetric?categoryNames[s.categoryMetric]:stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
   {active(run) && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
   </details>
   {run.source && <>

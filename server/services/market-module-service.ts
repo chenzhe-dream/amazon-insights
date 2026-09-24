@@ -22,7 +22,7 @@ import {MarketOverviewReportService} from './market-overview-report-service';
 import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../domain/market-research/module-flow';
-import {MarketShapeStartRequestSchema,MARKET_SHAPE_HISTORY_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
+import {MarketShapeStartRequestSchema,MARKET_SHAPE_CATEGORY_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
 import {MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,assertMarketProductQueryWindow} from '../../shared/market-product-source-policy';
 import {PostgresMarketShapePriceRevisionStore} from '../db/postgres/market-shape-price-revision-store';
 import {readMarketShapeRun,marketShapePublicRevision} from './market-shape-read-service';
@@ -144,8 +144,8 @@ export class MarketModuleService {
     const previous=await replay();if(previous)return previous;
     const {study}=await this.findStudy(actor,studyId);
     assertMarketProductQueryWindow(study.scope,new Date(this.now()));
-    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_HISTORY_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_HISTORY_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
+    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_CATEGORY_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_CATEGORY_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketShapeFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {SHAPE_CATEGORY_METRICS} from '../../../shared/market-shape-category-contracts';
 import { MarketShapeStartRequestSchema } from '../../../shared/market-shape-price-contracts';
 export { MarketShapeStartRequestSchema } from '../../../shared/market-shape-price-contracts';
 import { MarketAnalysisScopeSchema } from '../../../shared/market-analysis-contracts';
@@ -8,8 +9,9 @@ import {MarketShapeCatalogVersionSchema} from '../../../shared/market-shape-stru
 export const MARKET_SHAPE_FLOW_VERSION = 'market-shape-price-flow/v1';
 export const MARKET_SHAPE_RULES_FLOW_VERSION = 'market-shape-price-flow/rules-v1';
 export const MARKET_SHAPE_HISTORY_FLOW_VERSION = 'market-shape-price-flow/rules-v2';
-export const isMarketShapeRulesFlow = (flow:unknown) => [MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION].includes(String(flow));
-export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION]) });
+export const MARKET_SHAPE_CATEGORY_FLOW_VERSION = 'market-shape-price-flow/rules-v3';
+export const isMarketShapeRulesFlow = (flow:unknown) => [MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(String(flow));
+export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION]) });
 export const MarketShapeSelectionSchema = z.object({ referenceAttemptId: z.string().uuid(), selectionInputSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/),
     sourceRef: z.string().regex(/^market-source:[a-f0-9]{64}$/), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(100), dataCutoffAt: z.string().datetime(),
     selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false) }).strict();
@@ -19,7 +21,7 @@ const success = (s: MarketExecutionStep) => s.status === 'succeeded' || s.status
 const key = (phase: string, basis: unknown) => `shape-flow/${phase}:${digest(basis)}`;
 export const isMarketShapeFlow = (run: {
     params: unknown;
-}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION].includes(String(obj(run.params).flow));
+}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(String(obj(run.params).flow));
 function params(r: Request) {
     const p = MarketShapeFlowParamsSchema.parse(r.params);
     MarketAnalysisScopeSchema.parse(r.scope);
@@ -74,6 +76,10 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
     const selection = MarketShapeSelectionSchema.parse(attempt(selectionStep).output);
     if (selection.referenceAttemptId !== a.id || selection.selectionInputSnapshotId !== obj(a.output).inputSnapshotId || selection.sourceRef !== obj(a.output).sourceRef || new Set(selection.selectedAsins).size !== selection.selectedAsins.length)
         throw new TypeError('Shape selection differs from anchor');
+    if (p.flow === MARKET_SHAPE_CATEGORY_FLOW_VERSION) for (const metric of SHAPE_CATEGORY_METRICS) {
+        const d: MarketStepDefinition={stepKey:key('category',{reference:a.id,metric}),kind:'collect-shape-category',subject:{flow:p.flow,metric},input:{metric,selectionInputSnapshotId:selection.selectionInputSnapshotId},inputRefs:[{kind:'input',id:selection.selectionInputSnapshotId}]};
+        if (!find(d)) children.push(d);
+    }
     if (!selection.selectedAsins.length)
         return result();
     for (let month = view.run.scope.fromMonth; month < view.run.scope.toMonth;) {
@@ -83,7 +89,7 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
         const [y, m] = month.split('-').map(Number);
         month = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
     }
-    if (p.flow === MARKET_SHAPE_HISTORY_FLOW_VERSION) for (const asin of selection.selectedAsins) {
+    if ([MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(p.flow)) for (const asin of selection.selectedAsins) {
         const d: MarketStepDefinition = { stepKey: key('product-history', { reference: a.id, asin }), kind: 'collect-product-history', subject: { flow: p.flow, asin }, input: { asin, selectionInputSnapshotId: selection.selectionInputSnapshotId }, inputRefs: [{ kind: 'input', id: selection.selectionInputSnapshotId }] };
         if (!find(d)) children.push(d);
     }
