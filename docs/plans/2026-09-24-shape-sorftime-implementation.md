@@ -33,6 +33,6 @@ Files: app/market-shape-section.tsx and product/report components; narrowly copy
 ### Task 4: Integrated acceptance
 - [x] Typecheck, required isolated DB tests, browser screenshots desktop/mobile, build, strictspec.
 - [x] Independent task/whole-change review, resolve blockers; verify formal concurrent work before release.
-- [ ] Real Sorftime category input and persisted source values; refresh no recapture, fault recovery,300capacity limitations explicit. Only then update OpenSpec checkboxes and release record.
+- [x] Real Sorftime category input and persisted source values; refresh no recapture, fault recovery,300capacity limitations explicit. Only then update OpenSpec checkboxes and release record.
 
-执行记录：前三项开发与本地集成验收已完成。真实来源10商品通过，300商品完整容量测试使用模拟上游；正式发布及业务终验未执行，因此Task4最后一项和OpenSpec4.1继续保留未完成。详细证据见同目录2026-09-24-shape-sorftime-delivery-review.md及OpenSpec verification.md。
+执行记录：已发布012e9eca，正式10商品38步骤完成；版本保存/刷新无重采，配置模型情况下的本地规则分发问题已复现并修复。300商品完整容量测试使用模拟上游；业务终验尚待用户，因此OpenSpec4.1继续保留未完成。详细证据见同目录2026-09-24-shape-sorftime-delivery-review.md及OpenSpec verification.md。
