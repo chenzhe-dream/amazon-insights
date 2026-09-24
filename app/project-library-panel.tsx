@@ -11,6 +11,7 @@ import type { AnalysisProjectFavorites } from "./use-analysis-project-favorites"
 import type { ModuleKey } from "../shared/module-visibility-contracts";
 import { ProjectExportButton } from "./project-export/project-export-button";
 import { ProjectExportDialog } from "./project-export/project-export-dialog";
+import type { ExportIdentity } from "./project-export/read-export-content";
 import {
   AMAZON_MAJOR_CATEGORIES,
   AMAZON_MAJOR_CATEGORY_IDS,
@@ -125,6 +126,7 @@ function persistAuthor(value: string) {
 type Props = {
   favorites?: AnalysisProjectFavorites;
   exportVisibleModules?: readonly ModuleKey[];
+  exportIdentity?: ExportIdentity;
   canDeleteProjects?: boolean;
   onProjectDeleted?: (id: string) => void;
   market: string;
@@ -149,6 +151,7 @@ type Props = {
 export function ProjectLibraryPage({
   favorites,
   exportVisibleModules,
+  exportIdentity,
   canDeleteProjects = false,
   onProjectDeleted,
   market,
@@ -435,7 +438,9 @@ export function ProjectLibraryPage({
 
   return (
     <div className="project-library-page">
-      {exportProject ? <ProjectExportDialog project={exportProject} visibleModules={exportVisibleModules}
+      {exportProject && favorites?.ready && favorites.projectIds.includes(exportProject.id) ? <ProjectExportDialog
+        key={JSON.stringify([exportProject.id, exportIdentity?.sessionIdentity, exportVisibleModules])}
+        project={exportProject} visibleModules={exportVisibleModules} identity={exportIdentity}
         onClose={() => {
           const triggerId = `${exportId}-${exportProject.id}`;
           setExportProject(null);

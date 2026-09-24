@@ -1,56 +1,87 @@
 ## Purpose
 
-为已收藏项目提供可选择模块的悬浮导出预览与独立 HTML 报告，固定业务分享时的内容，避免多人继续编辑影响已导出的文件。按用户要求先落地前端，再接入完整后端结果，两个阶段分别验收。
+为已收藏项目提供模块可选的悬浮预览和 HTML 快照下载，把当时已有报告的文字、表格、结论与样式保存在文件，避免线上继续编辑影响已分享内容。图片允许在线读取，不要求断网可用；复用已有结果，不重新分析，不建设导出任务与文件管理。
 
 ## ADDED Requirements
 
 ### Requirement: Favorite-gated export entry
-The system SHALL show the export entry only for an analysis project with a successfully loaded favorite marker. Existing load, edit and unfavorite actions SHALL retain their behavior.
+The system SHALL offer export only for favorited analysis projects with known eligibility and current read access. Load, edit and unfavorite SHALL retain existing behavior. A known session, scope or eligibility change SHALL invalidate pending export.
 
-#### Scenario: Not favorited or favorite status unknown
-- **WHEN** a project is not favorited or favorites are still loading
-- **THEN** no enabled export entry is offered
+#### Scenario: Unknown or absent favorite
+- **WHEN** favorite status is unknown or the project is not favorited
+- **THEN** export is not enabled
 
-#### Scenario: Favorite is removed
-- **WHEN** a previously favorited project is unfavorited
-- **THEN** its export entry and any associated preview close without deleting the project
+#### Scenario: Eligibility revoked
+- **WHEN** the application learns of logout, removed favorite or revoked read access
+- **THEN** it clears pending export and prevents confirmation without deleting the project
 
 ### Requirement: Floating module selection preview
-The system SHALL open a modal overlay on the existing list. It SHALL show project metadata, permitted module choices, a preview area, selected count, cancel and confirmation controls. Keyboard focus and background scrolling SHALL remain scoped to the modal and return on close. The list query and scroll position SHALL be preserved.
+The system SHALL keep permitted module selection and full preview in a modal on the existing list. It SHALL preserve list search, pagination and scroll position, constrain keyboard focus, support Escape/cancel, and restore focus on close. A list refresh SHALL NOT dismiss the modal.
 
-#### Scenario: Select and close
-- **WHEN** a user opens the preview, changes module choices and presses Escape or cancel
-- **THEN** the choices update the preview and closing returns to the same list without navigation, analysis or download
+#### Scenario: Change selection
+- **WHEN** selection changes
+- **THEN** preview includes only selected permitted modules and confirmation waits until preparation completes
 
-#### Scenario: Hidden module
-- **WHEN** module visibility excludes VOC
-- **THEN** VOC is absent from both selection and preview
+#### Scenario: No selection
+- **WHEN** all modules are deselected
+- **THEN** the system explains that one module is required and prevents download
 
-### Requirement: Honest frontend-only phase
-Until the backend is connected, the frontend SHALL show real project metadata and selectable export scope only, explicitly label report content as unavailable, and disable final export. It MUST NOT fabricate report values, readiness, snapshot timestamps, progress or download success.
+### Requirement: Honest frontend-only transition
+Until real report preparation is connected, the system SHALL label contents as unavailable and disable final download. It MUST NOT fabricate report results, readiness or download success.
 
-#### Scenario: Backend not integrated
-- **WHEN** a user selects any number of modules in phase one
-- **THEN** confirmation stays disabled with a visible explanation, and no export API or provider request is sent
+#### Scenario: UI only
+- **WHEN** no real report reader is connected
+- **THEN** real project metadata and intended scope remain visible with an unavailable message and no fake export
 
-### Requirement: Immutable complete report in backend phase
-In phase two the system SHALL bind preview and HTML to the same authorized snapshot and template version. It SHALL include all selected module records, ASINs, pages, charts and expandable details; unselected modules SHALL be absent even from the file source. Missing data SHALL remain missing.
+### Requirement: Complete scoped existing results
+The system SHALL read existing results bound to the selected project, marketplace, ASIN set and applicable run or report references. It SHALL include all available selected records, pages and collapsed details, preserving existing analysis rules and missing-value semantics. It MUST NOT trigger collection, model analysis, normalization or repair jobs.
 
-#### Scenario: Online data changes after preview
-- **WHEN** another user updates the project after a preview is fixed
-- **THEN** export retains the confirmed version rather than replacing it with live results
+#### Scenario: Same ASIN across projects
+- **WHEN** multiple projects contain the same ASIN
+- **THEN** export follows the selected project's bindings rather than substituting another project's data solely by ASIN
 
-#### Scenario: Incomplete or restricted module
-- **WHEN** a module is incomplete or cannot be accessed by the current user
-- **THEN** the backend rejects its export and no fabricated or unrelated older result replaces it
+#### Scenario: Pagination and incomplete sources
+- **WHEN** a selected module has multiple pages, missing values or an upstream Top N limit
+- **THEN** all existing rows and details are included, missing is not zero and source limitations remain explicit
 
-### Requirement: Authorized offline HTML generation in backend phase
-In phase two the system SHALL recheck organization, project, module and favorite eligibility on generation and download, use existing analysis results without rerunning providers, and package content and approved images for offline viewing. Failed selected modules or images SHALL not be silently omitted.
+#### Scenario: No generated result
+- **WHEN** a selected module has no existing result
+- **THEN** preview and HTML explicitly show that status without creating new analysis
 
-#### Scenario: Favorite or permission is revoked
-- **WHEN** eligibility is revoked before confirmation or an authenticated download
-- **THEN** the operation is rejected with a clear message
+#### Scenario: Read failure
+- **WHEN** an existing result fails to load or has mismatched provenance
+- **THEN** confirmation is blocked until a successful retry or explicit deselection of that module
 
-#### Scenario: Offline use
-- **WHEN** a successfully generated complete HTML report is opened without network access
-- **THEN** selected text, tables, charts and embedded images remain readable, with local detail expansion
+#### Scenario: Unsaved checklist entries
+- **WHEN** checklist edits only existed in an unmounted page's component state
+- **THEN** export does not pretend to recover them and preview explicitly identifies those unsaved entries as excluded
+
+### Requirement: Frozen identical preview and HTML
+The system SHALL prepare a fixed report in browser memory and preview the same HTML that will be downloaded. Online updates after preparation SHALL NOT replace its content. Selection changes SHALL require an updated preview. Unselected content SHALL be absent from the file, including hidden markup and serialized payloads.
+
+#### Scenario: Online edit after preview
+- **WHEN** another user updates the project after preparation
+- **THEN** download retains the previewed text and data without refetching replacement content
+
+#### Scenario: Remove VOC from selection
+- **WHEN** VOC is deselected
+- **THEN** the next preview and file contain no VOC section or hidden VOC payload
+
+### Requirement: Browser HTML download with online images
+The system SHALL download one UTF-8 HTML file directly from the browser, containing report text, tables, static charts and required styles. Images SHALL use shareable absolute online URLs without dependence on local host or the exporting user's session. Opening the report SHALL NOT fetch live analysis results. Server export queues, stored export artifacts, expiration and offline image packaging are outside this capability.
+
+#### Scenario: Open on another computer
+- **WHEN** a recipient opens the downloaded file with network access
+- **THEN** the fixed report is readable without application login, and images use online source URLs
+
+#### Scenario: Unavailable image
+- **WHEN** an online image later fails or lacks a shareable URL
+- **THEN** descriptive text remains and the fixed report stays readable without claiming the image was preserved
+
+#### Scenario: Unsafe imported text
+- **WHEN** titles, reviews or remarks contain executable HTML or unsafe links
+- **THEN** content is safely rendered and cannot execute injected code or include session credentials
+
+#### Scenario: Download confirmation
+- **WHEN** the user confirms an eligible prepared report
+- **THEN** the browser initiates a file download using the preview HTML and does not require a server-side export job or stored file

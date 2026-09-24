@@ -23,6 +23,7 @@
 .previewSection p { margin: 6px 0; color: #657b9a; font-size: 12px; }
 .pending { display: inline-block; background: #ecf0f7; color: #657b9a; padding: 2px 7px; border-radius: 4px; font-size: 11px; }
 .empty { margin: 18px 0 0; }
+.reportFrame { width: 100%; min-height: 55dvh; height: 680px; border: 0; background: #fff; }
 .footer { display: flex; flex: none; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 22px; border-top: 1px solid #e2e8f3; background: #fff; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .secondary, .primary { padding: 9px 14px; border: 1px solid #d5dff0; border-radius: 7px; font: inherit; background: #fff; color: #293e5c; cursor: pointer; }
