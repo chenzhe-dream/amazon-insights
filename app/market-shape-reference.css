@@ -17,6 +17,9 @@
 .market-shape-reference .market-shape-query-footer details { margin: 0; }
 .market-shape-reference .market-shape-query-footer details[open] { flex-basis: 100%; }
 .market-shape-reference .market-shape-query-footer .ghost-btn { padding: 5px 9px; font-size: 12px; }
+.market-shape-reference .market-shape-table-options { margin: 0 0 12px; font-size: 12px; color: #60708a; }
+.market-shape-reference .market-shape-table-options summary { cursor: pointer; }
+.market-shape-reference .market-shape-table-options[open] .top-sales-shape-bulk-bar { margin-top: 10px; }
 .market-shape-reference .market-shape-revision-controls { padding: 14px 18px; }
 .market-shape-reference .market-shape-revision-controls h3 { margin: 0 0 8px; font-size: 14px; }
 .market-shape-reference .market-shape-task-details { font-size: 12px; margin: 0; }

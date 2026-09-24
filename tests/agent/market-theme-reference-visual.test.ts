@@ -7,6 +7,9 @@ import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { themeDetails,themeEntry,themeRun,themeRunId,themeScope } from './helpers/market-theme-page-fixture';
+import { aggregateCustomerThemes } from '../../server/domain/market-research/customer-themes';
+import { deriveThemeSelection,projectThemeSample } from '../../server/domain/market-research/customer-theme-selection';
+import { MarketThemeSelectionResponseSchema } from '../../shared/market-theme-selection-contracts';
 
 // Purely synthetic reference comparison. No provider/model traffic or production inputs.
 test('compare supplied Customers Say frontend with governed candidate at identical viewports',{timeout:120000},async t=>{
@@ -21,6 +24,14 @@ test('compare supplied Customers Say frontend with governed candidate at identic
  const makeAsin=(asin:string,ready:boolean)=>({asin,title:ready?'合成商品标题 A':'合成商品标题 B',rank:ready?1:2,customerSay:ready?'合成商品总览摘要':null,status:ready?'ready':'error',statusMessage:ready?undefined:'synthetic timeout',details:ready?[{keyword:'新版装配主题',content:'合成原文预览',mention:2,positive:1,negative:0},{keyword:'第二组亮度',content:'合成原文预览',mention:2,positive:1,negative:0}]:[]});
  const topics=['新版装配主题','第二组亮度'].map(keyword=>({keyword,label:keyword,mention:2,sharePct:50,positive:1,negative:0,sentiment:'positive',snippets:['合成原文预览'],asinCount:1,topAsins:[{asin:'B0THEME001',mention:2}]}));
  const originalReport={marketplace:'US',nodeId:themeScope.nodeIdPath,categoryName:themeScope.nodeIdPath,topN:20,fetchedAt:themeEntry().report.dataCutoffAt,source:'synthetic/v1',note:'合成对照数据：选中 2 个 ASIN，1 个取得主题，1 个采集失败；主题提及总数 4。',asins:[makeAsin('B0THEME001',true),makeAsin('B0THEME002',false)],totalMentions:4,topics,positiveTopics:topics,negativeTopics:[]};
+ const base=themeEntry(),ids=base.report.selectedAsins;
+ const aggregation=aggregateCustomerThemes({selectedAsins:ids,mappings:[],results:[
+  {asin:ids[0],status:'success',source:{sourceRecordId:'synthetic-record-1',fetchedAt:base.report.dataCutoffAt,sourceUpdatedAt:null},themes:topics.map((topic,index)=>({sourceThemeId:`synthetic-theme-${index+1}`,keyword:topic.keyword,content:'合成原文预览',mention:2,positive:1,negative:0}))},
+  {asin:ids[1],status:'failed',source:null,reason:'synthetic timeout'},
+ ]});
+ const baseline=deriveThemeSelection({aggregation,labels:[],decisions:topics.map((_,index)=>({sourceThemeId:`synthetic-theme-${index+1}`,status:'unknown' as const,groupId:null,reason:'unconfirmed',batchId:null}))},[],false);
+ const samples=ids.map((asin,index)=>projectThemeSample({asin,sourceIndex:index,product:{asin,title:index?'合成商品标题 B':'合成商品标题 A',sourceRank:index+1},productSource:{ref:`market-source:${'a'.repeat(64)}`,snapshotId:`market-input:${'b'.repeat(64)}`,payload:{data:ids.map((id,i)=>({asin:id,title:i?'合成商品标题 B':'合成商品标题 A',ranking:i+1}))}}}));
+ const selection=MarketThemeSelectionResponseSchema.parse({version:'market-theme-selection-view/v1',base,samples,baseline,latestRevisionId:null,revision:null,history:[]});
  const errors:string[]=[],external:string[]=[],requests:Array<{side:string;method:string;path:string}>=[];const metrics:Record<string,unknown>={};
  for(const side of ['reference','candidate']){
   const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(`${side}: ${e.message}`));
@@ -29,12 +40,14 @@ test('compare supplied Customers Say frontend with governed candidate at identic
    if(!url.pathname.startsWith('/api/'))return route.continue();requests.push({side,method:req.method(),path:url.pathname});
    if(side==='reference'&&url.pathname==='/api/sorftime-category-customers-say')return route.fulfill({json:{report:originalReport,fromCache:false}});
    if(side==='candidate'&&url.pathname.endsWith(`/runs/${themeRunId}`))return route.fulfill({json:themeRun()});
+   if(side==='candidate'&&url.pathname.includes('/theme-selection'))return route.fulfill({json:selection});
    if(side==='candidate'&&url.pathname.endsWith('/details')){const value=themeDetails(url);if(value.page.section==='asins'){value.page.items.unshift({kind:'asin',asin:'B0THEME001',status:'success',reason:null,sourceRecordId:'synthetic-record-1',fetchedAt:themeEntry().report.dataCutoffAt,totals:{mention:4,positive:2,negative:0,themeCount:2},memberCount:2});value.page.totalItems=2;}return route.fulfill({json:value});}
    return route.fulfill({status:404,json:{error:'Synthetic route unavailable'}});
   });
   await page.goto(`${origin}/${side}.html${side==='candidate'?`?themeRun=${themeRunId}`:''}`,{timeout:45000});
   if(side==='reference'){await page.getByLabel('亚马逊类目').fill(themeScope.nodeIdPath);await page.getByRole('button',{name:'拉取见解',exact:true}).click();}else await page.getByLabel('类目路径').fill(themeScope.nodeIdPath);
   await page.locator('.category-cs-table').getByText('新版装配主题',{exact:true}).waitFor();await page.locator('.category-cs-table').getByText('合成原文预览',{exact:false}).first().waitFor();await page.locator('.category-cs-asin-table').getByRole('link',{name:'B0THEME001'}).waitFor();
+  if(side==='candidate'){await page.getByText('合成商品标题 A',{exact:true}).waitFor();assert.equal(await page.getByText('Synthetic route unavailable',{exact:false}).count(),0);}
   assert.match(await page.locator('.category-cs-table').innerText(),/50.0%/);assert.equal(await page.locator('.ss-market-query-row').first().evaluate(e=>getComputedStyle(e).display),'grid');await page.mouse.move(0,0);
   metrics[side+'-desktop']=await page.evaluate(()=>[...document.querySelectorAll('.ss-market-query,.launch-block')].map(e=>({class:e.className,top:e.getBoundingClientRect().top,height:e.getBoundingClientRect().height,width:e.getBoundingClientRect().width})));
   if(side==='candidate')assert.ok((await page.locator('.ss-market-query').boundingBox())!.height<=230,'Theme query should stay compact above the saved report');

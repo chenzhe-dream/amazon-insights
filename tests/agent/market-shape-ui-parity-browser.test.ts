@@ -41,6 +41,10 @@ test('supplied shape table filters and sorts real rows while preserving drafts a
  await page.getByLabel('筛选品牌',{exact:true}).selectOption('');
  await table.getByRole('button',{name:/^销量原值/}).click();
  assert.match(await table.locator('tbody tr').first().innerText(),/B000000001/);
+ const advanced=page.locator('details.market-shape-table-options');
+ assert.equal(await advanced.getAttribute('open'),null,'bulk editing and column controls stay compact above the table');
+ assert.equal(await page.getByLabel('批量形态',{exact:true}).isVisible(),false);
+ await advanced.locator('summary').click();
  await page.getByLabel('批量形态',{exact:true}).selectOption('shelf');
  await page.getByRole('button',{name:'应用到所选',exact:true}).click();
  assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),'shelf');

@@ -81,11 +81,13 @@ test('manual exclusion and shape regrouping recompute structure from selected ro
     assert.equal(shelf.brands.find(b => b.brand === 'Fixture')!.stats.salesShare.value, 200 / 220);
     assert.equal(digest(first), before);
 });
-test('legacy catalog remains byte-identical and rejects unsupported rule versions', async () => {
+test('legacy catalog stays deterministic for the current normalized source and rejects unsupported rule versions', async () => {
     const reference = await observation('2026-08'), history = await observation('2026-07');
     const input = { reference, history: [history], sources: sources(reference, history), revision: revision(reference), bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }], dataCutoffAt: cutoff };
     const c = await buildMarketShapePriceCatalog(input);
-    assert.equal(digest(c), 'da41ed429bff6314b50dc0cfb6253e2587e3bd37335b631863ef7a89d9b31f0f');
+    // The source fixture now records selectedSize and distinct provider-return
+    // coverage, so its sourceRef and derived catalog identity changed together.
+    assert.equal(digest(c), '1db475b0bea6be31fdd84e00486095f694d63d195dff17ad720fe79ec2725102');
     assert.equal(Object.hasOwn(c, 'structure'), false);
     await assert.rejects(buildMarketShapePriceCatalog({ ...input, version: 'made-up' as any }));
 });

@@ -34,13 +34,16 @@ for(const mode of ['shape','keyword'] as const){
   assert.deepEqual(await columnIds(table,'thead th'),before);await handle.press('ArrowLeft');assert.deepEqual(await columnIds(table,'thead th'),before,'identity columns cannot be displaced');
   await handle.press('ArrowRight');assert.notDeepEqual(await columnIds(table,'thead th'),before);
   if(mode==='keyword')await page.getByText('调整表格列顺序',{exact:true}).click();
+  else await page.locator('details.market-shape-table-options > summary').click();
   await page.getByRole('button',{name:mode==='shape'?'重置商品列顺序':'重置关键词列顺序',exact:true}).click();
   assert.deepEqual(await columnIds(table,'thead th'),before);assert.deepEqual(await table.locator('tbody tr').allTextContents(),beforeRows);
   if(mode==='shape')assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),'shelf');
   await page.setViewportSize({width:390,height:844});
   const geometry=await region.evaluate(el=>{el.scrollLeft=250;return {scroll:el.scrollLeft,document:document.documentElement.scrollWidth,viewport:innerWidth};});
   assert.ok(geometry.scroll>0);assert.ok(geometry.document<=geometry.viewport+1,JSON.stringify(geometry));
-  const sticky=await table.locator('tbody tr:first-child > *').nth(mode==='shape'?1:0).evaluate(el=>({left:el.getBoundingClientRect().left,position:getComputedStyle(el).position}));assert.equal(sticky.position,'sticky');assert.ok(sticky.left>=0&&sticky.left<100);
+  const sticky=await table.locator('tbody tr:first-child > *').nth(mode==='shape'?1:0).evaluate(el=>({left:el.getBoundingClientRect().left,position:getComputedStyle(el).position}));
+  if(mode==='shape')assert.equal(sticky.position,'static','the supplied shape layout releases the product column on a phone so all columns remain reachable');
+  else {assert.equal(sticky.position,'sticky');assert.ok(sticky.left>=0&&sticky.left<100);}
   const headerLayers=await table.locator('thead th').evaluateAll(nodes=>nodes.map(node=>Number(getComputedStyle(node).zIndex)||0));assert.ok(headerLayers[0]>Math.max(...headerLayers.slice(fixed)),'fixed headers remain above horizontally scrolling headers');
   assert.equal(writes,0);assert.deepEqual(errors,[]);
  });

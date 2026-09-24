@@ -117,7 +117,7 @@ test('shape page requires human confirmation, saves a numeric version and reopen
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
     await policy.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-shape-page/source-policy-mobile.png'});
     await page.getByLabel('起始月',{exact:true}).fill('2020-01');
-    await page.getByRole('button',{name:'采集商品并生成形态建议'}).click();
+    await page.getByRole('button',{name:'采集商品并生成规则统计'}).click();
     await page.getByRole('alert').filter({hasText:'24'}).waitFor();
     assert.equal(writes.length,1,'unsupported month is rejected before any study or source write');
     assert.deepEqual(errors, []);
