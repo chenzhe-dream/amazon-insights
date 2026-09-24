@@ -13,6 +13,13 @@ export function themeEntry(old=false){return MarketThemeReportEntrySchema.parse(
 export function themeRun(running=false){return MarketThemeRunResponseSchema.parse({run:{id:themeRunId,scope:themeScope,status:running?'running':'partial',createdAt:'2026-09-12T05:00:00.000Z',planRevision:2,params:{memberCount:3,poolSize:100,newProductMonths:6},
   steps:[{id:'60000000-0000-4000-8000-000000000006',kind:'collect-customer-themes',status:running?'running':'failed',latestAttemptId:'60000000-0000-4000-8000-000000000007',attemptCount:1,current:true,canRetry:!running,asin:'B0THEME002',errorCode:running?null:'timeout'}],
   currentReport:running?null:themeEntry(),latestSavedReport:running?themeEntry(true):themeEntry(),history:running?[themeEntry(true)]:[themeEntry(),themeEntry(true)]}});}
+export function themeRuleEntry(){
+ const entry=themeEntry();entry.report.reportVersion='market-theme-report/v3';entry.report.versions={...entry.report.versions,planner:'market-theme-flow/rules-v2',model:null,prompt:null,configuration:null};
+ entry.report.status='complete';entry.report.ruleStatus='complete';entry.report.semanticStatus='skipped';entry.report.reasons=[];entry.report.semanticsReady=false;
+ Object.assign(entry.report.counts,{requestedCount:2,selectedCount:2,successfulCount:2,emptyCount:0,failedCount:0,missingCount:0,expectedMemberCount:2,validatedMemberCount:0,mappedMemberCount:0,unknownCount:0,unavailableCount:2,reconciliationRequired:false});
+ return MarketThemeReportEntrySchema.parse(entry);
+}
+export function themeRuleRun(){const value=themeRun();value.run.status='succeeded';value.run.steps=[];value.run.currentReport=themeRuleEntry();value.run.latestSavedReport=themeRuleEntry();value.run.history=[themeRuleEntry()];return MarketThemeRunResponseSchema.parse(value);}
 export function themeDetails(url:URL) {
   const old=url.pathname.includes(themeEntry(true).attemptId),entry=themeEntry(old),section=url.searchParams.get('section')??'groups',offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??20);
   const groupIndex=url.searchParams.has('groupIndex')?Number(url.searchParams.get('groupIndex')):null,denom=old?2:4;

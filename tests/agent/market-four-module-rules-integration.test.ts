@@ -7,6 +7,7 @@ import { loadVocPositioningRuntimeConfig } from '../../server/config';
 import { runPostgresMigrations } from '../../server/db/postgres/migrations';
 import { PostgresQueryContext } from '../../server/db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../../server/db/postgres/market-module-execution-store';
+import { MarketThemeSelectionStore } from '../../server/db/postgres/market-theme-selection-store';
 import { MarketModuleService } from '../../server/services/market-module-service';
 import { createMarketModelRuntime } from '../../server/runtime/market-model-runtime';
 import { startPostgresTestContainer } from './helpers/postgres-test-container';
@@ -47,7 +48,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
     [overview.run.id, 'market-overview-flow/rules-v2'],
     [shapes.run.id, 'market-shape-price-flow/rules-v1'],
     [keywords.run.id, 'market-keyword-flow/rules-v1'],
-    [themes.run.id, 'market-theme-flow/rules-v1'],
+    [themes.run.id, 'market-theme-flow/rules-v2'],
   ]);
   for (const id of started) {
     const view = await store.findModuleRun({ actor, moduleRunId: id });
@@ -114,4 +115,24 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   assert.equal(latestProducts?.distribution?.rows.length,100);
   assert.equal(overviewDetails.numbers.distributions?.find(row=>row.operation==='market_product_concentration'&&row.month==='2026-07')?.status,'not-collected');
   assert.ok(Buffer.byteLength(JSON.stringify(overviewDetails))<8*1_048_576);
+  const themeRun = await service.findRun(actor, themes.run.id);
+  assert.equal(themeRun.run.status, 'succeeded');
+  assert.ok(themeRun.run.currentReport, 'the rules-only theme run publishes a current report');
+  assert.equal(themeRun.run.currentReport.report.reportVersion, 'market-theme-report/v3');
+  assert.equal(themeRun.run.currentReport.report.semanticStatus, 'skipped');
+  assert.equal(themeRun.run.currentReport.report.ruleStatus, 'complete');
+  assert.equal(themeRun.run.currentReport.report.status, 'complete');
+  assert.equal(themeRun.run.currentReport.report.reasons.includes('model-results-missing'), false);
+  const themeDetails = await service.details(actor, themes.run.id, themeRun.run.currentReport.attemptId, { section: 'groups', offset: 0, limit: 20 });
+  assert.ok(themeDetails.page.items.some(item => item.kind === 'group' && item.sourceLabel?.text === 'easy assembly'));
+  const selectionStore = new MarketThemeSelectionStore(context);
+  const identity = { actor, moduleRunId: themes.run.id, attemptId: themeRun.run.currentReport.attemptId };
+  const selection = await selectionStore.read(identity);
+  assert.ok(selection);
+  assert.equal(selection.baseline.status, 'complete');
+  const callsBeforeRevision = sourceCalls;
+  const revision = await selectionStore.save({ ...identity, request: { baseReportHash: themeRun.run.currentReport.report.reportHash, expectedParentRevisionId: null, excludedAsins: [selection.baseline.selectedAsins[0]] }, idempotencyKey: randomUUID() });
+  assert.equal(revision.view.revision?.result.status, 'no-data');
+  assert.equal(sourceCalls, callsBeforeRevision);
+  assert.equal(modelCalls, 0);
 });

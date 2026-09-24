@@ -24,7 +24,7 @@ test('all market module starts replay frozen commands before current model or da
  const expectedFlows={
   'shape-price':'market-shape-price-flow/rules-v1',
   keywords:'market-keyword-flow/rules-v1',
-  'customer-themes':'market-theme-flow/rules-v1',
+  'customer-themes':'market-theme-flow/rules-v2',
  } as const;
  for(const c of cases)await t.test(c.name,async()=>{
   const key=randomUUID(),original=await service[c.method](actor,study.study.id,c.params,key);

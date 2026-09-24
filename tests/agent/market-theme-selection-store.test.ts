@@ -15,6 +15,9 @@ import { createMarketSourceProjectionStep } from '../../server/runtime/market-so
 import { createMarketThemeRulesStep } from '../../server/runtime/market-theme-rules-step';
 import { createMarketThemeReportStep } from '../../server/runtime/market-theme-report-step';
 import { MarketThemeSelectionStore } from '../../server/db/postgres/market-theme-selection-store';
+import { loadThemeSelectionFacts, restoreThemeSelectionFacts } from '../../server/services/market-theme-selection-facts';
+import { deriveThemeSelection } from '../../server/domain/market-research/customer-theme-selection';
+import { canonicalJsonSha256 as digest } from '../../server/runtime/model-request-accounting';
 import type { RemoteMcpConnector } from '../../server/connectors/connector-contract';
 
 test('immutable selection revisions isolate actors, replay commands and never create paid work',{timeout:90000},async t=>{
@@ -56,5 +59,25 @@ test('immutable selection revisions isolate actors, replay commands and never cr
   assert.equal((await proxy('POST','',{...payload,authorId:randomUUID()})).status,400);
   principal={...principal!,organizationId:randomUUID()};assert.equal((await proxy('GET')).status,404);
   assert.equal(calls,sourceCalls);assert.deepEqual(await counts(),countBefore);assert.equal(JSON.stringify(await service.findRun(f.actor,started.run.id)),before);
+ });
+ await t.test('previous rules-only selection revisions remain readable with their frozen v1 status',async()=>{
+  const previous=await store.read(identity);assert.ok(previous);
+  const facts=await loadThemeSelectionFacts(f.context,identity);assert.ok(facts);
+  const restored=restoreThemeSelectionFacts(facts).restored;
+  const request={baseReportHash:base.report.reportHash,expectedParentRevisionId:previous.latestRevisionId,excludedAsins:['B000000002'],note:''};
+  const result=deriveThemeSelection(restored,request.excludedAsins,false,false,false);
+  assert.equal(result.status,'partial');
+  const createdAt=new Date().toISOString(),body={parentRevisionId:previous.latestRevisionId,ordinal:previous.history.length+1,authorId:f.actor.userId,createdAt,
+   baseReportAttemptId:base.attemptId,baseReportHash:request.baseReportHash,note:'',result,resultHash:digest(result)};
+  const revisionId=`market-theme-selection-revision:${digest({version:'market-theme-selection-revision/v1',factsHash:digest(facts),...body})}`;
+  await pg.pool.query(`INSERT INTO market_theme_selection_revisions(organization_id,study_id,run_id,base_attempt_id,revision_id,parent_revision_id,ordinal,stored_by,stored_at,idempotency_key,request_json,request_hash,facts_json,facts_hash,revision_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14,$15::jsonb)`,
+   [f.actor.organizationId,f.scope.researchId,identity.moduleRunId,identity.attemptId,revisionId,body.parentRevisionId,body.ordinal,f.actor.userId,createdAt,randomUUID(),JSON.stringify(request),
+    digest({actor:f.actor,moduleRunId:identity.moduleRunId,attemptId:identity.attemptId,request}),JSON.stringify(facts),digest(facts),JSON.stringify({...body,revisionId})]);
+  const reread=await store.read(identity);
+  assert.equal(reread?.baseline.status,'complete');
+  assert.equal(reread?.revision?.result.status,'partial');
+  const next=await store.save({...identity,idempotencyKey:randomUUID(),request:{...request,expectedParentRevisionId:revisionId,excludedAsins:[]}});
+  assert.equal(next.view.revision?.result.status,'complete');
+  assert.equal((await store.read({...identity,revisionId}))?.revision?.result.status,'partial');
  });
 });

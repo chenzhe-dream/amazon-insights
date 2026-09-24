@@ -3,8 +3,12 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MarketThemeSection } from '../../app/market-theme-section';
+import { themeRunLabel } from '../../app/market-theme-section';
+import { MarketThemeReport } from '../../app/market-theme-report';
+import { ThemeEvidenceContent } from '../../app/market-theme-evidence';
+import { themePresentationStatus } from '../../app/market-theme-insight-panel';
 import { MarketThemeTopicTable, MarketThemeSampleTable, selectThemeSentiment } from '../../app/market-theme-insight-panel';
-import { themeDetails, themeEntry } from './helpers/market-theme-page-fixture';
+import { themeDetails, themeEntry, themeEvidence, themeRuleEntry, themeRuleRun } from './helpers/market-theme-page-fixture';
 
 const details=(section:string)=>themeDetails(new URL(`https://test.invalid/reports/${themeEntry().attemptId}/details?section=${section}`));
 test('theme query keeps reference site chips and category search composition without enabling unsupported sites',()=>{
@@ -45,4 +49,29 @@ test('theme topic and sample product links retain the saved UK and JP marketplac
   assert.ok(sample.includes(`https://www.${domain}/dp/B0THEME002`));
   assert.ok(!`${topic}${sample}`.includes('www.amazon.com/'));
  }
+});
+
+test('rules-only theme report presents source facts as complete without claiming model analysis',()=>{
+ const entry=themeRuleEntry();
+ const html=renderToStaticMarkup(<MarketThemeReport entry={entry}/>);
+ assert.equal(themeRunLabel(themeRuleRun().run),'规则报告已保存');
+ assert.match(html,/规则数据已完整/);
+ assert.match(html,/原主题条目/);
+ assert.match(html,/语义归组未启用/);
+ assert.doesNotMatch(html,/已校验的模型成员|模型结果不可用|部分主题的模型分析未完成/);
+ const evidence=themeEvidence(new URL(`https://test.invalid/reports/${entry.attemptId}/evidence`)).evidence;
+ evidence.analysis=null;
+ const detail=renderToStaticMarkup(<ThemeEvidenceContent value={evidence} semanticSkipped/>);
+ assert.match(detail,/此任务未启用语义归组/);
+ assert.doesNotMatch(detail,/已保存的模型分析|模型结果不可用/);
+});
+
+test('old rules-only revisions display saved source coverage while retaining their frozen v1 payload',()=>{
+ const prior={status:'partial' as const,selectedAsins:['B0THEME001','B0THEME002'],baseSelectionShortfall:false,asins:[{status:'success' as const},{status:'success' as const}]};
+ assert.equal(themePresentationStatus(themeRuleEntry(),prior),'complete');
+ assert.equal(themePresentationStatus(themeEntry(),prior),'partial');
+ assert.equal(themePresentationStatus(themeRuleEntry(),{...prior,asins:[prior.asins[0],{status:'failed'}]}),'partial');
+ const old=themeRuleRun().run,oldEntry=themeRuleEntry();oldEntry.report.reportVersion='market-theme-report/v1';oldEntry.report.versions.planner='market-theme-flow/rules-v1';oldEntry.report.status='partial';oldEntry.report.reasons=['model-results-missing'];
+ old.currentReport=oldEntry;
+ assert.equal(themeRunLabel(old),'规则报告已保存');
 });

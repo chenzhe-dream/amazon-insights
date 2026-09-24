@@ -10,7 +10,8 @@ export const MARKET_THEME_FLOW_VERSION = 'market-theme-flow/v1';
 // Old runs retain v1; new runs opt into the versioned reconciliation journal.
 export const MARKET_THEME_RECONCILED_FLOW_VERSION = 'market-theme-flow/v2';
 export const MARKET_THEME_RULES_FLOW_VERSION = 'market-theme-flow/rules-v1';
-export const MarketThemeFlowParamsSchema = z.object({ flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION]), memberCount: z.number().int().min(1).max(20),
+export const MARKET_THEME_RULES_FLOW_V2 = 'market-theme-flow/rules-v2';
+export const MarketThemeFlowParamsSchema = z.object({ flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2]), memberCount: z.number().int().min(1).max(20),
   poolSize: z.number().int().min(1).max(100), newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
   catalog: MarketThemePoolCatalogSchema, topN: z.number().int().min(0).max(2000).optional() }).strict().refine(p => p.poolSize >= p.memberCount);
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -23,13 +24,13 @@ type Request = Pick<CreateMarketModuleRunInput, 'scope' | 'moduleKind' | 'params
 
 function params(request: Request) {
   const p = MarketThemeFlowParamsSchema.parse(request.params);
-  const rulesOnly = p.flow === MARKET_THEME_RULES_FLOW_VERSION;
+  const rulesOnly = p.flow === MARKET_THEME_RULES_FLOW_VERSION || p.flow === MARKET_THEME_RULES_FLOW_V2;
   if (request.moduleKind !== 'customer-themes' || request.versions.source !== MARKET_SOURCE_HANDLER_VERSION || request.versions.planner !== p.flow ||
     request.versions.rule !== MARKET_THEME_MAPPING_RULE_VERSION || request.versions.mapping !== p.catalog.mappingVersion ||
     (rulesOnly ? request.versions.model !== null || request.versions.configuration !== null || request.versions.prompt !== null : request.versions.model !== 'market.semantic.text.v1' || !request.versions.configuration || !request.versions.prompt)) throw new TypeError('Theme flow versions differ');
   return p;
 }
-export function isMarketThemeFlow(request: { params: unknown }) { return [MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION].includes(String(obj(request.params).flow)); }
+export function isMarketThemeFlow(request: { params: unknown }) { return [MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2].includes(String(obj(request.params).flow)); }
 export function marketThemeFlowInitialSteps(request: Request): MarketStepDefinition[] {
   const p = params(request);
   return [{ stepKey: 'theme-flow/anchor', kind: 'collect-product-month', subject: { flow: p.flow }, input: { month: request.scope.toMonth,
@@ -85,7 +86,7 @@ export function inspectMarketThemeContinuation(view: MarketModuleRunView, now: s
   const poolAttempt = attempt(poolStep), pool = obj(poolAttempt.output), semanticInputSnapshotId = inputId.parse(pool.semanticInputSnapshotId);
   let preparationAttemptId: string | null = null, preparationReceiptId: string | null = null;
   let modelSteps: MarketExecutionStep[] = [];
-  if (pool.semanticStatus !== 'no-input' && p.flow !== MARKET_THEME_RULES_FLOW_VERSION) {
+  if (pool.semanticStatus !== 'no-input' && p.flow !== MARKET_THEME_RULES_FLOW_VERSION && p.flow !== MARKET_THEME_RULES_FLOW_V2) {
     const preparation = one(view.steps.filter(s => s.kind === 'prepare-model-batches' && obj(s.input).inputSnapshotId === semanticInputSnapshotId));
     current.add(preparation.stepKey); if (!terminal(preparation)) return result();
     const prepared = attempt(preparation); preparationAttemptId = prepared.id;

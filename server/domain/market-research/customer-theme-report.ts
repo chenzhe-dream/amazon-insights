@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { MarketInputSnapshot } from '../../../shared/market-analysis-contracts';
 import { MarketThemeReadinessCountsSchema } from '../../../shared/market-module-contracts';
 import type { MarketModuleRunView, MarketStepDefinition } from '../../db/market-module-execution-repository';
-import { MarketThemeFlowParamsSchema } from './customer-theme-flow';
+import { MarketThemeFlowParamsSchema, MARKET_THEME_RULES_FLOW_VERSION, MARKET_THEME_RULES_FLOW_V2 } from './customer-theme-flow';
 import { MARKET_THEME_MAPPING_RULE_VERSION } from './customer-theme-mapping-rules';
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../../shared/market-source-contracts';
 import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accounting';
@@ -11,6 +11,7 @@ import { MARKET_THEME_EVALUATION_VERSION, MarketThemeEvaluationInputSchema } fro
 
 export const MARKET_THEME_REPORT_VERSION = 'market-theme-report/v1';
 export const MARKET_THEME_RECONCILED_REPORT_VERSION = 'market-theme-report/v2';
+export const MARKET_THEME_RULE_REPORT_VERSION = 'market-theme-report/v3';
 const readinessSchema = MarketThemeReadinessCountsSchema;
 export function classifyMarketThemeReport(value: z.input<typeof readinessSchema>) {
   const p = readinessSchema.parse(value);
@@ -98,11 +99,15 @@ export function createMarketThemeReport(view: MarketModuleRunView, definition: M
     same(aggregation.dataReady, readiness.dataReady); same(aggregation.totals === null, !readiness.dataReady);
     same(attempt.status, readiness.dataReady ? 'succeeded' : 'empty');
   }
-  const report = { reportVersion: input.basis==='reconciliation-evaluation'?MARKET_THEME_RECONCILED_REPORT_VERSION:MARKET_THEME_REPORT_VERSION, moduleRunId: view.run.id, scope: view.run.scope, versions: view.run.versions,
+  const rulesV2 = params.flow === MARKET_THEME_RULES_FLOW_V2;
+  const semanticSkipped = rulesV2 || params.flow === MARKET_THEME_RULES_FLOW_VERSION;
+  const reasons = rulesV2 ? readiness.reasons.filter(reason => !['model-results-missing', 'unknown-themes', 'reconciliation-required'].includes(reason)) : readiness.reasons;
+  const status = rulesV2 ? !readiness.dataReady ? 'no-data' as const : reasons.length ? 'partial' as const : 'complete' as const : readiness.status;
+  const report = { reportVersion: input.basis==='reconciliation-evaluation'?MARKET_THEME_RECONCILED_REPORT_VERSION:rulesV2?MARKET_THEME_RULE_REPORT_VERSION:MARKET_THEME_REPORT_VERSION, moduleRunId: view.run.id, scope: view.run.scope, versions: view.run.versions,
     basis: input.basis, basisAttemptId, inputSnapshotId: snapshot.snapshotId, resultHash, dataCutoffAt: snapshot.collectedAt,
     selectedAsins, selectionBasis: 'provider-row-order', bsrTopVerified: false, metricKind: 'customers_say_topic_share',
-    reviewDeduplication: 'unavailable', ...readiness,
-    ruleStatus: readiness.dataReady ? 'complete' as const : readiness.status === 'partial' ? 'partial' as const : 'unavailable' as const,
-    semanticStatus: params.flow === 'market-theme-flow/rules-v1' ? 'skipped' as const : readiness.semanticsReady ? 'complete' as const : readiness.counts.expectedMemberCount ? 'partial' as const : 'unavailable' as const };
+    reviewDeduplication: 'unavailable', ...readiness, reasons, status,
+    ruleStatus: rulesV2 ? status === 'no-data' ? 'unavailable' as const : status : readiness.dataReady ? 'complete' as const : readiness.status === 'partial' ? 'partial' as const : 'unavailable' as const,
+    semanticStatus: semanticSkipped ? 'skipped' as const : readiness.semanticsReady ? 'complete' as const : readiness.counts.expectedMemberCount ? 'partial' as const : 'unavailable' as const };
   return { ...report, reportHash: digest(report) };
 }

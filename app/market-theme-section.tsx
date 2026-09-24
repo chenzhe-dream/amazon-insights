@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema, type MarketThemeRunResponse } from '../shared/market-module-contracts';
 import { cancelThemeRun, createThemeStudy, readThemeRun, retryThemeSteps, startThemeRun } from './lib/market-theme-browser';
 import { MarketThemeReport } from './market-theme-report';
+import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 import { MarketThemeLaunchSection } from './market-theme-insight-panel';
 
 type Run=MarketThemeRunResponse['run'];
@@ -16,7 +17,7 @@ export function themeRunActive(run:Run) {return run.status!=='cancelled'&&run.st
 export function themeRunLabel(run:Run) {
   if(run.status==='cancelled')return '分析已取消';
   if(themeRunActive(run))return run.steps.some(s=>s.current&&s.status==='running')?'主题分析中':'等待后台执行';
-  if(run.currentReport)return run.currentReport.report.status==='complete'?'报告已保存':run.currentReport.report.status==='partial'?'部分报告已保存':'暂无可用主题';
+  if(run.currentReport){const report=run.currentReport.report,status=themeSavedReportStatus(report);return status==='complete'?report.semanticStatus==='skipped'?'规则报告已保存':'报告已保存':status==='partial'?report.semanticStatus==='skipped'?'部分规则报告已保存':'部分报告已保存':'暂无可用主题';}
   return run.steps.some(s=>s.current&&s.status==='failed')?'分析未完成':'等待后续处理';
 }
 export function themeRunFromUrl() {if(typeof window==='undefined')return null;const result=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('themeRun'));return result.success?result.data:null;}

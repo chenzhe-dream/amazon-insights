@@ -23,6 +23,15 @@ test('display truncation never drops denominator facts or unresolved mapping lim
  assert.equal(result.totals!.mention,10);assert.equal(result.groups.length,0);assert.equal(result.reconciliationRequired,true);assert.equal(result.status,'partial');
 });
 
+test('rules-only sample revision reports source coverage without treating skipped mapping as incomplete',()=>{
+ const results=[a,b].map((asin,i)=>({asin,status:'success' as const,source:{sourceRecordId:`source-${i}`,fetchedAt:'2026-09-01T00:00:00.000Z',sourceUpdatedAt:null},themes:[{sourceThemeId:`raw-${i}`,keyword:'Assembly',content:'Saved summary',mention:i+1,positive:i+1,negative:0}]}));
+ const aggregation=aggregateCustomerThemes({selectedAsins:[a,b],results,mappings:[]});
+ const facts={aggregation,labels:[],decisions:results.map((_,i)=>({sourceThemeId:`raw-${i}`,status:'unavailable' as const,groupId:null,reason:'model-result-unavailable',batchId:null}))};
+ assert.equal(deriveThemeSelection(facts,[],false,false,true).status,'complete');
+ assert.equal(deriveThemeSelection(facts,[b],false,false,true).status,'complete');
+ assert.equal(deriveThemeSelection(facts,[],false).status,'partial');
+});
+
 test('saved topN limits presentation without erasing sentiment counts through exclusions and restoration',()=>{
  const results=[a,b].map((asin,i)=>({asin,status:'success' as const,source:{sourceRecordId:`s${i}`,fetchedAt:'2026-09-01T00:00:00.000Z',sourceUpdatedAt:null},themes:[{sourceThemeId:`t${i}`,keyword:i?'Breakage':'Easy assembly',content:'Saved summary',mention:i?40:100,positive:i?0:100,negative:i?40:0}]}));
  const mappings=results.map(r=>({sourceThemeId:r.themes[0].sourceThemeId,groupId:r.themes[0].sourceThemeId}));
