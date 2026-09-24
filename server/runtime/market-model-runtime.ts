@@ -152,7 +152,7 @@ export async function createMarketModelRuntime(context: PostgresQueryContext, ba
     flowVersionsByStepKind:{reconcile:[MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_KEYWORD_FLOW_VERSION]},handlers: {
     'prepare-members': input=>{
       const phase=(input.claim.step.input as {phase?:unknown})?.phase;
-      if(phase==='select-shape-members')return shapeSelection(input);
+      if(phase==='select-shape-members'||phase==='select-sorftime-shape-members')return shapeSelection(input);
       if(phase==='prepare-overview-synthesis')return overviewSynthesisRound(input);
       if(phase==='prepare-shape-synthesis')return shapeSynthesisRound(input);
       if(phase==='prepare-shape-explanation')return shapeExplanationWindows(input);

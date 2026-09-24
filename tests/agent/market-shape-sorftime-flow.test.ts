@@ -9,7 +9,9 @@ import {MarketModuleStepWorker} from '../../server/runtime/market-module-step-wo
 import {createMarketSourceStepHandlers} from '../../server/runtime/market-source-step-handlers';
 import {createMarketShapeSelectionStep} from '../../server/runtime/market-shape-selection-step';
 import type {RemoteMcpConnector} from '../../server/connectors/connector-contract';
-test('Sorftime shape source is recent data, separate amounts persist and reload does not collect',{timeout:120000},async t=>{
+import {createMarketModelRuntime} from '../../server/runtime/market-model-runtime';
+import {loadVocPositioningRuntimeConfig} from '../../server/config';
+for(const configuredModel of [false,true]) test(`Sorftime shape source persists without model calls (configured=${configuredModel})`,{timeout:120000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
  const f=await createMarketSemanticFixture(pg.pool);await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
  const calls:string[]=[];
@@ -23,10 +25,11 @@ test('Sorftime shape source is recent data, separate amounts persist and reload 
  const study=await service.createStudy(f.actor,{marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,fromMonth:'2026-06',toMonth:'2026-08'},randomUUID());
  const started=await service.startShapes(f.actor,study.study.id,{poolSize:1,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion:'reference/v1',allowedLabels:[]}},randomUUID());
  assert.equal(started.run.steps[0].kind,'collect-shape-pool');
- const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:seller,sorftime}}),'prepare-members':createMarketShapeSelectionStep(f.context)}});t.after(()=>worker.stop());
+ let modelCalls=0;
+ const worker=configuredModel?await createMarketModelRuntime(f.context,loadVocPositioningRuntimeConfig({OPENAI_API_KEY:'synthetic-market-key',AGENT_VOC_MODEL:'gpt-5.6',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'10000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'90000',AGENT_VOC_CALL_MAX_TOKENS:'100000',AGENT_VOC_CALL_MAX_COST_MICROS:'1000000',AGENT_VOC_RUN_MAX_TOKENS:'100000',AGENT_VOC_RUN_MAX_COST_MICROS:'1000000',AGENT_VOC_DAILY_MAX_TOKENS:'100000',AGENT_VOC_DAILY_MAX_COST_MICROS:'1000000',AGENT_VOC_WORKER_OWNER_ID:'synthetic-worker',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2'}),{connectors:{sellerSprite:seller,sorftime},client:{responses:{create:async()=>{modelCalls++;throw Error('Rules must not call a model');}}} as never}):new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:seller,sorftime}}),'prepare-members':createMarketShapeSelectionStep(f.context)}});t.after(()=>worker.stop());
  for(let i=0;i<30&&await worker.tick();i++){}
  const current=(await service.findShapes(f.actor,started.run.id)).run;
- assert.equal(current.status,'succeeded');assert.equal(current.semanticStatus,'skipped');
+ assert.equal(current.status,'succeeded');assert.equal(current.semanticStatus,'skipped');assert.equal(modelCalls,0);
  assert.equal(current.source!.sorftimePool!.period,'recent-30-days');assert.equal(current.source!.sorftimePool!.products[0].grossProfitMargin,70);
  assert.equal(current.source!.productAmountHistory!.products[0].points[2].amount,20.75);
  assert.equal(current.source!.productHistory!.products[0].points[2].units,20);
