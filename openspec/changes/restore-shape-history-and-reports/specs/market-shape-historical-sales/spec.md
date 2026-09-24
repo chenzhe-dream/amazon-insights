@@ -25,3 +25,20 @@ The system SHALL display stored monthly history directly with supplier and per-p
 #### Scenario: Reopen successful run
 - **WHEN** a user reopens a report
 - **THEN** monthly values and complete period totals are read from storage without collection
+
+### Requirement: Persist independent category dashboard sources
+The system SHALL collect six independent Sorftime category sources on new rules-v3 shape runs and preserve previous flow plans.
+#### Scenario: Reopen old report
+- **WHEN** a rules-v2 task is read
+- **THEN** no category collection is scheduled
+#### Scenario: Partial category failure
+- **WHEN** one category metric fails
+- **THEN** successful metrics and product history remain available and only failed steps can be retried
+### Requirement: Keep statistical periods and units explicit
+The system SHALL distinguish category_report recent statistics from category_trend monthly history and from the frozen SellerSprite product sample.
+#### Scenario: Estimated revenue
+- **WHEN** monthly SalesCount and AvgPrice are both available
+- **THEN** their product is shown as estimated revenue, with missing months kept unknown
+#### Scenario: Mixed percentage bases
+- **WHEN** report cards and concentration trend charts are displayed
+- **THEN** cards identify sales-volume shares and trend charts identify sales-amount shares

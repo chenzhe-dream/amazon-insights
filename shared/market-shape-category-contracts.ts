@@ -1,0 +1,11 @@
+import {z} from 'zod';
+export const SHAPE_CATEGORY_METRICS=['report','SalesCount','AvgPrice','Top3ProductSalesAmountShare','Top3BrandSalesAmountShare','Top3SellerSalesAmountShare'] as const;
+export const ShapeCategoryMetricSchema=z.enum(SHAPE_CATEGORY_METRICS);
+export type ShapeCategoryMetric=z.infer<typeof ShapeCategoryMetricSchema>;
+const number=z.number().finite().nonnegative().nullable();
+const point=z.object({month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),value:number}).strict();
+export const ShapeCategoryStatsSchema=z.object({top100Units:number,top100Amount:number,top3ProductPct:number,top3BrandPct:number,top3SellerPct:number,amazonOwnedPct:number,averagePrice:number,medianPrice:number,returnRatePct:number}).strict();
+export const ShapeCategorySourceSchema=z.object({metric:ShapeCategoryMetricSchema,status:z.enum(['queued','running','ready','partial','empty','failed','cancelled']),sourceRef:z.string().nullable(),fetchedAt:z.string().datetime().nullable(),points:z.array(point).max(120),stats:ShapeCategoryStatsSchema.nullable()}).strict();
+export type ShapeCategorySource=z.infer<typeof ShapeCategorySourceSchema>;
+export const ShapeCategoryDashboardSchema=z.object({provider:z.literal('sorftime'),referenceMonth:z.string(),currency:z.string().regex(/^[A-Z]{3}$/),sources:z.array(ShapeCategorySourceSchema).max(6),estimatedAmount:z.array(point).max(120)}).strict();
+export type ShapeCategoryDashboard=z.infer<typeof ShapeCategoryDashboardSchema>;

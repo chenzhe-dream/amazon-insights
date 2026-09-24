@@ -46,7 +46,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   const started = [overview.run.id, shapes.run.id, keywords.run.id, themes.run.id];
   const expected = new Map([
     [overview.run.id, 'market-overview-flow/rules-v2'],
-    [shapes.run.id, 'market-shape-price-flow/rules-v2'],
+    [shapes.run.id, 'market-shape-price-flow/rules-v3'],
     [keywords.run.id, 'market-keyword-flow/rules-v1'],
     [themes.run.id, 'market-theme-flow/rules-v2'],
   ]);
@@ -69,7 +69,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
       sourceCalls++;
       const input = ((request.input as Record<string, unknown>).request ?? request.input) as Record<string, unknown>;
       const month = String(input.month ?? '2026-08');
-      const data = request.operation === 'product_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'market_product_concentration'
+      const data = request.operation === 'category_report' ? {category_stats_report:{node_id:'34',top100_monthly_sales_volume:'200'}} : request.operation === 'category_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'product_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'market_product_concentration'
         ? Array.from({length:100},(_,index)=>({asin:`B${String(index+1).padStart(9,'0')}`,title:'Synthetic shelf lamp',totalUnits:20+index,totalRevenue:400+index,price:20,ranking:index+1}))
         : request.operation === 'market_research'
           ? { items: [{ marketplace: 'US', currency: 'USD', nodeIdPath: '12:34', month, topProducts: 1, products: 1, totalUnits: 20, totalRevenue: 400 }] }
@@ -80,7 +80,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
               : request.operation === 'keyword_trend'
                 ? { keyword: String(input.keyword ?? 'shelf lamp'), search_volume_trend: ['2026-08 search volume 20'], search_rank_trend: [], recommended_bid_trend: [] }
                 : { details: [{ keyword: 'easy assembly', content: 'Easy assembly', mention: 2, positive: 2, negative: 0, update_time: '2026-08-01' }] };
-      const connectorId = request.operation === 'product_trend' || request.operation === 'keyword_extends' || request.operation === 'keyword_trend' || request.operation === 'product_customers_say' ? 'sorftime' : 'sellerSprite';
+      const connectorId = request.operation.startsWith('category_') || request.operation === 'product_trend' || request.operation === 'keyword_extends' || request.operation === 'keyword_trend' || request.operation === 'product_customers_say' ? 'sorftime' : 'sellerSprite';
       return { data: { code: 'OK', marketplace: 'US', currency: 'USD', nodeIdPath: '12:34', month, data }, source: { connectorId, operation: request.operation, fetchedAt: NOW.toISOString(), attemptCount: 1 } };
     },
   };

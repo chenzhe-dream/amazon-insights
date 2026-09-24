@@ -10,7 +10,7 @@ import { PostgresMarketAgentRunStore } from './db/postgres/market-agent-run-stor
 import { createMarketOverviewSynthesisReportStep } from './runtime/market-overview-synthesis-report-step';
 import { createMarketSourceStepHandlers } from './runtime/market-source-step-handlers';
 import {createMarketShapeSelectionStep} from './runtime/market-shape-selection-step';
-import {MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION} from './domain/market-research/shape-price-flow';
+import {MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION} from './domain/market-research/shape-price-flow';
 import {MARKET_KEYWORD_FLOW_VERSION} from './domain/market-research/keyword-flow';
 import {createMarketKeywordPoolStep} from './runtime/market-keyword-pool-step';
 import {createMarketOverviewCatalogStep} from './runtime/market-overview-catalog-step';
@@ -404,7 +404,7 @@ export async function createAgentService(
       steps: new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
       moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords'],'prepare-model-batches':['overview']},
       flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows],
-        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION],report:explainedOverviewFlows,'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
+        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION],report:explainedOverviewFlows,'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
       handlers: {
         ...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),
         rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),

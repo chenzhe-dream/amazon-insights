@@ -40,7 +40,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
                 const output = { schemaVersion: input.schemaVersion, task: input.task, batchId: input.batchId, inputDigest: input.inputDigest, products: input.products.map(p => { assert.ok(p.title.state==='known'); return ({ productId: p.productId, decision: { status: 'supported', candidates: [{ labelId: 'shelf', evidence: [{ refId: p.title.value.refId, start: 0, end: 5, quote: 'Shelf' }] }], requiresManualConfirmation: true } }); }) };
                 return { id: 'synthetic-shape-' + modelCalls, status: 'completed', usage: { input_tokens: 300, output_tokens: 150, total_tokens: 450 }, output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify(output) }] }] };
             } } } as unknown as OpenAIProviderOptions['client'];
-    const create = () => createMarketModelRuntime(f.context, base, { client, connectors: { sellerSprite: connector, sorftime: {id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>({data:{data:[]},source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}})} } });
+    const create = () => createMarketModelRuntime(f.context, base, { client, connectors: { sellerSprite: connector, sorftime: {id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>({data:{data:r.operation==='category_report'?{category_stats_report:{}}:[]},source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}})} } });
     let runtime = await create();
     t.after(() => runtime.stop());
     const labels = [{ labelId: 'shelf', label: '层架式', definition: '标题明确带层架的灯' }];
@@ -129,8 +129,8 @@ test('shape flow freezes members, collects their history and audits suggestions 
         assert.deepEqual(start.run.params.catalog.allowedLabels, [], 'product collection does not require a prewritten shape directory');
         assert.equal(start.run.suggestions.status, 'unavailable');
         assert.equal(start.run.source, null);
-        for (let i = 0; i < 12 && await runtime.tick(); i++) { }
-        const first = await offline.findShapes(f.actor, start.run.id), failed = first.run.steps.find(s => s.status === 'failed');
+        for (let i = 0; i < 50 && await runtime.tick(); i++) { }
+        const first = await offline.findShapes(f.actor, start.run.id), failed = first.run.steps.find(s => s.kind==='collect-product-month' && s.status === 'failed');
         assert.ok(failed);
         assert.equal(first.run.source!.historyAttemptIds.length, 0);
         const command = { referenceAttemptId: first.run.source!.referenceAttemptId, historyAttemptIds: [], expectedParentRevisionId: null, selectedAsins: ['B000000001'], taxonomyVersion: 'test-shapes/v1', labels, assignments: [], bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }] };
@@ -149,7 +149,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
         failHistory = false;
         const before = calls.length;
         await offline.retry(f.actor, start.run.id, { steps: [{ stepId: failed.id, failedAttemptId: failed.latestAttemptId! }] }, randomUUID());
-        for (let i = 0; i < 8 && await runtime.tick(); i++) { }
+        for (let i = 0; i < 50 && await runtime.tick(); i++) { }
         assert.equal(calls.length, before + 1);
         assert.equal(calls.at(-1), '202607');
         assert.equal(modelCalls, 1);
