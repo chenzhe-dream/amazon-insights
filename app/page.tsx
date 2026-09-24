@@ -4299,6 +4299,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           kind="analysis"
           key={runtimeSessionKey}
           favorites={projectFavorites}
+          exportVisibleModules={authSession.visibleModules}
           canDeleteProjects={authSession.user.role === "admin" && !authSession.logoutPending}
           onProjectDeleted={id => {
             setWorkspaces(previous => previous.filter(project => project.id !== id));

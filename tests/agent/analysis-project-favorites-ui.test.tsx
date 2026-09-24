@@ -11,7 +11,7 @@ const id = "10000000-0000-4000-8000-000000000001";
 const project = { majorCategory: null, categoryLabel: null, note: null, createdBy: null as string | null, latestAnalystName: null as string | null, createdAt: "2026-09-01T00:00:00Z", id, kind: "analysis", name: "历史灯具项目", slug: "test-lamps", marketplace: "US",
   asins: ["B01E6CX34C", "B07Y4PJJR4", "B07WFC14VR"], updatedAt: "2026-09-01T00:00:00Z" };
 before(async () => {
-  server = await createServer({ configFile: false, define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0 } });
+  server = await createServer({ configFile: false, cacheDir: "test-results/favorite-ui-vite", define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0 } });
   await server.listen(); const address = server.httpServer!.address(); assert.ok(address && typeof address !== "string");
   origin = `http://127.0.0.1:${address.port}`; browser = await chromium.launch({ headless: true });
 });
@@ -112,6 +112,85 @@ test("history is not implicitly favorite; explicit add/remove survives reload wi
   await page.getByRole("button", { name: /^历史项目（/ }).click();
   await page.getByText("历史灯具项目", { exact: true }).waitFor();
   assert.deepEqual(state.writes, [`PUT /api/agent/v1/local-data/projects/${id}/favorite`, `DELETE /api/agent/v1/local-data/projects/${id}/favorite`]);
+});
+
+test("export is favorite-gated and opens a scoped modal without starting analysis or download", async t => {
+  const { page, state } = await fixture(t);
+  let downloads = 0;
+  page.on("download", () => { downloads += 1; });
+  await page.getByRole("button", { name: /^历史项目（/ }).click();
+  await page.getByText("历史灯具项目", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "导出", exact: true }).count(), 0);
+  await page.locator(".project-card").getByRole("button", { name: "☆ 收藏项目", exact: true }).click();
+  const trigger = page.getByRole("button", { name: "导出", exact: true });
+  await trigger.waitFor();
+  const search = page.getByPlaceholder("搜项目名 / ASIN / 大类 / 品类 / 创建人 / 分析人 / 备注");
+  const searchResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/projects")
+    && new URL(response.url()).searchParams.get("search") === "历史灯具");
+  await search.fill("历史灯具");
+  await trigger.waitFor();
+  const currentUrl = page.url();
+  const writes = [...state.writes];
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "导出预览", exact: true });
+  await dialog.waitFor();
+  await searchResponse;
+  await trigger.waitFor();
+  assert.equal(await dialog.isVisible(), true, "search refresh must not dismiss the export dialog");
+  await page.screenshot({ path: "test-results/favorite-export-modal.png", fullPage: true });
+  assert.match(await dialog.innerText(), /历史灯具项目/);
+  for (const asin of project.asins) assert.match(await dialog.innerText(), new RegExp(asin));
+  await dialog.getByText("报告数据与导出服务尚未接入，暂不能生成 HTML。", { exact: true }).waitFor();
+  assert.equal(await dialog.getByRole("button", { name: "确认并开始导出" }).isDisabled(), true);
+  assert.equal(await page.evaluate(() => document.body.style.overflow), "hidden");
+  assert.equal(await dialog.getByRole("checkbox").count(), 8);
+  await dialog.getByRole("checkbox", { name: "VOC 分析", exact: true }).uncheck();
+  assert.equal(await dialog.getByRole("heading", { name: "VOC 分析", exact: true }).count(), 0);
+  for (const checkbox of await dialog.getByRole("checkbox").all()) await checkbox.uncheck();
+  await dialog.getByText("请至少勾选一个模块。", { exact: true }).waitFor();
+  await dialog.getByRole("checkbox", { name: "竞品参数总览", exact: true }).check();
+  const close = dialog.getByRole("button", { name: "关闭导出预览" });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await dialog.getByRole("button", { name: "取消", exact: true }).evaluate(el => document.activeElement === el), true);
+  await page.keyboard.press("Tab");
+  assert.equal(await close.evaluate(el => document.activeElement === el), true);
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(await trigger.evaluate(el => document.activeElement === el), true);
+  assert.notEqual(await page.evaluate(() => document.body.style.overflow), "hidden");
+  assert.equal(await search.inputValue(), "历史灯具");
+  assert.equal(page.url(), currentUrl);
+  assert.deepEqual(state.writes, writes);
+  assert.equal(downloads, 0);
+  await page.getByRole("button", { name: "取消收藏", exact: true }).click();
+  await page.getByRole("button", { name: "☆ 收藏项目", exact: true }).first().waitFor();
+  assert.equal(await page.getByRole("button", { name: "导出", exact: true }).count(), 0);
+});
+
+test("export scope respects module visibility and remains usable in a narrow viewport", async t => {
+  const { page, state } = await fixture(t);
+  state.favorite = true;
+  await page.goto(page.url() + "&modules=overview");
+  const trigger = page.getByRole("button", { name: "导出", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "导出预览", exact: true });
+  await dialog.waitFor();
+  assert.equal(await dialog.getByRole("checkbox").count(), 3);
+  assert.equal(await dialog.getByRole("checkbox", { name: "VOC 分析", exact: true }).count(), 0);
+  await page.setViewportSize({ width: 390, height: 680 });
+  const bounds = await dialog.boundingBox();
+  assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y >= 0 && bounds.y + bounds.height <= 680);
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  assert.deepEqual(state.writes, []);
+  await page.goto(page.url().replace("modules=overview", "modules="));
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  await dialog.getByText("当前没有可选择的导出模块。", { exact: true }).waitFor();
+  assert.equal(await dialog.getByRole("checkbox").count(), 0);
+  assert.equal(await dialog.getByRole("button", { name: "确认并开始导出" }).isDisabled(), true);
 });
 
 test("history shows a read-only latest analyst, searches that name, and keeps unknown separate from creator", async t => {

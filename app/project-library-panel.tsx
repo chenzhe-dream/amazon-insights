@@ -6,8 +6,11 @@ import { localAgentFetch, localAgentErrorMessage } from "./lib/local-agent-brows
 import { LocalDataProjectsResponseSchema } from "../shared/agent-contracts";
 import "./project-library-pagination.css";
 import { PROJECT_TIME_SORT_OPTIONS, projectTimeValues, type ProjectTimeSort } from "../shared/project-library-time";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AnalysisProjectFavorites } from "./use-analysis-project-favorites";
+import type { ModuleKey } from "../shared/module-visibility-contracts";
+import { ProjectExportButton } from "./project-export/project-export-button";
+import { ProjectExportDialog } from "./project-export/project-export-dialog";
 import {
   AMAZON_MAJOR_CATEGORIES,
   AMAZON_MAJOR_CATEGORY_IDS,
@@ -121,6 +124,7 @@ function persistAuthor(value: string) {
 
 type Props = {
   favorites?: AnalysisProjectFavorites;
+  exportVisibleModules?: readonly ModuleKey[];
   canDeleteProjects?: boolean;
   onProjectDeleted?: (id: string) => void;
   market: string;
@@ -144,6 +148,7 @@ type Props = {
 
 export function ProjectLibraryPage({
   favorites,
+  exportVisibleModules,
   canDeleteProjects = false,
   onProjectDeleted,
   market,
@@ -165,6 +170,10 @@ export function ProjectLibraryPage({
   onRefreshKeywords,
 }: Props) {
   const [projects, setProjects] = useState<AnalysisProject[]>([]);
+  const exportId = useId();
+  // Keep the chosen metadata outside refreshing rows. This is a UI selection,
+  // not the authoritative report snapshot that phase two will create.
+  const [exportProject, setExportProject] = useState<AnalysisProject | null>(null);
   const [libraryView, setLibraryView] = useState<"favorites" | "history">("favorites");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -426,6 +435,13 @@ export function ProjectLibraryPage({
 
   return (
     <div className="project-library-page">
+      {exportProject ? <ProjectExportDialog project={exportProject} visibleModules={exportVisibleModules}
+        onClose={() => {
+          const triggerId = `${exportId}-${exportProject.id}`;
+          setExportProject(null);
+          // A refreshed row may have replaced the original focused button.
+          requestAnimationFrame(() => document.getElementById(triggerId)?.focus());
+        }} /> : null}
       {notice ? <p role="status">{notice}</p> : null}
       <section className="card page-intro">
         <div>
@@ -652,6 +668,11 @@ export function ProjectLibraryPage({
                 <button type="button" className="ghost-btn" onClick={() => beginEdit(project)}>
                   {copy.editBtn}
                 </button>
+                {kind === "analysis" && favorites?.ready && !favorites.loading && !favorites.pending
+                  && favorites.projectIds.includes(project.id) ? (
+                  <ProjectExportButton id={`${exportId}-${project.id}`}
+                    onClick={() => setExportProject({ ...project, asins: [...project.asins] })} />
+                ) : null}
                 {copy.refreshBtn && onRefreshKeywords ? (
                   <button
                     type="button"
