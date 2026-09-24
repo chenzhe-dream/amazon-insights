@@ -10,11 +10,15 @@ test('original shape flow collects by category before any manual shape name and 
  const server=await createServer({configFile:false,cacheDir:'test-results/shape-original-flow-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
  const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
  const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage({viewport:{width:1280,height:900}}),current=shapePageRun();
+ current.run.source!.summary={basis:'collected-source',scope:current.run.scope,selectedAsins:['B000000001'],eligibleAsins:['B000000001'],totalUnits:10,referenceRevenue:123.45,monthly:[{month:'2026-08',totalUnits:10}],products:[{asin:'B000000001',observations:[{month:'2026-08',units:10,issues:[]}]}],periods:['last-3','last-6','year-2025','year-2024'].map(id=>({id,issues:['period-not-collected'],products:[{asin:'B000000001',units:null}]}))};
+ const evidence=(name:string)=>({sourceRef:'market-source:'+'1'.repeat(64),inputSnapshotId:current.run.source!.referenceSnapshotId,payloadPath:['data',0,name] as any});
+ const missing=(name:string)=>({rawValue:null,value:null,issues:['missing'] as ['missing'],evidence:evidence(name)});
+ current.run.source!.products[0].metadata={basis:'reference-observation',referenceMonth:'2026-08',imageUrl:{rawValue:'https://m.media-amazon.com/images/I/fixture.jpg',value:'https://m.media-amazon.com/images/I/fixture.jpg',issues:[],evidence:evidence('imageUrl')},revenue:missing('totalRevenue'),rating:missing('rating'),ratingCount:missing('ratings'),sellerName:missing('sellerName'),sellerType:missing('sellerType'),listedAt:missing('shelfDate')};
  current.run.semanticStatus='skipped';current.run.suggestions={status:'unavailable',items:[]};current.run.latestRevision=null;
  const errors:string[]=[],starts:unknown[]=[],revisions:unknown[]=[];let studies=0;
  page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',async route=>{
-  const request=route.request(),url=new URL(request.url());if(url.origin!==origin)return route.abort();
+  const request=route.request(),url=new URL(request.url());if(url.hostname==='m.media-amazon.com')return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=','base64')});if(url.origin!==origin)return route.abort();
   if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-shape-browser-harness.tsx"></script></body></html>`)});
   if(!url.pathname.startsWith('/api/'))return route.continue();
   if(request.method()==='POST'&&url.pathname.endsWith('/studies')){
@@ -40,6 +44,16 @@ test('original shape flow collects by category before any manual shape name and 
  await page.getByRole('button',{name:'筛选市场',exact:true}).click();
  const row=page.getByLabel('B000000001 人工形态');await row.waitFor();
  assert.equal(studies,1);assert.equal(starts.length,1);assert.deepEqual((starts[0] as {catalog:{allowedLabels:unknown[]}}).catalog.allowedLabels,[]);
+ await page.getByText('123.45',{exact:true}).waitFor();
+ assert.equal(await page.getByText('等待人工确认并保存',{exact:true}).count(),0);
+ await page.getByRole('img',{name:'B000000001 商品图片',exact:true}).scrollIntoViewIfNeeded();
+ await page.waitForFunction(()=>{const image=document.querySelector('img[alt="B000000001 商品图片"]') as HTMLImageElement;return image?.complete&&image.naturalWidth>0});
+ assert.ok(await page.getByText('未采集该区间',{exact:true}).count()>0);
+ await page.getByText('月度销量',{exact:true}).first().click();
+ await page.getByRole('region',{name:'形态人工确认表'}).getByText('2026-08：10',{exact:true}).waitFor();
+ await mkdir('test-results/market-shape-original-flow',{recursive:true});
+ await page.screenshot({path:'test-results/market-shape-original-flow/collected-dashboard.png',fullPage:true});
+ assert.equal(revisions.length,0);
  await row.fill('层架式');
  await page.getByRole('button',{name:'确认并重新计算'}).click();
  await page.getByRole('region',{name:'形态价格带版本报告'}).waitFor();

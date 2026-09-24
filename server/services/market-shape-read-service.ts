@@ -1,3 +1,4 @@
+import {buildMarketShapeSourceSummary} from '../domain/market-research/shape-source-summary';
 import {marketProductSourcePolicy,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../shared/market-product-source-policy';
 import { z } from 'zod';
 import { MarketShapeRunResponseSchema, MarketShapeRevisionPublicSchema } from '../../shared/market-shape-public-contracts';
@@ -41,27 +42,21 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
     const ruleBaseline = projectionAttempt && Object.hasOwn(obj(projectionAttempt.output), 'ruleBaseline') ? MarketRuleBaselineSchema.parse(obj(projectionAttempt.output).ruleBaseline) : undefined;
     const readScope = { actor, studyId: view.run.scope.researchId, moduleRunId: id };
     const anchor = view.steps.find(s => s.stepKey === 'shape-flow/anchor'), a = view.attempts.find(a => a.id === anchor?.latestAttemptId);
-    let source: null | {
-        referenceAttemptId: string;
-        historyAttemptIds: string[];
-        referenceSnapshotId: string;
-        fetchedAt: string;
-        selectionBasis: 'provider-row-order';
-        bsrTopVerified: false;
-        products: Array<{
-            asin: string;
-            title: string | null;
-            brand: string | null;
-            price: number | null;
-            units: number | null;
-        }>;
-    } = null;
+    let source: z.infer<typeof MarketShapeRunResponseSchema>['run']['source'] = null;
     if (a && ['succeeded', 'empty'].includes(a.status)) {
         const out = obj(a.output), saved = await snapshots.findInput({ ...readScope, id: z.string().parse(out.inputSnapshotId) }), raw = await snapshots.findSource({ ...readScope, id: z.string().parse(out.sourceRef) });
         if (!saved || !raw)
             invalid();
         const checked = await readMarketProductMonth({ month: view.run.scope.toMonth, snapshot: saved.snapshot, sourceRef: raw.id }, { [raw.id]: raw.evidence });
         source = { referenceAttemptId: a.id, historyAttemptIds: view.steps.filter(s => current.has(s.stepKey) && s.kind === 'collect-product-month' && s.id !== anchor!.id && ['succeeded', 'empty'].includes(s.status)).map(s => s.latestAttemptId!), referenceSnapshotId: saved.snapshot.snapshotId, fetchedAt: raw.evidence.fetchedAt, selectionBasis: 'provider-row-order', bsrTopVerified: false, products: checked.products.map(p => ({ asin: p.asin, title: p.title, brand: p.brand, price: p.price, units: p.units, metadata: projectMarketShapeSourceMetadata(checked,p.asin,view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION) })) };
+        const history = await Promise.all(source.historyAttemptIds.map(async attemptId => {
+            const attempt=view.attempts.find(item=>item.id===attemptId),step=view.steps.find(item=>item.id===attempt?.stepId);
+            if(!attempt||!step)invalid();
+            const output=obj(attempt.output),snapshot=await snapshots.findInput({...readScope,id:z.string().parse(output.inputSnapshotId)}),evidence=await snapshots.findSource({...readScope,id:z.string().parse(output.sourceRef)});
+            if(!snapshot||!evidence)invalid();
+            return readMarketProductMonth({month:z.string().parse(obj(step.input).month),snapshot:snapshot.snapshot,sourceRef:evidence.id},{[evidence.id]:evidence.evidence});
+        }));
+        source.summary=buildMarketShapeSourceSummary(checked,history,view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION);
     }
     const items: MarketShapeSuggestionOutput['products'] = [];
     const modelSteps = view.steps.filter(s => current.has(s.stepKey) && s.kind === 'model-batch');

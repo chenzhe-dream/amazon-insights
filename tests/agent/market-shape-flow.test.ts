@@ -28,7 +28,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
             calls.push(q.month);
             if (failHistory && q.month === '202607')
                 throw new ConnectorError('sellerSprite', 'upstream-permanent', false);
-            return { data: { code: 'OK', ...(emitEcho?{marketplace: 'US', currency: 'USD', nodeIdPath: f.scope.nodeIdPath, month: q.month}:{}), data: [{ asin: 'B000000001', title: 'Shelf lamp', brand: 'Fixture', price: 20, totalUnits: 10, totalRevenue: 200, ranking: 1, rating: 4, ratings: 10, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-01' }] }, source: { connectorId: 'sellerSprite', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
+            return { data: { code: 'OK', ...(emitEcho?{marketplace: 'US', currency: 'USD', nodeIdPath: f.scope.nodeIdPath, month: q.month}:{}), data: [{ asin: 'B000000001', title: 'Shelf lamp', brand: 'Fixture', price: 20, totalUnits: 10, totalRevenue: 200, ranking: 1, rating: 4, ratings: 10, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-01', imageUrl:'https://m.media-amazon.com/images/I/fixture.jpg' }] }, source: { connectorId: 'sellerSprite', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
         } };
     // A known tokenizer keeps this legacy synthetic model-path fixture inside
     // the task's 8k input admission; no external model call is made.
@@ -65,6 +65,9 @@ test('shape flow freezes members, collects their history and audits suggestions 
     const publicView = await service.findShapes(f.actor, run.id);
     assert.equal(publicView.run.source!.products[0].title, 'Shelf lamp');
     const metadata=publicView.run.source!.products[0].metadata!;
+    assert.equal(metadata.imageUrl?.value,'https://m.media-amazon.com/images/I/fixture.jpg');
+    assert.equal(publicView.run.source!.summary!.totalUnits,20);
+    assert.deepEqual(publicView.run.source!.summary!.monthly.map(m=>m.totalUnits),[10,10]);
     assert.equal(metadata.revenue.value,200);
     assert.equal(metadata.rating.value,4);
     assert.equal(metadata.ratingCount.value,10);

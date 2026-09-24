@@ -3,6 +3,16 @@ import test from 'node:test';
 import {observation} from './helpers/market-shape-explanation-fixture';
 import {readMarketProductMonth} from '../../server/domain/market-research/product-month-evidence';
 import {projectMarketShapeSourceMetadata} from '../../server/domain/market-research/shape-source-metadata';
+
+test('frozen Amazon thumbnail is projected without changing the source; unsafe URLs are rejected',async()=>{
+ for(const url of ['https://images-na.ssl-images-amazon.com/images/I/example.jpg','javascript:alert(1)','https://untrusted.example/image.jpg']){
+  const o=await observation('2026-08',p=>{p.data[0].imageUrl=url}),checked=await readMarketProductMonth(o,{[o.sourceRef]:o.source});
+  const before=JSON.stringify(checked),m=projectMarketShapeSourceMetadata(checked,'B000000001',true);
+  assert.equal(m.imageUrl?.value,url.startsWith('https://images-na.')?url:null);
+  assert.deepEqual(m.imageUrl?.evidence.payloadPath,['data',0,'imageUrl']);
+  assert.equal(JSON.stringify(checked),before);
+ }
+});
 test('metadata uses frozen source values, carries exact evidence paths and never multiplies price by units',async()=>{
  const o=await observation('2026-08',p=>{p.data[0].totalRevenue=17;p.data[0].rating=0;p.data[0].ratings=0;p.data[0].shelfDate='2024-02-29';});
  const checked=await readMarketProductMonth(o,{[o.sourceRef]:o.source}),before=JSON.stringify(checked),m=projectMarketShapeSourceMetadata(checked,'B000000001',true);
