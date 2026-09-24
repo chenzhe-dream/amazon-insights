@@ -58,6 +58,7 @@ function renderTable(columns: readonly string[], rows: readonly (readonly Export
 }
 
 const CHART_COLORS = ["#7964e5", "#3688ca", "#238c83", "#c0782f", "#b95482", "#64748b"];
+const chartColor = (color: string | undefined, index: number) => color && /^#[0-9a-f]{6}$/i.test(color) ? color : CHART_COLORS[index % CHART_COLORS.length];
 function renderChart(block: Extract<ExportBlock, { kind: "chart" }>): string {
   const count = Math.max(block.labels.length, 0, ...block.series.map(series => series.values.length));
   const values = block.series.flatMap(series => series.values.filter((value): value is number => value !== null && Number.isFinite(value)));
@@ -77,7 +78,7 @@ function renderChart(block: Extract<ExportBlock, { kind: "chart" }>): string {
   const x = (index: number) => count === 1 ? 480 : 64 + index * 840 / (count - 1);
   const y = (value: number) => 210 - ((value / scale - minimum) / range) * 170;
   const marks = block.series.map((series, seriesIndex) => {
-    const color = CHART_COLORS[seriesIndex % CHART_COLORS.length];
+    const color = chartColor(series.color, seriesIndex);
     const lines: string[] = [];
     const dots: string[] = [];
     let run: string[] = [];
@@ -92,7 +93,7 @@ function renderChart(block: Extract<ExportBlock, { kind: "chart" }>): string {
     flush();
     return lines.join("") + dots.join("");
   }).join("");
-  const legend = `<p class="legend">${block.series.map((series, index) => `<span style="border-color:${CHART_COLORS[index % CHART_COLORS.length]}">${escapeHtml(series.label)}</span>`).join("")}</p>`;
+  const legend = `<p class="legend">${block.series.map((series, index) => `<span style="border-color:${chartColor(series.color,index)}">${escapeHtml(series.label)}</span>`).join("")}</p>`;
   return `${title}${legend}<svg xmlns="http://www.w3.org/2000/svg" class="chart" viewBox="0 0 960 260" role="img" aria-label="${escapeHtml(block.title)}"><title>${escapeHtml(block.title)}（完整数值见下表）</title><path d="M64 28V210H904" fill="none" stroke="#cbd5e1"/><text x="60" y="20" fill="#657b9a" font-size="12">${escapeHtml(String(maximum * scale))}</text><text x="60" y="230" fill="#657b9a" font-size="12">${escapeHtml(rows[0][0].text)}</text><text x="904" y="250" text-anchor="end" fill="#657b9a" font-size="12">${escapeHtml(rows[count - 1][0].text)}</text>${marks}</svg><p class="note">缺失值以 — 表示，折线在缺失处断开；下表保留全部标签和数值。</p>${table}`;
 }
 

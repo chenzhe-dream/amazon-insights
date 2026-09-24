@@ -105,6 +105,15 @@ test("unsafe URLs, local hosts, private IP literals, credentials and unknown pro
   }
 });
 
+test("chart variant colors stay consistent and cannot inject CSS or SVG", () => {
+  const html=render(content([{kind:"chart",title:"颜色",labels:["一月","二月"],series:[
+    {label:"浅蓝",color:"#12abcd",values:[1,2]},
+    {label:"恶意来源",color:'red"><script>bad()</script>',values:[3,4]},
+  ]}]));
+  assert.match(html,/stroke="#12abcd"/);assert.match(html,/border-color:#12abcd/);
+  assert.doesNotMatch(html,/<script>|bad\(\)/);
+});
+
 test("filenames use Beijing time, preserve Unicode and remain safe and bounded on Windows", () => {
   assert.ok(downloader, "HTML download module must be implemented");
   assert.equal(downloader.buildExportFileName("灯具 💡", "US", "2026-09-24T16:02:03Z"), "灯具 💡_US_快照_20260925-000203.html");

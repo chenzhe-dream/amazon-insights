@@ -56,7 +56,7 @@ export function ProjectExportDialog({ project, visibleModules, identity, onClose
                 <span>{section.label}<small>{identity && connectedExportModules.includes(section.id) ? "读取已有报告" : "内容待接入"}</small></span>
               </label>)}
               {sections.length === 0 ? <p>当前没有可选择的导出模块。</p> : null}
-              <p className={styles.help}>{identity ? "各模块逐项接入；待接入模块暂不可选。不会重新分析或调用模型。" : "当前可确认导出范围；接入报告后，将按实际完成情况开放导出。"}</p>
+              <p className={styles.help}>{identity ? "保留所选模块的已有内容，预览生成后固定。不会重新分析或调用模型。" : "当前可确认导出范围；接入报告后，将按实际完成情况开放导出。"}</p>
             </fieldset>
             <section className={styles.preview} aria-label="导出范围预览">
               {identity ? <>

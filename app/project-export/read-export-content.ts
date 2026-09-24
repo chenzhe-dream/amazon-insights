@@ -8,6 +8,15 @@ import { readCurrentProjectDisplayVersion, type CurrentProjectDisplayVersion } f
 import { visibleExportSections, type ExportSectionId } from "./module-catalog";
 import type { ExportBlock, PreparedExportContent } from "./export-contracts";
 import { buildOverviewExportSection } from "./overview-export-section";
+import { buildListingImagesExportSection } from "./listing-images-export-section";
+import { buildKeywordsExportSection } from "./keywords-export-section";
+import { readVariantsExportSection } from "./read-variants-export";
+import { readVocExportSection } from "./voc-export-section";
+import { readDefinitionExportSection } from "./definition-export-section";
+import { readChecklistExportSection } from "./checklist-export-section";
+import { readTrafficExportSection } from "./read-traffic-export";
+import type { ExportModuleContext } from "./export-module-context";
+import type { ExportSection } from "./export-contracts";
 
 export type ExportIdentity = Readonly<{ sessionIdentity: string; organizationId: string }>;
 export type ExportRequest = ExportIdentity & Readonly<{
@@ -15,7 +24,11 @@ export type ExportRequest = ExportIdentity & Readonly<{
 }>;
 export type PreparedProjectExport = PreparedExportContent & Readonly<{ sourceProjectId: string }>;
 export type ExportFetcher = (path: string, init?: RequestInit) => Promise<Response>;
-export const connectedExportModules: readonly ExportSectionId[] = ["competitor-overview"];
+export const connectedExportModules: readonly ExportSectionId[] = [
+  "competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic",
+];
+const exportFetcher: ExportFetcher = (path, init) => path.startsWith("/api/")
+  ? fetch(path, { ...init, credentials: "same-origin" }) : localAgentFetch(path, init);
 
 function scopedFetcher(request: ExportRequest, fetcher: ExportFetcher): ExportFetcher {
   return async (path, init) => {
@@ -61,7 +74,7 @@ async function eligibility(request: ExportRequest, fetcher: ExportFetcher) {
   }
   return { project, source, sourceProjectId };
 }
-export async function verifyExportEligibility(request: ExportRequest, prepared: PreparedProjectExport, fetcher: ExportFetcher = localAgentFetch) {
+export async function verifyExportEligibility(request: ExportRequest, prepared: PreparedProjectExport, fetcher: ExportFetcher = exportFetcher) {
   const read = scopedFetcher(request, fetcher);
   const current = await eligibility(request, read);
   if (current.sourceProjectId !== prepared.sourceProjectId || current.project.id !== prepared.project.id
@@ -107,7 +120,7 @@ async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: r
       [[{ text: item.asin }, { text: item.message || "暂无已生成的中文卖点" },
         { text: item.original.join("\n") || "—" }, { text: item.state }]]) }];
 }
-export async function readExportContent(request: ExportRequest, fetcher: ExportFetcher = localAgentFetch): Promise<PreparedProjectExport> {
+export async function readExportContent(request: ExportRequest, fetcher: ExportFetcher = exportFetcher): Promise<PreparedProjectExport> {
   const read = scopedFetcher(request, fetcher);
   const { project, source, sourceProjectId } = await eligibility(request, read);
   const version = await readCurrentProjectDisplayVersion({
@@ -116,18 +129,38 @@ export async function readExportContent(request: ExportRequest, fetcher: ExportF
   const scopedVersion = version ? { ...version, asins: [...project.asins],
     catalog: version.catalog.filter(item => item && typeof item === "object" && "asin" in item && project.asins.includes(String(item.asin))),
     gaps: version.gaps.filter(item => project.asins.includes(item.asin)) } : null;
-  const section = scopedVersion ? buildOverviewExportSection(scopedVersion) : {
-    id: "competitor-overview" as const, title: "竞品概览", status: "missing" as const,
-    blocks: [{kind:"text" as const,text:"暂无已发布的竞品概览结果；导出不会自动发起分析。"}],
+  const context: ExportModuleContext = {
+    projectId: sourceProjectId, organizationId: request.organizationId, marketplace: project.marketplace,
+    asins: project.asins, sourceAsins: source.asins, currentRunId: source.currentRunId,
+    version: scopedVersion, capturedAt: new Date().toISOString(), sharedReads: new Map(),
   };
-  const supplements = scopedVersion ? await readSellingPoints(scopedVersion, project.asins, read) : [];
+  const readers: Record<ExportSectionId, () => Promise<ExportSection> | ExportSection> = {
+    "competitor-overview": async () => {
+      if (!scopedVersion) return {id:"competitor-overview",title:"竞品概览",status:"missing",
+        blocks:[{kind:"text",text:"暂无已发布的竞品概览结果；导出不会自动发起分析。"}]};
+      const section=buildOverviewExportSection(scopedVersion);
+      return {...section,blocks:[...section.blocks,...await readSellingPoints(scopedVersion,project.asins,read)]};
+    },
+    "variants-orders": () => readVariantsExportSection(context,read),
+    "listing-images": () => buildListingImagesExportSection(context),
+    voc: () => readVocExportSection(context,read),
+    keywords: () => buildKeywordsExportSection(context),
+    definition: () => readDefinitionExportSection(context,read),
+    checklist: () => readChecklistExportSection(context,read),
+    traffic: () => readTrafficExportSection(context,read),
+  };
+  const labels = new Map(visibleExportSections(undefined).map(section=>[section.id,section.label]));
+  const sections = await Promise.all(request.moduleIds.map(async id => {
+    try { return await readers[id](); }
+    catch(error) { throw new Error(`${labels.get(id)}：${error instanceof Error?error.message:"读取失败，请重试"}`); }
+  }));
   await session(request, read);
   request.signal.throwIfAborted();
   return structuredClone({
     schemaVersion: "1", sourceProjectId,
     project: { id: project.id, name: project.name, marketplace: project.marketplace, asins: project.asins },
     capturedAt: new Date().toISOString(),
-    sourceLabel: version ? `已发布报告 ${version.versionId} · 来源完成 ${version.sourceCompletedAt}` : "暂无已发布报告",
-    sections: [{ ...section, blocks: [...section.blocks, ...supplements] }],
+    sourceLabel: version ? `基础报告 ${version.versionId} · 来源完成 ${version.sourceCompletedAt}；各模块补充来源与时间见正文` : "暂无已发布基础报告；其他已有来源与时间见各模块",
+    sections,
   });
 }

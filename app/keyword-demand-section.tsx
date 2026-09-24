@@ -747,8 +747,8 @@ export function KeywordDemandSection({
 }) {
   const analysis = useMemo(() => buildKeywordDemandAnalysis(products, sources), [products, sources]);
   const conclusions = useMemo(
-    () => buildKeywordLaunchConclusions(analysis, products, analysisScope),
-    [analysis, products, analysisScope],
+    () => buildKeywordLaunchConclusions(analysis, products, analysisScope, sources),
+    [analysis, products, analysisScope, sources],
   );
   const [showTaxonomy, setShowTaxonomy] = useState(false);
   const eyebrow = mode === "insight" ? "关键词调研 · 关键词洞察" : "关键词调研 · 竞品关键词分析";

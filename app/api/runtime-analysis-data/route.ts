@@ -8,5 +8,6 @@ import { createAgentServiceClient } from "../../lib/agent-service-client";
 export const GET = createRuntimeAnalysisDataHandler({
   client: createAgentServiceClient(),
   readSnapshot: readGeneratedRuntimeAnalysisData,
+  readStrictSnapshot: (asins, country) => readGeneratedRuntimeAnalysisData(asins, country, { strictCacheRead: true }),
   readProgress: readGeneratedXydcOrderProgress,
 });

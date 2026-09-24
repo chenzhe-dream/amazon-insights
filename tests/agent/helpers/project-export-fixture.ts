@@ -40,3 +40,13 @@ export function exportVersionFixture() {
       { stage, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }])),
     gaps: [], contentHash: "a".repeat(64), sourceCompletedAt: "2026-09-23T05:00:00Z", publishedAt: "2026-09-23T06:00:00Z" };
 }
+
+export function exportRuntimeFixture() {
+  const version=exportVersionFixture();
+  return {catalog:version.catalog,keywords:{analysisByAsin:{},enrichmentByKeyword:{}},reviews:{analysisByAsin:{},ratingByAsin:{}},
+    salesTrend:{trendByAsin:{}},fba:{feeByAsin:{}},listing:{contentByAsin:{}},category:{trendByNode:{}},
+    childSales:{rowsByAsin:{}},priceStrategy:{strategyByAsin:{}},imageRemarks:{remarksByAsin:{},outcomesByAsin:{}},
+    variants:{families:[]},variantOrders:{families:[]},xydcOrderProgress:null,
+    exportScope:{projectId:exportSourceId,organizationId:exportOrganizationId,marketplace:"US",asins:version.asins,
+      readAt:new Date().toISOString(),contentHash:"c".repeat(64)}};
+}

@@ -40,6 +40,18 @@ The system SHALL read existing results bound to the selected project, marketplac
 - **WHEN** multiple projects contain the same ASIN
 - **THEN** export follows the selected project's bindings rather than substituting another project's data solely by ASIN
 
+#### Scenario: Authorized existing variant cache
+- **WHEN** the selected variant/order page uses shared marketplace and ASIN caches without a published run binding
+- **THEN** export MAY read that existing cache after project authorization, exact source scope and strict format checks, SHALL verify read stability including translated attributes, and SHALL label its actual source and time without claiming published-run provenance
+
+#### Scenario: Current page and saved history differ
+- **WHEN** current saved inputs differ from a historic local rule report
+- **THEN** export SHALL preserve the current page's pure display computation and identify any included historical result separately; it SHALL NOT substitute a historic checklist for the current checklist or automatically enable review fallback
+
+#### Scenario: Historical rules
+- **WHEN** a saved result includes its own rule definitions and decision versions
+- **THEN** export SHALL retain those original definitions and versions and label any current rules as comparison material
+
 #### Scenario: Pagination and incomplete sources
 - **WHEN** a selected module has multiple pages, missing values or an upstream Top N limit
 - **THEN** all existing rows and details are included, missing is not zero and source limitations remain explicit

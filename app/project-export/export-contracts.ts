@@ -5,7 +5,7 @@ export type ExportCell = { text: string; imageUrl?: string; href?: string };
 export type ExportBlock =
   | { kind: "text"; text: string }
   | { kind: "table"; title: string; columns: readonly string[]; rows: readonly (readonly ExportCell[])[] }
-  | { kind: "chart"; title: string; labels: readonly string[]; series: readonly { label: string; values: readonly (number | null)[] }[] };
+  | { kind: "chart"; title: string; labels: readonly string[]; series: readonly { label: string; color?: string; values: readonly (number | null)[] }[] };
 
 export type ExportSection = {
   id: ExportSectionId;
