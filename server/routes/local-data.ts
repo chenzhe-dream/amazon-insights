@@ -84,6 +84,11 @@ export type LocalDataBridgeDeps = {
   fetchProject(id: string): Promise<AnalysisProject | null>;
   createAnalysisProject(input: Record<string, unknown>): Promise<AnalysisProject>;
   updateAnalysisProject(id: string, patch: Record<string, unknown>): Promise<AnalysisProject | null>;
+  syncProjectName?(input: {
+    organizationId: string;
+    previous: AnalysisProject;
+    project: AnalysisProject;
+  }): Promise<void>;
   deleteAnalysisProject(id: string): Promise<boolean>;
   authorizeProjectDeletion?(principal: RequestPrincipal, id: string): Promise<boolean>;
   normalizeAsins(values: unknown): Promise<string[] | null>;
@@ -174,6 +179,26 @@ export function createDefaultLocalDataBridgeDeps(
     fetchProject,
     createAnalysisProject,
     updateAnalysisProject,
+    async syncProjectName({ organizationId, previous, project }) {
+      if (!repository || previous.name === project.name) return;
+      const stored = await repository.findProjectById(project.id);
+      if (!stored) return;
+      if (stored.organizationId !== organizationId ||
+          stored.marketplace !== project.marketplace ||
+          stored.asins.length !== project.asins.length ||
+          stored.asins.some((asin, index) => asin !== project.asins[index]) ||
+          previous.marketplace !== project.marketplace ||
+          previous.asins.length !== project.asins.length ||
+          previous.asins.some((asin, index) => asin !== project.asins[index])) {
+        throw new Error("Project name scope does not match the database project");
+      }
+      if (stored.name === project.name) return;
+      if (!repository.updateProjectMetadata) throw new Error("Database project name update is unavailable");
+      const updated = await repository.updateProjectMetadata({
+        organizationId, projectId: project.id, name: project.name, updatedAt: project.updatedAt,
+      });
+      if (!updated || updated.name !== project.name) throw new Error("Database project name update failed");
+    },
     deleteAnalysisProject,
     async authorizeProjectDeletion(principal, id) {
       if (principal.kind !== "user" || principal.role !== "admin" || !repository) return false;
@@ -446,6 +471,35 @@ export function registerLocalDataRoutes(
       await validateSourceProject(request.authPrincipal,{...existing,...body});
       const project = await deps.updateAnalysisProject(id, body);
       if (!project) return missing("Project not found");
+      if (body.name !== undefined && project.name !== existing.name && deps.syncProjectName) {
+        const restorePrevious = () => deps.updateAnalysisProject(id, {
+          name: existing.name,
+          kind: existing.kind,
+          marketplace: existing.marketplace,
+          asins: existing.asins,
+          majorCategory: existing.majorCategory,
+          categoryLabel: existing.categoryLabel,
+          note: existing.note,
+          sourceProjectId: existing.sourceProjectId ?? null,
+          createdBy: existing.createdBy,
+        });
+        if (request.authPrincipal?.kind !== "user") {
+          await restorePrevious();
+          throw new ContractRouteError(401, "AUTHENTICATION_REQUIRED", "Authentication is required");
+        }
+        try {
+          await deps.syncProjectName({ organizationId: request.authPrincipal.organizationId, previous: existing, project });
+        } catch (error) {
+          const restored = await restorePrevious();
+          if (!restored || restored.name !== existing.name ||
+              restored.marketplace !== existing.marketplace ||
+              restored.asins.length !== existing.asins.length ||
+              restored.asins.some((asin, index) => asin !== existing.asins[index])) {
+            throw new Error("Project name sync failed and local rollback failed", { cause: error });
+          }
+          throw error;
+        }
+      }
       return LocalDataProjectResponseSchema.parse({ project: (await withLatestAnalysts([project], request.authPrincipal))[0] });
     } catch (error) {
       if (error instanceof ContractRouteError) throw error;

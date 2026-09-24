@@ -1,21 +1,15 @@
 import { isAmazonImageHost, normalizeAmazonImageUrl } from "../../lib/amazon-image";
-import {
-  MAX_AMAZON_IMAGE_BYTES,
-  isValidAmazonImage,
-  normalizeImageContentType,
-  readCachedAmazonImage,
-  storeCachedAmazonImage,
-} from "../../lib/amazon-image-cache.server";
+import { MAX_AMAZON_IMAGE_BYTES, isValidAmazonImage, normalizeImageContentType } from "../../lib/amazon-image-validation.server";
 
 const MAX_IMAGE_URL_LENGTH = 4096;
+export const dynamic = "force-dynamic";
 
-function imageResponse(bytes: Buffer, contentType: string, cache: "HIT" | "MISS" | "BYPASS") {
+function imageResponse(bytes: Buffer, contentType: string) {
   return new Response(new Uint8Array(bytes), {
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=86400, immutable",
+      "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-      "X-Image-Cache": cache,
     },
   });
 }
@@ -62,9 +56,6 @@ export async function GET(request: Request) {
   }
   target.hash = "";
 
-  const cached = await readCachedAmazonImage(target.href);
-  if (cached) return imageResponse(cached.bytes, cached.contentType, "HIT");
-
   try {
     const upstream = await fetch(target.href, {
       headers: {
@@ -72,6 +63,7 @@ export async function GET(request: Request) {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
       },
+      cache: "no-store",
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
@@ -86,13 +78,7 @@ export async function GET(request: Request) {
     }
     const bytes = await boundedImageBody(upstream);
     if (!isValidAmazonImage(bytes, contentType)) return new Response("not an image", { status: 502 });
-    try {
-      await storeCachedAmazonImage(target.href, { bytes, contentType });
-      return imageResponse(bytes, contentType, "MISS");
-    } catch {
-      console.warn("Amazon image cache write failed");
-      return imageResponse(bytes, contentType, "BYPASS");
-    }
+    return imageResponse(bytes, contentType);
   } catch {
     return new Response("image unavailable", { status: 502 });
   }

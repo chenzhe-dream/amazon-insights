@@ -14,6 +14,7 @@ import { BoundedLoginRateLimiter } from "../../server/auth/login-rate-limiter";
 import { digestSessionToken } from "../../server/auth/session";
 import type { AgentAuthenticationConfig } from "../../server/config";
 import { openSqliteAgentRepository } from "../../server/db/sqlite-repository";
+import type { RuntimeAgentRepository } from "../../server/db/repository";
 import {
   SyncJobRunConflictError,
   type SyncJobRecord,
@@ -188,6 +189,85 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
     },
   };
 }
+
+test("renaming a local analysis project updates the matching database project name", async (t) => {
+  const deps = fakeDeps();
+  const events: string[] = [];
+  deps.fetchProject = async () => ({ ...project, name: "Original name" });
+  deps.updateAnalysisProject = async (_id, patch) => {
+    events.push("local");
+    return { ...project, name: String(patch.name) };
+  };
+  Object.assign(deps, {
+    async syncProjectName(input: {
+      organizationId: string;
+      previous: AnalysisProject;
+      project: AnalysisProject;
+    }) {
+      events.push("database");
+      assert.equal(input.organizationId, memberPrincipal().organizationId);
+      assert.equal(input.previous.name, "Original name");
+      assert.equal(input.project.name, "Renamed project");
+      assert.deepEqual(input.project.asins, projectAsins);
+    },
+  });
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "PATCH", url: `/v1/local-data/projects/${project.id}`,
+    headers: authenticatedHeaders(), payload: { name: "Renamed project" } });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.deepEqual(events, ["local", "database"]);
+});
+
+test("failed database name sync restores the previous local name", async (t) => {
+  const deps = fakeDeps();
+  let localName = "Original name";
+  let localAsins = [...projectAsins];
+  deps.fetchProject = async () => ({ ...project, name: localName, asins: localAsins });
+  deps.updateAnalysisProject = async (_id, patch) => {
+    if (patch.name !== undefined) localName = String(patch.name);
+    if (Array.isArray(patch.asins)) localAsins = patch.asins as string[];
+    return { ...project, name: localName, asins: localAsins };
+  };
+  Object.assign(deps, { async syncProjectName() { throw new Error("database name update failed"); } });
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "PATCH", url: `/v1/local-data/projects/${project.id}`,
+    headers: authenticatedHeaders(), payload: { name: "Renamed project", asins: [...projectAsins].reverse() } });
+  assert.equal(response.statusCode, 500);
+  assert.equal(localName, "Original name");
+  assert.deepEqual(localAsins, projectAsins);
+});
+
+test("database name sync checks organization and ordered ASIN scope before writing", async () => {
+  let writes = 0;
+  const stored = {
+    id: project.id, organizationId: memberPrincipal().organizationId,
+    name: "Original name", marketplace: project.marketplace, asins: [...projectAsins],
+  };
+  const repository = {
+    async findProjectById() { return stored; },
+    async updateProjectMetadata(input: { name: string }) {
+      writes++;
+      stored.name = input.name;
+      return stored;
+    },
+  } as unknown as RuntimeAgentRepository;
+  const sync = createDefaultLocalDataBridgeDeps(repository, { bypassProviderReadiness: true }).syncProjectName!;
+  const input = {
+    organizationId: memberPrincipal().organizationId,
+    previous: { ...project, name: "Original name" },
+    project: { ...project, name: "Renamed project" },
+  };
+  await sync(input);
+  assert.equal(stored.name, "Renamed project");
+  assert.equal(writes, 1);
+  await assert.rejects(sync({ ...input, organizationId: "foreign-organization" }), /scope/i);
+  await assert.rejects(sync({ ...input, project: { ...input.project, asins: [...projectAsins].reverse() } }), /scope/i);
+  assert.equal(writes, 1);
+});
 
 test("current sync job read is organization scoped and returns the completed display job", async (t) => {
   const deps = fakeDeps();
