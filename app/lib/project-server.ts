@@ -1,4 +1,6 @@
-import { refreshedCatalog } from "../competitor-data";
+import { generatedAppDataPath } from "../../scripts/lib/generated-app-data-path.mjs";
+import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
+import { readCachedArrayExport } from "../../scripts/lib/sync-cache.mjs";
 import { inferAmazonMajorCategory, normalizeAmazonMajorCategory } from "../amazon-major-categories";
 
 export type ProjectKind = "analysis" | "keyword-compare" | "traffic-promo" | "checklist";
@@ -22,9 +24,10 @@ export type AnalysisProject = {
 };
 
 function catalogProductsForAsins(asins: string[]) {
+  const catalog = readCachedArrayExport(generatedAppDataPath(getProjectRoot(), "competitor-data.ts"), "refreshedCatalog");
   return asins
-    .map(asin => refreshedCatalog.find(item => item.asin === asin))
-    .filter((item): item is (typeof refreshedCatalog)[number] => Boolean(item));
+    .map(asin => catalog.find(item => item.asin === asin))
+    .filter((item): item is (typeof catalog)[number] => Boolean(item));
 }
 
 function resolveMajorCategory(asins: string[], raw: unknown) {

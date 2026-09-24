@@ -1380,8 +1380,9 @@ function buildKeywordConclusions(
   analysis: KeywordDemandAnalysis | null,
   products: LaunchProductInput[],
   scope?: Partial<AnalysisInputScope>,
+  sources?: ProductLaunchRuntimeSources["keywordSources"],
 ): KeywordLaunchConclusions | null {
-  return analysis ? buildKeywordLaunchConclusions(analysis, products, scope) : null;
+  return analysis ? buildKeywordLaunchConclusions(analysis, products, scope, sources) : null;
 }
 
 function buildProductDefinition(
@@ -1973,7 +1974,7 @@ export function buildProductLaunchAnalysis(
     insight: "先验证适用性和供应商能力，再确定实施顺序",
   }));
 
-  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList, ruleSession.scope);
+  const keywordConclusions = buildKeywordConclusions(sources.keywordDemand, productList, ruleSession.scope, sources.keywordSources);
   const verdict = buildVerdict(opportunities, market, hasData, keywordConclusions);
   const negativePriorityRows = buildNegativePriorityRows(summary, productList.length, family, ruleSession.action);
   const positivePriorityRows = buildPositivePriorityRows(summary, productList.length, family, ruleSession.action);

@@ -7,9 +7,10 @@ import {
   type CategoryBucket,
   type KeywordDemandAnalysis,
   type KeywordDemandProduct,
+  type KeywordDemandSources,
 } from "./keyword-demand-analysis";
 import type { KeywordCategory } from "./keyword-classifier";
-import { sifKeywordEnrichmentData, type KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
+import type { KeywordSearchTrendPoint } from "./sif-keyword-enrichment-data";
 
 export type LaunchConclusionItem = {
   label: string;
@@ -82,13 +83,13 @@ function normalizeKeyword(keyword: string) {
   return keyword.trim().toLowerCase();
 }
 
-function resolveVolume(keyword: string, fallback: number | null | undefined) {
-  const enrich = sifKeywordEnrichmentData[normalizeKeyword(keyword)];
+function resolveVolume(keyword: string, fallback: number | null | undefined, sources: KeywordDemandSources) {
+  const enrich = sources.enrichmentByKeyword?.[normalizeKeyword(keyword)];
   return resolveKeywordSearchVolume(enrich?.searchTrend ?? [], fallback).volume;
 }
 
-function resolveTrend(keyword: string): KeywordSearchTrendPoint[] {
-  return sifKeywordEnrichmentData[normalizeKeyword(keyword)]?.searchTrend ?? [];
+function resolveTrend(keyword: string, sources: KeywordDemandSources): KeywordSearchTrendPoint[] {
+  return sources.enrichmentByKeyword?.[normalizeKeyword(keyword)]?.searchTrend ?? [];
 }
 
 function formatVolume(value: number | null | undefined) {
@@ -105,14 +106,14 @@ function formatKeywordList(keywords: AggregatedKeyword[], limit = 3) {
     .join("、");
 }
 
-function pickKeywords(categories: CategoryBucket[], ids: KeywordCategory[]) {
+function pickKeywords(categories: CategoryBucket[], ids: KeywordCategory[], sources: KeywordDemandSources) {
   return categories
     .filter(item => ids.includes(item.id))
     .flatMap(item => item.keywords)
     .sort(
       (a, b) =>
         b.aggregateShare - a.aggregateShare ||
-        (resolveVolume(b.keyword, b.searchVolume) ?? 0) - (resolveVolume(a.keyword, a.searchVolume) ?? 0),
+        (resolveVolume(b.keyword, b.searchVolume, sources) ?? 0) - (resolveVolume(a.keyword, a.searchVolume, sources) ?? 0),
     );
 }
 
@@ -233,12 +234,12 @@ function audienceToProductParams(audienceKw: AggregatedKeyword[], ageBands: stri
   return hints.length ? hints.join("；") : "需结合 VOC 将人群词转化为结构/安全/尺寸参数";
 }
 
-function buildFunctionMatrix(functionKw: AggregatedKeyword[], readyCount: number): FunctionDemandRow[] {
-  const volumes = functionKw.map(item => resolveVolume(item.keyword, item.searchVolume)).filter((v): v is number => v != null && v > 0);
+function buildFunctionMatrix(functionKw: AggregatedKeyword[], readyCount: number, sources: KeywordDemandSources): FunctionDemandRow[] {
+  const volumes = functionKw.map(item => resolveVolume(item.keyword, item.searchVolume, sources)).filter((v): v is number => v != null && v > 0);
   const volThreshold = volumes.length ? volumes.sort((a, b) => b - a)[Math.floor(volumes.length * 0.5)] ?? 0 : 0;
 
   return functionKw.slice(0, 12).map(item => {
-    const volume = resolveVolume(item.keyword, item.searchVolume);
+    const volume = resolveVolume(item.keyword, item.searchVolume, sources);
     const coverage = item.competitorCount;
     let type: FunctionDemandRow["type"];
     let action: string;
@@ -264,7 +265,7 @@ function buildFunctionMatrix(functionKw: AggregatedKeyword[], readyCount: number
   });
 }
 
-function buildKeywordCombos(allKeywords: AggregatedKeyword[]): KeywordComboRow[] {
+function buildKeywordCombos(allKeywords: AggregatedKeyword[], sources: KeywordDemandSources): KeywordComboRow[] {
   const productKw = allKeywords.filter(item => item.category === "core_product");
   const rootPattern = productKw.length
     ? new RegExp(productKw.slice(0, 3).map(k => k.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i")
@@ -295,7 +296,7 @@ function buildKeywordCombos(allKeywords: AggregatedKeyword[]): KeywordComboRow[]
       return {
         keyword: item.keyword,
         elements: parts.join(" + "),
-        volume: resolveVolume(item.keyword, item.searchVolume),
+        volume: resolveVolume(item.keyword, item.searchVolume, sources),
       };
     })
     .filter(row => (row.volume ?? 0) > MIN_COMBO_VOLUME)
@@ -322,10 +323,10 @@ function buildPriceBand(products: KeywordDemandProduct[]) {
   };
 }
 
-function assessCompetition(matrix: ReturnType<typeof buildKeywordComparisonMatrix>, brandSharePct: number) {
+function assessCompetition(matrix: ReturnType<typeof buildKeywordComparisonMatrix>, brandSharePct: number, sources: KeywordDemandSources) {
   const rows = matrix.rows.slice(0, 30);
   const withTop3 = rows
-    .map(row => sifKeywordEnrichmentData[normalizeKeyword(row.keyword)]?.top3ClickShare)
+    .map(row => sources.enrichmentByKeyword?.[normalizeKeyword(row.keyword)]?.top3ClickShare)
     .filter((v): v is number => v != null);
   const avgTop3Click = withTop3.length ? withTop3.reduce((s, v) => s + v, 0) / withTop3.length : null;
   const lowCoverageRows = rows.filter(row => row.coverageCount <= 1 && (row.searchVolume ?? 0) >= 5000);
@@ -449,6 +450,7 @@ export function buildKeywordLaunchConclusions(
   analysis: KeywordDemandAnalysis,
   products: KeywordDemandProduct[],
   analysisScope?: Partial<AnalysisInputScope>,
+  sources: KeywordDemandSources = {},
 ): KeywordLaunchConclusions {
   const ruleSession = createProductRuleSession(products, keywordRuleSources(analysis, analysisScope));
   const dataGaps: string[] = [];
@@ -473,20 +475,20 @@ export function buildKeywordLaunchConclusions(
   }
 
   const allKeywords = analysis.categories.flatMap(item => item.keywords);
-  const productKw = pickKeywords(analysis.categories, ["core_product"]);
-  const functionKw = pickKeywords(analysis.categories, ["function"]);
-  const benefitKw = pickKeywords(analysis.categories, ["benefit"]);
-  const painKw = pickKeywords(analysis.categories, ["pain_need"]);
-  const audienceKw = pickKeywords(analysis.categories, ["audience"]);
-  const ageKw = pickKeywords(analysis.categories, ["age"]);
-  const scenarioKw = pickKeywords(analysis.categories, ["scenario"]);
-  const specKw = pickKeywords(analysis.categories, ["attribute_spec"]);
-  const styleKw = pickKeywords(analysis.categories, ["material_style"]);
-  const holidayKw = pickKeywords(analysis.categories, ["holiday_season"]);
-  const brandKw = pickKeywords(analysis.categories, ["brand_competitor"]);
+  const productKw = pickKeywords(analysis.categories, ["core_product"], sources);
+  const functionKw = pickKeywords(analysis.categories, ["function"], sources);
+  const benefitKw = pickKeywords(analysis.categories, ["benefit"], sources);
+  const painKw = pickKeywords(analysis.categories, ["pain_need"], sources);
+  const audienceKw = pickKeywords(analysis.categories, ["audience"], sources);
+  const ageKw = pickKeywords(analysis.categories, ["age"], sources);
+  const scenarioKw = pickKeywords(analysis.categories, ["scenario"], sources);
+  const specKw = pickKeywords(analysis.categories, ["attribute_spec"], sources);
+  const styleKw = pickKeywords(analysis.categories, ["material_style"], sources);
+  const holidayKw = pickKeywords(analysis.categories, ["holiday_season"], sources);
+  const brandKw = pickKeywords(analysis.categories, ["brand_competitor"], sources);
 
   const withVolume = allKeywords
-    .map(item => ({ ...item, volume: resolveVolume(item.keyword, item.searchVolume) }))
+    .map(item => ({ ...item, volume: resolveVolume(item.keyword, item.searchVolume, sources) }))
     .filter(item => item.volume != null && item.volume > 0)
     .sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0));
 
@@ -494,20 +496,20 @@ export function buildKeywordLaunchConclusions(
   const totalTop20 = withVolume.slice(0, 20).reduce((s, item) => s + (item.volume ?? 0), 0);
   const demandScale = classifyDemandScale(headVolume, totalTop20);
 
-  const topTrends = withVolume.slice(0, 8).map(item => resolveTrend(item.keyword)).filter(item => item.length >= 6);
+  const topTrends = withVolume.slice(0, 8).map(item => resolveTrend(item.keyword, sources)).filter(item => item.length >= 6);
   const trend = analyzeTrend(topTrends);
   if (!trend) dataGaps.push("近12个月搜索趋势样本不足，趋势/季节性判断置信度有限");
 
   const ageBands = extractAgeBands([...ageKw, ...audienceKw]).map(([label]) => label);
-  const matrix = buildKeywordComparisonMatrix(products, { limit: 80 });
+  const matrix = buildKeywordComparisonMatrix(products, { limit: 80, sources });
   const brandSharePct = analysis.categories.find(item => item.id === "brand_competitor")?.sharePct ?? 0;
-  const competition = assessCompetition(matrix, brandSharePct);
+  const competition = assessCompetition(matrix, brandSharePct, sources);
 
-  const functionMatrix = buildFunctionMatrix(functionKw, analysis.meta.readyCount);
+  const functionMatrix = buildFunctionMatrix(functionKw, analysis.meta.readyCount, sources);
   if (functionMatrix.some(row => row.type === "数据不足")) {
     dataGaps.push("部分功能词缺少有效月搜索量，暂不能判断配置优先级");
   }
-  const keywordCombos = buildKeywordCombos(allKeywords);
+  const keywordCombos = buildKeywordCombos(allKeywords, sources);
   const priceBand = buildPriceBand(products);
 
   const ruleSuggestion = (raw: string, id: string) => {
@@ -543,7 +545,7 @@ export function buildKeywordLaunchConclusions(
 
   const avgCpc = withVolume
     .slice(0, 10)
-    .map(item => sifKeywordEnrichmentData[normalizeKeyword(item.keyword)]?.bidMedian)
+    .map(item => sources.enrichmentByKeyword?.[normalizeKeyword(item.keyword)]?.bidMedian)
     .filter((v): v is number => v != null);
   const cpcText = avgCpc.length ? `头部词 CPC 中位约 $${(avgCpc.reduce((s, v) => s + v, 0) / avgCpc.length).toFixed(2)}` : "—";
 

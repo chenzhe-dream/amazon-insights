@@ -82,6 +82,7 @@ test("saved report reads never fall back to generated data; first analysis still
   let mode: "waiting" | "success" | "failure" | "absent" = "waiting";
   let exposeJob = false;
   let jobStatus = "completed";
+  let runtimeAvailable = true;
   const staleImage = "https://m.media-amazon.com/images/I/STALE-CATALOG.jpg";
   const staleProduct = { ...refreshedCatalog[0], asin: asins[0], brand: "旧目录占位", image: staleImage };
   const stageReads: string[] = [];
@@ -137,11 +138,11 @@ test("saved report reads never fall back to generated data; first analysis still
       return reply(stageOutputs[stageMatch[1]]);
     }
     if (endpoint === "/api/catalog") return reply({ items: [staleProduct] });
-    if (endpoint === "/api/runtime-analysis-data") return reply({ catalog: [staleProduct], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
+    if (endpoint === "/api/runtime-analysis-data") return runtimeAvailable ? reply({ catalog: [staleProduct], keywords: { analysisByAsin: {}, enrichmentByKeyword: {} },
       reviews: { analysisByAsin: {}, ratingByAsin: {} }, salesTrend: { trendByAsin: {} }, fba: { feeByAsin: {} },
       listing: { contentByAsin: { [asins[0]]: { asin: asins[0], status: "ready", mainImage: staleImage, galleryImages: [staleImage] } } },
       category: { trendByNode: {} }, childSales: { rowsByAsin: {} },
-      priceStrategy: { strategyByAsin: {} }, imageRemarks: { remarksByAsin: { [asins[0]]: [{ remark: "旧生成文件备注", image_types: [], confidence: "high" }] }, outcomesByAsin: {} } });
+      priceStrategy: { strategyByAsin: {} }, imageRemarks: { remarksByAsin: { [asins[0]]: [{ remark: "旧生成文件备注", image_types: [], confidence: "high" }] }, outcomesByAsin: {} } }) : reply({ error: "runtime unavailable" }, 503);
     if (endpoint === "/api/projects" || endpoint === "/api/agent/v1/local-data/projects") return reply({ projects: [project] });
     if (endpoint.endsWith("/project-favorites")) return reply({ projectIds: [projectId] });
     return reply({ error: "fixture endpoint unavailable" }, 404);
@@ -231,6 +232,12 @@ test("saved report reads never fall back to generated data; first analysis still
   await page.getByText("旧生成文件备注", { exact: true }).waitFor();
   assert.equal(await page.locator(".listing-image-frame").count(), 1);
   assert.ok(!(await page.locator("body").innerText()).includes("当前项目暂无可读取的分析报告"));
+  project.asins = ["B07VY9Q95Q", "B0BPXRVWYK", "B07DYG1C9B"];
+  runtimeAvailable = false;
+  await page.goto(`http://127.0.0.1:${reserved.port}/p/${project.slug}?tab=overview-images`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1000);
+  assert.equal(await page.locator(".listing-image-frame").count(), 0,
+    "a derived project cannot fall back to generated modules when runtime data is unavailable");
   assert.deepEqual(writes, [], "normal reads must not start collection");
   assert.deepEqual(pageErrors, []);
 });
