@@ -64,6 +64,18 @@ The system SHALL read existing results bound to the selected project, marketplac
 - **WHEN** an existing result fails to load or has mismatched provenance
 - **THEN** confirmation is blocked until a successful retry or explicit deselection of that module
 
+#### Scenario: Optional selling point translation
+- **WHEN** the authorized report contains original selling points but a Chinese translation is missing, pending, failed, unconfigured or temporarily unreadable
+- **THEN** export SHALL retain all available originals from that report, explicitly label translation availability and SHALL NOT generate a translation; confirmed source mismatches, invalid responses and authorization failures SHALL still block export
+
+#### Scenario: Selling point report version
+- **WHEN** export reads a saved selling point translation
+- **THEN** it SHALL pin the prepared published report version and verify the original against that report, SHALL NOT read a generated workspace catalog, and SHALL reject a changed report version
+
+#### Scenario: Partial published catalog
+- **WHEN** a published report lacks some selected products' catalog entries
+- **THEN** export SHALL preserve the selected ASIN scope and existing VOC, definition and checklist sources, label missing product information, keep numeric values unknown and use the generic product family without importing another project's product data
+
 #### Scenario: Unsaved checklist entries
 - **WHEN** checklist edits only existed in an unmounted page's component state
 - **THEN** export does not pretend to recover them and preview explicitly identifies those unsaved entries as excluded

@@ -33,12 +33,12 @@ export class SellingPointTranslationService {
   private tail: Promise<void> = Promise.resolve();
   constructor(private readonly options: {
     root: string; modelIdentity: string;
-    resolveSource: (organizationId: string, projectId: string, asin: string) => Promise<SellingSource>;
+    resolveSource: (organizationId: string, projectId: string, asin: string, versionId?: string) => Promise<SellingSource>;
     translate: (source: SellingSource, sourceHash: string) => Promise<string[]>;
   }) {}
 
-  private async context(organizationId: string, projectId: string, asin: string) {
-    const source = await this.options.resolveSource(organizationId, projectId, asin);
+  private async context(organizationId: string, projectId: string, asin: string, versionId?: string) {
+    const source = await this.options.resolveSource(organizationId, projectId, asin, versionId);
     if (source.organizationId !== organizationId || source.projectId !== projectId || source.asin !== asin) throw new Error("Translation scope mismatch");
     const sourceHash = createHash("sha256").update(JSON.stringify(["selling-zh-v1", this.options.modelIdentity, organizationId, asin, source.original])).digest("hex");
     const empty: SellingTranslationResult = { asin, sourceHash, state: source.original.length ? "missing" : "unavailable", original: source.original,
@@ -48,6 +48,8 @@ export class SellingPointTranslationService {
       const cached = JSON.parse(readFileSync(join(this.options.root, sourceHash + ".json"), "utf8"));
       const parsed = SellingTranslationResponse.parse(cached.result);
       if (parsed.sourceHash === sourceHash && parsed.asin === asin) {
+        if (JSON.stringify(parsed.original) !== JSON.stringify(source.original)) throw new Error("Cached original mismatch");
+        if (parsed.state === "ready") validateSellingTranslation(source.original, parsed.points);
         result = { ...parsed, sourceComplete: source.sourceComplete };
         if (result.state === "pending" && !this.jobs.has(sourceHash) && Date.now() - Number(cached.savedAt) > 600_000) {
           result = { ...empty, state: "failed", message: "翻译任务已中断，请重试。" };
@@ -65,12 +67,14 @@ export class SellingPointTranslationService {
     writeFileSync(temporary, JSON.stringify({ savedAt: Date.now(), result }), "utf8");
     renameSync(temporary, target);
   }
-  async read(organizationId: string, projectId: string, asin: string) {
-    return (await this.context(organizationId, projectId, asin)).result;
+  async read(organizationId: string, projectId: string, asin: string, versionId?: string) {
+    return (await this.context(organizationId, projectId, asin, versionId)).result;
   }
   async start(organizationId: string, projectId: string, asin: string) {
     const { source, result } = await this.context(organizationId, projectId, asin);
     if (["ready", "pending", "unavailable"].includes(result.state) || this.jobs.has(result.sourceHash)) return result;
+    if (source.original.length > 10 || source.original.some(point => point.length > 8000) || source.original.join("").length > 20000)
+      return { ...result, state: "failed" as const, message: "卖点原文过长，需要核对后再翻译。" };
     if (this.jobs.size >= 10) return { ...result, state: "failed" as const, message: "翻译队列已满，请稍后重试。" };
     const pending = { ...result, state: "pending" as const, message: null };
     this.save(pending);

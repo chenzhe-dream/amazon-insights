@@ -39,7 +39,7 @@ async function fixture(t: test.TestContext, modules = "overview") {
       if (state.delay) await new Promise(resolve => setTimeout(resolve, state.delay));
       return state.fail?reply({error:"报告读取失败"},500):reply(state.version);
     }
-    if(path.includes("/selling-point-translations/"))return reply(exportTranslationFixture(path.split("/").at(-1)!));
+    if(path.includes("/selling-point-translations/"))return reply(exportTranslationFixture(new URL(path, "http://test").pathname.split("/").at(-1)!));
     return reply({error:"Unexpected endpoint"},404);
   });
   await page.goto(`${origin}/tests/agent/helpers/analysis-favorites-harness.html?export=true&modules=${modules}`);

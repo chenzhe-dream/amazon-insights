@@ -14,7 +14,7 @@ function fixture() {
     if (path === "/v1/local-data/project-favorites") return Response.json({ projectIds: state.favorite ? [state.project.id] : [] });
     if (path === `/v1/local-data/projects/${state.project.id}`) return Response.json({ project: state.project });
     if (path === `/v1/projects/${state.project.sourceProjectId}`) return Response.json({ project: exportSourceProjectFixture() });
-    if (path.includes("/selling-point-translations/")) return Response.json(exportTranslationFixture(path.split("/").at(-1)!));
+    if (path.includes("/selling-point-translations/")) return Response.json(exportTranslationFixture(new URL(path, "http://test").pathname.split("/").at(-1)!));
     if (path === `/v1/local-data/projects/${state.project.sourceProjectId}/current-display-version`) {
       return state.versionStatus === 404 ? Response.json({ error: { code: "PROJECT_REPORT_NOT_PUBLISHED", message: "missing", requestId: "test" } }, {status:404})
         : Response.json(state.version, { status: state.versionStatus });
@@ -72,22 +72,37 @@ test("download invalidates changed project scope without refreshing frozen repor
   await assert.rejects(verifyExportEligibility(request, content, fetcher), /来源已变化/);
 });
 
-test("known unconfigured translation stays unavailable; transient failures and mismatched originals fail", async () => {
+test("optional translation failures retain snapshot originals; mismatched originals still fail", async () => {
   const { request, fetcher } = fixture();
   let mode = "configuration";
   const read = (path: string, init?: RequestInit) => {
     if (!path.includes("/selling-point-translations/")) return fetcher(path, init);
     if (mode === "mismatch") return Promise.resolve(Response.json({
-      ...exportTranslationFixture(path.split("/").at(-1)!), original: ["属于另一次同步的卖点"],
+      ...exportTranslationFixture(new URL(path, "http://test").pathname.split("/").at(-1)!), original: ["属于另一次同步的卖点"],
     }));
     return Promise.resolve(Response.json({error:{code: mode === "configuration" ? "CONFIGURATION_ERROR" : "INFRASTRUCTURE_ERROR",
       message:"翻译服务不可用"}},{status:503}));
   };
   assert.match(JSON.stringify(await readExportContent(request, read)), /翻译服务尚未配置/);
   mode = "temporary";
-  await assert.rejects(readExportContent(request, read), /翻译服务不可用/);
+  assert.match(JSON.stringify(await readExportContent(request, read)), /保留已有原文/);
   mode = "mismatch";
   await assert.rejects(readExportContent(request, read), /原文不匹配/);
+});
+
+test('selling translation reads pin the preview report version and preserve every original on missing translation', async () => {
+  const { state, request, fetcher } = fixture();
+  Object.assign(state.version.catalog[0], { listingBullets: ['Original one', 'Original two'] });
+  const read = async (path: string, init?: RequestInit) => {
+    if (!path.includes('/selling-point-translations/')) return fetcher(path, init);
+    const url = new URL(path, 'http://test');
+    assert.equal(url.searchParams.get('versionId'), state.version.versionId);
+    const asin = url.pathname.split('/').at(-1)!;
+    return Response.json({ ...exportTranslationFixture(asin), state: 'missing',
+      ...(asin === state.project.asins[0] ? { original: ['Original one', 'Original two'], sourceComplete: true } : {}) });
+  };
+  const text = JSON.stringify(await readExportContent(request, read));
+  assert.match(text, /Original one/); assert.match(text, /Original two/);
 });
 
 test("changed mutable translations and revoked session during preparation invalidate the result", async () => {
@@ -96,7 +111,7 @@ test("changed mutable translations and revoked session during preparation invali
   const changing = (path: string, init?: RequestInit) => {
     if (!path.includes("/selling-point-translations/")) return fetcher(path, init);
     count++;
-    return Promise.resolve(Response.json({ ...exportTranslationFixture(path.split("/").at(-1)!),
+    return Promise.resolve(Response.json({ ...exportTranslationFixture(new URL(path, "http://test").pathname.split("/").at(-1)!),
       sourceHash: count > state.project.asins.length ? "new" : "old",
     }));
   };

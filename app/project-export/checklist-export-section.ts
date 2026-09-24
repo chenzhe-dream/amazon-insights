@@ -3,7 +3,7 @@ import type { ExportBlock, ExportSection } from './export-contracts';
 import type { ExportModuleContext, ExportModuleRead } from './export-module-context';
 import { exportTable } from './export-record-blocks';
 import { buildExportRuleTrace } from './export-rule-trace';
-import { buildCurrentPageAnalysis, readManualVocRecords } from './read-voc-definition-export';
+import { buildCurrentPageAnalysis, catalogGapNote, readManualVocRecords } from './read-voc-definition-export';
 
 function table(title: string, input: LaunchChecklistStructuredTable): ExportBlock {
   return exportTable(title, input.headers, input.rows.map(row => row.map(cell =>
@@ -12,7 +12,7 @@ function table(title: string, input: LaunchChecklistStructuredTable): ExportBloc
 
 export async function readChecklistExportSection(context: ExportModuleContext, read: ExportModuleRead): Promise<ExportSection> {
   const manual = await readManualVocRecords(context, read);
-  const blocks: ExportBlock[] = [];
+  const blocks: ExportBlock[] = catalogGapNote(context).map(text => ({ kind: 'text', text }));
   const analysis = buildCurrentPageAnalysis(context, manual);
   if (!analysis) {
     blocks.push({ kind: 'text', text: '暂无与当前项目范围一致的立项清单系统来源；导出不会启动分析。' });

@@ -16,8 +16,10 @@ const path = `/v1/projects/${projectId}/selling-point-translations/${asin}`;
 test("translation requires a session, uses server organization, and rejects client source overrides", async t => {
   const root = mkdtempSync(join(tmpdir(), "selling-http-"));
   t.after(() => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  let requestedVersion: string | undefined;
   const service = new SellingPointTranslationService({ root, modelIdentity: "test",
-    resolveSource: async (org, project, item) => {
+    resolveSource: async (org, project, item, versionId) => {
+      requestedVersion = versionId;
       assert.equal(org, "org");
       assert.equal(project, projectId);
       assert.equal(item, asin);
@@ -36,6 +38,10 @@ test("translation requires a session, uses server organization, and rejects clie
   assert.equal((await app.inject({ method: "POST", url: path, payload: { original: ["injected"], organizationId: "other" } })).statusCode, 400);
   assert.equal((await app.inject(path + "?organizationId=other")).statusCode, 400);
   assert.equal((await app.inject(path)).json().state, "missing");
+  assert.equal((await app.inject(path + "?versionId=" + projectId)).statusCode, 200);
+  assert.equal(requestedVersion, projectId);
+  assert.equal((await app.inject(path + "?versionId=invalid")).statusCode, 400);
+  assert.equal((await app.inject({ method: "POST", url: path + "?versionId=" + projectId, payload: {} })).statusCode, 400);
   assert.equal((await app.inject({ method: "POST", url: path, payload: {} })).statusCode, 202);
   await service.drain();
   const response = await app.inject(path);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { SellingPointTranslationService, validateSellingTranslation, readOriginalSellingPoints } from "../../server/services/selling-point-translation";
@@ -44,4 +44,26 @@ test("failed model output is not cached as success and does not retry itself", a
   await service.start("org", "p", "B000000001"); await service.drain();
   assert.equal((await service.read("org", "p", "B000000001")).state, "failed");
   assert.equal(calls, 1);
+});
+
+test("long originals remain readable but do not start a paid translation; inconsistent caches are rejected", async t => {
+  const root = mkdtempSync(join(tmpdir(), "selling-translation-"));
+  t.after(() => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  let original = Array.from({length: 12}, () => "x".repeat(9000));
+  let calls = 0;
+  const service = new SellingPointTranslationService({root, modelIdentity: "test",
+    resolveSource: async () => ({organizationId:"org",projectId:"p",runId:"r",asin:"B000000001",original,sourceComplete:true}),
+    translate: async () => {calls++; return ["错误"];},
+  });
+  assert.deepEqual((await service.read("org","p","B000000001")).original, original);
+  assert.equal((await service.start("org","p","B000000001")).state, "failed");
+  await service.drain(); assert.equal(calls, 0);
+  original = ["Timer 2 hours"];
+  const result = await service.read("org","p","B000000001");
+  writeFileSync(join(root,result.sourceHash+".json"), JSON.stringify({savedAt:Date.now(),
+    result:{...result,state:"ready",original:["Another product"],points:["不同商品"]}}));
+  await assert.rejects(service.read("org","p","B000000001"), /缓存读取失败/);
+  writeFileSync(join(root,result.sourceHash+".json"), JSON.stringify({savedAt:Date.now(),
+    result:{...result,state:"ready",points:["定时 9 小时"]}}));
+  await assert.rejects(service.read("org","p","B000000001"), /缓存读取失败/);
 });

@@ -4,7 +4,7 @@ import type { ExportSection } from './export-contracts';
 import type { ExportModuleContext, ExportModuleRead } from './export-module-context';
 import { exportFields, exportTable, valueText } from './export-record-blocks';
 import { buildExportRuleTrace } from './export-rule-trace';
-import { buildCurrentPageAnalysis, publishedReviewRecords, readLocalRuleReportsForExport, readManualVocRecords, readRunReportsForExport, selectedReport } from './read-voc-definition-export';
+import { buildCurrentPageAnalysis, catalogGapNote, publishedReviewRecords, readLocalRuleReportsForExport, readManualVocRecords, readRunReportsForExport, selectedReport } from './read-voc-definition-export';
 
 function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 
@@ -12,7 +12,7 @@ export async function readVocExportSection(context: ExportModuleContext, read: E
   const [manual, ruleReports, analysisReports] = await Promise.all([
     readManualVocRecords(context, read), readLocalRuleReportsForExport(context, read), readRunReportsForExport(context, read),
   ]);
-  const blocks: ExportSection['blocks'][number][] = [];
+  const blocks: ExportSection['blocks'][number][] = catalogGapNote(context).map(text => ({ kind: 'text', text }));
   const selected = selectedReport(analysisReports, 'voc-positioning');
   const saved = ruleReports[0];
   const scopedReviews = publishedReviewRecords(context);
