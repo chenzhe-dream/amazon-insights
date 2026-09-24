@@ -122,7 +122,8 @@ test('shape flow freezes members, collects their history and audits suggestions 
     await t.test('missing model configuration does not block collection, manual statistics or a failed-month retry', async () => {
         const offline = new MarketModuleService({ context: f.context, modelIdentity: () => null });
         failHistory = true; emitEcho=false;
-        const start = await offline.startShapes(f.actor, f.scope.researchId, { poolSize: 100, newProductMonths: 6, catalog: request.params.catalog }, randomUUID());
+        const start = await offline.startShapes(f.actor, f.scope.researchId, { poolSize: 100, newProductMonths: 6, catalog: { ...request.params.catalog, allowedLabels: [] } }, randomUUID());
+        assert.deepEqual(start.run.params.catalog.allowedLabels, [], 'product collection does not require a prewritten shape directory');
         assert.equal(start.run.suggestions.status, 'unavailable');
         assert.equal(start.run.source, null);
         for (let i = 0; i < 12 && await runtime.tick(); i++) { }
@@ -131,6 +132,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
         assert.equal(first.run.source!.historyAttemptIds.length, 0);
         const command = { referenceAttemptId: first.run.source!.referenceAttemptId, historyAttemptIds: [], expectedParentRevisionId: null, selectedAsins: ['B000000001'], taxonomyVersion: 'test-shapes/v1', labels, assignments: [], bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }] };
         const partial = await offline.saveShapeRevision(f.actor, start.run.id, command, randomUUID());
+        assert.equal(partial.revision.labels[0].label,'层架式');
         assert.equal(partial.revision.totalUnits, null);
         assert.equal(partial.revision.coverage, 'none');
         assert.equal(partial.revision.sourcePolicy!.version,'sellersprite-product-source-policy/v1');

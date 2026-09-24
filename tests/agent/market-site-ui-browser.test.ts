@@ -20,7 +20,7 @@ test("all four module queries preserve UK scope and send GBP without calling a p
   await page.waitForFunction(()=>document.querySelector('[aria-label="选择市场站点"] button[aria-pressed="true"]')?.textContent==="英国站");
   const before=writes.length;const submitted=page.waitForResponse(response=>response.request().method()==="POST");
   if(view==="overview")await page.getByRole("button",{name:"筛选市场",exact:true}).click();
-  if(view==="shapes"){await page.getByText("形态目录与采集选项",{exact:true}).click();await page.getByLabel("本次形态目录（每行：名称|判断依据）").fill("台灯|桌面使用");await page.getByRole("button",{name:"采集商品并生成形态建议",exact:true}).click()}
+  if(view==="shapes")await page.getByRole("button",{name:"筛选市场",exact:true}).click();
   if(view==="keywords"){await page.getByLabel("产品核心名",{exact:true}).fill("desk lamp");await page.getByLabel("类目说明",{exact:true}).fill("桌面台灯");await page.getByRole("button",{name:"采集关键词并分析",exact:true}).click()}
   if(view==="themes")await page.getByRole("button",{name:"拉取见解",exact:true}).click();
   await submitted;

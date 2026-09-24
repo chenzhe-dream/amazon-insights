@@ -13,6 +13,7 @@ import {MarketShapeProductTable} from './market-shape-product-table';
 import {MarketShapeDashboard} from './market-shape-dashboard';
 import {LaunchSection} from './launch-section';
 import {MarketShapeExplanationSection} from './market-shape-explanation-section';
+import {buildManualShapeCatalog} from './lib/market-shape-manual-draft';
 type Selection = {
     marketplace?: MarketSite;
     nodeIdPath: string;
@@ -43,7 +44,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     onFavorite?:()=>void;
 }) {
     const [runId, setRunId] = useState(''), [restoreId, setRestoreId] = useState(''), [run, setRun] = useState<MarketShapeRun | null>(null), [reload, setReload] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [readError, setReadError] = useState<string | null>(null);
-    const [taxonomy, setTaxonomy] = useState(''), [poolSize, setPoolSize] = useState(100), [bands, setBands] = useState('0,20,40'), [selected, setSelected] = useState<string[]>([]), [assignments, setAssignments] = useState<Record<string, string>>({}), [parent, setParent] = useState<string | null>(null), [note, setNote] = useState('');
+    const [poolSize, setPoolSize] = useState(100), [bands, setBands] = useState('0,20,40'), [selected, setSelected] = useState<string[]>([]), [assignments, setAssignments] = useState<Record<string, string>>({}), [parent, setParent] = useState<string | null>(null), [note, setNote] = useState('');
     const [choice, setChoice] = useState('latest'), [historic, setHistoric] = useState<MarketShapePublicRevision | null>(null), [historyError, setHistoryError] = useState<string | null>(null);
     const [presentation, setPresentation] = useState<MarketShapeExplanationPresentation | null>(null);
     const [analysisNotice,setAnalysisNotice]=useState<{runId:string;revisionId:string;reason:string|null}|null>(null);
@@ -81,7 +82,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         return () => { abort.abort(); if (timer)
             clearTimeout(timer); };
     }, [runId, reload]);
-    function loadDraft(next: MarketShapeRun) { const r = next.latestRevision; setSelected(r?.selectedAsins ?? next.source?.products.map(p => p.asin) ?? []); setAssignments(Object.fromEntries((r?.assignments ?? []).map(a => [a.asin, a.labelId ?? '']))); setParent(r?.revisionId ?? null); setNote(r?.note ?? ''); setBands(r ? r.bands.map(b => b.minInclusive).join(',') : '0,20,40'); draftRun.current = next.id; pendingSave.current = null; }
+    function loadDraft(next: MarketShapeRun) { const r = next.latestRevision, labels = new Map((r?.labels ?? next.params.catalog.allowedLabels).map(l => [l.labelId,l.label])); setSelected(r?.selectedAsins ?? next.source?.products.map(p => p.asin) ?? []); setAssignments(Object.fromEntries((r?.assignments ?? []).map(a => [a.asin, a.labelId ? labels.get(a.labelId) ?? '' : '']))); setParent(r?.revisionId ?? null); setNote(r?.note ?? ''); setBands(r ? r.bands.map(b => b.minInclusive).join(',') : '0,20,40'); draftRun.current = next.id; pendingSave.current = null; }
     useEffect(() => { if (run?.source && draftRun.current !== run.id)
         loadDraft(run); }, [run]);
     useEffect(() => { setHistoric(null); setHistoryError(null); if (!runId || choice === 'latest')
@@ -98,11 +99,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         setError(null);
         try {
             assertMarketProductQueryWindow(selection,new Date());
-            const labels = taxonomy.split('\n').filter(s => s.trim()).map((line, i) => { const split = line.indexOf('|'); if (split < 1 || !line.slice(split + 1).trim())
-                throw Error('每行请填写“形态名称|判断依据”。'); return { labelId: `shape-${i + 1}`, label: line.slice(0, split).trim(), definition: line.slice(split + 1).trim() }; });
-            if (!labels.length)
-                throw Error('请先填写本次形态目录，供人工确认和规则统计使用。');
-            const scope = { ...selection, marketplace: selection.marketplace??'US', currency: marketSiteCurrency(selection.marketplace??'US') }, params = { poolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-taxonomy/v1', allowedLabels: labels } }, hash = JSON.stringify({ scope, params });
+            const scope = { ...selection, marketplace: selection.marketplace??'US', currency: marketSiteCurrency(selection.marketplace??'US') }, params = { poolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-after-collection/v1', allowedLabels: [] } }, hash = JSON.stringify({ scope, params });
             const command = pendingStart.current?.hash === hash ? pendingStart.current : { hash, studyKey: browserRequestId(), runKey: browserRequestId() };
             pendingStart.current = command;
             const study = await createShapeStudy(scope, command.studyKey, signal), next = await startShapeRun(study.id, params, command.runKey, signal);
@@ -133,7 +130,8 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         setError(null);
         try {
             const catalog = run.latestRevision ?? { taxonomyVersion: run.params.catalog.taxonomyVersion, labels: run.params.catalog.allowedLabels };
-            const request = { referenceAttemptId: run.source.referenceAttemptId, historyAttemptIds: run.source.historyAttemptIds, expectedParentRevisionId: parent, selectedAsins: selected, taxonomyVersion: catalog.taxonomyVersion, labels: catalog.labels, assignments: selected.filter(asin => Object.hasOwn(assignments, asin)).map(asin => ({ asin, labelId: assignments[asin] || null })), bands: priceBands(bands), note };
+            const manual = buildManualShapeCatalog(catalog.labels,selected,assignments);
+            const request = { referenceAttemptId: run.source.referenceAttemptId, historyAttemptIds: run.source.historyAttemptIds, expectedParentRevisionId: parent, selectedAsins: selected, taxonomyVersion: catalog.taxonomyVersion, labels: manual.labels, assignments: manual.assignments, bands: priceBands(bands), note };
             const hash = JSON.stringify({ id: run.id, request }), command = pendingSave.current?.hash === hash ? pendingSave.current : { hash, key: browserRequestId() };
             pendingSave.current = command;
             const saved = await saveShapeRevisionAnalysis(run.id, request, command.key, signal),revision=saved.revision;
@@ -181,14 +179,14 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
    <div className="ss-market-query-row"><span className="ss-market-query-label">选择站点</span><MarketSiteSelector value={selection.marketplace??'US'} onChange={marketplace=>onSelectionChange({marketplace,nodeIdPath:''})} disabled={busy}/></div>
    <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={busy}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!selection.nodeIdPath} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID，例如 13280971" required disabled={busy}/></div></div>
     <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><label>起始月 <input type="month" value={selection.fromMonth} max={selection.toMonth} onChange={e=>onSelectionChange({fromMonth:e.target.value})} required disabled={busy}/></label><label>结束月 <input type="month" value={selection.toMonth} max={maxMonth} onChange={e=>onSelectionChange({toMonth:e.target.value})} required disabled={busy}/></label></div>
-    <details className="market-shape-query-options"><summary>形态目录与采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={100} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={busy}/></label><label>本次形态目录（每行：名称|判断依据）<textarea value={taxonomy} onChange={e=>setTaxonomy(e.target.value)} placeholder="例如：层架式|灯具带有储物或展示层架" rows={3} disabled={busy}/></label></details>
-    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={busy}>{busy?'提交中…':'采集商品并生成规则统计'}</button><button className="ss-market-reset-btn" type="button" disabled={busy} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setTaxonomy('');setPoolSize(100);}}>重置条件</button></div>
+    <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={100} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={busy}/></label></details>
+    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={busy}>{busy?'提交中…':'筛选市场'}</button><button className="ss-market-reset-btn" type="button" disabled={busy} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);}}>重置条件</button></div>
    </div></form>
   <div className="market-shape-query-footer"><details><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p></details>
   {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</div>
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，变更操作暂停。</p>}
  </section>
- {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点、研究月份和形态目录后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>采集商品并完成人工形态确认后生成价格带报告；缺失字段保持未知。</span></div></LaunchSection>}
+ {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>先采集商品，再在 TOP 销售表标注形态并保存价格带报告；缺失字段保持未知。</span></div></LaunchSection>}
  {run && <>{report && <MarketShapeDashboard report={report}/>}{!report && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>

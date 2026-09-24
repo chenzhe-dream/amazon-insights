@@ -36,7 +36,6 @@ test("market submissions work on insecure HTTP with one node and preserve retry 
         assert.deepEqual(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID, random: typeof crypto.getRandomValues })), { secure: false, uuid: "undefined", random: "function" });
         let button = "筛选市场";
         if (view === "analysis") { await page.getByText("分析设置与任务管理", {exact:true}).click(); button = "开始总览分析"; }
-        if (view === "shapes") { await page.getByText("形态目录与采集选项", {exact:true}).click(); await page.getByLabel("本次形态目录（每行：名称|判断依据）").fill("按压式|按压出芯"); button = "采集商品并生成形态建议"; }
         if (view === "keywords") { await page.getByLabel("产品核心名", { exact: true }).fill("gel pens"); await page.getByLabel("类目说明", { exact: true }).fill("中性笔"); button = "采集关键词并分析"; }
         if (view === "themes") button = "拉取见解";
         await page.getByRole("button", { name: button, exact: true }).click();

@@ -44,6 +44,8 @@
 
 ## 2. 商品形态与价格带
 
+2026-09-24 流程校正：原版先按类目采集商品，再在 TOP 销售表逐条或批量标注形态；采集前不要求填写形态目录。当前本地规则版据此以空 `allowedLabels` 启动采集，在人工保存统计版本时把实际填写的形态名称写入该 revision 的标签与分组。未标注商品保留为未分类；未单独记录的判断依据明确标为未记录。既有带目录的任务与历史版本继续按保存内容读取，单纯查看报告不重新采集。
+
 | 原版职责 / 文件与符号 | 当前职责 / 文件与符号 | 边界 |
 | --- | --- | --- |
 | `sellersprite-market-structure-section.tsx::SellerSpriteMarketStructureSection` → `sorftime-category-dashboard-view.tsx::SorftimeCategoryDashboardView` | `app/market-shape-section.tsx::MarketShapeSection` 任务/人工编辑；`app/market-shape-report.tsx::MarketShapeReport`、`market-shape-dashboard.tsx::MarketShapeDashboard`、`market-shape-product-table.tsx::MarketShapeProductTable` | 分离任务 owner 与纯报表 |

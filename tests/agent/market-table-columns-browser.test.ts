@@ -18,7 +18,7 @@ for(const mode of ['shape','keyword'] as const){
   await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body style="margin:20px"><div id="root"></div><script type="module" src="/tests/agent/helpers/market-${mode}-browser-harness.tsx"></script></body></html>`)});if(!url.pathname.startsWith('/api/'))return route.continue();if(req.method()!=='GET')writes++;return route.fulfill(url.pathname.endsWith(mode==='shape'?'/shape-price':'/keywords')?{json:sample}:{status:404,json:{}});});
   await page.goto(`${origin}/?${mode==='shape'?`shapeRun=${shapeRunId}`:`keywordRun=${keywordRunId}`}`);
   const region=page.getByRole('region',{name:mode==='shape'?'形态人工确认表':'关键词参考月指标'}),table=region.locator('table');await table.waitFor();
-  if(mode==='shape')await table.getByLabel('B000000001 人工形态').selectOption('shelf');
+  if(mode==='shape')await table.getByLabel('B000000001 人工形态').fill('层架式');
   const before=await columnIds(table,'thead th'),widths=await table.locator('col').evaluateAll(nodes=>Object.fromEntries(nodes.map(n=>[n.getAttribute('data-column-id'),(n as HTMLElement).style.width])));
   const beforeRows=await table.locator('tbody tr').allTextContents();
   const cellValues=await table.locator('tbody tr:first-child > *').evaluateAll(nodes=>Object.fromEntries(nodes.map(node=>[node.getAttribute('data-column-id'),node.textContent])));
@@ -37,7 +37,7 @@ for(const mode of ['shape','keyword'] as const){
   else await page.locator('details.market-shape-table-options > summary').click();
   await page.getByRole('button',{name:mode==='shape'?'重置商品列顺序':'重置关键词列顺序',exact:true}).click();
   assert.deepEqual(await columnIds(table,'thead th'),before);assert.deepEqual(await table.locator('tbody tr').allTextContents(),beforeRows);
-  if(mode==='shape')assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),'shelf');
+  if(mode==='shape')assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),'层架式');
   await page.setViewportSize({width:390,height:844});
   const geometry=await region.evaluate(el=>{el.scrollLeft=250;return {scroll:el.scrollLeft,document:document.documentElement.scrollWidth,viewport:innerWidth};});
   assert.ok(geometry.scroll>0);assert.ok(geometry.document<=geometry.viewport+1,JSON.stringify(geometry));

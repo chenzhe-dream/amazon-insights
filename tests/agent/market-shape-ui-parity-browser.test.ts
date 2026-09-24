@@ -19,11 +19,11 @@ test('supplied shape table filters and sorts real rows while preserving drafts a
  const table=page.getByRole('region',{name:'形态人工确认表'});await table.waitFor();
  assert.match(await table.innerText(),/人工确认与来源/);
  assert.equal(await page.getByText('等待本版本的保存解释').count(),0);
- const classification=page.locator('details').filter({has:page.locator('summary',{hasText:'形态目录与采集选项'})});
+ const classification=page.locator('details').filter({has:page.locator('summary',{hasText:'采集选项'})});
  assert.equal(await classification.count(),1,'saved results keep collection options in a compact disclosure');
  assert.equal(await classification.getAttribute('open'),null);
  await classification.locator('summary').click();
- await page.getByLabel('本次形态目录（每行：名称|判断依据）').fill('层架式|带有层架');
+ assert.equal(await page.getByLabel('本次形态目录（每行：名称|判断依据）').count(),0);
  await classification.locator('summary').click();
  const positions=await page.evaluate(()=>({
   dashboard:document.querySelector('.category-node-trend-card')!.getBoundingClientRect().top,
@@ -45,9 +45,11 @@ test('supplied shape table filters and sorts real rows while preserving drafts a
  assert.equal(await advanced.getAttribute('open'),null,'bulk editing and column controls stay compact above the table');
  assert.equal(await page.getByLabel('批量形态',{exact:true}).isVisible(),false);
  await advanced.locator('summary').click();
- await page.getByLabel('批量形态',{exact:true}).selectOption('shelf');
+ await page.getByLabel('批量形态',{exact:true}).fill(' 层架式 ');
  await page.getByRole('button',{name:'应用到所选',exact:true}).click();
- assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),'shelf');
+ assert.equal(await table.getByLabel('B000000001 人工形态').inputValue(),' 层架式 ');
+ await page.getByLabel('筛选商品形态',{exact:true}).selectOption('层架式');
+ assert.match(await table.locator('tbody').innerText(),/B000000001/,'shape filter uses the same normalized name as the saved revision');
  const output='test-results/market-shape-rule-ui';await mkdir(output,{recursive:true});await page.screenshot({path:`${output}/desktop.png`,fullPage:true});
  await page.setViewportSize({width:390,height:844});
  const overflow=await page.evaluate(()=>({width:document.documentElement.scrollWidth,viewport:innerWidth,items:[...document.querySelectorAll('body *')].filter(e=>{const r=e.getBoundingClientRect();return r.width>innerWidth&&getComputedStyle(e).overflowX==='visible'}).slice(0,12).map(e=>({tag:e.tagName,cls:e.className,width:e.getBoundingClientRect().width}))}));

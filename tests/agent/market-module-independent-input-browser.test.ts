@@ -74,9 +74,7 @@ test('each market module keeps its own category through navigation and refresh',
   await page.getByRole('alert').waitFor();
   assert.equal(writes.at(-1)?.body.nodeQuery, '111111');
   await nav.getByRole('button', { name: '商品形态及价格带' }).click();
-  await page.getByText('形态目录与采集选项', { exact: true }).click();
-  await page.getByLabel('本次形态目录（每行：名称|判断依据）').fill('层架式|带有置物层架');
-  await page.getByRole('button', { name: '采集商品并生成形态建议' }).click();
+  await page.getByRole('button', { name: '筛选市场', exact: true }).click();
   await page.getByRole('alert').waitFor();
   assert.equal(writes.at(-1)?.body.nodeIdPath, '222222');
   await nav.getByRole('button', { name: '类目关键词洞察' }).click();

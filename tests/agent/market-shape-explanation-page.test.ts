@@ -33,7 +33,7 @@ test('manual save exposes analysis, retry and history without triggering work on
   if(url.pathname.endsWith('/shape-price'))return route.fulfill({json:current});return route.fulfill({status:404,json:{}});
  });
  const revisionId=shapeRevisionId;
- await page.goto(`${origin}/?shapeRun=${shapeRunId}`);await page.getByLabel('B000000001 人工形态').selectOption('shelf');await page.getByRole('button',{name:'确认并重新计算'}).click();
+ await page.goto(`${origin}/?shapeRun=${shapeRunId}`);await page.getByLabel('B000000001 人工形态').fill('层架式');await page.getByRole('button',{name:'确认并重新计算'}).click();
  const analysis=page.getByRole('region',{name:'形态解释分析状态'});await analysis.waitFor();await analysis.getByText('已完成分片 6 / 12',{exact:true}).waitFor();assert.equal(await analysis.locator('.market-theme-spinner').count(),1);assert.equal(writes.length,1);
  await mkdir('test-results/market-shape-explanation-page',{recursive:true});await analysis.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-shape-explanation-page/waiting-desktop.png'});
  state=explanationPageRun('failed');await page.clock.runFor(4100);await analysis.getByText('分析失败',{exact:true}).waitFor();

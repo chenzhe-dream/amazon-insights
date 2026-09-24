@@ -47,7 +47,7 @@ test('shape page requires human confirmation, saves a numeric version and reopen
     assert.equal(await assignment.inputValue(), '');
     await page.getByText('模型建议：层架式', { exact: true }).waitFor();
     assert.equal(writes.length, 0);
-    await assignment.selectOption('shelf');
+    await assignment.fill('层架式');
     await page.getByRole('button', { name: '确认并重新计算' }).click();
     const report = page.getByRole('region', { name: '形态价格带版本报告' });
     await report.waitFor();
@@ -62,10 +62,10 @@ test('shape page requires human confirmation, saves a numeric version and reopen
     await page.reload();
     await report.waitFor();
     assert.equal(writes.length, 1);
-    assert.equal(await page.getByLabel('B000000001 人工形态').inputValue(), 'shelf');
+    assert.equal(await page.getByLabel('B000000001 人工形态').inputValue(), '层架式');
     current.run.latestRevision!.labels[0].label = '人工分类修订';
     await page.getByRole('button', { name: '刷新形态状态' }).click();
-    await page.getByRole('option', { name: '人工分类修订', exact: true }).waitFor({ state: 'attached' });
+    await page.locator('datalist#market-shape-name-options option[value="人工分类修订"]').waitFor({ state: 'attached' });
     await page.getByText('模型建议：层架式', { exact: true }).waitFor();
     readFailure = true;
     await page.getByRole('button', { name: '刷新形态状态' }).click();
@@ -117,7 +117,7 @@ test('shape page requires human confirmation, saves a numeric version and reopen
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1));
     await policy.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-shape-page/source-policy-mobile.png'});
     await page.getByLabel('起始月',{exact:true}).fill('2020-01');
-    await page.getByRole('button',{name:'采集商品并生成规则统计'}).click();
+    await page.getByRole('button',{name:'筛选市场',exact:true}).click();
     await page.getByRole('alert').filter({hasText:'24'}).waitFor();
     assert.equal(writes.length,1,'unsupported month is rejected before any study or source write');
     assert.deepEqual(errors, []);
