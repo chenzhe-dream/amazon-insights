@@ -1,3 +1,5 @@
+import {collectShapeCategory} from '../services/market-shape-category-collector';
+import {ShapeCategoryMetricSchema} from '../../shared/market-shape-category-contracts';
 import {collectMarketProductHistory} from '../services/market-product-history-collector';
 import {inspectMarketShapeContinuation} from '../domain/market-research/shape-price-flow';
 import { z } from 'zod';
@@ -108,6 +110,15 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
     return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-history',asin:input.asin,metric:'SalesVolume',points:result.points}}],result.status,result.evidence,{asin:input.asin,metric:'SalesVolume',selectionInputSnapshotId:input.selectionInputSnapshotId});
   };
+  const category:MarketStepHandler=async({claim,signal})=>{
+    const input=z.object({metric:ShapeCategoryMetricSchema,selectionInputSnapshotId:snapshotId}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
+    const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+    if(!view||view.run.moduleKind!=='shape-price'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('Category is outside shape frontier');
+    const pool=await selected(claim,input.selectionInputSnapshotId,scope);if(pool.kind!=='products')invalid('Category selection differs');
+    const result=await collectShapeCategory({...input,scope,connector:deps.connectors.sorftime,jobId:claim.moduleRunId,signal});
+    if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+    return collected(scope,'overview',[input.metric],[{id:input.metric,data:{collection:'shape-category',metric:input.metric,points:result.points,stats:result.stats}}],result.status,result.evidence,{metric:input.metric,selectionInputSnapshotId:input.selectionInputSnapshotId});
+  };
   const pages: MarketStepHandler = async ({ claim, signal }) => {
     const input = pageInput.parse(claim.step.input), scope = await scopeFor(claim, signal);
     const result = await collectMarketKeywordPage({ ...input, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
@@ -163,7 +174,7 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope,'overview',[id],[{id,data:{collection:'overview-month',month:input.month,operation:input.operation,parameters:result.parameters}}],result.status,result.evidence,
       {month:input.month,operation:input.operation,parameters:result.parameters,issues:result.issues});
   };
-  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
+  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-shape-category':category, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
 }
 
 /** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */

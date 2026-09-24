@@ -19,10 +19,9 @@ import {
   shouldShowBuilderNotice,
   type BuilderNotice,
 } from "./lib/primary-admin";
-import { refreshedCatalog } from "./competitor-data";
-import { sorftimePriceStrategies, sorftimePriceStrategyMeta } from "./sorftime-price-strategy-data";
-import { sorftimeFbaFeeData, sorftimeFbaFeeMeta } from "./sorftime-fba-fee-data";
-import { sorftimeChildSales30d, sorftimeChildSalesMeta } from "./sorftime-child-sales-data";
+import { sorftimePriceStrategyMeta, type sorftimePriceStrategies } from "./sorftime-price-strategy-data";
+import { sorftimeFbaFeeMeta, type sorftimeFbaFeeData } from "./sorftime-fba-fee-data";
+import { sorftimeChildSalesMeta, type sorftimeChildSales30d } from "./sorftime-child-sales-data";
 import {
   sifListingTrafficMeta,
   childTrafficSegmentMeta,
@@ -34,7 +33,7 @@ import {
   type ChildTrafficVariant,
   type TrafficDisplayData,
 } from "./sif-listing-traffic-data";
-import { sifMonthlyTrafficTrend, sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
+import { sifMonthlyTrafficMeta, type SifMonthlyTrafficSeries } from "./sif-monthly-traffic-trend-data";
 import {
   manualVocDimensions,
   manualVocDisplayMeta,
@@ -52,10 +51,10 @@ import {
   sorftimeReviewAnalysisMeta,
   type SellerSpriteReviewAnalysisRecord,
 } from "./seller-sprite-review-analysis";
-import { sorftimeReviewAnalysisData, sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta } from "./sorftime-review-analysis-data";
-import { sorftimeSalesTrendData, sorftimeSalesTrendMeta } from "./sorftime-sales-trend-data";
+import { sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta, type sorftimeReviewAnalysisData } from "./sorftime-review-analysis-data";
+import { sorftimeSalesTrendMeta, type sorftimeSalesTrendData } from "./sorftime-sales-trend-data";
 import { resolveOverviewPrice, resolveOverviewRank } from "./lib/competitor-overview-fallback";
-import { sorftimeRatingData } from "./sorftime-rating-data";
+import type { sorftimeRatingData } from "./sorftime-rating-data";
 import { resolveFbaMetric, resolvePriceMetric, resolveRatingMetric } from "./lib/competitor-metric-resolution";
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
@@ -72,14 +71,14 @@ import { AsinSyncProgressSection, hasResumableFailedStages, UrlResumableAsinSync
 import { createIncompleteSyncRepair } from "./lib/sync-incomplete-repair-browser";
 import { BatchAsinInput } from "./batch-asin-input";
 import { KeywordFetchStatusSection } from "./keyword-fetch-status";
-import { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
-import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
+import type { sifKeywordAnalysisData } from "./sif-keyword-analysis-data";
+import type { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { TrafficFetchStatusSection } from "./traffic-fetch-status";
 import { TrafficDetailRecoveryControl } from './traffic-detail-recovery';
 import { CategoryNodeTrendSection } from "./category-node-trend-section";
-import { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
+import type { sorftimeCategoryTrendData } from "./sorftime-category-trend-data";
 import { LISTING_IMAGES_SOURCE_LABEL, ListingImagesSection } from "./listing-images-section";
-import { listingImageRemarks } from "./listing-image-remarks";
+import type { listingImageRemarks } from "./listing-image-remarks";
 import { projectSegmentName } from "../shared/project-segment-name";
 import { ProjectLibraryPage, type AnalysisProject } from "./project-library-panel";
 import { SellingPointTranslation } from "./selling-point-translation";
@@ -127,7 +126,7 @@ import { createRuntimeAnalysisScopeGuard, readAndCommitRuntimeAnalysisData, type
 import { useXydcOrderProgress } from "./lib/use-xydc-order-progress";
 import { StageOutputGapCard } from "./stage-output-gap-card";
 import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
-import { sorftimeListingContentData } from "./sorftime-listing-content-data";
+import type { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { buildTrafficAnalysisConclusion, type TrafficHealth } from "./traffic-analysis-conclusion";
 import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
 import { XydcVariantSection } from "./xydc-variant-section";
@@ -1295,7 +1294,7 @@ type MonthlyTrafficHover = {
 
 function MonthlyTrafficStackChart({
   products,
-  monthlyTrendByAsin = sifMonthlyTrafficTrend,
+  monthlyTrendByAsin = {},
 }: {
   products: Product[];
   monthlyTrendByAsin?: Record<string, SifMonthlyTrafficSeries>;
@@ -1442,9 +1441,9 @@ function MonthlyTrafficStackChart({
   );
 }
 
-function ProductHeader({ product, index, market, authoritativeImage = false }: { product: Product; index: number; market?: MarketCode; authoritativeImage?: boolean }) {
+function ProductHeader({ product, index, market }: { product: Product; index: number; market?: MarketCode }) {
   const marketInfo = markets[market ?? "US"];
-  const image = amazonMediaSrc(authoritativeImage || !product.image ? product.image : sorftimeListingContentData[product.asin]?.mainImage || product.image);
+  const image = amazonMediaSrc(product.image);
   return <div className="compare-product-head">
     <span className="series-dot" style={{ background: colors[index] }}>{index + 1}</span>
     {image ? <img src={image} alt="" referrerPolicy="no-referrer" /> : <div className="image-placeholder">ASIN</div>}
@@ -1790,7 +1789,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flyoutPanelRef = useRef<HTMLElement | null>(null);
   const flyoutPinnedRef = useRef(false);
-  const [catalogItems, setCatalogItems] = useState<Product[]>(() => refreshedCatalog as Product[]);
+  const [catalogItems, setCatalogItems] = useState<Product[]>([]);
   const [runtimeAnalysisData, setRuntimeAnalysisData] = useState<RuntimeAnalysisDataSnapshot | null>(null);
   const [runtimeAnalysisDataScope, setRuntimeAnalysisDataScope] = useState<string | null>(null);
   const runtimeAnalysisRequest = useRef(0);
@@ -2197,51 +2196,30 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   const trafficOrigin = trafficSnapshotState.kind === "dynamic"
     ? "dynamic" as const
     : trafficSnapshotState.kind === "legacy" ? "legacy" as const : "pending" as const;
+  const scopedRuntimeAnalysisData = runtimeAnalysisDataScope === runtimeScopeKey ? runtimeAnalysisData : null;
   const stageOutputView = useMemo(
     () => buildStageOutputView({ ...stageOutputSnapshot, traffic: currentDisplayVersion || blockReportResults
       ? stageOutputSnapshot.traffic : visibleTrafficStage.traffic }, {
-      keywordAnalysisByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.keywords.analysisByAsin as typeof sifKeywordAnalysisData
-        : sifKeywordAnalysisData,
-      keywordEnrichmentByKeyword: runtimeAnalysisData
-        ? runtimeAnalysisData.keywords.enrichmentByKeyword as typeof sifKeywordEnrichmentData
-        : sifKeywordEnrichmentData,
+      keywordAnalysisByAsin: scopedRuntimeAnalysisData?.keywords.analysisByAsin as typeof sifKeywordAnalysisData ?? {},
+      keywordEnrichmentByKeyword: scopedRuntimeAnalysisData?.keywords.enrichmentByKeyword as typeof sifKeywordEnrichmentData ?? {},
       // Global generated review files carry no project/run/job ownership.
       reviewAnalysisByAsin: {} as typeof sorftimeReviewAnalysisData,
-      ratingByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.reviews.ratingByAsin as typeof sorftimeRatingData
-        : sorftimeRatingData,
-      salesTrendByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.salesTrend.trendByAsin as typeof sorftimeSalesTrendData
-        : sorftimeSalesTrendData,
-      fbaFeeByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.fba.feeByAsin as typeof sorftimeFbaFeeData
-        : sorftimeFbaFeeData,
-      listingContentByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.listing.contentByAsin as typeof sorftimeListingContentData
-        : sorftimeListingContentData,
-      categoryTrendByNode: runtimeAnalysisData
-        ? runtimeAnalysisData.category.trendByNode as typeof sorftimeCategoryTrendData
-        : sorftimeCategoryTrendData,
-      childSalesByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.childSales.rowsByAsin as typeof sorftimeChildSales30d
-        : sorftimeChildSales30d,
-      priceStrategyByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.priceStrategy.strategyByAsin as typeof sorftimePriceStrategies
-        : sorftimePriceStrategies,
-      imageRemarksByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.imageRemarks.remarksByAsin as typeof listingImageRemarks
-        : listingImageRemarks,
-      imageRemarkOutcomesByAsin: runtimeAnalysisData
-        ? runtimeAnalysisData.imageRemarks.outcomesByAsin
-        : {},
+      ratingByAsin: scopedRuntimeAnalysisData?.reviews.ratingByAsin as typeof sorftimeRatingData ?? {},
+      salesTrendByAsin: scopedRuntimeAnalysisData?.salesTrend.trendByAsin as typeof sorftimeSalesTrendData ?? {},
+      fbaFeeByAsin: scopedRuntimeAnalysisData?.fba.feeByAsin as typeof sorftimeFbaFeeData ?? {},
+      listingContentByAsin: scopedRuntimeAnalysisData?.listing.contentByAsin as typeof sorftimeListingContentData ?? {},
+      categoryTrendByNode: scopedRuntimeAnalysisData?.category.trendByNode as typeof sorftimeCategoryTrendData ?? {},
+      childSalesByAsin: scopedRuntimeAnalysisData?.childSales.rowsByAsin as typeof sorftimeChildSales30d ?? {},
+      priceStrategyByAsin: scopedRuntimeAnalysisData?.priceStrategy.strategyByAsin as typeof sorftimePriceStrategies ?? {},
+      imageRemarksByAsin: scopedRuntimeAnalysisData?.imageRemarks.remarksByAsin as typeof listingImageRemarks ?? {},
+      imageRemarkOutcomesByAsin: scopedRuntimeAnalysisData?.imageRemarks.outcomesByAsin ?? {},
       trafficData: trafficData ?? {
         overview: {},
         monthlyTrend: {},
         meta: sifListingTrafficMeta,
       },
     }, { authoritative: Boolean(displayVersionPending || displayVersionReadFailed || displayVersionMissing || currentDisplayVersion || (stageOutputJobId && resumedProjectId === priorityRecoveryProjectId)) }),
-    [runtimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId, currentDisplayVersion, displayVersionReadFailed, displayVersionPending, displayVersionMissing, blockReportResults],
+    [scopedRuntimeAnalysisData, stageOutputSnapshot, visibleTrafficStage.traffic, trafficData, stageOutputJobId, resumedProjectId, currentDisplayVersion, displayVersionReadFailed, displayVersionPending, displayVersionMissing, blockReportResults],
   );
   const {
     keywordAnalysisByAsin, keywordEnrichmentByKeyword, ratingByAsin,
@@ -2296,7 +2274,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         setCatalogItems(payload.items);
       }
     } catch {
-      // 保留打包快照
+      // 等待运行时目录恢复；不显示代码仓库中的历史目录数据。
     }
   }, []);
 
@@ -3452,7 +3430,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
             gapItems={stageOutputSnapshot.fba && "gap" in stageOutputSnapshot.fba ? stageOutputSnapshot.fba.gap.items : []}
           />
         ) : null}
-        <ComparisonOverviewCard description={<>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</>} badge={<SourceBadge>MCP 综合</SourceBadge>}><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market} authoritativeImage={Boolean(currentDisplayVersion)}/></th>)}</tr></thead><tbody>
+        <ComparisonOverviewCard description={<>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</>} badge={<SourceBadge>MCP 综合</SourceBadge>}><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
           <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}><SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/></td>)}</tr>
           <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const metric=resolveRatingMetric(ratingByAsin[p.asin],p);return <td key={p.asin}>{metric.value?<>{metric.value.rating===null?<span>— / {metric.value.reviewCount?.toLocaleString() ?? "—"}</span>:<RatingCell rating={metric.value.rating} reviews={metric.value.reviewCount}/>} {metric.label?<small className="no-data-text">{metric.label}</small>:null}</>:<span className="no-data-text">{metric.label}</span>}</td>})}</tr>

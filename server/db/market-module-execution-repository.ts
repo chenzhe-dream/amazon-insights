@@ -2,7 +2,7 @@ import type { LocalAdmission } from './concurrency-control-repository';
 import type { MarketAnalysisScope, MarketJsonValue } from "../../shared/market-analysis-contracts";
 
 export const MARKET_MODULE_KINDS = ["overview", "shape-price", "keywords", "customer-themes"] as const;
-export const MARKET_STEP_KINDS = ["collect-product-month", "collect-product-history", "collect-overview-month", "collect-keyword-page", "collect-keyword-trend", "collect-keyword-aba", "collect-customer-themes", "prepare-members", "prepare-keyword-pool", "prepare-model-batches", "reconcile", "model-batch", "rules", "report"] as const;
+export const MARKET_STEP_KINDS = ["collect-product-month", "collect-product-history", "collect-shape-category", "collect-overview-month", "collect-keyword-page", "collect-keyword-trend", "collect-keyword-aba", "collect-customer-themes", "prepare-members", "prepare-keyword-pool", "prepare-model-batches", "reconcile", "model-batch", "rules", "report"] as const;
 export type MarketModuleKind = typeof MARKET_MODULE_KINDS[number];
 export type MarketStepKind = typeof MARKET_STEP_KINDS[number];
 export type MarketExecutionActor = { organizationId: string; userId: string };

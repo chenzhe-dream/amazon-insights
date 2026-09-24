@@ -1,3 +1,5 @@
+import {buildShapeCategoryDashboard,normalizeShapeCategorySource} from '../../server/services/market-shape-category-collector';
+import {SHAPE_CATEGORY_METRICS} from '../../shared/market-shape-category-contracts';
 import {productHistoryPeriods} from '../../server/services/market-product-history-collector';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -65,6 +67,9 @@ test('original shape flow collects by category before any manual shape name and 
  assert.ok(await page.getByRole('cell',{name:'缺少完整月份',exact:true}).count()>0);
  await page.getByRole('cell',{name:'30',exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'test-results/market-shape-original-flow/historical-sales.png',fullPage:true});
+ current.run.categoryDashboard=buildShapeCategoryDashboard(SHAPE_CATEGORY_METRICS.map(metric=>({metric,status:'ready',sourceRef:'test',fetchedAt:'2026-09-24T00:00:00.000Z',...normalizeShapeCategorySource(metric,metric==='report'?{data:{category_stats_report:{top100_monthly_sales_volume:'200',top100_monthly_sales_amount:'300',top3_product_sales_volume_share:'17.52%',return_rate:'5.4%'}}}:{data:['2026-06=10','2026-07=0','2026-08=20']},'2026-08')})),'USD','2026-08');
+ await page.reload();await page.getByRole('img',{name:'类目月销量与估算销售额趋势',exact:true}).waitFor();await page.getByRole('img',{name:'Top3 销售额占比趋势',exact:true}).waitFor();
+ await page.getByText('17.52%',{exact:true}).waitFor();await page.screenshot({path:'test-results/market-shape-original-flow/category-dashboard.png',fullPage:true});
  await row.fill('层架式');
  await page.getByRole('button',{name:'确认并重新计算'}).click();
  await page.getByRole('region',{name:'形态价格带版本报告'}).waitFor();
