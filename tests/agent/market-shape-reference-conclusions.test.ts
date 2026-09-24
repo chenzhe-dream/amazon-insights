@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildReferenceConclusions } from "../../app/market-shape-reference/conclusions";
-import { ReferenceConclusionsView, ReferenceShapePriceConclusion } from "../../app/market-shape-reference/conclusions/view";
+import { ReferenceConclusionsView, ReferenceShapePriceConclusion, ReferenceBrandPriceConclusion } from "../../app/market-shape-reference/conclusions/view";
 import type { SorftimeCategoryDashboardReport } from "../../app/market-shape-reference/types";
 
 const product = (asin: string, shape: string, price: number, sales: number, year: string) => ({
@@ -24,6 +24,25 @@ const report: SorftimeCategoryDashboardReport = {
   productSalesTotals: { last3Months: 900, last6Months: 1800, y2024: 3600, y2025: 3600, monthsAvailable: 12 },
   topLinkCount: 2,
 };
+
+test("brand price cards explain pending evidence and translate every research grade without changing results", () => {
+  const slot = buildReferenceConclusions(report, {}).brandPrice;
+  assert.equal(slot.status, "ready");
+  if (slot.status !== "ready") return;
+  const before = JSON.stringify(slot.result);
+  const html = renderToStaticMarkup(createElement(ReferenceBrandPriceConclusion, { result: slot.result }));
+  assert.doesNotMatch(html, />[^<]*GRAY/);
+  assert.match(html, /待验证/);
+  assert.match(html, /价格带内真实品牌仅 1 个，样本不足/);
+  assert.match(html, /样本：1 个商品 · 1 个品牌/);
+  assert.match(html, /当前价格带样本/);
+  for (const [grade, label] of [["GREEN", "优先研究"], ["YELLOW", "差异化研究"], ["RED", "暂缓"], ["GRAY", "待验证"]] as const) {
+    const result = { ...slot.result, priceBands: [{ ...slot.result.priceBands[0], grade }] };
+    const rendered = renderToStaticMarkup(createElement(ReferenceBrandPriceConclusion, { result }));
+    assert.match(rendered, new RegExp(`>${label}</span>`));
+  }
+  assert.equal(JSON.stringify(slot.result), before);
+});
 
 test("builds the five original rich conclusion sections from the same scoped products", () => {
   const result = buildReferenceConclusions(report, { A: "Desk", B: "Floor" });

@@ -3257,3 +3257,22 @@
 .market-ui-reference .demo-welcome-tabs a b{font-size:11px}
 .market-ui-reference .demo-welcome-tabs a small{font-size:10px;color:#8b96a4}
 @media(max-width:760px){.market-ui-reference .demo-welcome-card{margin-left:16px;margin-right:16px}}
+
+/* Brand/price conclusions: labels and evidence stay scoped to this report area. */
+.market-ui-reference .brand-price-opportunity-grid{grid-template-columns:minmax(0,1fr);align-items:start}
+.market-ui-reference .brand-price-opportunity-card{min-width:0;padding:16px;overflow-wrap:anywhere}
+.market-ui-reference .brand-price-opportunity .listing-age-conclusion-summary{margin-top:10px;font-size:12px}
+.market-ui-reference .brand-price-scope-note{margin:0 0 16px;font-size:12px;line-height:1.65;color:#607086}
+.market-ui-reference .brand-price-opportunity-card .market-structure-dimension-head{align-items:center}
+.market-ui-reference .brand-price-opportunity-card h5{font-size:14px}
+.market-ui-reference .brand-price-grade{flex:none;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:650;line-height:1.5;background:#edf1f5;color:#475569}
+.market-ui-reference .brand-price-grade-green{background:#e7f5ed;color:#17653b}
+.market-ui-reference .brand-price-grade-yellow{background:#fff3d6;color:#805500}
+.market-ui-reference .brand-price-grade-red{background:#fff0ee;color:#a43125}
+.market-ui-reference .brand-price-sample{margin:0 0 10px;font-size:12px;color:#607086;line-height:1.5}
+.market-ui-reference .brand-price-finding{margin:0 0 4px;font-size:13px;font-weight:600;line-height:1.6;color:#24354a}
+.market-ui-reference .brand-price-trend{margin:0 0 12px;font-size:12px;line-height:1.6;color:#53657a}
+.market-ui-reference .brand-price-limitations{margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#f4f6f9;font-size:12px;line-height:1.6;color:#475569}
+.market-ui-reference .brand-price-limitations ul{margin:4px 0 0;padding-left:16px}
+.market-ui-reference .brand-price-opportunity-card .market-structure-dimension-list li{font-size:12px;line-height:1.65}
+@media(min-width:1100px){.market-ui-reference .brand-price-opportunity-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

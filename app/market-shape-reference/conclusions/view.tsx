@@ -1,10 +1,12 @@
 import { LaunchSection } from "../../launch-section";
 import { marketStructureVerdictLabel } from "./market-structure-synthesis-analysis";
 import type { ReferenceConclusions } from "./index";
+import type { ResearchGrade } from "./brand-price-opportunity-analysis";
 
 type Ready = { [K in keyof ReferenceConclusions]: Extract<ReferenceConclusions[K], { status: "ready" }>["result"] };
 const tone: Record<string, string> = { green: "listing-age-entry-green", light_green: "listing-age-entry-light-green", yellow: "listing-age-entry-yellow", red: "listing-age-entry-red", gray: "listing-age-entry-gray" };
 const confidence = { high: "高", medium: "中", low: "低", insufficient: "不足" };
+const researchGradeLabels: Record<ResearchGrade, string> = { GREEN: "优先研究", YELLOW: "差异化研究", RED: "暂缓", GRAY: "待验证" };
 const sentences = (value: string) => value.split("。").map(part => part.trim()).filter(Boolean);
 
 export function ReferenceListingYearConclusion({ result, embedded = false }: { result: Ready["listingYear"]; embedded?: boolean }) {
@@ -34,8 +36,15 @@ export function ReferenceShapePriceConclusion({ result, embedded = false }: { re
 }
 
 export function ReferenceBrandPriceConclusion({ result, embedded = false }: { result: Ready["brandPrice"]; embedded?: boolean }) {
-  const body = <div className="listing-age-conclusion market-shape-saved-conclusion"><h4 className="listing-age-conclusion-title">{result.classification.headline}</h4><p>{result.summary}</p>
-      <div className="market-structure-dimension-grid">{result.priceBands.map(band => <article className="market-structure-dimension-card" key={band.priceBand}><h5>{band.priceBand} · {band.grade}</h5><p>{band.demandLabel} · {band.competitionLabel}</p><p>{band.trendLabel}</p><ul>{band.evidence.map((item, i) => <li key={i}>{item}</li>)}</ul></article>)}</div>
+  const body = <div className="listing-age-conclusion market-shape-saved-conclusion brand-price-opportunity"><h4 className="listing-age-conclusion-title">{result.classification.headline}</h4><p className="listing-age-conclusion-summary">{result.summary}</p>
+      <p className="brand-price-scope-note">价格带销量份额以当前商品池的销量为分母；CR1 / CR3 以当前价格带样本的销量为分母，分别表示第一品牌、前三品牌合计份额。以上均为样本内统计，不代表整个类目。</p>
+      <div className="market-structure-dimension-grid brand-price-opportunity-grid">{result.priceBands.map(band => <article className="market-structure-dimension-card brand-price-opportunity-card" key={band.priceBand}>
+        <header className="market-structure-dimension-head"><h5>{band.priceBand}</h5><span className={`brand-price-grade brand-price-grade-${band.grade.toLowerCase()}`}>{researchGradeLabels[band.grade]}</span></header>
+        <p className="brand-price-sample">样本：{band.linkCount} 个商品 · {band.brandCount} 个品牌</p>
+        <p className="brand-price-finding">{band.demandLabel} · {band.competitionLabel}</p><p className="brand-price-trend">{band.trendLabel}</p>
+        {band.limitations.length > 0 && <div className="brand-price-limitations"><strong>{band.grade === "GRAY" ? "待验证原因" : "判断限制"}</strong><ul>{band.limitations.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
+        <ul className="market-structure-dimension-list">{band.evidence.map((item, i) => <li key={i}>{item}</li>)}</ul>
+      </article>)}</div>
       <div className="market-structure-synthesis-extra"><p className="listing-age-conclusion-block-title">机会与风险</p><ul>{[...result.recommendedActions, ...result.risks].map((item, i) => <li key={i}>{item}</li>)}</ul></div>
     </div>;
   return embedded ? body : <LaunchSection title="品牌 × 价格带 · 机会结论" description="按需求、竞争和品牌布局筛选价格带" badge={<span className="source-badge">{result.analysisScope.validLinkCount} 条有效链接 · 置信度 {confidence[result.analysisScope.confidence]}</span>}>{body}</LaunchSection>;
