@@ -10,6 +10,7 @@ import { CategoryComboChart, MonopolyTrendChart } from "./charts";
 import { buildReferenceConclusions } from "./conclusions";
 import { ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
 import { ResizeHeader, TOP_SALES_COLUMNS, useReferenceColumnWidths, type TopSalesColumnId } from "./column-resize";
+import { marketSites } from "../../shared/market-sites";
 
 export type { SorftimeCategoryDashboardProduct, SorftimeCategoryDashboardReport } from "./types";
 
@@ -80,6 +81,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const bands = [...new Set(report.products.map(band))].sort((a, b) => (parseInt(a.replace(/\D/g, "")) || Infinity) - (parseInt(b.replace(/\D/g, "")) || Infinity));
   const shapes = [...new Set(report.products.map(p => shape(assignments, p)))].sort();
   const margins = [...new Set(report.products.map(p => marginLabel(p.grossProfitMargin)))];
+  const amazonDomain = marketSites.find(site => site.code === report.marketplace)?.amazonDomain;
   const counts = (get: (p: SorftimeCategoryDashboardProduct) => string) => new Map([...new Set(report.products.map(get))].map(value => [value, report.products.filter(p => get(p) === value).length]));
   const visible = report.products.filter(p =>
     (!brand?.length || brand.includes(p.brand || "未知")) && (!listingYear?.length || listingYear.includes(year(p.onlineDate))) &&
@@ -146,7 +148,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
         {visible.map(p => <tr key={p.asin} className={selected.has(p.asin) ? "top-sales-row-selected" : ""}>
           <td><input type="checkbox" aria-label={`选择 ${p.asin}`} checked={selected.has(p.asin)} disabled={disabled} onChange={e => onSelected(e.target.checked ? [...selectedAsins, p.asin] : selectedAsins.filter(a => a !== p.asin))} /></td>
           <td><input type="checkbox" aria-label={`批量选择 ${p.asin}`} checked={bulkSelected.includes(p.asin)} onChange={e => setBulkSelected(e.target.checked ? [...bulkSelected, p.asin] : bulkSelected.filter(asin => asin !== p.asin))} /></td><td>{p.rank}</td>
-          <td><div className="traffic-conclusion-product top-sales-product-cell">{p.imageUrl ? <img src={p.imageUrl} alt="" width={48} height={48} /> : null}<div><a href={`https://www.amazon.com/dp/${p.asin}`} target="_blank" rel="noreferrer">{p.asin} ↗</a><small>{p.title}</small></div></div></td>
+          <td><div className="traffic-conclusion-product top-sales-product-cell">{p.imageUrl ? <img src={p.imageUrl} alt="" width={48} height={48} /> : null}<div>{amazonDomain ? <a href={`https://www.${amazonDomain}/dp/${p.asin}`} target="_blank" rel="noreferrer">{p.asin} ↗</a> : <strong>{p.asin}</strong>}<small>{p.title}</small></div></div></td>
           <td>{p.brand || "未知"}</td><td><input aria-label={`${p.asin} 人工形态`} value={assignments[p.asin] ?? ""} disabled={disabled} onChange={e => onAssignment(p.asin, e.target.value)} /></td>
           <td>{p.onlineDate?.slice(0, 7) || "未知"}</td><td>{p.grossProfitMargin == null ? "未知" : `${n(p.grossProfitMargin, 1)}%`}</td><td>{marginLabel(p.grossProfitMargin)}</td><td>{n(p.price, 2)}</td><td>{band(p)}</td><td>{n(p.monthlySalesVolume)}</td><td>{n(p.monthlySalesAmount, 2)}</td><td><Trend product={p} /></td>
           {periods.map(period => <td key={period.key}>{n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
