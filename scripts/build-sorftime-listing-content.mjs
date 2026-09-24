@@ -1,6 +1,7 @@
 import { createRepairSafeRecordMap, isRepairIncomplete, reportIncompleteRepair } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./lib/sellersprite-mcp-client.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
@@ -13,8 +14,8 @@ import {
 import { readScopedSorftimeEvidence } from "./lib/scoped-sorftime-evidence.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const outPath = path.join(root, "app", "sorftime-listing-content-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const outPath = generatedAppDataPath(root, "sorftime-listing-content-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");

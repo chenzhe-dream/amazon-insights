@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./sellersprite-mcp-client.mjs";
 import { detectProductFamily } from "./product-family.mjs";
 import { localizeSellingPoints } from "./selling-point-zh.mjs";
@@ -8,7 +9,7 @@ import { localizeSpecifications } from "./specification-zh.mjs";
 import { extractExportArrayLiteral, readCachedArrayExport } from "./sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
-export const catalogPath = path.join(root, "app", "competitor-data.ts");
+export const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
 const rufusPath = path.join(root, "app", "rufus-voc-data.ts");
 
 /** Captures the generated catalog at the catalog phase boundary in the job mirror. */

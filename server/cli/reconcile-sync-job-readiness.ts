@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { generatedAppDataPath } from "../../scripts/lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
 
 import { loadLocalEnv } from "../../scripts/lib/local-env.mjs";
@@ -105,7 +106,7 @@ export async function createGeneratedListingEvidenceSource(
   } = {},
 ): Promise<GeneratedListingEvidenceSource> {
   const statusModule = await import("../../scripts/lib/asin-data-status.mjs");
-  const generatedPath = path.join(root, "app", "sorftime-listing-content-data.ts");
+  const generatedPath = generatedAppDataPath(root, "sorftime-listing-content-data.ts");
   const readReadiness = dependencies.readReadiness ?? statusModule.readAsinStageReadiness;
   return {
     async read(asins) {

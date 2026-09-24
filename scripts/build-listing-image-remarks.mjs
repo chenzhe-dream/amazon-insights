@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { reconcileListingImageRemarks } from "./lib/listing-image-identity.mjs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { randomUUID } from "node:crypto";
 import { hasCompleteImageRemarks } from "./lib/asin-data-status.mjs";
 import { imageRemarkOutcome } from "./lib/image-remark-outcome.mjs";
@@ -23,9 +24,9 @@ import { createImageRemarkCandidate, writeImageRemarkCandidate } from "./lib/ima
 loadLocalEnv();
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const listingPath = path.join(root, "app", "sorftime-listing-content-data.ts");
-const outPath = path.join(root, "app", "listing-image-remarks.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const listingPath = generatedAppDataPath(root, "sorftime-listing-content-data.ts");
+const outPath = generatedAppDataPath(root, "listing-image-remarks.ts");
 
 const SKILL_PROMPT = `你是电商 Listing 主辅图视觉分析助手。分析这张商品图片，只依据画面中可见内容，返回 JSON：
 {

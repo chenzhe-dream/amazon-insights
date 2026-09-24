@@ -2,6 +2,7 @@ import "server-only";
 
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "../../scripts/lib/generated-app-data-path.mjs";
 
 import { z } from "zod";
 
@@ -36,7 +37,7 @@ const RuntimeAnalysisDataQuerySchema = z.strictObject({
   asins: z.array(AsinSchema).min(3).max(10).refine(values => new Set(values).size === values.length),
 });
 
-const catalogPath = path.join(getProjectRoot(), "app", "competitor-data.ts");
+const catalogPath = generatedAppDataPath(getProjectRoot(), "competitor-data.ts");
 
 export async function readGeneratedXydcOrderProgress(scope: XydcOrderReadScope, families: readonly XydcVariantFamily[]) {
   if (!scope.currentRunId || !process.env.AGENT_DATABASE_URL) return null;

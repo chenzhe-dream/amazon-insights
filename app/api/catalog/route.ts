@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "../../../scripts/lib/generated-app-data-path.mjs";
 import { getProjectRoot } from "../../../scripts/lib/project-root.mjs";
 import { readCachedArrayExport } from "../../../scripts/lib/sync-cache.mjs";
 
-const catalogPath = path.join(getProjectRoot(), "app", "competitor-data.ts");
+const catalogPath = generatedAppDataPath(getProjectRoot(), "competitor-data.ts");
 
 export async function GET() {
   const items = readCachedArrayExport(catalogPath, "refreshedCatalog");

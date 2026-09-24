@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 
 import { readCachedDataExport } from "./sync-cache.mjs";
 import { getProjectRoot } from "./project-root.mjs";
@@ -12,44 +13,44 @@ export const PROJECTABLE_SYNC_STAGE_IDS = [
 const root = getProjectRoot();
 const projectionSources = {
   keywords: {
-    analysis: [path.join(root, "app", "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"],
-    enrichment: [path.join(root, "app", "sif-keyword-enrichment-data.ts"), "sifKeywordEnrichmentData"],
+    analysis: [generatedAppDataPath(root, "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"],
+    enrichment: [generatedAppDataPath(root, "sif-keyword-enrichment-data.ts"), "sifKeywordEnrichmentData"],
   },
   reviews: {
-    analysis: [path.join(root, "app", "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData"],
-    rating: [path.join(root, "app", "sorftime-rating-data.ts"), "sorftimeRatingData"],
+    analysis: [generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData"],
+    rating: [generatedAppDataPath(root, "sorftime-rating-data.ts"), "sorftimeRatingData"],
   },
   sales_trend: {
-    file: path.join(root, "app", "sorftime-sales-trend-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-sales-trend-data.ts"),
     exportName: "sorftimeSalesTrendData",
   },
   fba: {
-    file: path.join(root, "app", "sorftime-fba-fee-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-fba-fee-data.ts"),
     exportName: "sorftimeFbaFeeData",
   },
   listing: {
-    file: path.join(root, "app", "sorftime-listing-content-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-listing-content-data.ts"),
     exportName: "sorftimeListingContentData",
   },
   category: {
-    file: path.join(root, "app", "sorftime-category-trend-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-category-trend-data.ts"),
     exportName: "sorftimeCategoryTrendData",
   },
   traffic: {
-    listing: [path.join(root, "app", "sif-listing-traffic-raw-data.ts"), "sifListingTrafficRawByAsin"],
-    monthly: [path.join(root, "app", "sif-monthly-traffic-trend-raw-data.ts"), "sifMonthlyTrafficRawByAsin"],
+    listing: [generatedAppDataPath(root, "sif-listing-traffic-raw-data.ts"), "sifListingTrafficRawByAsin"],
+    monthly: [generatedAppDataPath(root, "sif-monthly-traffic-trend-raw-data.ts"), "sifMonthlyTrafficRawByAsin"],
   },
   child_sales: {
-    file: path.join(root, "app", "sorftime-child-sales-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-child-sales-data.ts"),
     exportName: "sorftimeChildSales30d",
   },
   price_strategy: {
-    file: path.join(root, "app", "sorftime-price-strategy-data.ts"),
+    file: generatedAppDataPath(root, "sorftime-price-strategy-data.ts"),
     exportName: "sorftimePriceStrategies",
   },
   image_remarks: {
-    remarks: [path.join(root, "app", "listing-image-remarks.ts"), "listingImageRemarks"],
-    outcomes: [path.join(root, "app", "listing-image-remarks.ts"), "listingImageRemarksMeta"],
+    remarks: [generatedAppDataPath(root, "listing-image-remarks.ts"), "listingImageRemarks"],
+    outcomes: [generatedAppDataPath(root, "listing-image-remarks.ts"), "listingImageRemarksMeta"],
   },
 };
 

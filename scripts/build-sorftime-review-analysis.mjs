@@ -1,6 +1,7 @@
 import { createRepairSafeRecordMap, hasCompleteReviewRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
 import {
   callSorftimeTool,
@@ -12,9 +13,9 @@ import { isForceRefresh, logCacheHit, readCachedDataExport, shouldUseCachedRecor
 import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const ratingPath = path.join(root, "app", "sorftime-rating-data.ts");
-const target = path.join(root, "app", "sorftime-review-analysis-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const ratingPath = generatedAppDataPath(root, "sorftime-rating-data.ts");
+const target = generatedAppDataPath(root, "sorftime-review-analysis-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");

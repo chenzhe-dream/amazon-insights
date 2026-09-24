@@ -35,7 +35,7 @@ function runBuilder(fixture, job, endpoint) {
       cwd: fixture,
       env: {
         ...process.env,
-        AGENT_FORMAL_WORKTREE_ROOT: 'fixture',
+        AGENT_FORMAL_WORKTREE_ROOT: '',
         AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: '0',
         AGENT_SYNC_JOB_ID: job.jobId,
         AGENT_SYNC_LISTING_STAGE_FILE: listingFile,

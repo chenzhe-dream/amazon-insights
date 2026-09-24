@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.mjs";
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport, readCachedArrayExport, hasCompleteKeywordRecord, hasCompleteReviewRecord } from "./sync-cache.mjs";
@@ -8,19 +9,19 @@ import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-
 const root = getProjectRoot();
 
 const paths = {
-  keywords: path.join(root, "app", "sif-keyword-analysis-data.ts"),
-  ratings: path.join(root, "app", "sorftime-rating-data.ts"),
-  reviews: path.join(root, "app", "sorftime-review-analysis-data.ts"),
-  sales: path.join(root, "app", "sorftime-sales-trend-data.ts"),
-  childSales: path.join(root, "app", "sorftime-child-sales-data.ts"),
-  priceStrategies: path.join(root, "app", "sorftime-price-strategy-data.ts"),
-  fbaFees: path.join(root, "app", "sorftime-fba-fee-data.ts"),
-  categoryTrends: path.join(root, "app", "sorftime-category-trend-data.ts"),
+  keywords: generatedAppDataPath(root, "sif-keyword-analysis-data.ts"),
+  ratings: generatedAppDataPath(root, "sorftime-rating-data.ts"),
+  reviews: generatedAppDataPath(root, "sorftime-review-analysis-data.ts"),
+  sales: generatedAppDataPath(root, "sorftime-sales-trend-data.ts"),
+  childSales: generatedAppDataPath(root, "sorftime-child-sales-data.ts"),
+  priceStrategies: generatedAppDataPath(root, "sorftime-price-strategy-data.ts"),
+  fbaFees: generatedAppDataPath(root, "sorftime-fba-fee-data.ts"),
+  categoryTrends: generatedAppDataPath(root, "sorftime-category-trend-data.ts"),
   voc: path.join(root, "app", "rufus-voc-data.ts"),
-  catalog: path.join(root, "app", "competitor-data.ts"),
-  traffic: path.join(root, "app", "sif-listing-traffic-raw-data.ts"),
-  listing: path.join(root, "app", "sorftime-listing-content-data.ts"),
-  imageRemarks: path.join(root, "app", "listing-image-remarks.ts"),
+  catalog: generatedAppDataPath(root, "competitor-data.ts"),
+  traffic: generatedAppDataPath(root, "sif-listing-traffic-raw-data.ts"),
+  listing: generatedAppDataPath(root, "sorftime-listing-content-data.ts"),
+  imageRemarks: generatedAppDataPath(root, "listing-image-remarks.ts"),
 };
 
 export const ASIN_SYNC_STAGE_IDS = [

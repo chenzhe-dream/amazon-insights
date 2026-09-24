@@ -798,7 +798,7 @@ test("a valid sync job adopts a legacy failed image slot before later-job retry"
   const endpoint = "http://127.0.0.1:" + address.port;
   const common = {
     AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "0",
-    AGENT_FORMAL_WORKTREE_ROOT: "fixture",
+    AGENT_FORMAL_WORKTREE_ROOT: "",
     OPENAI_BASE_URL: endpoint,
   };
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import {
   isForceRefresh,
@@ -11,8 +12,8 @@ import {
 import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const outPath = path.join(root, "app", "sorftime-rating-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const outPath = generatedAppDataPath(root, "sorftime-rating-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");

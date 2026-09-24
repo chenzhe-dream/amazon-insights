@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { canonicalTheme } from "./lib/voc-theme-merge.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
 const rufusPath = path.join(root, "app", "rufus-voc-data.ts");
-const sorftimeReviewPath = path.join(root, "app", "sorftime-review-analysis-data.ts");
-const salesPath = path.join(root, "app", "sorftime-sales-trend-data.ts");
+const sorftimeReviewPath = generatedAppDataPath(root, "sorftime-review-analysis-data.ts");
+const salesPath = generatedAppDataPath(root, "sorftime-sales-trend-data.ts");
 
 function readExport(filePath, exportName) {
   const source = fs.readFileSync(filePath, "utf8");

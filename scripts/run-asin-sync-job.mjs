@@ -2,6 +2,7 @@ import { runSorftimeCommand } from "./lib/sorftime-stream.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
 import {
   asinsNeedingMcpSync,
@@ -1146,7 +1147,7 @@ async function main() {
           ...keywordsResult.diagnostics,
           ...sifKeywordSchemaDiagnostics(
             keywordAsins,
-            readCachedDataExport(path.join(root, "app", "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"),
+            readCachedDataExport(generatedAppDataPath(root, "sif-keyword-analysis-data.ts"), "sifKeywordAnalysisData"),
           ),
         ];
         finalizeProcessedStageCohort(jobId, "keywords", keywordAsins, asins, {

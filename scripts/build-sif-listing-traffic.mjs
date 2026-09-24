@@ -1,6 +1,7 @@
 import { createRepairSafeRecordMap, isRepairIncomplete, reportIncompleteRepair } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
 import {
   isForceRefresh,
@@ -10,9 +11,9 @@ import {
 } from "./lib/sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const listingRawPath = path.join(root, "app", "sif-listing-traffic-raw-data.ts");
-const monthlyRawPath = path.join(root, "app", "sif-monthly-traffic-trend-raw-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const listingRawPath = generatedAppDataPath(root, "sif-listing-traffic-raw-data.ts");
+const monthlyRawPath = generatedAppDataPath(root, "sif-monthly-traffic-trend-raw-data.ts");
 
 const TRAFFIC_QUERY = {
   timePieceType: "latelyDay",

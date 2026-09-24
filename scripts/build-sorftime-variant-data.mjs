@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
 import { createSorftimeBudget } from "./lib/sorftime-request-budget.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -11,8 +12,8 @@ import {
 } from "./lib/sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const outPath = path.join(root, "app", "sorftime-variant-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const outPath = generatedAppDataPath(root, "sorftime-variant-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");

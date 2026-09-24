@@ -1,6 +1,7 @@
 import { createRepairSafeRecordMap, isRepairIncomplete, hasCompleteKeywordRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
 import { buildSifKeywordAnalysis } from "./lib/sif-keyword-transform.mjs";
 import { collectUniqueKeywords, enrichKeywords } from "./lib/sif-keyword-enrichment.mjs";
@@ -13,9 +14,9 @@ import {
 } from "./lib/sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
-const outPath = path.join(root, "app", "sif-keyword-analysis-data.ts");
-const enrichPath = path.join(root, "app", "sif-keyword-enrichment-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
+const outPath = generatedAppDataPath(root, "sif-keyword-analysis-data.ts");
+const enrichPath = generatedAppDataPath(root, "sif-keyword-enrichment-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");
