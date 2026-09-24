@@ -16,6 +16,33 @@ const report: SorftimeCategoryDashboardReport = {
   productSalesTotals: { last3Months: 600, last6Months: 1100, y2024: 1800, y2025: 1900, monthsAvailable: 24 }, topLinkCount: 100,
 };
 
+test("summary status distinguishes computed conclusions from missing evidence", () => {
+  const render = (value: SorftimeCategoryDashboardReport) => renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
+  const complete = render(report);
+  assert.match(complete, /规则结论已生成/);
+  assert.doesNotMatch(complete, /规则草稿/);
+  const missing = structuredClone(report);
+  missing.products[0].sales.y2024 = null;
+  const partial = render(missing);
+  assert.match(partial, /综合结论待补数据/);
+  assert.match(partial, /B000000001 缺少 2024 销量/);
+  assert.doesNotMatch(partial, /规则结论已生成/);
+});
+
+test("margin cards keep missing margins unknown and explain both denominators", () => {
+  const value = structuredClone(report);
+  value.products.push({ ...structuredClone(value.products[0]), asin: "B000000002", grossProfitMargin: null });
+  const before = JSON.stringify(value);
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={value.products.map(p => p.asin)} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.match(html, /毛利标签占比按有毛利数据的链接计算/);
+  assert.match(html, /缺失占比按全部所选链接计算/);
+  assert.match(html, /100%/);
+  assert.match(html, /50%/);
+  assert.match(html, /不含采购、头程、广告/);
+  assert.doesNotMatch(html, /有效链接平均毛利润率/);
+  assert.equal(JSON.stringify(value), before);
+});
+
 test("reference view renders the seven original regions from supplied evidence", () => {
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{ B000000001: "折叠款" }} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
   for (const heading of ["类目销量看板", "TOP 销售商品", "上架年份", "商品形态 · 销量占比", "商品形态 · 价格带", "品牌 · 价格带", "市场结构综合结论"]) assert.ok(html.includes(heading), heading);

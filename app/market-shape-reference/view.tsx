@@ -8,7 +8,7 @@ import { TopSalesMultiSelectFilter } from "./top-sales-multi-select-filter";
 import type { TopSalesMultiSelectFilterState } from "./multi-filter";
 import { CategoryComboChart, MonopolyTrendChart } from "./charts";
 import { buildReferenceConclusions } from "./conclusions";
-import { ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
+import { ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceMarginConclusion, ReferenceSummaryMetrics, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
 import { ResizeHeader, TOP_SALES_COLUMNS, useReferenceColumnWidths, type TopSalesColumnId } from "./column-resize";
 import { marketSites } from "../../shared/market-sites";
 
@@ -160,9 +160,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       </tbody></LaunchTable>
       <p className="market-research-note">毛利准入：≥70% 优先进入；≥60% 建议进入；≥50% 谨慎进入；低于50% 不建议进入。未知保持未知。</p>
       <MetricBars rows={marginGroups.map(([label, count]) => ({ label, value: count }))} />
-      <div className="listing-age-conclusion listing-age-entry-gray top-sales-margin-entry-conclusion"><div className="listing-age-conclusion-head"><div><p className="listing-age-conclusion-eyebrow">毛利润率 · 市场准入</p><h4 className="listing-age-conclusion-title">{marginConclusion?.headline ?? "历史销量不足，无法生成原版毛利准入结论"}</h4></div></div>
-        {marginConclusion ? <><p>有效毛利 {marginConclusion.withMarginCount} / {marginConclusion.totalLinks} 链接；平均毛利 {n(marginConclusion.avgMarginPct, 1)}%。</p><ul>{marginConclusion.bullets.map((item, i) => <li key={i}>{item}</li>)}</ul></> : <p>缺失历史销量保留未知，补齐后可生成分层结论。</p>}
-      </div>
+      {marginConclusion ? <ReferenceMarginConclusion result={marginConclusion} /> : <div className="listing-age-conclusion listing-age-entry-gray shape-summary-panel"><h4 className="listing-age-conclusion-title">毛利准入结论待补数据</h4><p className="shape-summary-note">{conclusions.margin.status === "insufficient" ? conclusions.margin.reason : "缺失历史销量保留未知，补齐后可生成分层结论。"}</p></div>}
     </LaunchSection>
 
     <LaunchSection title="上架年份 · 销量结构分析" description="按已选商品的真实历史销量汇总；缺失历史不补零" badge={<span className="source-badge">{yearly.length} 年份组</span>}>
@@ -182,11 +180,13 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       <AggregateTable rows={brandBands} total={analysis.synthesis.totalSales} />
       {conclusions.brandPrice.status === "ready" ? <ReferenceBrandPriceConclusion result={conclusions.brandPrice.result} embedded /> : <p className="market-research-note">{conclusions.brandPrice.reason}</p>}
     </LaunchSection>
-    <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">规则草稿</span>}>
-      <p>所选 {active.length} 个链接；近30天销量 {n(currentUnits)}，销售额 {n(currentAmount, 2)}。近6个月历史销量 {n(periodTotal("last6Months"))}。</p>
-      <p>形态数量 {byShape.length}；品牌价格带组合 {brandBands.length}。毛利准入：{marginGroups.map(([label, count]) => `${label.replace("—", "未知")} ${count}`).join("；") || "未知"}。</p>
-      {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} embedded /> : <p className="market-research-note">{conclusions.synthesis.reason}</p>}
-      <p className="market-research-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p>
+    <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">{conclusions.synthesis.status === "ready" ? "规则结论已生成" : "综合结论待补数据"}</span>}>
+      <div className="shape-summary-panel shape-summary-overview">
+        <ReferenceSummaryMetrics items={[["所选商品链接", n(active.length)], ["近30天销量", n(currentUnits)], ["近30天销售额（来源值）", n(currentAmount, 2)], ["近6个月历史销量", n(periodTotal("last6Months"))], ["形态分组（含未分类）", n(byShape.length)], ["品牌 × 价格带组合", n(brandBands.length)]]} />
+        <div className="shape-summary-selection"><strong>毛利准入分布</strong>{marginGroups.length ? marginGroups.map(([label, count]) => <span key={label}>{label.replace("—", "未知")} <b>{count} 条</b></span>) : <span>暂无所选样本</span>}</div>
+        {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} embedded /> : <div className="shape-summary-gap"><strong>综合判断尚缺数据</strong><p>{conclusions.synthesis.reason}。上方已获取的指标仍可查看。</p></div>}
+        <details className="shape-summary-source"><summary>数据范围与口径</summary><p className="shape-summary-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p></details>
+      </div>
     </LaunchSection>
   </div>;
 }

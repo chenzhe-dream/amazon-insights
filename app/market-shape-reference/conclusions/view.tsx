@@ -8,12 +8,32 @@ const tone: Record<string, string> = { green: "listing-age-entry-green", light_g
 const confidence = { high: "高", medium: "中", low: "低", insufficient: "不足" };
 const researchGradeLabels: Record<ResearchGrade, string> = { GREEN: "优先研究", YELLOW: "差异化研究", RED: "暂缓", GRAY: "待验证" };
 const sentences = (value: string) => value.split("。").map(part => part.trim()).filter(Boolean);
+const number = (value: number | null, suffix = "") => value == null || !Number.isFinite(value) ? "未知" : `${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}${suffix}`;
+
+export function ReferenceSummaryMetrics({ items }: { items: readonly (readonly [string, string])[] }) {
+  return <dl className="shape-summary-metrics">{items.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
+}
+
+export function ReferenceMarginConclusion({ result }: { result: Ready["margin"] }) {
+  // The structured cards replace these two generated statistic lines; all advice remains visible.
+  const advice = result.bullets.filter(item => !item.startsWith("标签分布：") && !item.startsWith("有效链接平均毛利润率"));
+  return <div className="listing-age-conclusion listing-age-entry-gray top-sales-margin-entry-conclusion shape-summary-panel">
+    <h4 className="listing-age-conclusion-title">毛利润率 · 市场准入</h4>
+    <p className="shape-summary-lead">{result.headline}</p>
+    <ReferenceSummaryMetrics items={[["平均毛利润率（平台费后）", number(result.avgMarginPct, "%")], ["有效毛利链接 / 所选链接", `${result.withMarginCount} / ${result.totalLinks}`], ["缺少毛利数据", `${result.missingCount} 条`]]} />
+    <div className="shape-summary-tiers">{result.tiers.map(tier => <div className={`shape-summary-tier shape-summary-tier-${tier.tone}`} key={tier.label}><span>{tier.label === "—" ? "毛利未知" : tier.label}</span><strong>{tier.count} 条</strong><span>{number(tier.pct, "%")}</span></div>)}</div>
+    <p className="shape-summary-note">毛利标签占比按有毛利数据的链接计算；缺失占比按全部所选链接计算。Sorftime 平台费后毛利不含采购、头程、广告，不等同于净利润。</p>
+    <div className="shape-summary-evidence"><h5>筛选建议与风险</h5><ul>{advice.map((item, i) => <li key={i}>{item}</li>)}</ul></div>
+  </div>;
+}
 
 export function ReferenceListingYearConclusion({ result, embedded = false }: { result: Ready["listingYear"]; embedded?: boolean }) {
-  const body = <div className={`listing-age-conclusion ${tone[result.classification.entryColor]}`}>
-      <h4 className="listing-age-conclusion-title">{result.classification.marketType}</h4>
-      <p>{result.classification.entryRecommendation}</p><p>{result.summary}</p>
-      <div className="market-structure-synthesis-extra"><p className="listing-age-conclusion-block-title">依据与风险</p><ul>{[...result.evidence, ...result.risks].map((item, i) => <li key={i}>{item}</li>)}</ul></div>
+  const body = <div className={`listing-age-conclusion shape-summary-panel listing-year-summary ${tone[result.classification.entryColor]}`}>
+      <header className="shape-summary-header"><h4 className="listing-age-conclusion-title">{result.classification.marketType}</h4><span className="source-badge">置信度：{confidence[result.analysisScope.confidence]}</span></header>
+      {result.classification.entryRecommendation !== result.classification.marketType && <p className="shape-summary-lead">{result.classification.entryRecommendation}</p>}
+      <p className="shape-summary-note">{result.analysisScope.sampleScope} · {result.analysisScope.salesPeriod}销量 · {result.analysisScope.validProductCount} 条有效链接</p>
+      <ReferenceSummaryMetrics items={[["近2年新品销量占比", number(result.coreMetrics.recent2ySalesShare, "%")], ["近2年新品效率指数", number(result.coreMetrics.recent2ySalesEfficiencyIndex)], ["3年以上老品销量占比", number(result.coreMetrics.older3ySalesShare, "%")]]} />
+      <div className="shape-summary-columns"><div className="shape-summary-evidence"><h5>判断依据</h5><ul>{result.evidence.map((item, i) => <li key={i}>{item}</li>)}</ul></div><div className="shape-summary-evidence"><h5>风险与限制</h5>{result.risks.length ? <ul>{result.risks.map((item, i) => <li key={i}>{item}</li>)}</ul> : <p>当前规则未列出额外风险，不代表不存在风险。</p>}</div></div>
     </div>;
   return embedded ? body : <LaunchSection title="上架年份 · 新品准入结论" description="按链接上架时间及近6个月销量识别新品机会" badge={<span className="source-badge">{result.analysisScope.validProductCount} 条有效链接 · 置信度 {confidence[result.analysisScope.confidence]}</span>}>{body}</LaunchSection>;
 }
