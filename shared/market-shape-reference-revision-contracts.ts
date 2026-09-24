@@ -1,3 +1,4 @@
+import {MarketShapeProductImagesPublicSchema} from './market-shape-product-image-contracts';
 import {z} from 'zod';
 import {MarketAnalysisScopeSchema} from './market-analysis-contracts';
 import {SorftimeShapePoolPublicSchema} from './market-shape-sorftime-contracts';
@@ -18,6 +19,7 @@ export const MarketShapeReferenceRevisionRequestSchema=z.object({
 export const MarketShapeReferenceRevisionDataSchema=z.object({
  scope:MarketAnalysisScopeSchema,
  pool:SorftimeShapePoolPublicSchema,
+ productImages:MarketShapeProductImagesPublicSchema.optional(),
  productHistory:ProductHistoryPublicSchema,
  productAmountHistory:ProductAmountHistoryPublicSchema,
  categoryDashboard:ShapeCategoryDashboardSchema,
@@ -28,6 +30,7 @@ export const MarketShapeReferenceRevisionSchema=z.object({
  assignments:z.array(z.object({asin,label:z.string().trim().min(1).max(60).nullable()}).strict()).max(300),note:z.string().max(500),
  data:MarketShapeReferenceRevisionDataSchema,
 }).strict();
+export const MarketShapeReferenceRevisionSummarySchema=MarketShapeReferenceRevisionSchema.omit({data:true});
 export const MarketShapeReferenceRevisionResponseSchema=z.object({revision:MarketShapeReferenceRevisionSchema}).strict();
 export const MarketShapeReferenceRevisionHistorySchema=z.array(z.object({revisionId:MarketShapeReferenceRevisionIdSchema,ordinal:z.number().int().positive(),createdAt:z.string().datetime()}).strict()).max(100);
 export type MarketShapeReferenceRevisionRequest=z.infer<typeof MarketShapeReferenceRevisionRequestSchema>;

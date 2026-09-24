@@ -10,7 +10,7 @@ import type { SorftimeCategoryDashboardReport } from "../../app/market-shape-ref
 
 const product = (asin: string, shape: string, price: number, sales: number, year: string) => ({
   rank: 1, asin, title: asin, brand: "Brand A", imageUrl: "", monthlySalesVolume: sales,
-  monthlySalesAmount: sales * price, sales: { last3Months: sales * 3, last6Months: sales * 6, y2024: sales * 12, y2025: sales * 12, monthsAvailable: 12 },
+  monthlySalesAmount: sales * price, sales: { last3Months: sales * 3, last6Months: sales * 6, y2024: year>'2024-12-31'?0:sales * 12, y2025: sales * 12, monthsAvailable: 12 },
   monthlyTrend: { volume: [], amount: [] }, price, categoryRank: "", productCategory: "", productShape: shape,
   productShapeHint: null, bsrRank: 1, deliveryType: "FBA", reviewCount: 10, starRating: 4.5,
   seller: "Seller A", sellerOrigin: "US", onlineDate: year, grossProfitMargin: 65, priceBand: `$${Math.floor(price / 10) * 10}-${Math.floor(price / 10) * 10 + 10}`,
@@ -62,6 +62,20 @@ test("missing six-month sales blocks only modules that need that period", () => 
   assert.equal(result.listingYear.status, "insufficient");
   assert.equal(result.margin.status, "insufficient");
   if (result.margin.status === "insufficient") assert.match(result.margin.reason, /近6个月/);
+});
+
+test("a confirmed new listing has no pre-launch annual contribution and does not block the original conclusions",()=>{
+ const recent={...report,products:[{...report.products[0],onlineDate:'2026-08-01',sales:{...report.products[0].sales,y2024:null,y2025:null}}]};
+ const result=buildReferenceConclusions(recent,{A:'Desk'});
+ assert.equal(result.synthesis.status,'ready');assert.equal(result.shapeSales.status,'ready');
+ assert.equal(recent.products[0].sales.y2024,null,'do not rewrite missing provider observations');
+ const unknownDate={...recent,products:[{...recent.products[0],onlineDate:null}]};
+ assert.equal(buildReferenceConclusions(unknownDate,{A:'Desk'}).synthesis.status,'insufficient');
+ const conflict={...recent,products:[{...recent.products[0],sales:{...recent.products[0].sales,y2024:5}}]};
+ const conflictResult=buildReferenceConclusions(conflict,{A:'Desk'});
+ assert.equal(conflictResult.synthesis.status,'insufficient');
+ if(conflictResult.synthesis.status==='insufficient')assert.match(conflictResult.synthesis.reason,/冲突/);
+ for(const date of ['2026-08-99','2026-08-foo','2026-02-30'])assert.equal(buildReferenceConclusions({...recent,products:[{...recent.products[0],onlineDate:date}]},{A:'Desk'}).synthesis.status,'insufficient');
 });
 
 test("missing margin is excluded from observed margin evidence", () => {

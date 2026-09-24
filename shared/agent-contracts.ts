@@ -1,3 +1,4 @@
+import {MarketShapeReferenceRevisionRequestSchema,MarketShapeReferenceRevisionResponseSchema} from './market-shape-reference-revision-contracts';
 import {MarketShapeExplanationRunResponseSchema} from './market-shape-explanation-public-contracts';
 import { SellingTranslationParams, SellingTranslationEmpty, SellingTranslationResponse } from "./selling-point-translation-contracts";
 import {MarketShapeStartRequestSchema,MarketShapeRevisionRequestSchema} from './market-shape-price-contracts';
@@ -1728,8 +1729,8 @@ export const v1Contracts = [
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketKeywordRevisionIdSchema}).strict(),response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/studies/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeStartRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
-  {method:'POST',path:'/v1/market-analysis/runs/:id/shape-price/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeRevisionRequestSchema,response:MarketShapeRevisionResponseSchema,error:ApiErrorResponseSchema},
-  {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketShapeRevisionIdSchema}).strict(),response:MarketShapeRevisionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/runs/:id/shape-price/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:z.union([MarketShapeRevisionRequestSchema,MarketShapeReferenceRevisionRequestSchema]),response:z.union([MarketShapeRevisionResponseSchema,MarketShapeReferenceRevisionResponseSchema]),error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketShapeRevisionIdSchema}).strict(),response:z.union([MarketShapeRevisionResponseSchema,MarketShapeReferenceRevisionResponseSchema]),error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/shape-explanation',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeExplanationRunResponseSchema,error:ApiErrorResponseSchema},
 
   { method: "POST", path: "/v1/market-research/jobs", request: MarketResearchScopeSchema, response: MarketResearchJobResponseSchema, error: ApiErrorResponseSchema },

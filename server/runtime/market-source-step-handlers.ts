@@ -1,3 +1,5 @@
+import {collectMarketShapeProductImage} from '../services/market-shape-product-image';
+import {collectSorftimeShapePoolPage} from '../services/market-shape-sorftime-pool';
 import {collectShapeCategory} from '../services/market-shape-category-collector';
 import {ShapeCategoryMetricSchema} from '../../shared/market-shape-category-contracts';
 import {collectMarketProductHistory} from '../services/market-product-history-collector';
@@ -100,15 +102,29 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
       result.products.map(product => ({ id: product.asin, data: { collection: 'product-month', month: result.month, product } })), result.status, result.evidence,
       { month: result.month, sampling: result.sampling, boundaries: result.boundaries, issues: result.issues });
   };
+  const sorftimePool:MarketStepHandler=async({claim,signal})=>{
+    const input=z.object({poolSize:z.number().int().min(1).max(300),page:z.number().int().min(1).max(20).optional(),categoryName:z.string().max(500).optional(),referenceAttemptId:z.string().uuid().optional()}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
+    const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+    if(!view||view.run.moduleKind!=='shape-price'||object(view.run.params).flow!=='market-shape-price-flow/rules-v4'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('Pool outside Sorftime frontier');
+    const result=await collectSorftimeShapePoolPage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+    if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+    return collected(scope,'products',result.products.map(p=>p.asin),result.products.map(product=>({id:product.asin,data:{collection:'sorftime-shape-pool',product}})),result.status,result.evidence,{productCount:result.products.length,productAsins:result.products.map(p=>p.asin),receivedCount:result.receivedCount,categoryName:result.categoryName});
+  };
   const productHistory: MarketStepHandler = async ({claim,signal}) => {
     const input=themesInput.parse(claim.step.input),scope=await scopeFor(claim,signal);
     const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
     if(!view||view.run.moduleKind!=='shape-price'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('History is outside the current shape frontier');
     const pool=await selected(claim,input.selectionInputSnapshotId,scope);
-    if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&object(r.data).collection==='product-month'&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
-    const result=await collectMarketProductHistory({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+    if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection))&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
+    if(claim.step.kind==='collect-product-image'){
+      const result=await collectMarketShapeProductImage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+      if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+      return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-image',asin:input.asin,imageUrl:result.imageUrl}}],result.status,result.evidence,{asin:input.asin,selectionInputSnapshotId:input.selectionInputSnapshotId});
+    }
+    const metric=claim.step.kind==='collect-product-amount-history'?'SalesAmount':'SalesVolume';
+    const result=await collectMarketProductHistory({...input,metric,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
-    return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-history',asin:input.asin,metric:'SalesVolume',points:result.points}}],result.status,result.evidence,{asin:input.asin,metric:'SalesVolume',selectionInputSnapshotId:input.selectionInputSnapshotId});
+    return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:metric==='SalesAmount'?'product-amount-history':'product-history',asin:input.asin,metric,points:result.points}}],result.status,result.evidence,{asin:input.asin,metric,selectionInputSnapshotId:input.selectionInputSnapshotId});
   };
   const category:MarketStepHandler=async({claim,signal})=>{
     const input=z.object({metric:ShapeCategoryMetricSchema,selectionInputSnapshotId:snapshotId}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
@@ -174,7 +190,7 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope,'overview',[id],[{id,data:{collection:'overview-month',month:input.month,operation:input.operation,parameters:result.parameters}}],result.status,result.evidence,
       {month:input.month,operation:input.operation,parameters:result.parameters,issues:result.issues});
   };
-  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-shape-category':category, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
+  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-product-amount-history':productHistory,'collect-product-image':productHistory, 'collect-shape-pool':sorftimePool, 'collect-shape-category':category, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
 }
 
 /** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */

@@ -96,8 +96,26 @@ export function resolveY2025MonthDivisor(fetchedAt?: string, referenceDate = new
 export function getReferencePeriodTotals(products: readonly SorftimeCategoryDashboardProduct[]): ReferencePeriodValues {
   return Object.fromEntries(REFERENCE_PERIODS.map(period => [
     period,
-    sumKnown(products.map(product => product.sales?.[period])),
+    sumKnown(products.map(product => referencePeriodContribution(product, period))),
   ])) as ReferencePeriodValues;
+}
+
+export function isReferencePeriodBeforeLaunch(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod): boolean {
+  if (period !== 'y2024' && period !== 'y2025') return false;
+  const launch = product.onlineDate?.match(/^(\d{4})-(0[1-9]|1[0-2])(?:-(\d{2}))?$/);
+  if(!launch)return false;
+  const year=Number(launch[1]),month=Number(launch[2]),day=Number(launch[3]??1),date=new Date(Date.UTC(year,month-1,day));
+  return year>=1900&&date.getUTCFullYear()===year&&date.getUTCMonth()===month-1&&date.getUTCDate()===day&&year>Number(period.slice(1));
+}
+
+export function hasReferencePeriodDateConflict(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod): boolean {
+  return isReferencePeriodBeforeLaunch(product,period)&&(known(product.sales?.[period])??0)>0;
+}
+
+/** A confirmed pre-launch year contributes nothing; unavailable post-launch data stays unknown. */
+export function referencePeriodContribution(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod): number | null {
+  if(hasReferencePeriodDateConflict(product,period))return null;
+  return isReferencePeriodBeforeLaunch(product,period)?0:known(product.sales?.[period]);
 }
 
 export function resolveListingYear(value: string | null | undefined): string {

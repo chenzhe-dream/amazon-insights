@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MarketAnalysisScopeSchema } from './market-analysis-contracts';
 import { MarketSemanticLabelSchema,MarketShapeSuggestionInputSchema } from './market-semantic-contracts';
-export const MarketShapeStartRequestSchema=z.object({poolSize:z.number().int().min(1).max(100).default(100),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6),catalog:MarketShapeSuggestionInputSchema.pick({task:true,taxonomyVersion:true,allowedLabels:true})}).strict();
+export const MarketShapeStartRequestSchema=z.object({poolSize:z.number().int().min(1).max(300).default(100),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6),catalog:MarketShapeSuggestionInputSchema.pick({task:true,taxonomyVersion:true,allowedLabels:true})}).strict();
 const asin = z.string().regex(/^[A-Z0-9]{10}$/), id = z.string().trim().min(1).max(160);
 export const MarketShapeRevisionBodySchema = z.object({ schemaVersion: z.literal('market-shape-revision/v1').default('market-shape-revision/v1'), scope: MarketAnalysisScopeSchema,
     basisSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/), parentRevisionId: z.string().regex(/^market-shape-revision:[a-f0-9]{64}$/).nullable(),

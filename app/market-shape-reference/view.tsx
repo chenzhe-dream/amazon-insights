@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { LaunchSection, LaunchTable } from "../launch-section";
 import type { SorftimeCategoryDashboardProduct, SorftimeCategoryDashboardReport } from "./types";
-import { buildReferenceShapeAnalysis, resolveProductPriceBand, resolveSorftimeMarginEntryLabel, type ReferenceGroupRow } from "./rules";
+import { buildReferenceShapeAnalysis, resolveProductPriceBand, resolveSorftimeMarginEntryLabel, isReferencePeriodBeforeLaunch, hasReferencePeriodDateConflict, type ReferenceGroupRow } from "./rules";
 import { TopSalesMultiSelectFilter } from "./top-sales-multi-select-filter";
 import type { TopSalesMultiSelectFilterState } from "./multi-filter";
 import { CategoryComboChart, MonopolyTrendChart } from "./charts";
@@ -21,6 +21,9 @@ export type MarketShapeReferenceViewProps = {
   onAssignment: (asin: string, label: string) => void;
   onSelected: (asins: string[]) => void;
   disabled?: boolean;
+  requestedPoolSize?: number;
+  onPoolSizeChange?: (size: number) => void;
+  poolSizeDisabled?: boolean;
 };
 
 type Period = "last3Months" | "last6Months" | "y2025" | "y2024";
@@ -39,18 +42,20 @@ const periodValue = (p: SorftimeCategoryDashboardProduct, key: Period) => known(
 function Trend({ product }: { product: SorftimeCategoryDashboardProduct }) {
   const volume = product.monthlyTrend.volume;
   const amount = product.monthlyTrend.amount;
+  const months = [...new Set([...volume, ...amount].map(point => point.month))].sort();
   const max = Math.max(1, ...volume.map(p => known(p.value) ?? 0));
   const maxAmount = Math.max(1, ...amount.map(p => known(p.value) ?? 0));
   return <div className="shape-ref-trend" aria-label={`${product.asin} 月度销量与销售额趋势`}>
-    {volume.length ? <div className="shape-ref-trend-bars">{volume.map(point => {
-      const revenue = amount.find(p => p.month === point.month)?.value;
-      return <div key={point.month} className="shape-ref-trend-pair" title={`${point.month}：销量 ${n(point.value)}；销售额 ${n(revenue, 2)}`}>
-        {known(point.value) === null ? null : <span style={{ height: `${Math.max(2, point.value! / max * 42)}px`, background: "#2f80ed" }} />}
+    {months.length ? <div className="shape-ref-trend-bars">{months.map(month => {
+      const units = volume.find(p => p.month === month)?.value;
+      const revenue = amount.find(p => p.month === month)?.value;
+      return <div key={month} className="shape-ref-trend-pair" title={`${month}：销量 ${n(units)}；销售额 ${n(revenue, 2)}`}>
+        {known(units) === null ? null : <span style={{ height: `${Math.max(2, units! / max * 42)}px`, background: "#2f80ed" }} />}
         {known(revenue) === null ? null : <span style={{ height: `${Math.max(2, revenue! / maxAmount * 42)}px`, background: "#7a67d8" }} />}
       </div>;
     })}</div> : "未知"}
     <small>蓝：销量　紫：金额</small>
-    <div className="shape-ref-trend-values">{volume.slice(-3).map(point => <small key={point.month}>{point.month}　{n(point.value)} / {n(amount.find(p => p.month === point.month)?.value, 2)}</small>)}</div>
+    <div className="shape-ref-trend-values">{months.slice(-3).map(month => <small key={month}>{month}　{n(volume.find(p => p.month === month)?.value)} / {n(amount.find(p => p.month === month)?.value, 2)}</small>)}</div>
   </div>;
 }
 
@@ -59,7 +64,7 @@ function MetricBars({ rows }: { rows: { label: string; value: number | null }[] 
   return <div className="shape-ref-metric-bars">{rows.map(row => <div key={row.label} className="shape-ref-bar-row"><span>{row.label}</span><div><span style={{ width: `${row.value === null ? 0 : row.value / max * 100}%` }} title={`${row.label}：${n(row.value)}`} /></div><b>{n(row.value)}</b></div>)}</div>;
 }
 
-export function MarketShapeReferenceView({ report, assignments, selectedAsins, onAssignment, onSelected, disabled = false }: MarketShapeReferenceViewProps) {
+export function MarketShapeReferenceView({ report, assignments, selectedAsins, onAssignment, onSelected, disabled = false, requestedPoolSize = report.topLinkCount, onPoolSizeChange, poolSizeDisabled = false }: MarketShapeReferenceViewProps) {
   const [brand, setBrand] = useState<TopSalesMultiSelectFilterState>(null);
   const [listingYear, setListingYear] = useState<TopSalesMultiSelectFilterState>(null);
   const [priceBand, setPriceBand] = useState<TopSalesMultiSelectFilterState>(null);
@@ -68,7 +73,6 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"rank" | "sales30" | Period>("rank");
   const [descending, setDescending] = useState(true);
-  const [limit, setLimit] = useState(300);
   const [bulkSelected, setBulkSelected] = useState<string[]>([]);
   const [bulkShape, setBulkShape] = useState("");
   const { widths, setWidth } = useReferenceColumnWidths();
@@ -95,7 +99,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     if (av === null) return 1;
     if (bv === null) return -1;
     return (av - bv) * (descending ? -1 : 1) || a.rank - b.rank;
-  }).slice(0, limit);
+  });
   const toggleSort = (key: typeof sort) => { setDescending(sort === key ? !descending : true); setSort(key); };
   const yearly = analysis.listingYears, byShape = analysis.shapes, shapeBands = analysis.shapePriceBands, brandBands = analysis.brandPriceBands;
   const currentUnits = analysis.synthesis.currentMonthlyVolume, currentAmount = analysis.synthesis.currentMonthlyAmount;
@@ -135,7 +139,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     <LaunchSection title="TOP 销售商品 · 形态与毛利准入" description="人工形态立即影响下方草稿统计；销量与金额为来源近30天观测" badge={<span className="source-badge">已选 {active.length} / 来源 {report.products.length} 链接</span>}>
       <div className="top-sales-table-toolbar"><div className="top-sales-table-filters">
         <span>来源 TOP {report.topLinkCount} · 共 {report.products.length} 链接</span>
-        <label>显示行数 <select aria-label="显示行数" value={limit} onChange={e => setLimit(Number(e.target.value))}>{[50, 100, 150, 200, 250, 300].map(v => <option key={v} value={v}>{v}</option>)}</select></label>
+        {onPoolSizeChange&&<label>商品池上限（更改后重新采集） <select aria-label="商品池采集上限" disabled={disabled||poolSizeDisabled} value={requestedPoolSize} onChange={e => onPoolSizeChange(Number(e.target.value))}>{[...new Set([requestedPoolSize,50,100,150,200,250,300])].sort((a,b)=>a-b).map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
         <TopSalesMultiSelectFilter prefix="品牌" ariaLabel="筛选品牌" options={brands} optionCounts={counts(p => p.brand || "未知")} filter={brand} onChange={setBrand} searchable />
         <TopSalesMultiSelectFilter prefix="上架年份" ariaLabel="筛选上架年份" options={years} optionCounts={counts(p => year(p.onlineDate))} filter={listingYear} onChange={setListingYear} />
         <TopSalesMultiSelectFilter prefix="价格带" ariaLabel="筛选价格带" options={bands} optionCounts={counts(band)} filter={priceBand} onChange={setPriceBand} />
@@ -151,7 +155,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
           <td><div className="traffic-conclusion-product top-sales-product-cell">{p.imageUrl ? <img src={p.imageUrl} alt="" width={48} height={48} /> : null}<div>{amazonDomain ? <a href={`https://www.${amazonDomain}/dp/${p.asin}`} target="_blank" rel="noreferrer">{p.asin} ↗</a> : <strong>{p.asin}</strong>}<small>{p.title}</small></div></div></td>
           <td>{p.brand || "未知"}</td><td><input aria-label={`${p.asin} 人工形态`} value={assignments[p.asin] ?? ""} disabled={disabled} onChange={e => onAssignment(p.asin, e.target.value)} /></td>
           <td>{p.onlineDate?.slice(0, 7) || "未知"}</td><td>{p.grossProfitMargin == null ? "未知" : `${n(p.grossProfitMargin, 1)}%`}</td><td>{marginLabel(p.grossProfitMargin)}</td><td>{n(p.price, 2)}</td><td>{band(p)}</td><td>{n(p.monthlySalesVolume)}</td><td>{n(p.monthlySalesAmount, 2)}</td><td><Trend product={p} /></td>
-          {periods.map(period => <td key={period.key}>{n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
+          {periods.map(period => <td key={period.key}>{hasReferencePeriodDateConflict(p,period.key)?'日期冲突':isReferencePeriodBeforeLaunch(p,period.key)?'不适用':n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
         </tr>)}
       </tbody></LaunchTable>
       <p className="market-research-note">毛利准入：≥70% 优先进入；≥60% 建议进入；≥50% 谨慎进入；低于50% 不建议进入。未知保持未知。</p>

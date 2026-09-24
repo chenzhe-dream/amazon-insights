@@ -1,3 +1,4 @@
+import {readMarketShapeImages} from '../../services/market-shape-product-image';
 import {z} from 'zod';
 import type {Pool} from 'pg';
 import type {MarketExecutionActor,MarketModuleRunView} from '../market-module-execution-repository';
@@ -20,6 +21,7 @@ function invalid():never{throw new MarketExecutionConflictError();}
 function same(a:unknown,b:unknown){if(digest(a)!==digest(b))invalid();}
 function refs(data:MarketShapeReferenceRevisionData){return [
  ...data.pool.sourceRefs,
+ ...(data.productImages?.products.map(p=>p.sourceRef)??[]),
  ...data.productHistory.products.map(p=>p.sourceRef),
  ...data.productAmountHistory.products.map(p=>p.sourceRef),
  ...data.categoryDashboard.sources.map(s=>s.sourceRef),
@@ -47,7 +49,7 @@ export class PostgresMarketShapeReferenceRevisionStore{
   const productHistory=await readMarketShapeHistory(common);
   const productAmountHistory=await readMarketShapeAmountHistory(common);
   const categoryDashboard=await readShapeCategoryDashboard({view,actor,current,snapshots:this.snapshots});
-  const data=MarketShapeReferenceRevisionDataSchema.parse({scope:view.run.scope,pool:pool.publicPool,productHistory,productAmountHistory,categoryDashboard});
+  const data=MarketShapeReferenceRevisionDataSchema.parse({scope:view.run.scope,pool:pool.publicPool,productImages:await readMarketShapeImages(common),productHistory,productAmountHistory,categoryDashboard});
   const attempts=view.steps.filter(s=>current.has(s.stepKey)&&['succeeded','empty'].includes(s.status)).map(s=>view.attempts.find(a=>a.id===s.latestAttemptId)).filter((a):a is NonNullable<typeof a>=>!!a);
   const binding=bindingSchema.parse({
    sourceRefs:[...new Set(attempts.map(a=>obj(a.output).sourceRef).filter((v):v is string=>typeof v==='string'))].sort(),
@@ -103,9 +105,15 @@ export class PostgresMarketShapeReferenceRevisionStore{
   const row=(await this.context.query<Row>('SELECT * FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 AND ($3::text IS NULL OR revision_id=$3) ORDER BY ordinal DESC LIMIT 1',[actor.organizationId,moduleRunId,revisionId??null])).rows[0];
   return row?this.restore(actor,view,row):null;
  }
+ async findSummary(input:{actor:MarketExecutionActor;moduleRunId:string}){
+  const actor=actorSchema.parse(input.actor),moduleRunId=uuid.parse(input.moduleRunId),view=await this.view(actor,moduleRunId);if(!view)return null;
+  const row=(await this.context.query<Row>('SELECT revision_json,revision_hash FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 1',[actor.organizationId,moduleRunId])).rows[0];if(!row)return null;
+  const revision=MarketShapeReferenceRevisionSchema.parse(row.revision_json);same(row.revision_hash,digest(revision));same(revision.data.scope,view.run.scope);
+  const {data:_data,...summary}=revision;return {revision:summary};
+ }
  async list(input:{actor:MarketExecutionActor;moduleRunId:string}){
   const actor=actorSchema.parse(input.actor),moduleRunId=uuid.parse(input.moduleRunId),view=await this.view(actor,moduleRunId);if(!view)return [];
-  const rows=(await this.context.query<Row>('SELECT * FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100',[actor.organizationId,moduleRunId])).rows;
+  const rows=(await this.context.query<Row>('SELECT revision_id,ordinal,stored_at FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100',[actor.organizationId,moduleRunId])).rows;
   return MarketShapeReferenceRevisionHistorySchema.parse(rows.map(r=>({revisionId:r.revision_id,ordinal:r.ordinal,createdAt:new Date(r.stored_at).toISOString()})));
  }
 }

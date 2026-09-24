@@ -1,0 +1,36 @@
+"use client";
+import {useEffect,useMemo,useRef,useState} from 'react';
+import type {MarketShapeRun} from '../shared/market-shape-public-contracts';
+import type {MarketShapeReferenceRevision,MarketShapeReferenceRevisionData} from '../shared/market-shape-reference-revision-contracts';
+import {MarketShapeReferenceView} from './market-shape-reference/view';
+import {toShapeReferenceReport} from './lib/market-shape-reference-adapter';
+import {readShapeReferenceRevision,saveShapeReferenceRevision,retryShapeSteps,cancelShapeRun} from './lib/market-shape-browser';
+import {browserRequestId} from './lib/browser-request-id';
+import {LaunchSection} from './launch-section';
+const labels:Record<string,string>={'collect-shape-pool':'商品池','collect-product-history':'历史销量','collect-product-amount-history':'历史销售额','collect-product-image':'商品图片','collect-shape-category':'类目看板','prepare-members':'固定商品池'};
+const statuses:Record<string,string>={queued:'排队',running:'采集中',succeeded:'完成',empty:'未返回数据',failed:'失败',cancelled:'已取消'};
+export function MarketShapeReferencePanel({run,readError,onRefresh,starting=false,onPoolSizeChange}:{run:MarketShapeRun;readError:string|null;onRefresh:()=>void;starting?:boolean;onPoolSizeChange?:(size:number)=>void}){
+ const [selected,setSelected]=useState<string[]>([]),[assignments,setAssignments]=useState<Record<string,string>>({}),[parent,setParent]=useState<string|null>(null),[note,setNote]=useState('');
+ const [choice,setChoice]=useState('draft'),[historic,setHistoric]=useState<MarketShapeReferenceRevision|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[notice,setNotice]=useState('');
+ const loaded=useRef(false),owner=useRef<AbortController|null>(null),pending=useRef<{hash:string;key:string}|null>(null);
+ useEffect(()=>{const abort=new AbortController();owner.current=abort;return()=>abort.abort();},[]);
+ const live=useMemo<MarketShapeReferenceRevisionData|null>(()=>run.source?.sorftimePool&&run.source.productHistory&&run.source.productAmountHistory&&run.categoryDashboard?{scope:run.scope,pool:run.source.sorftimePool,productImages:run.source.productImages,productHistory:run.source.productHistory,productAmountHistory:run.source.productAmountHistory,categoryDashboard:run.categoryDashboard}:null,[run]);
+ function restoreDraft(){const revision=run.referenceRevision;setSelected(revision?.selectedAsins??live?.pool.products.map(p=>p.asin)??[]);setAssignments(Object.fromEntries((revision?.assignments??[]).map(a=>[a.asin,a.label??''])));setParent(revision?.revisionId??null);setNote(revision?.note??'');pending.current=null;}
+ useEffect(()=>{if(live&&!loaded.current){loaded.current=true;restoreDraft();}},[live]);
+ useEffect(()=>{setHistoric(null);setError(null);if(choice==='draft')return;const abort=new AbortController();void readShapeReferenceRevision(run.id,choice,abort.signal).then(r=>{if(!abort.signal.aborted)setHistoric(r)},e=>{if(!abort.signal.aborted)setError(e instanceof Error?e.message:'读取版本失败')});return()=>abort.abort();},[run.id,choice]);
+ const data=choice==='draft'?live:historic?.data??null,report=useMemo(()=>data?toShapeReferenceReport(data):null,[data]);
+ async function save(){const signal=owner.current?.signal;if(!signal||busy||readError)return;setBusy(true);setError(null);try{
+  const request={expectedParentRevisionId:parent,selectedAsins:selected,assignments:selected.map(asin=>({asin,label:assignments[asin]?.trim()||null})),note},hash=JSON.stringify(request),command=pending.current?.hash===hash?pending.current:{hash,key:browserRequestId()};pending.current=command;
+  const saved=await saveShapeReferenceRevision(run.id,request,command.key,signal);signal.throwIfAborted();pending.current=null;setParent(saved.revisionId);setNotice(`版本 ${saved.ordinal} 已保存`);onRefresh();
+ }catch(e){if(!signal.aborted)setError(e instanceof Error?e.message:'保存失败，草稿已保留')}finally{if(!signal.aborted)setBusy(false)}}
+ async function act(kind:'retry'|'cancel',step?:MarketShapeRun['steps'][number]){const signal=owner.current?.signal;if(!signal||busy||readError)return;setBusy(true);setError(null);try{if(kind==='retry'&&step?.latestAttemptId)await retryShapeSteps(run.id,[{stepId:step.id,failedAttemptId:step.latestAttemptId}],browserRequestId(),signal);else await cancelShapeRun(run.id,browserRequestId(),signal);signal.throwIfAborted();onRefresh();}catch(e){if(!signal.aborted)setError(e instanceof Error?e.message:'操作失败')}finally{if(!signal.aborted)setBusy(false)}}
+ const running=run.steps.some(s=>s.current&&['queued','running'].includes(s.status)),failed=run.steps.filter(s=>s.current&&s.status==='failed');
+ const disabled=busy||starting||!!readError||run.status==='cancelled'||choice!=='draft';
+ return <>
+ <section className="card market-shape-controls"><div className="market-theme-actions"><label>报告版本 <select aria-label="形态报告版本" value={choice} onChange={e=>setChoice(e.target.value)} disabled={busy}><option value="draft">当前草稿（即时统计）</option>{(run.referenceHistory??[]).map(r=><option key={r.revisionId} value={r.revisionId}>版本 {r.ordinal} · {r.createdAt}</option>)}</select></label>{choice==='draft'&&<><label>修订说明 <input value={note} maxLength={500} onChange={e=>setNote(e.target.value)} disabled={disabled}/></label><button className="primary-btn" onClick={()=>void save()} disabled={disabled||!selected.length}>保存当前版本</button><button className="ghost-btn" disabled={disabled} onClick={restoreDraft}>恢复已保存的选择</button></>}</div>
+ {notice&&<p role="status">{notice}</p>}{error&&<p role="alert" className="market-research-error">{error}</p>}
+ {choice==='draft'&&parent!==(run.referenceRevision?.revisionId??null)&&<p role="status">已有较新保存版本，当前草稿仍保留；保存前请恢复最新选择后重新修改。</p>}
+ <details open={running||failed.length>0}><summary>{running?'正在采集，已到达的数据实时展示':failed.length?'部分来源未完成，可重试失败项':run.status==='cancelled'?'任务已取消，保留已保存数据':choice!=='draft'?'正在查看已保存版本（只读）':'本地规则已计算，可直接查看并修改'}</summary><p>修改形态、筛选与切换保存版本不会重新采集。商品池为近30天来源，历史销量和销售额按各自返回月份展示。</p><ul className="market-theme-steps">{run.steps.filter(s=>s.current).map(s=><li key={s.id}>{s.asin?`${s.asin} · `:''}{labels[s.kind]??s.kind}{s.categoryMetric?` · ${s.categoryMetric}`:''}：{statuses[s.status]??s.status}{s.canRetry&&<button className="ghost-btn" disabled={busy||!!readError} onClick={()=>void act('retry',s)}>重试</button>}</li>)}</ul>{running&&<button className="ghost-btn" disabled={busy||!!readError} onClick={()=>void act('cancel')}>取消采集</button>}</details></section>
+ {report?<MarketShapeReferenceView report={report} assignments={choice==='draft'?assignments:Object.fromEntries((historic?.assignments??[]).map(a=>[a.asin,a.label??'']))} selectedAsins={choice==='draft'?selected:historic?.selectedAsins??[]} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} onSelected={setSelected} disabled={disabled} requestedPoolSize={run.params.poolSize} onPoolSizeChange={onPoolSizeChange} poolSizeDisabled={running}/>:<LaunchSection title="类目销量看板" description="商品形态及价格带" badge={<span className="source-badge">Sorftime</span>}><div className="pending-box"><strong>{choice!=='draft'?(error?'保存版本读取失败，请重新选择版本重试':'正在读取保存版本…'):run.status==='cancelled'?'任务已取消，保留已到达的来源':failed.length?'商品来源未就绪，请查看失败步骤':running?'正在读取商品池…':'本次未返回可用商品'}</strong><span>已保存数据会继续保留，缺失数据不补零。</span></div></LaunchSection>}
+ </>;
+}

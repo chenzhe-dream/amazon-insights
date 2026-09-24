@@ -1,4 +1,4 @@
-import {MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION} from '../../domain/market-research/shape-price-flow';
+import {MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION} from '../../domain/market-research/shape-price-flow';
 import {LOCAL_ADMISSION_REASONS} from '../concurrency-control-repository';
 import {readMarketOverviewSynthesisReport} from '../../runtime/market-overview-synthesis-report-reader';
 import {isMarketShapeExplanationFlow} from '../../domain/market-research/shape-explanation-flow';
@@ -205,7 +205,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   private async completeRulesOnlyRun(run:RunRow):Promise<void>{
     const mapped=mapRun(run),flow=String(obj(mapped.params).flow);
-    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION))return;
+    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION||flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION))return;
     const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:run.id});if(!view)return;
     const now=(await this.queries.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.toISOString();
     const frontier=inspectMarketContinuation(view,now),current=view.steps.filter(step=>frontier.currentStepKeys.includes(step.stepKey));

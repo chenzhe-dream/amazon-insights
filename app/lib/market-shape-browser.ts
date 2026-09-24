@@ -1,3 +1,4 @@
+import {MarketShapeReferenceRevisionResponseSchema,MarketShapeReferenceRevisionRequestSchema} from '../../shared/market-shape-reference-revision-contracts';
 import { z } from 'zod';
 import { MarketModuleIdSchema } from '../../shared/market-module-contracts';
 import { MarketShapeStartRequestSchema, MarketShapeRevisionRequestSchema } from '../../shared/market-shape-price-contracts';
@@ -48,4 +49,14 @@ export async function readShapeExplanation(id:string,revisionId:string,signal?:A
  const {run}=await request(`runs/${runId}/shape-explanation`,MarketShapeExplanationRunResponseSchema,{signal});
  if(run.id!==runId||run.revisionId!==revision||run.report&&(run.report.moduleRunId!==runId||run.report.revisionId!==revision||run.report.explanation.revisionId!==revision)||run.presentation&&(run.presentation.revisionId!==revision||run.presentation.explanationCatalogId!==run.report?.explanationCatalogId))throw new Error('解释任务或报告版本不一致，未加载该结果。');
  return run;
+}
+
+export async function saveShapeReferenceRevision(id:string,body:unknown,key:string,signal?:AbortSignal){
+ const params=MarketShapeReferenceRevisionRequestSchema.parse(body),result=await request(`runs/${MarketModuleIdSchema.parse(id)}/shape-price/revisions`,MarketShapeReferenceRevisionResponseSchema,post(params,key,signal));
+ if(result.revision.parentRevisionId!==params.expectedParentRevisionId||[...result.revision.selectedAsins].sort().join()!==[...params.selectedAsins].sort().join())throw Error('保存版本与人工选择不一致。');
+ return result.revision;
+}
+export async function readShapeReferenceRevision(id:string,revisionId:string,signal?:AbortSignal){
+ const revision=MarketShapeRevisionIdSchema.parse(revisionId),result=await request(`runs/${MarketModuleIdSchema.parse(id)}/shape-price/revisions/${encodeURIComponent(revision)}`,MarketShapeReferenceRevisionResponseSchema,{signal});
+ if(result.revision.revisionId!==revision)throw Error('报告版本不一致。');return result.revision;
 }

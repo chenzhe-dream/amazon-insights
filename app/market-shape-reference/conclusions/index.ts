@@ -1,4 +1,5 @@
 import type { SorftimeCategoryDashboardReport as SavedReport } from "../types";
+import { referencePeriodContribution,hasReferencePeriodDateConflict } from '../rules';
 import {
   buildListingYearAnalysis,
   buildShapePriceBandAnalysis,
@@ -49,7 +50,11 @@ export function buildReferenceConclusions(
   selectedAsins?: readonly string[],
 ): ReferenceConclusions {
   const selected = selectedAsins ? new Set(selectedAsins) : null;
-  const products = report.products.filter(product => selected === null || selected.has(product.asin));
+  const sourceProducts=report.products.filter(product => selected === null || selected.has(product.asin));
+  const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period)));
+  const products = sourceProducts.map(product=>({...product,sales:{...product.sales,
+    y2024:referencePeriodContribution(product,'y2024'),y2025:referencePeriodContribution(product,'y2025'),
+  }}));
   if (!products.length) return unavailable("所选范围没有 Sorftime 商品链接");
 
   // Each original analyzer is called only after its own required sales periods pass validation.
@@ -57,7 +62,7 @@ export function buildReferenceConclusions(
   const sampleScope = `${scoped.marketplace} · ${scoped.categoryName} · TOP${scoped.topLinkCount}`;
   const shape = (asin: string) => assignments[asin]?.trim() || products.find(product => product.asin === asin)?.productShape?.trim() || "—";
   const sixMonthGap = missingSales(products, ["last6Months"]);
-  const fullGap = missingSales(products, PERIODS);
+  const fullGap = conflicting?`${conflicting.asin} 年度销量与上市日期冲突，当前结论数据不足`:missingSales(products, PERIODS);
   const listingYear = sixMonthGap ? insufficient(sixMonthGap) : ready(analyzeListingAgeSalesShare(buildListingAgeSalesShareInputsFromProducts(scoped.products, "last6Months"), {
     analysisDate: report.fetchedAt, salesPeriod: "last6Months", sampleScope,
     categoryName: report.categoryName, marketplace: report.marketplace,

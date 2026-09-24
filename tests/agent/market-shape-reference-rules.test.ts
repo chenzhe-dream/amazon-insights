@@ -48,6 +48,14 @@ test("2025 monthly divisor follows the source report date", () => {
   assert.equal(resolveY2025MonthDivisor("2026-01-01"), 12);
 });
 
+test('pre-launch annual periods do not erase other products known totals, but missing dates still do',()=>{
+  const source=report();source.products[0].onlineDate='2024-01-01';source.products[0].sales.y2024=120;
+  source.products[1].onlineDate='2025-07-01';source.products[1].sales.y2024=null;
+  assert.equal(buildReferenceShapeAnalysis(source,{}).synthesis.totalSales.y2024,120);
+  source.products[1].onlineDate='';
+  assert.equal(buildReferenceShapeAnalysis(source,{}).synthesis.totalSales.y2024,null);
+});
+
 test("unknown sales remain unknown through groups, shares and summary", () => {
   const result = buildReferenceShapeAnalysis(report(), { A1: "Shape A", A2: "Shape A" });
   assert.equal(result.shapes[0].sales.last6Months, null);

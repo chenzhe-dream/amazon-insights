@@ -46,3 +46,11 @@ test("manual assignment and selection change the same render without saved state
   assert.ok(updated.includes("折叠款"));
   assert.ok(!initial.includes("折叠款"));
 });
+
+test("amount history stays visible when volume history is unavailable", () => {
+  const amountOnly = structuredClone(report);
+  amountOnly.products[0].monthlyTrend.volume = [];
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={amountOnly} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.ok(html.includes('2026-08：销量 未知；销售额 4,000'));
+  assert.ok(html.includes('2026-08　未知 / 4,000'));
+});

@@ -14,23 +14,25 @@ Architecture: 新rules-v4独立版本；持久化来源→公开瘦身合同→�
 Files owned: shared/market-product-history-contracts.ts, server/services/market-product-history-collector.ts, server/services/market-shape-history-reader.ts, tests/agent/market-product-history*.test.ts (existing specific history tests first discover by rg). Do not edit step handlers, flow, main public run schema, UI, or source metadata.
 Interfaces: extend collectMarketProductHistory input with optional metric:'SalesVolume'|'SalesAmount' default SalesVolume. Preserve existing volume evidence hashes/replay. Add amount output contract and exported readMarketShapeAmountHistory with the same read input and step kind collect-product-amount-history. Amount points use month/value or month/amount (choose and report), nonnegative decimal finite safe, currency scope bound and checked against any response currency. Immutable input collection product-amount-history metric SalesAmount. Primary worker handles step enum/worker persistence and assigns run.source.productAmountHistory to returned contract.
 Existing readMarketShapeHistory retains v1-v3 semantics. New exported referenceProductHistoryPeriods(points, referenceMonth) mirrors original sorted.slice(-3/-6), years referenceYear-1/-2 for UI with actual months, preserving null/invalid, not treating unavailable as real zero. Main worker selects v4 only. Extend max product lists to300; no legacy behavior changed for existing100.
-- [ ] Write failing tests for decimal amounts, real zero, missing, conflicts, scope/currency mismatch; legacy volume output equality and no-network reader behavior where feasible.
-- [ ] Implement normalization/collection/read replay and reference periods.
-- [ ] Run covering tests and report exact commands/results; do not commit unrelated files. Report under test-results/shape-history-amount-report.md.
+- [x] Write failing tests for decimal amounts, real zero, missing, conflicts, scope/currency mismatch; legacy volume output equality and no-network reader behavior where feasible.
+- [x] Implement normalization/collection/read replay and reference periods.
+- [x] Run covering tests and report exact commands/results; do not commit unrelated files. Report under test-results/shape-history-amount-report.md.
 
 ### Task 2: Sorftime product pool and pipeline (primary)
 Files: new server/services/market-shape-sorftime-pool.ts, shared source public contract; shape-price-flow.ts, market-source-step-handlers.ts, source projection and read/revision services, step enums/migration.
-- [ ] Fail tests for report mapping, duplicate/filter/300 bounds, non-monthly period metadata and failed-source behavior.
-- [ ] Add rules-v4 and freeze original-provider products; collect histories independently; preserve legacy replay and no-model boundary.
-- [ ] Persist and read source snapshots, expose images/gross margin/period identity without loss; isolated DB create/read/retry/save tests.
+- [x] Fail tests for report mapping, duplicate/filter/300 bounds, non-monthly period metadata and failed-source behavior.
+- [x] Add rules-v4 and freeze original-provider products; collect histories independently; preserve legacy replay and no-model boundary.
+- [x] Persist and read source snapshots, expose images/gross margin/period identity without loss; isolated DB create/read/retry/save tests.
 
 ### Task 3: Original rules and seven sections
 Files: app/market-shape-section.tsx and product/report components; narrowly copy/adapt reference pure functions/components under isolated namespace as needed.
-- [ ] Restore10-unitbands, reference cycles, margin entry and synthesis via reference source.
-- [ ] Remove save gate for live drafts, keep explicit DB version save/restore; no network reads within charts/rules.
-- [ ] Original filters/sort, charts/hover, capacity controls; same-input rule comparisons and browser interactions.
+- [x] Restore10-unitbands, reference cycles, margin entry and synthesis via reference source.
+- [x] Remove save gate for live drafts, keep explicit DB version save/restore; no network reads within charts/rules.
+- [x] Original filters/sort, charts/hover, capacity controls; same-input rule comparisons and browser interactions.
 
 ### Task 4: Integrated acceptance
-- [ ] Typecheck, required isolated DB tests, browser screenshots desktop/mobile, build, strictspec.
-- [ ] Independent task/whole-change review, resolve blockers; verify formal concurrent work before release.
+- [x] Typecheck, required isolated DB tests, browser screenshots desktop/mobile, build, strictspec.
+- [x] Independent task/whole-change review, resolve blockers; verify formal concurrent work before release.
 - [ ] Real Sorftime category input and persisted source values; refresh no recapture, fault recovery,300capacity limitations explicit. Only then update OpenSpec checkboxes and release record.
+
+执行记录：前三项开发与本地集成验收已完成。真实来源10商品通过，300商品完整容量测试使用模拟上游；正式发布及业务终验未执行，因此Task4最后一项和OpenSpec4.1继续保留未完成。详细证据见同目录2026-09-24-shape-sorftime-delivery-review.md及OpenSpec verification.md。

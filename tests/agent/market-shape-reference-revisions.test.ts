@@ -15,12 +15,13 @@ import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-
 test('v4 manual revisions freeze source data across newer attempts and enforce actor, parent, and idempotency',{timeout:120000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
  const f=await createMarketSemanticFixture(pg.pool);await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
- let calls=0,failAmount=true;
+ let calls=0,failAmount=true,failImage=true;
  const seller:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('unused')},execute:async()=>{throw Error('Unexpected SellerSprite call')}};
  const sorftime:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>{
   calls++;
   if(r.input.product_trend_type==='SalesAmount'&&failAmount)throw new ConnectorError('sorftime','upstream-permanent',false);
-  const data=r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:70,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
+  if(r.operation==='product_detail'&&failImage)throw new ConnectorError('sorftime','upstream-permanent',false);
+  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,main_image:'https://m.media-amazon.com/images/I/after-retry.jpg'}}:r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:70,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
   return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
@@ -34,6 +35,7 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  const first=await store.save(command),same=await store.save(command);
  assert.equal(first.created,true);assert.equal(same.created,false);assert.deepEqual(same.revision,first.revision);
  assert.equal(first.revision.data.productAmountHistory.products[0].status,'failed');
+ assert.equal(first.revision.data.productImages!.products[0].imageUrl,null);
  assert.equal(first.revision.data.pool.products[0].grossProfitMargin,70);
  assert.equal(first.revision.assignments[0].label,'Floor Lamp');
  assert.equal(first.revision.ordinal,1);
@@ -45,19 +47,22 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  await pg.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Other','member','active',now(),now())",[other.userId,other.organizationId,`${other.userId}@example.com`]);
  assert.equal(await store.find({actor:other,moduleRunId:started.run.id}),null);
  await assert.rejects(store.save({...command,actor:other,idempotencyKey:randomUUID()}));
- failAmount=false;
+ failAmount=false;failImage=false;
  const current=(await service.findShapes(f.actor,started.run.id)).run;
  const amount=current.steps.find(s=>s.kind==='collect-product-amount-history'&&s.status==='failed')!;
- await service.retry(f.actor,current.id,{steps:[{stepId:amount.id,failedAttemptId:amount.latestAttemptId!}]},randomUUID());await drain();
+ const image=current.steps.find(s=>s.kind==='collect-product-image'&&s.status==='failed')!;
+ await service.retry(f.actor,current.id,{steps:[amount,image].map(step=>({stepId:step.id,failedAttemptId:step.latestAttemptId!}))},randomUUID());await drain();
  const old=await store.find({actor:f.actor,moduleRunId:started.run.id,revisionId:first.revision.revisionId});
  assert.equal(digest(old!.revision),digest(first.revision));
  assert.equal(old!.revision.data.productAmountHistory.products[0].status,'failed');
+ assert.equal(old!.revision.data.productImages!.products[0].imageUrl,null);
  const second=await store.save({...command,idempotencyKey:randomUUID(),request:{...request,expectedParentRevisionId:first.revision.revisionId,note:'After retry'}});
  assert.equal(second.revision.data.productAmountHistory.products[0].status,'ready');
  assert.equal(second.revision.data.productAmountHistory.products[0].points.at(-1)!.amount,30.25);
+ assert.equal(second.revision.data.productImages!.products[0].imageUrl,'https://m.media-amazon.com/images/I/after-retry.jpg');
  assert.equal((await store.find({actor:f.actor,moduleRunId:started.run.id}))!.revision.revisionId,second.revision.revisionId);
  assert.deepEqual((await store.list({actor:f.actor,moduleRunId:started.run.id})).map(r=>r.ordinal),[2,1]);
  await assert.rejects(store.save({...command,idempotencyKey:randomUUID(),request:{...request,expectedParentRevisionId:first.revision.revisionId}}));
- assert.equal(calls,afterSave+1);
+ assert.equal(calls,afterSave+2);
  await assert.rejects(pg.pool.query('UPDATE market_shape_reference_revisions SET revision_json=$1 WHERE run_id=$2',[{},started.run.id]),/immutable/i);
 });

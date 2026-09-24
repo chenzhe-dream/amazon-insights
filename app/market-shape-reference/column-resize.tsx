@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export const TOP_SALES_COLUMNS = [
   ["include", 52], ["bulk", 45], ["rank", 50], ["product", 240], ["brand", 90],
@@ -11,12 +11,30 @@ export const TOP_SALES_COLUMNS = [
 ] as const;
 export type TopSalesColumnId = (typeof TOP_SALES_COLUMNS)[number][0];
 
-/** Matches the reference drag affordance; widths live only in the current view. */
+const WIDTHS_KEY = 'market-shape-reference-column-widths/v1';
+const clampWidth = (width: number) => Math.min(560, Math.max(40, Math.round(width)));
+/** Column sizes are browser display preferences, independent of report data. */
 export function useReferenceColumnWidths() {
   const [widths, setWidths] = useState<Record<TopSalesColumnId, number>>(
     () => Object.fromEntries(TOP_SALES_COLUMNS.map(([id, width]) => [id, width])) as Record<TopSalesColumnId, number>,
   );
-  const setWidth = (id: TopSalesColumnId, width: number) => setWidths(current => ({ ...current, [id]: Math.min(560, Math.max(40, Math.round(width))) }));
+  const widthsRef=useRef(widths);
+  useEffect(()=>{
+    // Restore browser-only preferences after the initial hydrated render.
+    const frame=requestAnimationFrame(()=>{try{
+      const stored:unknown=JSON.parse(localStorage.getItem(WIDTHS_KEY)??'null');
+      if(stored&&typeof stored==='object'&&!Array.isArray(stored)){
+        const next={...widthsRef.current,...Object.fromEntries(TOP_SALES_COLUMNS.flatMap(([id])=>{const value=(stored as Record<string,unknown>)[id];return typeof value==='number'&&Number.isFinite(value)?[[id,clampWidth(value)]]:[]}))};
+        widthsRef.current=next;setWidths(next);
+      }
+    }catch{/* Restricted or invalid storage keeps defaults. */}});
+    return()=>cancelAnimationFrame(frame);
+  },[]);
+  const setWidth = (id: TopSalesColumnId, width: number) => {
+    const next={...widthsRef.current,[id]:clampWidth(width)};
+    widthsRef.current=next;setWidths(next);
+    try{localStorage.setItem(WIDTHS_KEY,JSON.stringify(next));}catch{/* Resizing works without storage. */}
+  };
   return { widths, setWidth };
 }
 
