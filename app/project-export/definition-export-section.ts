@@ -4,13 +4,13 @@ import type { ExportBlock, ExportSection } from './export-contracts';
 import type { ExportModuleContext, ExportModuleRead } from './export-module-context';
 import { exportFields, exportTable } from './export-record-blocks';
 import { buildExportRuleTrace } from './export-rule-trace';
-import { buildCurrentPageAnalysis, readLocalRuleReportsForExport, readManualVocRecords, readRunReportsForExport, selectedReport } from './read-voc-definition-export';
+import { buildCurrentPageAnalysis, catalogGapNote, readLocalRuleReportsForExport, readManualVocRecords, readRunReportsForExport, selectedReport } from './read-voc-definition-export';
 
 export async function readDefinitionExportSection(context: ExportModuleContext, read: ExportModuleRead): Promise<ExportSection> {
   const [localReports, reports, manual] = await Promise.all([readLocalRuleReportsForExport(context, read), readRunReportsForExport(context, read), readManualVocRecords(context, read)]);
   const local = localReports[0];
   const saved = selectedReport(reports, 'product-definition');
-  const blocks: ExportBlock[] = [];
+  const blocks: ExportBlock[] = catalogGapNote(context).map(text => ({ kind: 'text', text }));
   const pageAnalysis = buildCurrentPageAnalysis(context, manual);
   const pagePriceBand = pageAnalysis?.marketRows.find(row => row.metric.includes('价格'))?.data ?? pageAnalysis?.productDefinition.targetPrice ?? '待验证';
   const pageReport = pageAnalysis ? buildFinalProductDefinition({

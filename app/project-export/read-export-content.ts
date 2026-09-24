@@ -93,12 +93,13 @@ async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: r
       asin, sourceHash: "", state: "unavailable", ...expected, points: [], message,
     });
     if (version.marketplace !== "US") return unavailable("当前站点尚未支持中文卖点翻译，保留已有原文");
-    const response = await read(`/v1/projects/${version.projectId}/selling-point-translations/${asin}`);
+    const response = await read(`/v1/projects/${version.projectId}/selling-point-translations/${asin}?versionId=${encodeURIComponent(version.versionId)}`);
     const body: unknown = await response.json();
     if (!response.ok) {
       const code = body && typeof body === "object" && "error" in body
         && body.error && typeof body.error === "object" && "code" in body.error ? body.error.code : null;
       if (response.status === 503 && code === "CONFIGURATION_ERROR") return unavailable("翻译服务尚未配置，保留已有原文");
+      if (response.status === 503 && code === "INFRASTRUCTURE_ERROR") return unavailable("已有中文翻译暂时无法读取，保留已有原文");
       throw new Error(localAgentErrorMessage(body, "主要卖点读取失败"));
     }
     const data = SellingTranslationResponse.parse(body);
@@ -118,7 +119,7 @@ async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: r
       [{ text: item.asin }, { text: point }, { text: item.original[index] },
         { text: item.sourceComplete ? "已翻译" : "历史原文仅保留部分卖点" }]) :
       [[{ text: item.asin }, { text: item.message || "暂无已生成的中文卖点" },
-        { text: item.original.join("\n") || "—" }, { text: item.state }]]) }];
+        { text: item.original.join("\n") || "—" }, { text: ({ missing: "暂无中文翻译", pending: "翻译中（本次保留原文）", failed: "翻译未完成（保留原文）", unavailable: "中文翻译不可用" } as const)[item.state] }]]) }];
 }
 export async function readExportContent(request: ExportRequest, fetcher: ExportFetcher = exportFetcher): Promise<PreparedProjectExport> {
   const read = scopedFetcher(request, fetcher);

@@ -201,6 +201,12 @@ export function publishedReviewRecords(context: ExportModuleContext): Record<str
   return scopedAsinRecords(context, dataMap(context, 'reviews', 'analysisByAsin'), '智能评论');
 }
 
+export function catalogGapNote(context: ExportModuleContext): string[] {
+  const missing = context.version ? context.asins.filter(asin => !context.version!.catalog.some(item =>
+    item && typeof item === 'object' && 'asin' in item && item.asin === asin)) : [];
+  return missing.length ? [`商品资料缺失：${missing.join('、')}。保留已有 VOC 和报告内容；价格、销量和产品结构按未知处理，不套用特定类目的规则。`] : [];
+}
+
 /** Replays the page's existing pure display builder only on explicitly scoped, already read sources. */
 export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: readonly ManualAlexaVocRecord[]): ProductLaunchAnalysis | null {
   if (!context.version || context.marketplace !== 'US' || context.asins.length === 0) return null;
@@ -208,8 +214,8 @@ export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: r
     const matches = context.version!.catalog.filter(item => item && typeof item === 'object' && 'asin' in item && item.asin === asin);
     if (matches.length > 1) throw new Error('商品目录来源重复');
     const item = matches[0];
-    if (!item || typeof item !== 'object') throw new Error(`${asin} 缺少已发布商品资料，无法还原页面清单`);
-    const p = item as Record<string, unknown>;
+    // Match the page's missing-product behavior without importing global catalog data or zero-filled metrics.
+    const p = (item ?? {}) as Record<string, unknown>;
     const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
     return { asin, brand: typeof p.brand === 'string' ? p.brand : '', title: typeof p.title === 'string' ? p.title : undefined,
       features: Array.isArray(p.features) && p.features.every(feature => typeof feature === 'string') ? p.features as string[] : undefined,

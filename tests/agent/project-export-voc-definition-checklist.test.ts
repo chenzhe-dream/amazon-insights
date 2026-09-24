@@ -15,6 +15,20 @@ const context: ExportModuleContext = {
 };
 const response = (body: unknown, status = 200) => Response.json(body, { status });
 
+test('missing published catalog preserves saved VOC and exports explicit gaps without invented rules', async () => {
+  const scoped = { ...context, version: { catalog: [], stageOutputs: {} } as unknown as NonNullable<ExportModuleContext['version']> };
+  const manual = { asin, marketplace: 'US', revision: '1', contentHash: 'a'.repeat(64),
+    normalizedRecord: { asin, attention: ['舒适'], positives: ['坐起来很舒适'], negatives: ['不方便清洁'], unmet: ['便于清洁'],
+      audiences: ['家庭'], scenarios: ['家中'], motives: ['使用'], captureStatus: 'dialog',
+      alexaReport: { title: '报告', asin, rating: 4, reviewCount: 30, prompt: '七问', overallConclusion: '舒适' } },
+    source: 'postgres', generation: null, capturedAt: context.capturedAt };
+  const read = reader({ '/api/alexa-voc': { records: [manual] }, '/api/local-rule-reports': { reports: [] } });
+  const sections = await Promise.all([readVocExportSection(scoped, read), readDefinitionExportSection(scoped, read), readChecklistExportSection(scoped, read)]);
+  assert.match(JSON.stringify(sections[0]), /坐起来很舒适/);
+  for (const section of sections) assert.match(JSON.stringify(section), /商品资料缺失/);
+  assert.equal(buildCurrentPageAnalysis(scoped, []), null);
+});
+
 function reader(bodies: Record<string, unknown>, paths: string[] = []): ExportModuleRead {
   return async path => { paths.push(path); const key = path.split('?')[0]; return response(bodies[key] ?? { error: 'unexpected path' }, key in bodies ? 200 : 404); };
 }
