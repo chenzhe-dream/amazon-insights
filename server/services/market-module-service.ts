@@ -22,7 +22,7 @@ import {MarketOverviewReportService} from './market-overview-report-service';
 import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../domain/market-research/module-flow';
-import {MarketShapeStartRequestSchema,MARKET_SHAPE_RULES_FLOW_VERSION,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
+import {MarketShapeStartRequestSchema,MARKET_SHAPE_HISTORY_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
 import {MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,assertMarketProductQueryWindow} from '../../shared/market-product-source-policy';
 import {PostgresMarketShapePriceRevisionStore} from '../db/postgres/market-shape-price-revision-store';
 import {readMarketShapeRun,marketShapePublicRevision} from './market-shape-read-service';
@@ -144,8 +144,8 @@ export class MarketModuleService {
     const previous=await replay();if(previous)return previous;
     const {study}=await this.findStudy(actor,studyId);
     assertMarketProductQueryWindow(study.scope,new Date(this.now()));
-    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_RULES_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_RULES_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
+    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_HISTORY_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_HISTORY_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketShapeFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}
@@ -196,7 +196,7 @@ export class MarketModuleService {
   }
   async saveShapeRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();
-    const rulesOnly=obj(view.run.params).flow===MARKET_SHAPE_RULES_FLOW_VERSION;
+    const rulesOnly=isMarketShapeRulesFlow(obj(view.run.params).flow);
     const identity=rulesOnly?null:this.deps.shapeModelIdentity?.();
     if(identity){
       const linked=await new PostgresMarketShapeExplanationRunStore(this.deps.context).saveRevisionAndEnsureExplanation({actor,parentRunId:id,request:body,idempotencyKey:MarketModuleIdSchema.parse(key),identity});
@@ -266,7 +266,7 @@ export class MarketModuleService {
       if (!previous.rowCount) {
         if(view.run.scope.marketplace!=='US'&&input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&s.kind==='collect-keyword-aba')))
           throw new MarketModuleServiceError(400,'此站点尚无已验证的 ABA 补充接口，不能重试此补充步骤');
-        const rulesOnly=['market-theme-flow/rules-v1','market-theme-flow/rules-v2'].includes(String(obj(view.run.params).flow))||String(obj(view.run.params).flow)==='market-shape-price-flow/rules-v1'||String(obj(view.run.params).flow)==='market-keyword-flow/rules-v1'||['market-overview-flow/rules-v1','market-overview-flow/rules-v2'].includes(String(obj(view.run.params).flow));
+        const rulesOnly=['market-theme-flow/rules-v1','market-theme-flow/rules-v2'].includes(String(obj(view.run.params).flow))||isMarketShapeRulesFlow(obj(view.run.params).flow)||String(obj(view.run.params).flow)==='market-keyword-flow/rules-v1'||['market-overview-flow/rules-v1','market-overview-flow/rules-v2'].includes(String(obj(view.run.params).flow));
         const requiresModel=rulesOnly?false:isMarketKeywordFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&['prepare-model-batches','model-batch'].includes(s.kind))):isMarketShapeExplanationFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&s.kind!=='report')):isMarketShapeFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&(['prepare-model-batches','model-batch'].includes(s.kind)||s.kind==='prepare-members'&&obj(s.input).phase!=='select-shape-members'))):!isMarketOverviewFlow(view.run)||input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&['prepare-members','prepare-model-batches','model-batch'].includes(s.kind)));
         const model=requiresModel?(isMarketShapeExplanationFlow(view.run)?this.deps.shapeModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(view.run.params).analysisMode==='global-reconciliation/v2'?this.deps.keywordExplicitModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(view.run.params).analysisMode==='global-reconciliation/v1'?this.deps.keywordReconciliationModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(obj(view.run.params).catalog).discoveryMode==='labels-and-clusters/v1'?this.deps.keywordModelIdentity?.():this.model()):null; if(requiresModel&&!model)throw new MarketModuleServiceError(503,'该分析模型暂不可用，已保存输入与报告保留'); if (model&&(view.run.versions.configuration !== model.configurationVersion || view.run.versions.prompt !== model.promptVersion))
           throw new MarketModuleServiceError(503, '该任务的模型版本暂不可用，请保留报告并使用当前版本创建分析');

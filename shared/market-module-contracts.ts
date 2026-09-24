@@ -29,7 +29,7 @@ export const MarketThemeReportSchema = z.object({ reportVersion: z.enum(['market
   .refine(v=>(v.basis==='reconciliation-evaluation')===(v.reportVersion==='market-theme-report/v2')&&
     (v.versions.planner==='market-theme-flow/rules-v2')===(v.reportVersion==='market-theme-report/v3'),'Theme report version differs from its basis');
 export const MarketThemeReportEntrySchema = z.object({ attemptId: MarketModuleIdSchema, current: z.boolean(), report: MarketThemeReportSchema }).strict();
-export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema, kind: z.enum(['collect-product-month', 'collect-overview-month', 'collect-keyword-page', 'collect-keyword-trend', 'collect-keyword-aba', 'collect-customer-themes',
+export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema, kind: z.enum(['collect-product-month', 'collect-product-history', 'collect-overview-month', 'collect-keyword-page', 'collect-keyword-trend', 'collect-keyword-aba', 'collect-customer-themes',
   'prepare-members', 'prepare-keyword-pool', 'prepare-model-batches', 'reconcile', 'model-batch', 'rules', 'report']), status: z.enum(['queued', 'running', 'succeeded', 'empty', 'failed', 'cancelled']),
   latestAttemptId: MarketModuleIdSchema.nullable(), attemptCount: count, current: z.boolean(), canRetry: z.boolean(), asin: z.string().regex(/^[A-Z0-9]{10}$/).nullable(),
   nextAttemptAt:z.string().datetime().nullable().optional(),

@@ -1,3 +1,5 @@
+import {readMarketShapeHistory} from './market-shape-history-reader';
+import {isMarketShapeRulesFlow,MARKET_SHAPE_HISTORY_FLOW_VERSION} from '../domain/market-research/shape-price-flow';
 import {buildMarketShapeSourceSummary} from '../domain/market-research/shape-source-summary';
 import {marketProductSourcePolicy,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../shared/market-product-source-policy';
 import { z } from 'zod';
@@ -36,7 +38,7 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
     const params = MarketShapeFlowParamsSchema.parse(view.run.params), { flow: _flow, ...publicParams } = params;
     // Cancelled runs retain their frozen inputs and accepted suggestions for viewing.
     const current = new Set(inspectMarketShapeContinuation(view.run.status === 'cancelled' ? { ...view, run: { ...view.run, status: 'partial' } } : view, new Date().toISOString()).currentStepKeys);
-    const rulesOnly = params.flow === 'market-shape-price-flow/rules-v1';
+    const rulesOnly = isMarketShapeRulesFlow(params.flow);
     const projection = view.steps.find(s => s.kind === 'prepare-members' && obj(s.input).catalog && obj(obj(s.input).catalog).task === 'market-product-shape-suggestion');
     const projectionAttempt = projection?.latestAttemptId ? view.attempts.find(a => a.id === projection.latestAttemptId && ['succeeded','empty'].includes(a.status)) : undefined;
     const ruleBaseline = projectionAttempt && Object.hasOwn(obj(projectionAttempt.output), 'ruleBaseline') ? MarketRuleBaselineSchema.parse(obj(projectionAttempt.output).ruleBaseline) : undefined;
@@ -57,6 +59,7 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
             return readMarketProductMonth({month:z.string().parse(obj(step.input).month),snapshot:snapshot.snapshot,sourceRef:evidence.id},{[evidence.id]:evidence.evidence});
         }));
         source.summary=buildMarketShapeSourceSummary(checked,history,view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION);
+        if(params.flow===MARKET_SHAPE_HISTORY_FLOW_VERSION)source.productHistory=await readMarketShapeHistory({view,actor,current,snapshots,asins:source.products.map(p=>p.asin),selectionInputSnapshotId:source.referenceSnapshotId});
     }
     const items: MarketShapeSuggestionOutput['products'] = [];
     const modelSteps = view.steps.filter(s => current.has(s.stepKey) && s.kind === 'model-batch');
@@ -92,5 +95,5 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         stored_at: Date;
     }>('SELECT revision_id,ordinal,stored_at FROM market_shape_price_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100', [actor.organizationId, id])).rows.map(r => ({ revisionId: r.revision_id, ordinal: r.ordinal, createdAt: new Date(r.stored_at).toISOString() }));
     return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), ...(rulesOnly?{ruleStatus:ruleBaseline?.status??(source?'partial':'unavailable'),semanticStatus:'skipped' as const,...(ruleBaseline?{ruleBaseline}: {})}:{}), source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
-            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', asin: null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
+            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', asin: s.kind==='collect-product-history'?obj(s.input).asin:null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
 }

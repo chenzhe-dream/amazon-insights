@@ -44,3 +44,15 @@ test('rules-only shape run and saved report show rule completion without implyin
  assert.match(products,/人工确认与来源/);
  assert.doesNotMatch(products,/模型建议与依据|暂无建议/);
 });
+
+
+test('historical source states remain explicit without falling back to another supplier',()=>{
+ const run=shapePageRun().run;
+ const row={asin:'B000000001',status:'queued' as const,sourceRef:null,inputSnapshotId:null,fetchedAt:null,errorCode:null,points:[],periods:[]};
+ run.source!.productHistory={provider:'sorftime',metric:'SalesVolume',referenceMonth:'2026-08',products:[row]};
+ const render=()=>renderToStaticMarkup(<MarketShapeProductTable run={run} selected={[]} assignments={{}} disabled={false} onSelected={()=>{}} onAssignment={()=>{}} bands="0,20,40"/>);
+ assert.match(render(),/历史待采集/);
+ run.source!.productHistory.products[0].status='failed';assert.match(render(),/历史采集失败/);
+ run.source!.productHistory.products[0].status='empty';assert.match(render(),/来源无历史/);
+ assert.match(render(),/Sorftime 月销量/);
+});

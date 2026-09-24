@@ -21,7 +21,7 @@ type Selection = {
     toMonth: string;
 };
 const active = (run: MarketShapeRun) => run.steps.some(s => s.current && ['running', 'queued'].includes(s.status));
-const stepNames: Record<string, string> = { 'collect-product-month': '商品采集', 'prepare-members': '固定商品池 / 准备形态输入', 'prepare-model-batches': '准备模型分析', 'model-batch': '形态建议' };
+const stepNames: Record<string, string> = { 'collect-product-month': '商品采集', 'collect-product-history':'商品月度历史', 'prepare-members': '固定商品池 / 准备形态输入', 'prepare-model-batches': '准备模型分析', 'model-batch': '形态建议' };
 const stepErrors: Record<string, string> = { timeout: '等待上游超时', 'upstream-temporary': '上游暂不可用', 'invalid-data': '数据校验未通过', 'scope-mismatch': '来源范围不匹配', authentication: '来源认证失败', governance: '额度或调用策略限制', interrupted: '任务中断', internal: '处理失败', cancelled: '已取消' };
 const statusNames: Record<string, string> = { queued: '排队中', running: '处理中', succeeded: '已完成', empty: '未返回数据', failed: '失败', cancelled: '已取消' };
 const messages: Record<string, string> = { 'not-ready': '等待商品来源', unavailable: '模型暂不可用，可先人工确认并保存统计结果', running: '正在生成形态建议', partial: '部分形态建议不可用，可查看失败步骤或人工确认', complete: '形态建议已返回，需人工确认后才参与分组' };
@@ -30,6 +30,7 @@ export function shapeRunSummary(run: MarketShapeRun): string {
     if (run.semanticStatus !== 'skipped') return messages[run.suggestions.status];
     if (active(run)) return run.latestRevision ? '规则统计已保存，正在重试来源或规则步骤' : '正在采集商品并计算本地规则';
     if (run.status === 'failed') return run.latestRevision ? '规则统计已保存；本次来源或规则步骤失败，可查看失败步骤并重试' : '商品来源或规则步骤失败，可查看失败步骤并重试';
+    if (run.source?.productHistory?.products.some(p=>p.status==='failed')) return '商品来源已保存；部分商品历史采集失败，可在下方重试';
     if (run.latestRevision) return '本地规则统计已保存，语义解释未启用';
     if (run.source?.products.length) return '商品来源已就绪，待人工确认并保存规则统计';
     return '本次尚无可用商品来源，规则统计待完成';
@@ -193,7 +194,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>
  <details className="market-shape-task-details" open={active(run)||run.steps.some(s=>s.current&&s.canRetry)}><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
   <p>本任务范围：{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p><p className="market-research-note">样本使用供应商返回的商品池，尚未核验为 BSR 前 {run.params.poolSize} 名。{run.sourcePolicy?'站点和月份按接口查询范围绑定；币种依据供应商站点定义，响应回显另行记录。':'来源未确认单位或周期的原值不参与可比统计。'}</p>
-  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.month ? `${s.month} · ` : ''}{stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
+  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
   {active(run) && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
   </details>
   {run.source && <>
