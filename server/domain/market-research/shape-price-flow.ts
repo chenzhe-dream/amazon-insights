@@ -7,7 +7,9 @@ import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accou
 import {MarketShapeCatalogVersionSchema} from '../../../shared/market-shape-structure-contracts';
 export const MARKET_SHAPE_FLOW_VERSION = 'market-shape-price-flow/v1';
 export const MARKET_SHAPE_RULES_FLOW_VERSION = 'market-shape-price-flow/rules-v1';
-export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION]) });
+export const MARKET_SHAPE_HISTORY_FLOW_VERSION = 'market-shape-price-flow/rules-v2';
+export const isMarketShapeRulesFlow = (flow:unknown) => [MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION].includes(String(flow));
+export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION]) });
 export const MarketShapeSelectionSchema = z.object({ referenceAttemptId: z.string().uuid(), selectionInputSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/),
     sourceRef: z.string().regex(/^market-source:[a-f0-9]{64}$/), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(100), dataCutoffAt: z.string().datetime(),
     selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false) }).strict();
@@ -17,7 +19,7 @@ const success = (s: MarketExecutionStep) => s.status === 'succeeded' || s.status
 const key = (phase: string, basis: unknown) => `shape-flow/${phase}:${digest(basis)}`;
 export const isMarketShapeFlow = (run: {
     params: unknown;
-}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION].includes(String(obj(run.params).flow));
+}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION].includes(String(obj(run.params).flow));
 function params(r: Request) {
     const p = MarketShapeFlowParamsSchema.parse(r.params);
     MarketAnalysisScopeSchema.parse(r.scope);
@@ -81,6 +83,10 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
         const [y, m] = month.split('-').map(Number);
         month = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
     }
+    if (p.flow === MARKET_SHAPE_HISTORY_FLOW_VERSION) for (const asin of selection.selectedAsins) {
+        const d: MarketStepDefinition = { stepKey: key('product-history', { reference: a.id, asin }), kind: 'collect-product-history', subject: { flow: p.flow, asin }, input: { asin, selectionInputSnapshotId: selection.selectionInputSnapshotId }, inputRefs: [{ kind: 'input', id: selection.selectionInputSnapshotId }] };
+        if (!find(d)) children.push(d);
+    }
     const selectionRevision = `shape-selection:${digest(selection.selectionInputSnapshotId)}`;
     const projectionDefinition: MarketStepDefinition = { stepKey: key('project', a.id), kind: 'prepare-members', subject: { flow: p.flow }, input: { inputSnapshotId: selection.selectionInputSnapshotId, catalog: p.catalog, selectionRevision, dataCutoffAt: selection.dataCutoffAt }, inputRefs: [{ kind: 'input', id: selection.selectionInputSnapshotId }, { kind: 'step-output', id: a.id }] };
     const projection = find(projectionDefinition);
@@ -93,7 +99,7 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
     const projected = attempt(projection), snapshotId = z.string().regex(/^market-input:[a-f0-9]{64}$/).parse(obj(projected.output).inputSnapshotId);
     if (obj(projected.output).sourceInputSnapshotId !== selection.selectionInputSnapshotId || obj(projected.output).catalogHash !== digest(p.catalog))
         throw new TypeError('Shape projection differs');
-    if (p.flow === MARKET_SHAPE_RULES_FLOW_VERSION)
+    if (isMarketShapeRulesFlow(p.flow))
         return result();
     const preparationDefinition: MarketStepDefinition = { stepKey: `prepare-model/${digest({ projection: snapshotId, selectionRevision, dataCutoffAt: selection.dataCutoffAt })}`, kind: 'prepare-model-batches', subject: { task: p.catalog.task }, input: { task: p.catalog.task, inputSnapshotId: snapshotId, selectionRevision, dataCutoffAt: selection.dataCutoffAt }, inputRefs: [{ kind: 'input', id: snapshotId }] };
     const preparation = find(preparationDefinition);

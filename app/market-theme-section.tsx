@@ -10,7 +10,7 @@ import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 import { MarketThemeLaunchSection } from './market-theme-insight-panel';
 
 type Run=MarketThemeRunResponse['run'];
-const labels:Record<Run['steps'][number]['kind'],string>={'collect-product-month':'取得类目商品池','collect-overview-month':'取得类目月度总览','collect-keyword-page':'取得关键词','collect-keyword-aba':'取得逐词 ABA 份额','collect-keyword-trend':'取得趋势','collect-customer-themes':'取得商品主题','prepare-members':'固定样本与汇总主题','prepare-keyword-pool':'汇总关键词','prepare-model-batches':'准备模型输入',reconcile:'确认跨批分类','model-batch':'模型分析主题',rules:'核算主题指标',report:'保存报告'};
+const labels:Record<Run['steps'][number]['kind'],string>={'collect-product-month':'取得类目商品池','collect-product-history':'取得商品历史','collect-overview-month':'取得类目月度总览','collect-keyword-page':'取得关键词','collect-keyword-aba':'取得逐词 ABA 份额','collect-keyword-trend':'取得趋势','collect-customer-themes':'取得商品主题','prepare-members':'固定样本与汇总主题','prepare-keyword-pool':'汇总关键词','prepare-model-batches':'准备模型输入',reconcile:'确认跨批分类','model-batch':'模型分析主题',rules:'核算主题指标',report:'保存报告'};
 const statuses={queued:'排队中',running:'执行中',succeeded:'已完成',empty:'结果为空',failed:'失败',cancelled:'已取消'};
 const errors:Record<string,string>={ 'unsupported-marketplace':'此站点暂无该补充数据', 'upstream-temporary':'上游暂时不可用',timeout:'处理超时',interrupted:'执行中断',authentication:'来源认证失败',governance:'调用受到额度或治理限制','invalid-data':'返回数据未通过校验','scope-mismatch':'返回范围不匹配',cancelled:'已取消',internal:'内部处理失败'};
 export function themeRunActive(run:Run) {return run.status!=='cancelled'&&run.steps.some(s=>s.current&&(s.status==='queued'||s.status==='running'));}

@@ -1,3 +1,5 @@
+import {collectMarketProductHistory} from '../services/market-product-history-collector';
+import {inspectMarketShapeContinuation} from '../domain/market-research/shape-price-flow';
 import { z } from 'zod';
 import { MarketInputRecordSchema, type MarketAnalysisScope, type MarketJsonValue } from '../../shared/market-analysis-contracts';
 import { MARKET_SOURCE_HANDLER_VERSION, MarketSourceIdentityValueSchemas, type MarketSourceEvidence } from '../../shared/market-source-contracts';
@@ -96,6 +98,16 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
       result.products.map(product => ({ id: product.asin, data: { collection: 'product-month', month: result.month, product } })), result.status, result.evidence,
       { month: result.month, sampling: result.sampling, boundaries: result.boundaries, issues: result.issues });
   };
+  const productHistory: MarketStepHandler = async ({claim,signal}) => {
+    const input=themesInput.parse(claim.step.input),scope=await scopeFor(claim,signal);
+    const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+    if(!view||view.run.moduleKind!=='shape-price'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('History is outside the current shape frontier');
+    const pool=await selected(claim,input.selectionInputSnapshotId,scope);
+    if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&object(r.data).collection==='product-month'&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
+    const result=await collectMarketProductHistory({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+    if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+    return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-history',asin:input.asin,metric:'SalesVolume',points:result.points}}],result.status,result.evidence,{asin:input.asin,metric:'SalesVolume',selectionInputSnapshotId:input.selectionInputSnapshotId});
+  };
   const pages: MarketStepHandler = async ({ claim, signal }) => {
     const input = pageInput.parse(claim.step.input), scope = await scopeFor(claim, signal);
     const result = await collectMarketKeywordPage({ ...input, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
@@ -151,7 +163,7 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope,'overview',[id],[{id,data:{collection:'overview-month',month:input.month,operation:input.operation,parameters:result.parameters}}],result.status,result.evidence,
       {month:input.month,operation:input.operation,parameters:result.parameters,issues:result.issues});
   };
-  return Object.freeze({ 'collect-product-month': products, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
+  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
 }
 
 /** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */

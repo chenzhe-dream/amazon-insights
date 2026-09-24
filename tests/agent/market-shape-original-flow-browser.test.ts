@@ -1,3 +1,4 @@
+import {productHistoryPeriods} from '../../server/services/market-product-history-collector';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {chromium} from 'playwright';
@@ -56,10 +57,20 @@ test('original shape flow collects by category before any manual shape name and 
  await mkdir('test-results/market-shape-original-flow',{recursive:true});
  await page.screenshot({path:'test-results/market-shape-original-flow/collected-dashboard.png',fullPage:true});
  assert.equal(revisions.length,0);
+ const points=[{month:'2026-06',units:10,issues:[]},{month:'2026-07',units:0,issues:[]},{month:'2026-08',units:20,issues:[]}];
+ current.run.source!.productHistory={provider:'sorftime',metric:'SalesVolume',referenceMonth:'2026-08',products:[{asin:'B000000001',status:'ready',points,periods:productHistoryPeriods(points,'2026-08'),sourceRef:'market-source:'+'2'.repeat(64),inputSnapshotId:'market-input:'+'3'.repeat(64),fetchedAt:'2026-09-24T00:00:00Z',errorCode:null}]};
+ await page.reload();await row.waitFor();
+ await page.getByLabel('B000000001 月度销量').getByText('2026-07：0',{exact:true}).waitFor();
+ await page.getByRole('cell',{name:'30',exact:true}).waitFor();
+ assert.ok(await page.getByRole('cell',{name:'缺少完整月份',exact:true}).count()>0);
+ await page.getByRole('cell',{name:'30',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/market-shape-original-flow/historical-sales.png',fullPage:true});
  await row.fill('层架式');
  await page.getByRole('button',{name:'确认并重新计算'}).click();
  await page.getByRole('region',{name:'形态价格带版本报告'}).waitFor();
  assert.equal(revisions.length,1);
+ await page.getByLabel('B000000001 月度销量').getByText('2026-08：20',{exact:true}).waitFor();
+ await page.getByRole('cell',{name:'30',exact:true}).waitFor();
  const saved=revisions[0] as {labels:Array<{labelId:string;label:string;definition:string}>;assignments:Array<{asin:string;labelId:string}>};
  assert.equal(saved.labels[0].label,'层架式');assert.equal(saved.assignments[0].labelId,saved.labels[0].labelId);
  await mkdir('test-results/market-shape-original-flow',{recursive:true});
