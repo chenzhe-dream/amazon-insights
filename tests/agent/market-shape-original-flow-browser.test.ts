@@ -49,8 +49,10 @@ test('original shape flow collects by category before any manual shape name and 
  await page.getByRole('img',{name:'B000000001 商品图片',exact:true}).scrollIntoViewIfNeeded();
  await page.waitForFunction(()=>{const image=document.querySelector('img[alt="B000000001 商品图片"]') as HTMLImageElement;return image?.complete&&image.naturalWidth>0});
  assert.ok(await page.getByText('未采集该区间',{exact:true}).count()>0);
- await page.getByText('月度销量',{exact:true}).first().click();
- await page.getByRole('region',{name:'形态人工确认表'}).getByText('2026-08：10',{exact:true}).waitFor();
+ // Monthly values must be visible without opening a disclosure.
+ assert.equal(await page.getByRole('region',{name:'形态人工确认表'}).locator('details').filter({hasText:'月度销量'}).count(),0);
+ await page.getByRole('region',{name:'形态人工确认表'}).getByText('2026-08：10',{exact:true}).waitFor({timeout:3000});
+ await page.getByText('当前仅有 1 个月数据，展示单月数据点，尚不能判断增长或下降趋势。',{exact:true}).waitFor({timeout:3000});
  await mkdir('test-results/market-shape-original-flow',{recursive:true});
  await page.screenshot({path:'test-results/market-shape-original-flow/collected-dashboard.png',fullPage:true});
  assert.equal(revisions.length,0);
