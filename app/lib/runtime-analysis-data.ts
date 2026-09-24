@@ -20,6 +20,10 @@ export const RuntimeAnalysisDataSnapshotSchema = z.strictObject({
   variants: z.strictObject({ families: z.array(XydcVariantFamilySchema) }).default({ families: [] }),
   variantOrders: z.strictObject({ families: z.array(XydcOrderSnapshotSchema) }).default({ families: [] }),
   xydcOrderProgress: XydcOrderProgressViewSchema.nullable().default(null),
+  exportScope: z.strictObject({
+    projectId: z.string(), organizationId: z.string(), marketplace: z.string(),
+    asins: z.array(z.string()), readAt: z.string().datetime(), contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  }).optional(),
 });
 
 export type RuntimeAnalysisDataSnapshot = z.infer<typeof RuntimeAnalysisDataSnapshotSchema>;

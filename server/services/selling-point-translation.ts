@@ -2,15 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SellingTranslationResponse, type SellingTranslationResult } from "../../shared/selling-point-translation-contracts";
+export { readOriginalSellingPoints } from "../../shared/selling-point-source";
 
 export type SellingSource = { organizationId: string; projectId: string; runId: string; asin: string; original: string[]; sourceComplete: boolean };
-export function readOriginalSellingPoints(product: { listingBullets?: unknown; strengths?: unknown }) {
-  const full = Array.isArray(product.listingBullets);
-  const source = full ? product.listingBullets : product.strengths;
-  const original = (Array.isArray(source) ? source : []).filter((value): value is string =>
-    typeof value === "string" && Boolean(value.trim()) && !/[…]|\.{3}$|同步中|待.*分析/.test(value)).map(value => value.trim());
-  return { original, sourceComplete: full && original.length === (source as unknown[]).length };
-}
 
 function numbers(text: string, includeWords = false) {
   const words: Record<string, string> = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10" };
