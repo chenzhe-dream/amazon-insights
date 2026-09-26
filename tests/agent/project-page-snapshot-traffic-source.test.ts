@@ -80,5 +80,3 @@ test('partial exports use only selected products and never request comparative f
   assert.deepEqual(result.products.map(p=>p.asin),ctx.asins);
   assert.ok(!JSON.stringify(result).includes(base.asins[1]));
 });
-
-
