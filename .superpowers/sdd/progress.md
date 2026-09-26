@@ -141,3 +141,4 @@ Guardrails: latest `C:\Users\EDY\Desktop\alexa-for-shopping-voc\` only; no old `
 - Task 9.2 images active, snapshot_images owns presenter/builder/test. Parent owns host/source integration. 9.3+ pending. No formal release.
 - Task 9.2 images complete; five focused and seventeen original tests, nine real screenshots; independent review clean after URL-tagged reorder and missing-state fixes.
 - Task 9.3 VOC complete: shared original views, native nested disclosures; 19 combined tests, 13 source checks, independent review clean. Real drift four-module snapshot 441 rows, 9453px, 5.04MB. Tasks 9.4+ pending; no release.
+- Task 9.4 keywords complete: original views/all words+months/native detail;17 related and5 final focused tests, typecheck pass. Period review fix passed re-review; real9 source/browser audits pass. Two original copy-hook lint errors retained. No release.

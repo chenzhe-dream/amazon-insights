@@ -24,6 +24,7 @@ import { amazonMediaSrc } from "./lib/amazon-image";
 import { copyKeywordText } from "./lib/copy-keyword-text";
 import { AnalysisRuleExplanation, RuleDecisionExplanation } from "./analysis-rule-explanation";
 import type { AnalysisInputScope } from "../shared/product-structure-rules";
+import { useSnapshotPresentation } from "./project-report-views/snapshot-presentation";
 
 function SourceBadge({ children }: { children: React.ReactNode }) {
   return <span className="source-badge">{children}</span>;
@@ -73,6 +74,7 @@ function SearchVolumeCell({ volume, month }: { volume: number | null; month: str
 }
 
 function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint[] }) {
+  const snapshot = useSnapshotPresentation();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
   const cellRef = useRef<HTMLDivElement>(null);
@@ -105,6 +107,18 @@ function KeywordSearchTrendSparkline({ trend }: { trend: KeywordSearchTrendPoint
     .filter(item => item.rankY != null)
     .map(item => `${item.x},${item.rankY}`)
     .join(" ");
+
+  if (snapshot) return <div className="kw-trend-cell">
+    <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="img" aria-label="月搜索趋势">
+      {rankPoints ? <polyline points={rankPoints} fill="none" stroke="#f0923e" strokeWidth="1.4"/> : null}
+      <polyline points={volumePoints} fill="none" stroke="#19b66a" strokeWidth="1.6"/>
+    </svg>
+    <details className="kw-trend-values"><summary>查看全部月份</summary>
+      <table><thead><tr><th>月份</th><th>搜索量</th><th>ABA 排名</th></tr></thead><tbody>
+        {trend.map((point,index) => <tr key={`${point.month}-${index}`}><th>{point.month}</th><td>{formatNum(point.volume)}</td><td>{formatAbaRank(point.abaRank)}</td></tr>)}
+      </tbody></table>
+    </details>
+  </div>;
 
   const active = hoverIndex != null ? points[hoverIndex] : null;
 
@@ -414,6 +428,7 @@ function CompetitorMixRow({
   image?: string;
   mix: Array<{ id: KeywordCategory; label: string; sharePct: number }>;
 }) {
+  const snapshot = useSnapshotPresentation();
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({});
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -454,18 +469,20 @@ function CompetitorMixRow({
       </div>
       <div className="variant-bar-block kw-structure-compact">
         <div className="variant-bar-head kw-structure-bar-head">
-          <span>TOP 6 类 + 其他 · 悬停进度条查看全部分类占比</span>
+          <span>{snapshot ? "TOP 6 类 + 其他 · 展开查看全部分类占比" : "TOP 6 类 + 其他 · 悬停进度条查看全部分类占比"}</span>
         </div>
         <div
           ref={wrapRef}
           className="kw-structure-stack-wrap"
-          onMouseEnter={openPanel}
-          onMouseLeave={() => setPanelOpen(false)}
+          onMouseEnter={snapshot ? undefined : openPanel}
+          onMouseLeave={snapshot ? undefined : () => setPanelOpen(false)}
         >
           <SegmentStackBar segments={segments} absolute hideSegmentTitle />
         </div>
       </div>
-      {panelOpen ? (
+      {snapshot ? <details className="kw-structure-snapshot-details" style={{pointerEvents:"auto",position:"static"}}><summary>全部分类占比</summary>
+        <div className="kw-structure-float-list">{mix.map(item => <div key={item.id}><span>{item.label}</span><strong>{formatPct(item.sharePct)}</strong></div>)}</div>
+      </details> : panelOpen ? (
         <div className="kw-structure-float-panel" style={panelStyle}>
           <header className="kw-structure-float-head">
             {image ? <img className="kw-structure-float-thumb" src={amazonMediaSrc(image)} alt="" referrerPolicy="no-referrer" /> : null}
@@ -501,16 +518,19 @@ function KeywordComparisonMatrixTable({
   products,
   categories,
   sources,
+  snapshotMeta,
 }: {
   products: KeywordDemandProduct[];
   categories: CategoryBucket[];
   sources?: KeywordDemandSources;
+  snapshotMeta?: {period: string | null; updatedAt: string | null};
 }) {
+  const snapshot = useSnapshotPresentation();
   const [filter, setFilter] = useState<KeywordCategory | "all">("all");
   const [sort, setSort] = useState<MatrixSort>("coverageDesc");
   const matrix = useMemo(
-    () => buildKeywordComparisonMatrix(products, { category: filter, limit: 150, ...matrixSortOptions(sort), sources }),
-    [products, filter, sort, sources],
+    () => buildKeywordComparisonMatrix(products, { category: snapshot ? "all" : filter, limit: snapshot ? Number.MAX_SAFE_INTEGER : 150, ...matrixSortOptions(sort), sources }),
+    [products, filter, sort, sources, snapshot],
   );
   const rows = matrix.rows;
   const copyScope = JSON.stringify([products.map(product => product.asin), filter, rows.map(row => row.keyword).sort()]);
@@ -546,7 +566,7 @@ function KeywordComparisonMatrixTable({
 
   return (
     <>
-      <div className="kw-matrix-toolbar">
+      {!snapshot && <div className="kw-matrix-toolbar">
         <label>
           含义筛选
           <select value={filter} onChange={event => setFilter(event.target.value as KeywordCategory | "all")}>
@@ -561,20 +581,25 @@ function KeywordComparisonMatrixTable({
         <span className="launch-muted">
           展示 {rows.length} / {matrix.totalRows} 个去重词 · 默认按共享率降序 · 点击「月搜索量」按搜索量从高到低 · 悬停列头可看释义
         </span>
-      </div>
-      <div className="kw-matrix-copy-toolbar">
+      </div>}
+      {!snapshot && <div className="kw-matrix-copy-toolbar">
         <button type="button" className="ghost-btn" disabled={!selectedWords.length} onClick={() => void copyWords(selectedWords)}>复制已选（{selectedWords.length}）</button>
         <button type="button" className="ghost-btn" disabled={!rows.length} onClick={() => void copyWords(rows.map(row => row.keyword))}>复制当前列表（{rows.length}）</button>
         {selectedWords.length > 0 && <button type="button" className="ghost-btn" onClick={() => setSelection({ scope: copyScope, words: new Set() })}>清空选择</button>}
         <span className="launch-muted">每行一个词，按当前排序复制；当前列表最多 150 词。</span>
         <span role="status" aria-live="polite">{visibleCopyResult?.message}</span>
-      </div>
-      {visibleCopyResult?.failed && <label className="kw-copy-manual">手动复制关键词
+      </div>}
+      {!snapshot && visibleCopyResult?.failed && <label className="kw-copy-manual">手动复制关键词
         <textarea readOnly rows={4} value={visibleCopyResult.text} onFocus={event => event.currentTarget.select()} />
       </label>}
       <div className="kw-matrix-period-legend launch-muted">
-        <span><b>近30天</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3（SIF listingSearch lately·30）</span>
-        <span><b>月粒度</b>：月搜索量、ABA 排名、月搜索趋势（SIF keyword_history · 近12期）</span>
+        {snapshot ? <>
+          <span><b>{snapshotMeta?.period ?? "来源周期未记录"}</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3</span>
+          <span><b>已有月份</b>：月搜索量、ABA 排名、月搜索趋势；各词可展开查看全部已保存月份</span>
+        </> : <>
+          <span><b>近30天</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3（SIF listingSearch lately·30）</span>
+          <span><b>月粒度</b>：月搜索量、ABA 排名、月搜索趋势（SIF keyword_history · 近12期）</span>
+        </>}
       </div>
       <div className="kw-matrix-wrap matrix-wrap">
         <table className="compare-matrix kw-matrix-table">
@@ -596,10 +621,10 @@ function KeywordComparisonMatrixTable({
           <thead>
             <tr>
               <th className="kw-matrix-sticky kw-matrix-index">
-                <input type="checkbox" aria-label="全选当前列表" title="全选当前列表" disabled={!rows.length}
+                {!snapshot && <input type="checkbox" aria-label="全选当前列表" title="全选当前列表" disabled={!rows.length}
                   checked={rows.length > 0 && selectedWords.length === rows.length}
                   ref={element => { if (element) element.indeterminate = selectedWords.length > 0 && selectedWords.length < rows.length; }}
-                  onChange={event => setSelection({ scope: copyScope, words: new Set(event.target.checked ? rows.map(row => row.keyword) : []) })} />
+                  onChange={event => setSelection({ scope: copyScope, words: new Set(event.target.checked ? rows.map(row => row.keyword) : []) })} />}
               </th>
               <th className="kw-matrix-sticky kw-matrix-keyword kw-matrix-help" title={sifKeywordFieldTitle("keyword")}>
                 关键词
@@ -608,21 +633,21 @@ function KeywordComparisonMatrixTable({
                 含义分类
               </th>
               <th
-                className={`kw-matrix-sticky kw-matrix-volume kw-matrix-sortable kw-matrix-help${sort.startsWith("volume") ? " active" : ""}`}
-                onClick={() =>
+                className={`kw-matrix-sticky kw-matrix-volume kw-matrix-help${snapshot ? "" : ` kw-matrix-sortable${sort.startsWith("volume") ? " active" : ""}`}`}
+                onClick={snapshot ? undefined : () =>
                   setSort(current => {
                     if (current === "volumeDesc") return "volumeAsc";
                     return "volumeDesc";
                   })
                 }
-                title={sifKeywordFieldTitle("searchVolume", "点击按月搜索量降序（再点切换升序）")}
+                title={sifKeywordFieldTitle("searchVolume", snapshot ? undefined : "点击按月搜索量降序（再点切换升序）")}
               >
                 月搜索量
-                <span className="kw-sort-mark" aria-hidden="true">
+                {!snapshot && <span className="kw-sort-mark" aria-hidden="true">
                   {sort === "volumeDesc" ? "↓" : sort === "volumeAsc" ? "↑" : "↓"}
-                </span>
+                </span>}
               </th>
-              <th className="kw-matrix-sticky kw-matrix-trend kw-matrix-help" title={sifKeywordFieldTitle("searchTrend")}>
+              <th className="kw-matrix-sticky kw-matrix-trend kw-matrix-help" title={snapshot ? "月搜索趋势：展开各词可查看全部已保存月份" : sifKeywordFieldTitle("searchTrend")}>
                 月搜索趋势
               </th>
               <th className="kw-matrix-sticky kw-matrix-bid kw-matrix-help" title={sifKeywordFieldTitle("suggestedBid")}>
@@ -632,32 +657,32 @@ function KeywordComparisonMatrixTable({
                 点击<br />转化率
               </th>
               <th
-                className={`kw-matrix-sticky kw-matrix-aba kw-matrix-sortable kw-matrix-help${sort === "abaAsc" ? " active" : ""}`}
-                onClick={() => setSort("abaAsc")}
-                title={sifKeywordFieldTitle("abaRank", "点击可按 ABA 排名升序")}
+                className={`kw-matrix-sticky kw-matrix-aba kw-matrix-help${snapshot ? "" : ` kw-matrix-sortable${sort === "abaAsc" ? " active" : ""}`}`}
+                onClick={snapshot ? undefined : () => setSort("abaAsc")}
+                title={sifKeywordFieldTitle("abaRank", snapshot ? undefined : "点击可按 ABA 排名升序")}
               >
-                ABA<br />排名{sort === "abaAsc" ? " ↑" : ""}
+                ABA<br />排名{!snapshot && sort === "abaAsc" ? " ↑" : ""}
               </th>
               <th className="kw-matrix-sticky kw-matrix-top3 kw-matrix-help" title={sifKeywordFieldTitle("top3Concentration")}>
                 ABA Top3<br />集中度
               </th>
               <th
-                className={`kw-matrix-sticky kw-matrix-coverage kw-matrix-sortable kw-matrix-help${sort.startsWith("coverage") ? " active" : ""}`}
-                onClick={() =>
+                className={`kw-matrix-sticky kw-matrix-coverage kw-matrix-help${snapshot ? "" : ` kw-matrix-sortable${sort.startsWith("coverage") ? " active" : ""}`}`}
+                onClick={snapshot ? undefined : () =>
                   setSort(current => {
                     if (current === "coverageDesc") return "coverageAsc";
                     return "coverageDesc";
                   })
                 }
-                title={sifKeywordFieldTitle("coverage", "点击可按共享率排序（分子=有流量占比的竞品数，越大相关度越高）")}
+                title={sifKeywordFieldTitle("coverage", snapshot ? undefined : "点击可按共享率排序（分子=有流量占比的竞品数，越大相关度越高）")}
               >
-                共享率{sort === "coverageDesc" ? " ↓" : sort === "coverageAsc" ? " ↑" : ""}
+                共享率{snapshot ? "" : sort === "coverageDesc" ? " ↓" : sort === "coverageAsc" ? " ↑" : ""}
               </th>
               {matrix.competitors.map((competitor, index) => (
                 <th
                   key={competitor.asin}
                   className="kw-matrix-competitor-col kw-matrix-help"
-                  title={sifKeywordFieldTitle("trafficShare", `${competitor.brand} · ${competitor.asin} · 近30天 listingSearch`)}
+                  title={sifKeywordFieldTitle("trafficShare", `${competitor.brand} · ${competitor.asin} · ${snapshot ? snapshotMeta?.period ?? "来源周期未记录" : "近30天 listingSearch"}`)}
                 >
                   <div className="kw-matrix-product-head">
                     <span className="series-dot" style={{ background: palette[index % palette.length] }}>
@@ -682,12 +707,12 @@ function KeywordComparisonMatrixTable({
             {rows.map((row, index) => (
               <tr key={row.keyword}>
                 <th className="kw-matrix-sticky kw-matrix-index">
-                  <label className="kw-copy-row-index"><input type="checkbox" aria-label={`选择关键词 ${row.keyword}`}
-                    checked={selectedWords.includes(row.keyword)} onChange={event => toggleWord(row.keyword, event.target.checked)} />{index + 1}</label>
+                  {snapshot ? index + 1 : <label className="kw-copy-row-index"><input type="checkbox" aria-label={`选择关键词 ${row.keyword}`}
+                    checked={selectedWords.includes(row.keyword)} onChange={event => toggleWord(row.keyword, event.target.checked)} />{index + 1}</label>}
                 </th>
                 <td className="kw-matrix-sticky kw-matrix-keyword">
                   <b>{row.keyword}</b>
-                  <button type="button" className="kw-copy-word" aria-label={`复制关键词 ${row.keyword}`} onClick={() => void copyWords([row.keyword])}>复制</button>
+                  {!snapshot && <button type="button" className="kw-copy-word" aria-label={`复制关键词 ${row.keyword}`} onClick={() => void copyWords([row.keyword])}>复制</button>}
                 </td>
                 <td className="kw-matrix-sticky kw-matrix-category">
                   <span className="kw-tag" style={{ background: row.categoryColor }}>
@@ -739,12 +764,15 @@ export function KeywordDemandSection({
   mode = "analysis",
   sources,
   analysisScope,
+  snapshotMeta,
 }: {
   products: KeywordDemandProduct[];
   mode?: KeywordDemandSectionMode;
   sources?: KeywordDemandSources;
   analysisScope?: Partial<AnalysisInputScope>;
+  snapshotMeta?: {period: string | null; updatedAt: string | null};
 }) {
+  const snapshot = useSnapshotPresentation();
   const analysis = useMemo(() => buildKeywordDemandAnalysis(products, sources), [products, sources]);
   const conclusions = useMemo(
     () => buildKeywordLaunchConclusions(analysis, products, analysisScope, sources),
@@ -756,14 +784,14 @@ export function KeywordDemandSection({
     mode === "insight"
       ? conclusions.hasData
         ? conclusions.headline
-        : "关键词洞察待数据就绪"
-      : analysis.headline;
+        : snapshot ? "关键词洞察暂无已发布结果" : "关键词洞察待数据就绪"
+      : snapshot && !analysis.hasData ? "暂无已发布的关键词结果" : analysis.headline;
   const summary =
     mode === "insight"
       ? conclusions.hasData
         ? conclusions.verdict.matrixLabel
-        : "先完成竞品流量词同步，再输出开品结论与需求分层。"
-      : analysis.summaryInsight;
+              : snapshot ? "暂无已发布的关键词结果，暂无法输出关键词洞察。" : "先完成竞品流量词同步，再输出开品结论与需求分层。"
+      : snapshot && !analysis.hasData ? "当前项目没有可展示的已发布关键词分析。" : analysis.summaryInsight;
 
   return (
     <div className="launch-page kw-demand-page">
@@ -781,7 +809,7 @@ export function KeywordDemandSection({
             分类体系 <b>12 类标签</b>
           </span>
           <span>
-            统计周期 <b>{analysis.meta.period}</b>
+            统计周期 <b>{snapshot ? snapshotMeta?.period ?? "来源周期未记录" : analysis.meta.period}</b>
           </span>
           <span>
             竞品 <b>
@@ -792,7 +820,7 @@ export function KeywordDemandSection({
             去重词 <b>{analysis.meta.uniqueKeywords}</b>
           </span>
           <span>
-            更新 <b>{analysis.meta.updatedAt}</b>
+            更新 <b>{snapshot ? snapshotMeta?.updatedAt ?? "来源时间未记录" : analysis.meta.updatedAt}</b>
           </span>
         </div>
       </section>
@@ -803,10 +831,10 @@ export function KeywordDemandSection({
       />
 
       {!analysis.hasData ? (
-        <LaunchSection title="等待 SIF 关键词数据" description="反查流量词尚未同步到本地">
+        <LaunchSection title={snapshot ? "暂无已发布的关键词结果" : "等待 SIF 关键词数据"} description={snapshot ? "当前项目尚无可展示的关键词来源" : "反查流量词尚未同步到本地"}>
           <div className="pending-box">
-            服务端 SIF 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
-            <code>{sifKeywordAnalysisMeta.syncCommand}</code>。
+            {snapshot ? "暂无已发布的关键词结果。" : <>服务端 SIF 连接器尚未配置或数据尚未同步。请联系管理员配置连接器后运行{" "}
+            <code>{sifKeywordAnalysisMeta.syncCommand}</code>。</>}
           </div>
         </LaunchSection>
       ) : mode === "insight" ? (
@@ -820,7 +848,7 @@ export function KeywordDemandSection({
 
           <LaunchSection
             title="竞品关键词结构对比"
-            description="各 ASIN 流量词按含义分类 · 展示 TOP 6 类 + 其他"
+            description={snapshot ? "各 ASIN 流量词按含义分类 · 展示 TOP 6 类 + 其他；展开查看全部分类" : "各 ASIN 流量词按含义分类 · 展示 TOP 6 类 + 其他"}
             className="kw-structure-section"
           >
             <div className="kw-structure-list">
@@ -860,21 +888,21 @@ export function KeywordDemandSection({
 
           <LaunchSection
             title="流量词对比"
-            description="行=去重关键词 · 列=竞品近30天流量占比（listingSearch）"
+            description={snapshot ? `行=去重关键词 · 列=竞品流量占比（${snapshotMeta?.period ?? "来源周期未记录"}）` : "行=去重关键词 · 列=竞品近30天流量占比（listingSearch）"}
           >
-            <KeywordComparisonMatrixTable products={products} categories={analysis.categories} sources={sources} />
+            <KeywordComparisonMatrixTable products={products} categories={analysis.categories} sources={sources} snapshotMeta={snapshotMeta} />
           </LaunchSection>
 
           <LaunchSection
             title="关键词含义分类标准"
             description="12 类标签 · import from keyword-classifier / keyword-meaning-taxonomy"
-            badge={
+            badge={snapshot ? undefined :
               <button className="ghost-btn kw-toggle-taxonomy" onClick={() => setShowTaxonomy(value => !value)}>
                 {showTaxonomy ? "收起" : "展开词表"}
               </button>
             }
           >
-            {showTaxonomy ? <TaxonomyReferenceTable /> : <p className="launch-muted">点击「展开词表」查看 12 类标签定义与示例。</p>}
+            {snapshot ? <details><summary>展开词表</summary><TaxonomyReferenceTable /></details> : showTaxonomy ? <TaxonomyReferenceTable /> : <p className="launch-muted">点击「展开词表」查看 12 类标签定义与示例。</p>}
           </LaunchSection>
         </>
       )}

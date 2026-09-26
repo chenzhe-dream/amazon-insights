@@ -10,6 +10,7 @@ import {PageSnapshotVariants} from "./page-snapshot-variants";
 import {PageSnapshotImages} from "./page-snapshot-images";
 import {SnapshotPresentationProvider} from "../project-report-views/snapshot-presentation";
 import {PageSnapshotVoc} from "./page-snapshot-voc";
+import {PageSnapshotKeywords} from "./page-snapshot-keywords";
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
   return <SnapshotPresentationProvider><main className="page-snapshot">
@@ -20,6 +21,7 @@ export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
     {content.moduleIds.includes("variants-orders") && content.variants && <section className="compare-page" data-snapshot-module="variants-orders"><PageSnapshotVariants {...content.variants}/></section>}
     {content.moduleIds.includes("listing-images") && content.images && <section className="compare-page" data-snapshot-module="listing-images"><PageSnapshotImages {...content.images}/></section>}
     {content.moduleIds.includes("voc") && content.voc && <section className="compare-page" data-snapshot-module="voc"><PageSnapshotVoc {...content.voc}/></section>}
+    {content.moduleIds.includes("keywords") && content.keywords && <section className="compare-page" data-snapshot-module="keywords"><PageSnapshotKeywords {...content.keywords}/></section>}
   </main></SnapshotPresentationProvider>;
 }
 class SnapshotBoundary extends Component<{children: ReactNode; onError: (error: Error) => void}, {failed: boolean}> {
