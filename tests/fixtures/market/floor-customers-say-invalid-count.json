@@ -1,0 +1,185 @@
+{
+  "payload": {
+    "data": {
+      "customer_say": "Customers find the floor lamp easy to assemble and appreciate its amazing light quality, beautiful appearance, and good value for money. The foot pedal switch is a convenient feature, and customers like that it provides bright light. While some customers find it sturdy, others report that it can easily topple over.",
+      "details": [
+        {
+          "keyword": "sturdiness",
+          "content": "Customers have mixed opinions about the floor lamp’s sturdiness, with some finding it sturdy enough while others report it being wobbly and breaking within a month of use.",
+          "mention": 9,
+          "positive": 5,
+          "negative": 4,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "appearance",
+          "content": "Customers like the appearance of the floor lamp, with one customer describing it as looking like an upright banana.",
+          "mention": 9,
+          "positive": 9,
+          "negative": 76,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "assembly",
+          "content": "Customers find the floor lamp easy to assemble, with one mentioning that the pole sections connect easily.",
+          "mention": 18,
+          "positive": 15,
+          "negative": 3,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "quality",
+          "content": "Customers are happy with the floor lamp, finding it nice and meeting their expectations.",
+          "mention": 31,
+          "positive": 25,
+          "negative": 6,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "value for money",
+          "content": "Customers find the floor lamp offers good value for money.",
+          "mention": 17,
+          "positive": 12,
+          "negative": 5,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "functionality",
+          "content": "Customers find that the lamp works well.",
+          "mention": 7,
+          "positive": 7,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "brightness",
+          "content": "Customers have mixed opinions about the lamp’s brightness, with some praising its great amount of light and powerful performance, while others find it doesn’t project enough light.",
+          "mention": 6,
+          "positive": 4,
+          "negative": 2,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "floor switch",
+          "content": "Customers appreciate the floor lamp’s on/off switch, which can be activated by stepping on it.",
+          "mention": 202,
+          "positive": 182,
+          "negative": 20,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "switch",
+          "content": "Customers appreciate the floor lamp’s on/off switch, which is conveniently located on the floor and can be activated by stepping on it.",
+          "mention": 203,
+          "positive": 182,
+          "negative": 21,
+          "update_time": "2026-09-25"
+        },
+        {
+          "keyword": "size",
+          "content": "Customers are disappointed with the size of the lamp, describing it as small, skinny, and very short.",
+          "mention": 11,
+          "positive": 3,
+          "negative": 8,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "ease of assembly",
+          "content": "Customers find the floor lamp easy to assemble and use.",
+          "mention": 10,
+          "positive": 10,
+          "negative": 0,
+          "update_time": "2026-09-16"
+        },
+        {
+          "keyword": "durability",
+          "content": "Customers report that the lamp is flimsy and breaks after a few months of use.",
+          "mention": 10,
+          "positive": 2,
+          "negative": 8,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "ease of use",
+          "content": "Customers find the floor lamp easy to use and convenient, with one customer specifically mentioning the convenient step switch.",
+          "mention": 108,
+          "positive": 106,
+          "negative": 2,
+          "update_time": "2026-09-25"
+        },
+        {
+          "keyword": "stability",
+          "content": "Customers have mixed experiences with the floor lamp’s stability, with some finding it sturdy while others report it being wobbly and breaking within a month of use.",
+          "mention": 8,
+          "positive": 4,
+          "negative": 4,
+          "update_time": "2026-09-17"
+        },
+        {
+          "keyword": "lighting performance",
+          "content": "Customers find that the lamp works well, with one mentioning it performs better in its designated space.",
+          "mention": 5,
+          "positive": 5,
+          "negative": 0,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "easy to set up",
+          "content": "Customers find the floor lamp easy to set up.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "brightness settings",
+          "content": "Customers like the brightness settings of the floor lamp.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "remote control",
+          "content": "Customers appreciate the remote control feature of the floor lamp, with one customer noting that it works well and can be used to control the lamps from a distance.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "room lighting",
+          "content": "Customers like how the lamp adds light to their space, with one mentioning it works well in a dark corner of the living room.",
+          "mention": 7,
+          "positive": 6,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "lighting quantity",
+          "content": "Customers are satisfied with the lamp’s light output, with one mentioning that the shade provides good coverage.",
+          "mention": 6,
+          "positive": 5,
+          "negative": 1,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "build quality",
+          "content": "Customers are satisfied with the lamp’s build quality, finding it to be far better than expected.",
+          "mention": 19,
+          "positive": 17,
+          "negative": 2,
+          "update_time": "2026-09-24"
+        },
+        {
+          "keyword": "material quality",
+          "content": "Customers find the material quality of the floor lamp to be poor, noting that the shade is made cheaply.",
+          "mention": 7,
+          "positive": 1,
+          "negative": 6,
+          "update_time": "2026-09-24"
+        }
+      ]
+    }
+  }
+}

@@ -5,6 +5,7 @@ import {marketSiteCurrency,type MarketSite} from "../shared/market-sites";
 import React, { useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema, type MarketThemeRunResponse } from '../shared/market-module-contracts';
 import { cancelThemeRun, createThemeStudy, readThemeRun, retryThemeSteps, startThemeRun } from './lib/market-theme-browser';
+import {marketThemeSourceIssueText} from '../shared/market-theme-source-issue';
 import { MarketThemeReport } from './market-theme-report';
 import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 import { MarketThemeLaunchSection } from './market-theme-insight-panel';
@@ -13,6 +14,9 @@ type Run=MarketThemeRunResponse['run'];
 const labels:Record<Run['steps'][number]['kind'],string>={'collect-product-image':'取得商品图片','collect-shape-pool':'取得Sorftime商品池','collect-product-amount-history':'取得商品历史金额','collect-product-month':'取得类目商品池','collect-shape-category':'类目历史与指标', 'collect-product-history':'取得商品历史','collect-overview-month':'取得类目月度总览','collect-keyword-page':'取得关键词','collect-keyword-aba':'取得逐词 ABA 份额','collect-keyword-trend':'取得趋势','collect-customer-themes':'取得商品主题','prepare-members':'固定样本与汇总主题','prepare-keyword-pool':'汇总关键词','prepare-model-batches':'准备模型输入',reconcile:'确认跨批分类','model-batch':'模型分析主题',rules:'核算主题指标',report:'保存报告'};
 const statuses={queued:'排队中',running:'执行中',succeeded:'已完成',empty:'结果为空',failed:'失败',cancelled:'已取消'};
 const errors:Record<string,string>={ 'unsupported-marketplace':'此站点暂无该补充数据', 'upstream-temporary':'上游暂时不可用',timeout:'处理超时',interrupted:'执行中断',authentication:'来源认证失败',governance:'调用受到额度或治理限制','invalid-data':'返回数据未通过校验','scope-mismatch':'返回范围不匹配',cancelled:'已取消',internal:'内部处理失败'};
+export function MarketThemeStepStatus({step:s}:{step:Run['steps'][number]}) {
+ return <span>{labels[s.kind]}{s.asin?` · ${s.asin}`:''}：{statuses[s.status]}{s.errorCode?`（${errors[s.errorCode]}）`:''}{s.status==='failed'&&s.sourceIssue&&<><br/><small>{marketThemeSourceIssueText(s.sourceIssue)}</small></>}</span>;
+}
 export function themeRunActive(run:Run) {return run.status!=='cancelled'&&run.steps.some(s=>s.current&&(s.status==='queued'||s.status==='running'));}
 export function themeRunLabel(run:Run) {
   if(run.status==='cancelled')return '分析已取消';
@@ -85,7 +89,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
       {!run?<p role="status">{readError?'未能读取任务，请刷新状态或检查任务编号。':runId?'正在读取主题任务…':'尚未开始主题分析。可新建分析或恢复已有任务。'}</p>:<>
         <div className="market-research-job-heading"><h3>{!readError&&themeRunActive(run)&&<span className="market-theme-spinner" aria-hidden="true"/>}{readError?'最新状态待确认':themeRunLabel(run)}</h3><small>任务：{run.id}</small></div>
         <p className="market-research-note">{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p>
-        <ul className="market-theme-steps">{run.steps.filter(s=>s.current).map(s=><li key={s.id}><span>{labels[s.kind]}{s.asin?` · ${s.asin}`:''}：{statuses[s.status]}{s.errorCode?`（${errors[s.errorCode]}）`:''}</span>{s.canRetry&&<button type="button" className="ghost-btn" disabled={busy||!!readError} onClick={()=>void action('retry',s)}>重试{ s.asin?` ${s.asin}`:'此步骤'}</button>}</li>)}</ul>
+        <ul className="market-theme-steps">{run.steps.filter(s=>s.current).map(s=><li key={s.id}><MarketThemeStepStatus step={s}/>{s.canRetry&&<button type="button" className="ghost-btn" disabled={busy||!!readError} onClick={()=>void action('retry',s)}>重试{ s.asin?` ${s.asin}`:'此步骤'}</button>}</li>)}</ul>
         {run.history.length>0&&<label className="market-theme-version">报告版本 <select aria-label="报告版本" value={reportChoice} onChange={e=>setReportChoice(e.target.value)}><option value="latest">最新可用报告</option>{run.history.map((e,i)=><option key={e.attemptId} value={e.attemptId}>{e.current?'当前':'历史'} · {e.report.dataCutoffAt} · {i+1}</option>)}</select></label>}
       </>}
       <details className="market-research-boundaries"><summary>恢复已有主题任务</summary><form className="market-theme-actions" onSubmit={restore}><label>任务 UUID <input value={restoreId} onChange={e=>setRestoreId(e.target.value)} required disabled={busy}/></label><button type="submit" className="ghost-btn" disabled={busy}>读取任务</button></form><p>已打开的任务保存在当前地址中，刷新只读取状态和报告。</p></details>

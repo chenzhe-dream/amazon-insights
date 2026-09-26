@@ -30,6 +30,7 @@ import {readMarketShapeRun,marketShapePublicRevision} from './market-shape-read-
 import {isMarketKeywordFlow,MarketKeywordStartRequestSchema,MARKET_KEYWORD_RULES_FLOW_VERSION,marketKeywordFlowInitialSteps} from '../domain/market-research/keyword-flow';
 import {MARKET_KEYWORD_POOL_VERSION} from '../domain/market-research/keyword-source-pool';
 import {readMarketKeywordRun} from './market-keyword-read-service';
+import {MarketThemeSourceIssueSchema} from '../../shared/market-theme-source-issue';
 import {readMarketKeywordReconciliationReport} from './market-keyword-reconciliation-read';
 import {buildMarketKeywordRuleReport} from '../domain/market-research/keyword-rule-report';
 import {buildMarketKeywordScoreInputAudit} from '../domain/market-research/keyword-score-input-audit';
@@ -250,11 +251,16 @@ export class MarketModuleService {
       const view = await this.steps.findModuleRun({ actor, moduleRunId: id }); if (!view || !isMarketThemeFlow(view.run)) throw unavailable();
       const reports = await new MarketThemeReportService(this.deps.context).read({ actor, moduleRunId: id }); if (!reports) throw unavailable();
       const currentKeys = new Set(inspectMarketThemeContinuation(view, this.now()).currentStepKeys), p = obj(view.run.params);
+      const failedThemeAttempts=view.steps.filter(s=>s.kind==='collect-customer-themes'&&s.status==='failed'&&s.latestAttemptId).map(s=>s.latestAttemptId!);
+      const issues=failedThemeAttempts.length?new Map((await this.deps.context.query<{id:string;issue:unknown}>(
+        "SELECT id,diagnostic_json->'themeIssue' AS issue FROM market_analysis_step_attempts WHERE organization_id=$1 AND run_id=$2 AND id=ANY($3::uuid[]) AND status='failed'",
+        [actor.organizationId,id,failedThemeAttempts])).rows.map(row=>[row.id,MarketThemeSourceIssueSchema.safeParse(row.issue)])):new Map();
       return MarketThemeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, planRevision: view.run.planRevision,
         params: { memberCount: p.memberCount, poolSize: p.poolSize, newProductMonths: p.newProductMonths, ...(p.topN !== undefined ? { topN: p.topN } : {}) },
-        steps: view.steps.map(step => { const attempt = view.attempts.find(a => a.id === step.latestAttemptId), current = currentKeys.has(step.stepKey);
+        steps: view.steps.map(step => { const attempt = view.attempts.find(a => a.id === step.latestAttemptId), current = currentKeys.has(step.stepKey), issue=issues.get(step.latestAttemptId);
           return { id: step.id, kind: step.kind, status: step.status, latestAttemptId: step.latestAttemptId, attemptCount: step.attemptCount,nextAttemptAt:step.nextAttemptAt??null, current,
             canRetry: current && step.status === 'failed' && view.run.status !== 'cancelled', asin: obj(step.input).asin ?? null,
+            ...(issue?.success?{sourceIssue:issue.data}:{}),
             errorCode: ['failed', 'interrupted'].includes(attempt?.status ?? '') ? obj(attempt?.error).code ?? 'internal' : null }; }),
         currentReport: reports.currentReport, latestSavedReport: reports.latestSavedReport, history: reports.history } });
     });

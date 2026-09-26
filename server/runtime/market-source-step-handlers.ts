@@ -17,6 +17,7 @@ import { collectMarketKeywordPage, collectMarketKeywordTrend } from '../services
 import {collectMarketKeywordAba} from '../services/market-keyword-aba-collector';
 import {inspectMarketKeywordContinuation} from '../domain/market-research/keyword-flow';
 import { collectMarketCustomerThemes } from '../services/market-customer-themes-collector';
+import {MarketThemeSourceIssueSchema,type MarketThemeSourceIssue} from '../../shared/market-theme-source-issue';
 import { collectMarketOverviewSource, MarketOverviewSourceStepInputSchema } from '../services/market-overview-source-collector';
 import {collectMarketOverviewDistribution,MarketOverviewDistributionStepInputSchema} from '../services/market-overview-distribution-collector';
 import { createMarketInputSnapshot } from '../domain/market-research/snapshot';
@@ -50,14 +51,14 @@ function evidenceProposal(evidence: MarketSourceEvidence) {
   if (digest(createMarketSourceEvidence(proposal)) !== digest(evidence)) invalid('Source evidence could not be preserved');
   return proposal;
 }
-function failure(sourceCode: string, retryable: boolean): MarketStepWork {
+function failure(sourceCode: string, retryable: boolean, themeIssue?:MarketThemeSourceIssue): MarketStepWork {
   const code: MarketStepError['code'] = ['scope-mismatch', 'identity-conflict', 'identity-mismatch', 'source-mismatch'].includes(sourceCode) ? 'scope-mismatch'
     : sourceCode === 'authentication' ? 'authentication'
     : ['configuration', 'local-admission', 'governor-rejected'].includes(sourceCode) ? 'governance'
     : sourceCode === 'timeout' ? 'timeout' : ['interrupted', 'cancelled'].includes(sourceCode) ? 'interrupted'
     : ['rate-limit', 'upstream-temporary'].includes(sourceCode) ? 'upstream-temporary' : 'invalid-data';
   return { kind: 'settlement', value: { outcome: { status: 'failed', error: { code, retryable },
-    diagnostic: { handlerVersion: MARKET_SOURCE_HANDLER_VERSION, sourceCode } } } };
+    diagnostic: { handlerVersion: MARKET_SOURCE_HANDLER_VERSION, sourceCode, ...(themeIssue?{themeIssue}:{}) } } } };
 }
 function collected(scope: MarketAnalysisScope, kind: 'products' | 'keywords' | 'customer-themes' | 'overview', expectedRecordIds: string[],
   records: { id: string; data: unknown }[], status: string, evidence: MarketSourceEvidence, metadata: Record<string, unknown>): MarketStepWork {
@@ -177,7 +178,12 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if (selection.kind !== 'products' || !selection.records.some(r => r.id === input.asin && object(r.data).collection === 'product-month' && object(object(r.data).product).asin === input.asin)) invalid('ASIN is outside the saved source pool');
     signal.throwIfAborted();
     const result = await collectMarketCustomerThemes({ asin: input.asin, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
-    if (result.result.status === 'failed' || !result.evidence) return failure(result.issues[0]?.code ?? 'invalid-source', result.issues[0]?.retryable ?? false);
+    if (result.result.status === 'failed' || !result.evidence) {
+      const first=result.issues[0],path=first?.path;
+      const detail=first?.code==='invalid-theme'&&path?.length===4&&path[0]==='data'&&path[1]==='details'
+        ?MarketThemeSourceIssueSchema.safeParse({code:first.reason??'invalid-theme',themeIndex:path[2],field:path[3]}):null;
+      return failure(first?.code??'invalid-source',first?.retryable??false,detail?.success?detail.data:undefined);
+    }
     return collected(scope, 'customer-themes', [input.asin], [{ id: input.asin, data: { collection: 'customer-themes', result: result.result } }],
       result.result.status === 'empty' ? 'empty' : 'ready', result.evidence, { asin: input.asin, selectionInputSnapshotId: input.selectionInputSnapshotId, issues: result.issues });
   };

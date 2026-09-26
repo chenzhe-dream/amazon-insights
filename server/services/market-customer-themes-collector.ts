@@ -19,6 +19,7 @@ export type MarketCustomerThemesIssue = {
   message: string;
   retryable: boolean;
   path?: (string | number)[];
+  reason?: 'count-exceeds-mention';
 };
 export type CollectMarketCustomerThemesInput = {
   scope: MarketAnalysisScope;
@@ -84,7 +85,7 @@ const themeSchema = z.object({
   content: z.string(), mention: count, positive: count, negative: count, update_time: updateDate,
 }).passthrough().superRefine((theme, context) => {
   for (const field of ["positive", "negative"] as const) {
-    if (theme[field] > theme.mention) context.addIssue({ code: "custom", path: [field], message: `${field} cannot exceed mention` });
+    if (theme[field] > theme.mention) context.addIssue({ code: "custom", path: [field], message: `${field} cannot exceed mention`, params: { reason: 'count-exceeds-mention' } });
   }
 });
 
@@ -236,7 +237,8 @@ export async function collectMarketCustomerThemes(input: CollectMarketCustomerTh
   }
   const themeResults = body.details.map((theme) => themeSchema.safeParse(theme));
   const issues = themeResults.flatMap((result, index) => result.success ? [] : result.error.issues.map((error) =>
-    issue("invalid-theme", false, ["data", "details", index, ...error.path.filter((key): key is string | number => typeof key === "string" || typeof key === "number")])));
+    ({...issue("invalid-theme", false, ["data", "details", index, ...error.path.filter((key): key is string | number => typeof key === "string" || typeof key === "number")]),
+      ...(error.code==='custom'&&error.params?.reason==='count-exceeds-mention'?{reason:'count-exceeds-mention' as const}:{})})));
   if (issues.length > 0) return failed(issues);
   let totalMentions = 0;
   for (const [index, theme] of themeResults.entries()) {

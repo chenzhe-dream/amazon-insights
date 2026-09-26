@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { MarketAnalysisScopeSchema } from './market-analysis-contracts';
 export { MarketRuleBaselineSchema, normalizeMarketRuleBaseline } from './market-rule-baseline-contracts';
 import {marketSiteCurrencyMatches} from './market-sites';
+import {MarketThemeSourceIssueSchema} from './market-theme-source-issue';
 
 export const MarketModuleIdSchema = z.string().uuid().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i).toLowerCase();
 const { organizationId: _organizationId, researchId: _researchId, ...publicScopeShape } = MarketAnalysisScopeSchema.shape;
@@ -33,6 +34,7 @@ export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema,
   'prepare-members', 'prepare-keyword-pool', 'prepare-model-batches', 'reconcile', 'model-batch', 'rules', 'report']), status: z.enum(['queued', 'running', 'succeeded', 'empty', 'failed', 'cancelled']),
   latestAttemptId: MarketModuleIdSchema.nullable(), attemptCount: count, current: z.boolean(), canRetry: z.boolean(), asin: z.string().regex(/^[A-Z0-9]{10}$/).nullable(),
   nextAttemptAt:z.string().datetime().nullable().optional(),
+  sourceIssue:MarketThemeSourceIssueSchema.optional(),
   errorCode: z.enum(['local-admission', 'upstream-temporary', 'timeout', 'interrupted', 'authentication', 'governance', 'invalid-data', 'scope-mismatch', 'cancelled', 'internal', 'unsupported-marketplace']).nullable() }).strict();
 export const MarketThemeRunResponseSchema = z.object({ run: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema,
   status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), createdAt: z.string().datetime(), planRevision: count,
