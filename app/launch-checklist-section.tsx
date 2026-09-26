@@ -8,6 +8,7 @@ import {
   resolveReferralFeeFromProducts,
 } from "./amazon-us-referral-fees";
 import { downloadBlobFile, exportChecklistDocx } from "./launch-checklist-export";
+import { useSnapshotPresentation } from "./project-report-views/snapshot-presentation";
 import {
   checklistSourceLabels,
   parseTableCellOptions,
@@ -118,10 +119,12 @@ function TableCellEditor({
   cell,
   value,
   onChange,
+  snapshot,
 }: {
   cell: LaunchChecklistStructuredTable["rows"][number][number];
   value: string;
   onChange: (value: string) => void;
+  snapshot: boolean;
 }) {
   if (cell.source === "auto") {
     const display = value.trim() || cell.text;
@@ -145,6 +148,7 @@ function TableCellEditor({
               type="radio"
               name={cell.key}
               checked={value === option}
+              disabled={snapshot}
               onChange={() => onChange(option)}
             />
             <span>{option}</span>
@@ -157,7 +161,7 @@ function TableCellEditor({
   if (optionSpec?.type === "single") {
     return (
       <label className="launch-checklist-option is-single">
-        <input type="checkbox" checked={value === "✓"} onChange={event => onChange(event.target.checked ? "✓" : "")} />
+        <input type="checkbox" checked={value === "✓"} disabled={snapshot} onChange={event => onChange(event.target.checked ? "✓" : "")} />
         <span>{cell.text.trim() === "□" ? "确认" : cell.text.replace("□", "").trim()}</span>
       </label>
     );
@@ -168,6 +172,7 @@ function TableCellEditor({
       className="launch-checklist-cell-input"
       type="text"
       value={value}
+      readOnly={snapshot}
       placeholder={cell.placeholder ?? "请填写"}
       onChange={event => onChange(event.target.value)}
     />
@@ -178,10 +183,12 @@ function StructuredTableView({
   table,
   tableValues,
   onCellChange,
+  snapshot,
 }: {
   table: LaunchChecklistStructuredTable;
   tableValues: Record<string, string>;
   onCellChange: (key: string, value: string) => void;
+  snapshot: boolean;
 }) {
   return (
     <div className="launch-checklist-table-wrap">
@@ -202,6 +209,7 @@ function StructuredTableView({
                     cell={cell}
                     value={tableValues[cell.key] ?? (parseTableCellOptions(cell.text) ? "" : cell.text)}
                     onChange={next => onCellChange(cell.key, next)}
+                    snapshot={snapshot}
                   />
                 </td>
               ))}
@@ -219,12 +227,14 @@ function ChecklistEntryRow({
   manualValue,
   onToggle,
   onManualChange,
+  snapshot,
 }: {
   entry: LaunchChecklistEntry;
   checked: boolean;
   manualValue: string;
   onToggle: () => void;
   onManualChange: (value: string) => void;
+  snapshot: boolean;
 }) {
   const checkable = entry.source !== "auto";
   const displayValue = entry.autoValue;
@@ -234,7 +244,7 @@ function ChecklistEntryRow({
   return (
     <li className={`launch-checklist-row is-${entry.source}`}>
       {checkable ? (
-        <input type="checkbox" checked={checked} onChange={onToggle} aria-label={entry.label} />
+        <input type="checkbox" checked={checked} disabled={snapshot} onChange={onToggle} aria-label={entry.label} />
       ) : (
         <span className="launch-checklist-bullet" aria-hidden="true" />
       )}
@@ -247,6 +257,7 @@ function ChecklistEntryRow({
             className="launch-checklist-field-input is-inline"
             type="text"
             value={manualValue}
+            readOnly={snapshot}
             placeholder={entry.placeholder ?? "请填写"}
             onChange={event => onManualChange(event.target.value)}
           />
@@ -264,6 +275,7 @@ function ChecklistGroupBlock({
   onToggle,
   onManualChange,
   onTableChange,
+  snapshot,
 }: {
   group: LaunchChecklistGroup;
   checked: Record<string, boolean>;
@@ -272,6 +284,7 @@ function ChecklistGroupBlock({
   onToggle: (key: string) => void;
   onManualChange: (id: string, value: string) => void;
   onTableChange: (key: string, value: string) => void;
+  snapshot: boolean;
 }) {
   const isVeto = group.kind === "veto";
   const entries =
@@ -292,12 +305,12 @@ function ChecklistGroupBlock({
       {group.competitorTable ? (
         <div className="launch-checklist-subblock">
           <h5>竞品快照（系统抓取）</h5>
-          <StructuredTableView table={group.competitorTable} tableValues={tableValues} onCellChange={onTableChange} />
+          <StructuredTableView table={group.competitorTable} tableValues={tableValues} onCellChange={onTableChange} snapshot={snapshot} />
         </div>
       ) : null}
 
       {group.structuredTable ? (
-        <StructuredTableView table={group.structuredTable} tableValues={tableValues} onCellChange={onTableChange} />
+        <StructuredTableView table={group.structuredTable} tableValues={tableValues} onCellChange={onTableChange} snapshot={snapshot} />
       ) : null}
 
       {entries.length ? (
@@ -312,6 +325,7 @@ function ChecklistGroupBlock({
                 manualValue={manualValues[entry.id] ?? ""}
                 onToggle={() => onToggle(key)}
                 onManualChange={value => onManualChange(entry.id, value)}
+                snapshot={snapshot}
               />
             );
           })}
@@ -338,6 +352,7 @@ export function LaunchChecklistSection({
   libraryHref?: string;
   libraryMessage?: string | null;
 }) {
+  const snapshot = useSnapshotPresentation();
   const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
   const ready = hasProductLaunchAnalysis(products, sources);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -349,6 +364,11 @@ export function LaunchChecklistSection({
 
   const pricingLinkage = useMemo(() => findPricingModelLinkage(analysis.checklist), [analysis.checklist]);
   const referralMeta = useMemo(() => resolveReferralFeeFromProducts(products, null), [products]);
+  // Snapshot serialization happens before effects. Seed the same system values during render.
+  const snapshotTableValues = useMemo(() => {
+    const seeded = seedStructuredTableValues(analysis.checklist);
+    return pricingLinkage ? applyCommissionLinkage(seeded, pricingLinkage, products) : seeded;
+  }, [analysis.checklist, pricingLinkage, products]);
 
   useEffect(() => {
     if (!ready) return;
@@ -376,9 +396,10 @@ export function LaunchChecklistSection({
   }, [ready, analysis.checklist, pricingLinkage, products]);
 
   const research = analysis.checklistResearch;
-  const visibleSections = viewMode === "gates" ? gateSectionFilter : new Set(sectionOrder);
+  const activeViewMode = snapshot ? "full" : viewMode;
+  const visibleSections = activeViewMode === "gates" ? gateSectionFilter : new Set(sectionOrder);
   const sectionLayout =
-    viewMode === "gates"
+    activeViewMode === "gates"
       ? gateSectionLayout
       : sectionOrder.map(section => ({ section, display: section }));
   const grouped = sectionLayout
@@ -452,16 +473,16 @@ export function LaunchChecklistSection({
           <div className="launch-section-head-main">
             <span className="status-chip">立项前确认 · 清单 {analysis.checklistMeta.version}</span>
             <h2 className="launch-page-title">产品立项前确认清单</h2>
-            <p>
-              默认展示专利排查、合规认证与一票否决等硬门槛；可切换至完整十项清单。蓝色为系统已从竞品/VOC/销量自动抓取；黄色为系统预填待核验；绿色为仅需勾选确认；灰色输入框需人工填写。
-            </p>
+            <p>{snapshot
+              ? "完整十项清单。蓝色为系统已从竞品/VOC/销量自动抓取；黄色为系统预填待核验；绿色为需人工勾选；灰色输入框需人工填写。"
+              : "默认展示专利排查、合规认证与一票否决等硬门槛；可切换至完整十项清单。蓝色为系统已从竞品/VOC/销量自动抓取；黄色为系统预填待核验；绿色为仅需勾选确认；灰色输入框需人工填写。"}</p>
           </div>
           <div className="launch-checklist-head-actions">
             <span className="source-badge">{analysis.meta.productCount} 竞品 · {analysis.meta.dataMonth}</span>
-            {libraryHref ? (
+            {!snapshot && libraryHref ? (
               <Link className="ghost-btn" href={libraryHref}>★ 项目确认清单</Link>
             ) : null}
-            {onSaveToLibrary ? (
+            {!snapshot && onSaveToLibrary ? (
               <button
                 type="button"
                 className="ghost-btn"
@@ -471,7 +492,7 @@ export function LaunchChecklistSection({
                 {savingToLibrary ? "保存中…" : "保存到项目确认清单"}
               </button>
             ) : null}
-            {ready ? (
+            {!snapshot && ready ? (
               <button
                 type="button"
                 className="primary-btn launch-checklist-download"
@@ -483,19 +504,20 @@ export function LaunchChecklistSection({
             ) : null}
           </div>
         </div>
-        {libraryMessage ? (
+        {snapshot ? <p className="launch-checklist-library-notice">未包含其他页面未保存的人工填写与勾选</p> : null}
+        {!snapshot && libraryMessage ? (
           <p className={libraryMessage.includes("失败") || libraryMessage.includes("请至少") ? "launch-checklist-download-error" : "launch-checklist-library-notice"}>
             {libraryMessage}
           </p>
         ) : null}
-        {downloadError ? <p className="launch-checklist-download-error">{downloadError}</p> : null}
+        {!snapshot && downloadError ? <p className="launch-checklist-download-error">{downloadError}</p> : null}
         <div className="launch-checklist-legend">
           <span><i className="is-auto" /> 系统已抓取</span>
           <span><i className="is-verify" /> 系统预填 · 待核验</span>
           <span><i className="is-check" /> 需人工勾选</span>
           <span><i className="is-manual" /> 需人工填写</span>
         </div>
-        <div className="launch-checklist-view-tabs" role="tablist" aria-label="清单视图">
+        {!snapshot ? <div className="launch-checklist-view-tabs" role="tablist" aria-label="清单视图">
           <button
             type="button"
             role="tab"
@@ -514,7 +536,7 @@ export function LaunchChecklistSection({
           >
             完整十项清单
           </button>
-        </div>
+        </div> : null}
         <div className="launch-meta-row">
           <span>类目 <b>{analysis.meta.categoryLabel}</b></span>
           <span>识别品类 <b>{analysis.checklistMeta.verticalLabel}</b></span>
@@ -567,16 +589,20 @@ export function LaunchChecklistSection({
       {!ready ? (
         <section className="card launch-block">
           <div className="pending-box">
-            待 VOC 核心主题或 Sorftime 智能评论分析就绪后，自动生成完整确认清单。请先在「竞品VOC 汇总」页确认七维数据已同步。
+            {snapshot
+              ? "当前来源尚不足以生成完整确认清单。"
+              : "待 VOC 核心主题或 Sorftime 智能评论分析就绪后，自动生成完整确认清单。请先在「竞品VOC 汇总」页确认七维数据已同步。"}
           </div>
         </section>
       ) : (
         <section className="card launch-block">
           <div className="launch-section-head">
             <div className="launch-section-head-main">
-              <h3>{viewMode === "gates" ? "合规专利硬门槛确认" : "逐项确认"}</h3>
+              <h3>{activeViewMode === "gates" ? "合规专利硬门槛确认" : "逐项确认"}</h3>
               <p>
-                {viewMode === "gates"
+                {snapshot
+                  ? "完整十项清单含市场、利润、MOQ、供应链与评分会签；人工填写与勾选保留待确认。"
+                  : activeViewMode === "gates"
                   ? "按确认顺序：基本信息 → 合规认证 → 专利检索 → 一票否决；红灯暂停立项，黄灯需专业复核"
                   : "完整十项清单含市场、利润、MOQ、供应链与评分会签；导出时会合并系统值与人工输入"}
               </p>
@@ -594,10 +620,11 @@ export function LaunchChecklistSection({
                         group={group}
                         checked={checked}
                         manualValues={manualValues}
-                        tableValues={tableValues}
+                        tableValues={snapshot ? snapshotTableValues : tableValues}
                         onToggle={toggle}
                         onManualChange={(id, value) => setManualValues(prev => ({ ...prev, [id]: value }))}
                         onTableChange={handleTableChange}
+                        snapshot={snapshot}
                       />
                     ))}
                   </div>

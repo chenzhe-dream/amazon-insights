@@ -13,7 +13,7 @@ import {readPageSnapshotKeywords, type KeywordsSnapshotSources} from "./read-pag
 import {readPageSnapshotDefinition, type DefinitionSnapshotSources} from "./read-page-snapshot-definition";
 
 // Extend only after each original view has passed its snapshot acceptance.
-export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition"];
+export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist"];
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;
@@ -22,6 +22,7 @@ export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourc
   voc?: VocSnapshotSources;
   keywords?: KeywordsSnapshotSources;
   definition?: DefinitionSnapshotSources;
+  checklist?: DefinitionSnapshotSources;
 };
 
 export function stageData(context: ExportModuleContext, stage: keyof NonNullable<ExportModuleContext["version"]>["stageOutputs"]): Record<string, unknown> {
@@ -98,11 +99,13 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   const voc = request.moduleIds.includes("voc") ? await readPageSnapshotVoc(context,read,snapshotProducts(context)) : undefined;
   const keywords = request.moduleIds.includes("keywords") ? readPageSnapshotKeywords(context,snapshotProducts(context)) : undefined;
   const definition = request.moduleIds.includes("definition") ? await readPageSnapshotDefinition(context,read) : undefined;
+  const checklist = request.moduleIds.includes("checklist") ? definition ?? await readPageSnapshotDefinition(context,read) : undefined;
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
     sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds],
     sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
     overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}), ...(voc ? {voc} : {}), ...(keywords ? {keywords} : {}), ...(definition ? {definition} : {}),
+    ...(checklist ? {checklist} : {}),
   });
 }
