@@ -1,196 +1,203 @@
-# 收藏项目 HTML 快照导出实施计划（已审核，逐模块执行）
+# 原页面 HTML 快照实施计划
 
-> **For agentic workers:** 用户于 2026-09-24 批准实施，要求逐模块推进。进度以 tasks.md 为准；每个模块先核来源，再完成准备、渲染、下载和回归。尚未接入的模块须标明待接入并禁选，不能伪装为业务无数据。
+> 执行方式：在当前隔离工作区使用 executing-plans 逐项完成；每个模块完成后先核验，再进入下一模块。本文替代原 design.md 中按字段重组独立报告的实施方案。现有发布与测试历史保留在 verification.md。
 
-**Goal:** 收藏项目后，勾选模块、悬浮预览并直接下载固定内容的 HTML。
+**Goal:** 收藏项目导出与原业务页面一致的 HTML 快照，保留所选模块的业务展示、图表、表格和可展开详情，固定预览时的数据。
 
-**Architecture:** 复用已有只读结果，在浏览器内整理成独立报告；同一个 HTML 字符串用于预览和下载。图片使用在线地址，不创建服务端导出任务或文件存储。
+**Architecture:** 沿用现有鉴权、项目绑定及只读来源校验，将冻结的数据交给原页面共享展示组件。在独立只读渲染区域准备所选模块，序列化其真实 DOM 和样式，预览与下载使用同一份 HTML。停止递归展开后端对象、独立拼接字段报告的主链路。
 
-**Tech Stack:** 现有 Next.js / React / TypeScript、Zod、浏览器 Blob / URL、node:test、Playwright；不新增第三方依赖。
-
-## Global Constraints
-
-- 保留一期按钮、模态悬浮窗及原项目列表/收藏/编辑/加载行为。
-- 只有已收藏且有权查看的项目可导出，所选模块遵循当前可见范围。
-- 导出已有完整内容，不重新采集、不调用大模型、不启动修复任务。
-- 正文、表格、结论、静态图表和样式固定在文件，图片在线读取。
-- 不建设导出队列、下载历史、文件存储或过期清理；不要求断网可用。
-- 不修改分析规则、数据库结构、供应商连接池或正式数据目录。
-- 不混入其他窗口改动，不自动推送、合并或发布。
-- 用户已批准实施及其余模块接入，后续验收、合并和发布分别记录。
+**Tech Stack:** 现有 React / TypeScript、浏览器 DOM、内嵌 CSS、原生 details/summary、现有 SVG 图表、Blob 下载、Playwright 浏览器验收。无新增后端导出服务或数据库迁移。
 
 ## Context
 
-工作区分支 codex/favorite-html-export-ui；一期提交为 15ca8322，第一模块及公共下载链路提交为 7a0b8ed4。其余模块在同一隔离工作区实施。未跟踪 .cache 是此前保留的测试缓存，本轮不处理。
+- 开发位置：C:/Users/EDY/.codex/worktrees/favorite-html-export-ui/feat-voc-positioning-skill-execution，分支 codex/favorite-html-export-ui，当前基线 ff8fd2bb。
+- 2026-09-26 核验正式发布基线 aa150c62，包含其他窗口的市场形态变更。实施前和发版前重新核验，不用旧分支覆盖正式版本。
+- 现有儿童漂移车真实导出约 13.9 MB，VOC 63,899 个表格行，整份 71,992 行。主要问题是 exportFields 递归展开所有字段、额外规则/历史结果展开，以及将技术缺口逐条放在报告顶部。
+- 已有收藏资格、版本绑定、只读 GET、变体缓存校验、翻译缺失保留原文、预览下载同串等修复继续保留。
+- 当前阶段为计划已落盘、实现待执行。本次计划修改不代表新版页面快照已完成或已发布。
 
-可复用的现有代码：
-- app/lib/project-display-version-browser.ts：readCurrentProjectDisplayVersion 读取已发布报告版本，校验组织、项目、站点、ASIN、阶段结果，不启动任务。
-- app/lib/runtime-analysis-data.ts 与 runtime-analysis-data-server.ts：读取补充数据，但部分来自生成缓存，不能仅凭 ASIN 相同认定为当前项目结果。
-- app/lib/saved-analysis-reports.ts：按运行批次和报告 ID 读取已有结果。
-- app/lib/local-rule-report-browser.ts：读取已保存规则报告；不能调用其中的保存操作来冒充读取。
-- app/lib/traffic-snapshot-browser.ts：既有批次流量快照读取。
-- app/lib/amazon-image.ts：页面图片使用 /api/amazon-image 代理，导出需恢复可分享的原始在线地址。
-- app/launch-checklist-section.tsx：人工勾选、manualValues、tableValues 在组件 state；收藏页不能恢复已卸载的未保存人工编辑。
+## Global Constraints
 
-## Goals / Non-Goals
-
-**Goals:** 所选已有结果完整、预览与文件一致、后续线上修改不改变文件、接收者无需登录应用阅读正文。
-
-**Non-Goals:** 离线图片、像素级截图、复制整套应用、导出后台、自动补分析、额外修建清单编辑持久化系统。
+- 收藏 → 导出 → 悬浮窗选择模块和预览 → 确认下载 HTML，入口与流程不变。
+- 收藏仅保存入口；本次预览准备才固定数据。确认下载不得再次拉取正文替换预览。
+- 内容范围是原业务页面所选模块，包括原页面可展开、分页或滚动查看的业务内容；不是底层响应对象的全部字段。
+- 八个模块全部需要适配；未完成的模块在本地明确禁选，不能静默回退为旧字段长表。所有模块完成前不正式发布半成品。
+- 只读取已有数据；禁止发起采集、模型、翻译生成、规范化、保存报告或修复任务。
+- 同组织、项目、站点、ASIN 与版本/报告来源约束不放宽。缺失不填零，跨来源不匹配仍报错。
+- 图片保持在线 HTTPS；正文与样式无需原应用登录。无离线图片打包承诺。
+- 不带应用脚本、React hydration 数据、会话凭据或后台操作。展开/收起用原生 HTML，下载文件不访问应用 API。
+- 仅抽取需要复用的展示区域；不重构整个 page.tsx，不改分析算法、权限、连接池或市场模块。
+- 收藏页不能恢复其他已卸载页面的未保存清单编辑，继续明确提示。
 
 ## Decisions
 
-### 1. 用户流程和状态
+### 1. 选择原页面共享展示组件，再捕获 DOM
 
-收藏项目 → 导出 → 悬浮窗勾选模块 → 准备完整已有内容 → 固定预览 → 确认下载 HTML。
+对比三种方式：
+1. 直接保存收藏页 outerHTML：只能保存列表，其他模块尚未挂载，不能满足模块选择。
+2. 截图：接近视觉，但无法展开内容、复制表格和完整查看未显示的行。
+3. **采用：冻结来源 → 原模块展示区域 → DOM 与 CSS 快照。** 复用原页面结构，覆盖所选模块，不另做一套字段报告。
 
-默认勾选当前可见且已接入的模块；用户可取消。分模块接入期间，其余模块明确标为待接入并禁选。准备中和读取失败时禁止下载；已接入但未生成的模块显示“暂无已生成结果”，不悄悄隐藏。没有选择时提示至少选一项。
+原页面已有独立组件的模块增加明确的只读快照展示模式；混在 page.tsx 的概览表、VOC 矩阵和流量矩阵只抽取展示 JSX。普通页面继续使用同一组件，不改计算与取数逻辑。禁止挂载整个业务页面来触发其中的 effects。
 
-使用“准备内容 / 可导出 / 读取失败”的真实状态，不制造百分比进度。关闭弹窗取消请求，清理本次内存报告；再次打开重新准备。保留原列表搜索、分页、滚动位置和焦点行为。
+### 2. 读取和展示分离
 
-报告标注快照准备完成时间；来源更新时间另行展示，不能把快照时间说成数据采集时间。
+从 read-export-content.ts 中分离资格/作用域校验与来源读取。新增 read-page-snapshot-sources.ts 返回所选模块的冻结、强类型页面输入；复用现有 reader 的边界检查，不返回 ExportBlock 字段树。
 
-### 2. 固定内容的方法
+模块的输入类型直接复用原组件 Props 或已有来源契约；不引入任意对象递归渲染器。规则纯计算沿用原页面；当前页面没有展示的历史报告不额外查询或附加，避免跨版本内容重复。
 
-先读取收藏项目最新元信息，沿已有 sourceProjectId/项目绑定找到分析项目，校验会话、收藏和访问范围。不得凭名称或 ASIN 猜测另一个项目。
+页面与快照共同使用的 JSX 位于 app/project-report-views/；导出专用挂载、序列化和清理位于 app/project-export/。原页面通过依赖注入继续传入已有数据和事件，快照入口只传冻结数据。
 
-优先复用已有已发布显示版本及其绑定结果；补充模块只读匹配的项目、站点、ASIN 和报告/运行批次。对可变来源核验读取期间的版本或更新时间，变化则提示重新准备；稳定的已发布版本不因线上出现更新而自动替换。
+### 3. 渲染与冻结边界
 
-在浏览器中建立独立数据副本，只在本次弹窗内缓存，不写 localStorage 或服务端。修改勾选后生成新预览，不能直接下载旧范围。确认时仅重新核验资格，不重新拉取正文替换预览。
+新增 page-snapshot-host.tsx 在离屏但可正常布局的独立区域挂载所选展示组件，沿用当前页面 CSS、布局宽度和字体。禁止 display:none 导致图表宽高为零；保持可取消，不改变用户原列表和页面状态。
 
-允许复用原页面的纯展示计算和格式化；不挂载会触发抓取/保存的整页组件，不为缺失结果重新生成业务结论。
+公共接口：
 
-2026-09-24 补充口径：收藏不是数据冻结点。变体/订单使用页面现有共享缓存，通过原接口的 exportStrict=1 只读模式核验授权项目、完整 ASIN 范围、站点及缓存格式，重复读取比较内容（含译名）；明确标注共享缓存与来源时间，不以任务进度证明正文属于某分析批次。没有已发布目录时不借用全局商品投影。
+~~~ts
+export type SnapshotPresentation = 'page' | 'snapshot';
+export type SnapshotCaptureOptions = Readonly<{
+  root: HTMLElement;
+  cssText: string;
+  title: string;
+  capturedAt: string;
+}>;
+export function serializePageSnapshot(options: SnapshotCaptureOptions): string;
+export async function collectPageSnapshotStyles(document: Document, signal: AbortSignal): Promise<string>;
+~~~
 
-VOC、新品定义和清单共用本次准备期间的已校验读取 Promise；缓存只在一次准备内存活，不跨项目或弹窗。可变来源仍读取两次核对，异常使准备失败。当前页面的纯规则展示与已保存历史报告分别标注，历史版本不得取代当前清单或当前结论；不自动启用评论兜底。保存的规则定义与版本原样保留，当前规则仅供对照。
+准备结束条件是所选组件全部提交 DOM、必要的页面数据已读取、两帧布局完成且 SVG/chart 尺寸有效。图片保留在线地址，不等外网图片全部成功加载才允许导出。准备沿用 60 秒超时和取消；样式或某模块准备失败不得输出残缺文件。
 
-### 3. 模块来源与完整性清单
+collectPageSnapshotStyles 读取应用同源已加载的 style/link 样式并内联，保留 CSS 变量、媒体查询和模块 class；静态资源路径转为允许的绝对地址。无法读取必要样式时明确失败，不只复制 class 名造成无样式报告。
 
-| 模块 | 已有入口/内容 | 核验要求 |
-|---|---|---|
-| 竞品概览 | comparison-overview-card.tsx、page.tsx 概览展示和已发布阶段结果 | 参数、价格、评分、销量及既有趋势等内容块逐一映射，不能只保留参数表 |
-| 变体/订单 | runtime-analysis-data 中现有共享 variants/variantOrders 缓存 | 所有已有子体、属性、订单、12 个月趋势及缺失标记；严格授权/格式/读取稳定性校验，不声称运行绑定 |
-| 主副图 | listing-images-section.tsx、listing/image_remarks 阶段和备注 overlay | 全部已有图片及对应分析/备注，索引与图片一致 |
-| VOC | use-manual-alexa-voc.ts、voc-display-schema.ts、评论阶段 | 七维、已有评论分析及依据；读规范化结果，不发起规范化 |
-| 关键词 | keyword-demand-section.tsx、keyword-demand-analysis.ts、keywords 阶段 | 分析与洞察完整内容，复用既有展示计算，不截断在 UI 页码 |
-| 新品定义 | saved-analysis-reports.ts、local-rule-report-browser.ts、local-product-definition-section.tsx | 已保存的完整定义、依据与优先级，不只最终表，不自动生成新报告 |
-| 立项清单 | launch-checklist-section.tsx、launch-checklist-export.ts | 系统已有内容与可读取的已保存人工项；未保存组件 state 无法恢复，预览明确提示 |
-| 竞品流量 | 已发布 traffic 阶段、traffic-snapshot-browser.ts、已有 traffic-analysis 报告 | 流量结构、全部已有子体及结论，保留 Top N/来源不完整标记 |
+serializePageSnapshot 仅克隆所选业务区域；删除 script、事件属性、操作按钮、表单提交目标、隐藏应用状态与危险 URL；保存已有输入框/勾选值为只读文本或 disabled 控件。保留安全 SVG；如实际遇到 Canvas，则同源安全转换为静态图，不允许图表悄悄为空。转换失败标记该模块准备失败。
 
-Task 1 核对八个模块的实际来源与所有展示块，并记录成功样例。此表不是“所有接口已接通”的声明。没有业务结果可显示未生成，不能把“适配器没实现”当作无数据交差。
+图片代理地址还原成允许分享的在线原图地址，不复制登录 cookie。输出 CSP 继续禁止脚本与 API 连接，原生 details 不需要开启 iframe 脚本权限。
 
-已有数据缺口按原义呈现；请求失败/来源不匹配必须阻止该模块准备完成。原始来源只有 Top N 时如实说明，不承诺全量市场数据。缺失不填零，不按同 ASIN 调用别的项目结果。
+### 4. 阅读形态
 
-### 4. HTML 生成、预览与下载
+- 默认展示与原模块相同的摘要、表格、卡片、颜色、图片和图表，新增元信息只有项目、站点、ASIN、快照时间和简短数据时间。
+- 技术缺口在对应业务值显示“— / 暂无数据”，必要时合并一条中文说明；不把 catalog.rating、UPSTREAM_EMPTY 等代码逐条放到正文。
+- 原页面折叠内容在快照中用 details/summary，默认收起状态沿用页面默认；展开后保留原业务排版，不用逐字段长表替代。
+- 内部引用仍用于后台校验，但不主动渲染成正文。运营可见规则说明保留在原来的规则入口内，按原文和版本展示，不在每个模块额外附加完整规则库。
+- 页内标签的已有内容映射成标题明确的原生折叠分区；不保留需要 React 回调的失效按钮。排序/筛选固定为本次准备的状态，不伪装成可重新查询。
+- 原页面有分页、虚拟列表或“查看全部”时，快照准备包含该模块已有可读业务记录，在原表格/明细区提供滚动或折叠查看。不可只保存当前屏幕一页，也不可展开后台对象所有叶子。
+- 当前入口位于收藏页，默认使用所选项目页面的默认展示状态，不承诺捕获另一个浏览器页签尚未保存的筛选/编辑状态。
 
-新增纯 HTML 渲染入口，复用现有纯展示构建/格式化逻辑，保留白底表格、配色、标题及图表语义。不复制导航、编辑按钮、分析按钮和应用运行脚本。
+## 实施顺序与验收
 
-预览用 sandbox iframe 的 srcDoc，不授予脚本、表单或同源权限。下载使用同一个 HTML 字符串生成 UTF-8 Blob；禁止下载时重新渲染或拉取正文。
+各项按：先写会失败的行为用例 → 最小展示/快照改动 → 测试与截图对照 → 独立提交。每个模块都核对来源、页面对应区域、折叠/分页、文件打开结果，不凭“生成成功”通过。
 
-表格含全部行，可横向滚动；详情完整展开或使用原生 details；图表用静态 SVG/已有静态展示输出数值和标签，无需应用 JS。
+### Task 1：竞品参数总览样板与公共快照链路
 
-仅序列化所选模块，未选数据不能藏在 HTML、CSS 隐藏节点或 JSON 内。正文按文本转义，URL 只允许安全协议，不携带 cookie、令牌或不必要会话字段。
+**文件：** 新增 app/project-report-views/competitor-overview.tsx；新增 app/project-export/page-snapshot-host.tsx、read-page-snapshot-sources.ts、serialize-page-snapshot.ts、page-snapshot-styles.ts；修改 app/page.tsx、app/comparison-overview-card.tsx、app/project-export/use-project-export.ts、project-export-dialog.tsx；测试 tests/agent/project-page-snapshot.test.tsx。
 
-文件名：项目名称_站点_快照_北京时间YYYYMMDD-HHmmss.html。去除非法文件名字符并限制项目名长度。发起下载后释放 Blob URL，防重复点击；提示“已发起下载”，不宣称已确认落盘。
+- [ ] 固定儿童漂移车及一份灯具数据样例，记录原页面参数表和展开内容截图、字段值、颜色、缺失标记。
+- [ ] 浏览器回归先断言：原页面与快照都存在相同的 compare-matrix 指标、产品顺序、价格/缺失值；正文没有原始缺口代码，无采集或写请求。
+- [ ] 原样抽取概览展示区域并共享；拆开旧 reader 的来源读取与独立表格生成，保留卖点版本校验和原文兜底。
+- [ ] 完成 DOM/CSS 序列化；挂入既有预览和 Blob 下载，严格保持同一字符串。
+- [ ] 单模块在独立未登录浏览器打开文件；比较正常和窄窗口截图，检查横向滚动、折叠、图片地址和 SVG。
+- [ ] 样板通过后提交，再接后续模块；失败先修公共链路，不扩散到其余七个模块。
 
-### 5. 在线图片边界
+**明确用例：** 用浏览器让原页面与快照消费同一份保存样例，比较 compare-matrix 的 innerText 与 computedStyle（字体、背景、边框）；下载文本等于 iframe.srcdoc。准备后改样例价格为 98765，下载仍包含准备时的原价格。断言快照 document.querySelectorAll('script,form[action],button[data-write-action]').length 为 0。
 
-图片不下载打包、不转换 Base64、不等待全部加载后才允许导出。将站内图片代理转换为校验过的 HTTPS 原始来源；文件不能依赖 127.0.0.1、局域网地址、登录 cookie 或相对图片路径。
+### Task 2：变体 / 订单
 
-无可分享地址时保留说明文字；在线图片加 alt 和安全原图链接。远端图片以后可能变化或失效，不承诺图片内容也被固定保存。必要 CSS 内嵌，避免样式随线上更新变化。
+**文件：** app/xydc-variant-section.tsx、其实际调用的年/月详情子组件、app/project-export/read-variants-export.ts；新增快照模块 app/project-export/page-snapshot-variants.tsx；测试 tests/agent/project-page-snapshot-variants.test.tsx。
 
-### 6. 权限与错误
+- [ ] 覆盖超过首页展示数的子体、12 个月订单、颜色占比、属性翻译、缺失月份。
+- [ ] 复用 XydcVariantSection 卡片/表格，快照模式去除后台年检/请求 effects，完整已有详情转原生折叠。
+- [ ] 保留真实颜色、未知颜色口径、数字与来源时间，禁止重新计算一套比例；全部子体可展开，首页不铺满详情。
+- [ ] 比较原页面与文件的卡片和详情截图，检查输入 ASIN 范围及无后台调用，通过后提交。
 
-数据准备和下载确认沿用既有会话/权限/收藏读取。应用获知退出、权限撤销或取消收藏后清空待导出内容。已下载文件不提供远程撤回或防篡改认证。
+### Task 3：主副图分析
 
-读取失败展示具体模块，用户可重试或取消该模块；重试只能读取已有结果，不能发起分析。后台读接口缺字段时，只补既有读取处理器和契约，不改成导出服务。
+**文件：** app/listing-images-section.tsx、app/project-export/listing-images-export-section.ts 的来源核验；新增 app/project-export/page-snapshot-images.tsx；测试 tests/agent/project-page-snapshot-images.test.tsx。
 
-## Implementation Plan
+- [ ] 用超过默认显示列数的图片、含缺备注/补充备注样例建立失败用例。
+- [ ] 沿用 ListingImagesSection 图片矩阵、URL 匹配备注和 overlay；显式传入来源，禁用默认全局数据回退。
+- [ ] 快照包含全部已有图片，图片预览采用安全原图链接；不带生成备注/重新分析按钮。
+- [ ] 检查断开的图片仍有说明，原备注与对应图片不串位，截图通过后提交。
 
-任务只在本计划审核通过后执行；文件路径以下均相对本工作区。
+### Task 4：VOC 分析
 
-### Task 1：核实数据来源，建立验收样例
+**文件：** app/page.tsx 中 VOC 七维与 ReviewAnalysisMatrixSection，app/voc-positioning-section.tsx、app/product-launch-recommendation.tsx；抽取 app/project-report-views/voc.tsx；修改 app/project-export/read-voc-definition-export.ts 的共享来源入口；测试 tests/agent/project-page-snapshot-voc.test.tsx。
 
-**Files:** 本 design.md 来源表；新增 tests/agent/project-export-sources.test.ts；读取上述现有 helpers。
-- 核对收藏 ID → 分析项目 → 已发布版本/运行批次/报告 ID 的真实链路。
-- 对八个模块记录字段、全部内容块、分页/详情、完整性标记和可变来源版本。
-- 准备不同类目的脱敏样例，包括同 ASIN 不同项目、来源缺失、人工清单未保存和来源只有 Top N。
-- 先编写来源失败用例，证明不能串项目、不能虚构数据、不能触发写入或供应商请求。
-- 既有接口如缺必要只读字段，明确具体字段与改动文件后补充；不新建导出存储。
-**完成标准：** 八个模块均有可核验结果路径或明确业务无结果状态，没有以“尚未实现”代替无结果。
+- [ ] 使用儿童漂移车真实只读样例，记录原页面七维矩阵、评论矩阵、结论及原有规则入口。
+- [ ] 共享这些展示区域，删除新快照路径对 exportFields 的依赖；只传当前页面实际需要的已存数据。
+- [ ] 七维、好差评和结论保持原版式；原文、依据、规则在原有位置折叠，完整业务条目可展开。
+- [ ] 回归一个包含大量内部 decision/source 字段的样例：内部字段数量增加不能增加可见正文行数或被隐藏序列化；原业务记录增加则按原表格增加。
+- [ ] 与原页面逐区域截图比对，确认不再生成 63,899 行逐字段表，通过后提交。
 
-### Task 2：读取并固定完整内容
+### Task 5：关键词调研
 
-**Create:** app/project-export/export-contracts.ts、read-export-content.ts、export-source-adapters.ts。
-**Modify:** module-catalog.ts；**Test:** tests/agent/project-export-sources.test.ts。
+**文件：** app/keyword-demand-section.tsx、app/keyword-demand-analysis.ts 的既有纯展示输出；新增 app/project-export/page-snapshot-keywords.tsx；测试 tests/agent/project-page-snapshot-keywords.test.tsx。
 
-约定接口：
-- ExportRequest：sessionIdentity、organizationId、libraryProjectId、moduleIds、signal。
-- PreparedExportContent：schemaVersion、项目元信息、capturedAt、所选模块数据和来源版本、明确缺失说明。
-- readExportContent(request, readers)：返回 PreparedExportContent；readers 仅封装 Task 1 核实的 GET 读取。
-- 模块业务状态区分 ready 与 missing；读取异常携带 moduleId 抛出，不能当成 missing。
+- [ ] 覆盖分析/洞察两个页面区域、超过 200 个关键词、月份曲线与规则说明。
+- [ ] 复用 KeywordDemandSection，显式传入项目 sources，保留矩阵与图表；为快照准备全部已有词条并保留原有折叠/滚动层级。
+- [ ] 未选标签内容不以后台对象附加；所选关键词模块约定含分析和洞察两部分，用原生分区查看。
+- [ ] 核对全部词条可查看、缺失不填零、规则不重复平铺，截图通过后提交。
 
-先补失败测试，再实现和验证：分页完整性、深复制后不随源对象变化、请求取消、晚返回、项目/会话切换、来源不匹配与读取期间变更。测试请求日志不允许 POST/PUT/PATCH/DELETE 或供应商调用。
+### Task 6：新品定义
 
-### Task 3：生成静态 HTML 并下载
+**文件：** app/local-product-definition-section.tsx 与 app/page.tsx 定义入口，app/project-export/read-voc-definition-export.ts；新增 app/project-export/page-snapshot-definition.tsx；测试 tests/agent/project-page-snapshot-definition.test.tsx。
 
-**Create:** app/project-export/render-export-html.ts、export-html-styles.ts、download-export-html.ts。
-**Test:** tests/agent/project-export-html.test.ts。
+- [ ] 样例同时含当前结果与旧报告，建立不自动追加旧结果的用例。
+- [ ] 共享当前新品定义各部分与最终表；保留结论、VOC 依据、关键词依据、产品动作、优先级和原有全文展开。
+- [ ] 历史结果仅当当前原页面选中它时作为当前显示结果，不额外并列多个版本。保留该结果的规则版本与来源身份检查。
+- [ ] 比较当前页面与文件的关键结论、表格列宽、折叠效果，通过后提交。
 
-约定接口：
-- renderExportHtml(content: PreparedExportContent): string。
-- buildExportFileName(projectName: string, marketplace: string, capturedAt: string): string。
-- downloadExportHtml(html: string, fileName: string): void。
+### Task 7：立项前确认清单
 
-先添加全量行/详情、中文、特殊字符、缺失值、未选模块排除、URL、文件名用例，再实现。渲染函数无网络调用；下载只用传入字符串，不抓取正文。已选图表必须保留数值和标签，不用一句“图表略”替代。
+**文件：** app/launch-checklist-section.tsx、app/launch-checklist.ts；新增 app/project-export/page-snapshot-checklist.tsx；测试 tests/agent/project-page-snapshot-checklist.test.tsx。
 
-### Task 4：接入已有悬浮窗
+- [ ] 建立十部分清单与系统/人工字段的用例。
+- [ ] 复用原清单排版；可读取的已保存值固定为只读控件/文字，去掉保存入口。
+- [ ] 不臆造另一页面未保存的勾选；对应位置保留待填写，顶部只提示一次未保存范围。
+- [ ] 检查十部分全部存在、控件当前值写入 DOM、无保存请求，通过后提交。
 
-**Create:** app/project-export/use-project-export.ts。
-**Modify:** project-export-dialog.tsx、project-export.module.css、project-library-panel.tsx、app/page.tsx。
-**Test:** 新增 tests/agent/project-export-download-ui.test.tsx；扩展 analysis-project-favorites-ui.test.tsx。
+### Task 8：竞品流量分析
 
-状态：idle → preparing → ready，读取失败为 error，确认资格时为 checking，关闭/失效清空。会话、项目或选择范围变化使旧响应失效。
+**文件：** app/page.tsx 中流量矩阵与 TrafficAnalysisConclusionSection；抽取 app/project-report-views/traffic.tsx；复用 app/project-export/read-traffic-export.ts 中来源校验；测试 tests/agent/project-page-snapshot-traffic.test.tsx。
 
-用 hook 管理准备/取消/固定 HTML，业务页面只传递作用域。srcDoc 和下载使用同一个字符串。改变选择先禁用旧确认状态，再准备新预览。保留键盘操作、焦点恢复、列表刷新和窄屏行为。
+- [ ] 覆盖父子体、月份、自然/广告/推荐比例、已有结论与 Top N 限制。
+- [ ] 原样复用表格/图表/结论；移除旧快照路径的报告递归展开；项目与运行身份校验保留。
+- [ ] 所有已有月份在原区域可查看，无动态接口依赖、无未提供数据的零值评级，通过截图与来源测试后提交。
 
-浏览器用例先失败再通过；确认空选择禁用、读取失败可重试、取消中止请求、权限撤销阻止下载、已选范围不混入其他模块。
+### Task 9：整体替换与真实验收
 
-### Task 5：验收并记录结果
+**文件：** app/project-export/use-project-export.ts、project-export-dialog.tsx、read-export-content.ts、render-export-html.ts、export-record-blocks.ts；tests/agent/project-export-download-ui.test.tsx；本变更 verification.md。
 
-**Modify:** 本变更 verification.md 追加二期结果，保留一期事实。按范围本地提交，不发布。
+- [ ] 八模块均完成后将主链路切换至原页面快照；停止旧 exportFields/ExportBlock 递归报告路径，删除仅被旧导出使用的死代码与对应过时断言，保留来源/隔离回归。
+- [ ] 对儿童漂移车、灯具、滑板车和缺数据项目做正式数据的只读本地回放，记录每个模块的截图对照、准备耗时、HTML 大小、DOM 行数、默认页面高度。
+- [ ] 真实八模块组合、单模块、取消 VOC、读取失败重试、取消/超时、切换项目、取消收藏与权限撤销均验证；未选内容连隐藏 DOM 也不存在。
+- [ ] 同一视口下原页面与文件的业务表格、图表、颜色与默认折叠布局逐项一致；仅允许项目快照头、禁用操作和分页转完整可读区域的约定差异。目录列表和侧边导航不进入文件。
+- [ ] 独立无登录浏览器打开下载文件，核对预览 HTML 与下载字节相同、原生折叠能操作、零应用 API 请求；公开图片加载与不可用状态分开记录。
+- [ ] 原页面的正常交互、分析入口、收藏和权限测试通过，保证共享组件抽取没有改变正式页面行为。
+- [ ] 记录实测结果后提交供业务验收。未获后续发布指令不发布；发布时按正式最新基线追加本轮提交，保留其他窗口改动。
 
-| 用例 | 验收结果 |
-|---|---|
-| 未收藏、未知状态、权限不可见 | 不提供有效导出；未授权内容不入文件 |
-| 只选两个模块 | 只含两个模块，移除后连隐藏数据也不存在 |
-| 100 行表格、至少两个 ASIN、折叠详情 | 全部已有内容保留，缺失不填零 |
-| 预览后线上结果更新 | 下载正文与原预览一致，不读取新正文替换 |
-| 读取失败、重试、取消 | 错误明确，不静默少导，不触发采集/模型 |
-| 同 ASIN 不同项目、晚响应和会话切换 | 无串项目或跨会话结果 |
-| 已有缺口、未保存清单人工项 | 预览和文件明确标注，无伪造完整性 |
-| 标题/评论/备注含 HTML | 安全显示，不执行输入脚本 |
-| 独立浏览器打开下载文件 | 无原登录会话也能看正文和样式；图片走在线来源，无分析/刷新请求 |
-| 小/大项目性能 | 分别记录读取耗时、生成耗时、文件大小，不预先承诺固定秒数 |
+## 统一检查命令
 
-执行命令：
-- node node_modules/tsx/dist/cli.mjs --test tests/agent/project-export-sources.test.ts tests/agent/project-export-html.test.ts tests/agent/project-export-download-ui.test.tsx tests/agent/analysis-project-favorites-ui.test.tsx tests/agent/project-library-pagination.test.ts
-- npm run typecheck
-- node node_modules/eslint/bin/eslint.js app/project-export tests/agent/project-export-sources.test.ts tests/agent/project-export-html.test.ts tests/agent/project-export-download-ui.test.tsx
-- openspec validate add-favorite-html-export --strict
-- git diff --check
+~~~powershell
+node --import tsx --test tests/agent/project-page-snapshot*.test.tsx tests/agent/project-export-download-ui.test.tsx
+node --conditions=react-server --import tsx --test tests/agent/project-export-sources.test.ts tests/agent/project-export-variants.test.ts tests/agent/project-export-traffic.test.ts tests/agent/selling-point-published-source.test.ts tests/agent/selling-point-translation-http.test.ts
+npm run typecheck
+npx eslint app/project-export app/project-report-views
+openspec validate add-favorite-html-export --strict
+git diff --check
+~~~
 
-期望：相关回归、类型检查、定向 lint 通过，OpenSpec 有效，无空白错误；集成文件原有 lint 诊断单独对比基线，不声称全仓清零。
+浏览器用例不与 react-server 条件混跑。构建与原页面相关回归在 Task 9 一并执行；阶段内仅运行对应已创建测试文件，避免把尚未接入模块当成测试通过。
 
 ## Risks / Trade-offs
 
-- 屏幕可能只渲染一页 → 读取完整已有结果后生成，不保存当前屏幕 DOM。
-- 历史来源归属不足 → 明确无法校验，不按同 ASIN 找别的结果替代。
-- 清单人工项仅在组件内存 → 提示未保存范围，此次不新建编辑持久化能力。
-- 在线图片会变化/失效 → 图片保持在线依赖，正文和样式固定。
-- 大报告占用浏览器内存 → 实测、准备状态和可取消，不静默截断。
-- 文件可被接收者自行编辑 → 不提供防篡改或远程撤回。
+- 原组件可能在挂载时抓取、轮询或创建后台任务：拆分展示层或显式 snapshot 模式，在失败用例中拦截一切非计划请求；禁止靠不传回调来猜测无副作用。
+- CSS 只复制 class 会丢失样式：收集真实页面 CSS 并内联，另浏览器不登录验证；快照 CSS 只对导出文档生效。
+- 折叠组件只在展开后挂载：准备完整内容并转原生 details，不能只 clone 当前可见 DOM。
+- SVG 依赖宽高或渐变 id：以有效宽度渲染，每模块 id 必须唯一，浏览器截图验证。
+- 所有记录确实较多时文件仍可能较大：完整保留业务记录，用原有折叠和滚动控制默认阅读长度；不以删除记录换取速度，也不预先承诺固定 MB 或秒数。
+- 单 HTML 无法保留整套应用交互：只保留原生查看操作，编辑、分析、查询和后台同步不复制。
 
 ## Migration Plan
 
-无数据库或运行目录迁移。一期前端保留；二期已获批准并逐项实现与验收。验收后的合并/发布另行按用户指令处理。
+开发工作区完成全部样板和模块验证；未完成时仅本地禁用相应导出选择。保留现有正式导出直到整体替换通过。无数据库/数据目录变动，无迁移任务。若发布后需回退，只回退本次页面快照呈现改动，不能退掉 aa150c62 中的来源修复或其他窗口的功能。
