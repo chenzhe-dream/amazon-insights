@@ -1,5 +1,17 @@
 # 收藏项目 HTML 导出验收记录
 
+## 正式发布（2026-09-27，用户追加授权）
+
+- 正式基线 `949d848217c8fa61d51013169340aa3d30fe3193`；保留其他窗口已经发布的市场模块更新。合并到快照独立分支后，正式代码快进至 `f4646fd6f65f61643f7194a3cbf41a3e5329a30e`。相对原正式版本，server/shared/市场组件无新增变化；另一个窗口尚未发布的候选未合入。
+- 冲突来自同一个旧导出修复分别存在于 `ff8fd2bb` 和 `aa150c62`，已确认两者导出代码一致；保留新快照替代链路及其测试，未恢复旧递归导出。集成候选重新通过来源 20、展示 34、浏览器 33，共 87 项测试，类型检查及本地构建通过。
+- 私有备份目录：`C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/snapshot-release-20260927-003830`。保存配置、受管状态、发布指针、82 个业务文件及旧 Web artifact 的 71 个文件；旧 artifact 逐文件哈希一致。数据库 custom dump 20,079,527 字节，完整解码通过（未执行恢复），SHA256 `6072CF315B67CE473BD5DD48DC6E514E18C41E9AC632C02414887E810467B4AB`。
+- `manage-formal-stack.ps1 -PublishCode` 退出 0；构建前后及发布后活动分析数均为 0。Web 31900、Agent 31901 与局域网健康检查均成功，新 sourceCommit 一致。
+- 已激活 artifact：`5639b68d051b61b63867b5864c00171224fc5b336ada47c9eb025f185f4db57e`；正式 sourceHash：`7beda1512f361e536c06b9d63169ad289e5b2688fb90e358d9b29dd64b5bd0ce`。正式源文件、构建指纹和实际健康身份一致，8 个页面引用的 JS/CSS HTTP 200 且与激活 artifact 逐字节一致，实际页面 JS 包含新快照实现。
+- 候选与正式构建指纹因 checkout 换行符不同而不同；逐项核对 994 个源码文件，62 个仅 CRLF/LF 不同，无其他内容差异。未把候选字节哈希当成正式哈希。
+- 发布后 82 个业务文件、业务 dataCurrent 和 streams 与备份一致；配置和其他窗口目录未覆盖。原正式目录三项未跟踪图片候选目录保留。未推送 Git 远程或合入 main。
+- 浏览器连接工具返回 `nodeRepl.fetch request failed`，未完成正式登录页面的人工操作验收。浏览器交互回归在本地候选通过；用户正式验收入口为收藏夹 → 导出 → 勾选模块 → 预览 → 下载。
+- 发布日志和精确验证：本分支忽略目录 `test-results/snapshot-formal-release.log`、`snapshot-release-after-health.json`、`snapshot-release-assets.json`；不提交真实业务数据或凭据。
+
 ## 当前状态（2026-09-26）
 
 原页面快照八模块已在独立分支实现，下面较早的阶段记录仅用于追溯，不代表当前界面仍是占位或递归报告。实现审查范围为 `ff8fd2bb..6e10447c`；最终独立审查通过，未发现需修复的功能或安全问题。审查指出的测试文件末尾空行已清理。未推送、合并或发布正式环境。
