@@ -97,6 +97,10 @@ test("missing version preserves manual matrix without inventing current analysis
 });
 
 test("scope, malformed sources, changed manual revisions and read errors reject preparation", async () => {
+  const mismatched = structuredClone(manual);
+  mismatched.normalizedRecord.asin = "B000000099";
+  mismatched.normalizedRecord.alexaReport.asin = "B000000099";
+  await assert.rejects(readPageSnapshotVoc(context(),reader([mismatched]).read,products),/来源/);
   await assert.rejects(readPageSnapshotVoc(context({asin:"B000000099",marketplace:"US"}),reader().read,products),/来源/);
   await assert.rejects(readPageSnapshotVoc(context({asin,marketplace:"UK"}),reader().read,products),/来源/);
   await assert.rejects(readPageSnapshotVoc(context({asin,marketplace:"US",status:"ready",blocks:"bad"}),reader().read,products));

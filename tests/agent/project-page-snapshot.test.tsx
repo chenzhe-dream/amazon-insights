@@ -121,6 +121,28 @@ test('style capture preserves CSS rules and variables and fails rather than igno
   assert.match(result.css, /--snapshot-color/); assert.match(result.error, /样式/);
 });
 
+test('a short snapshot paragraph remains fully readable after the recipient narrows the window', async t => {
+  const page=await browser.newPage({viewport:{width:800,height:600}});t.after(()=>page.close());
+  await page.goto(origin+'/tests/agent/helpers/page-snapshot-harness.html');
+  const html=await page.evaluate(async()=>{
+    const {React,createRoot}=await import(/* @vite-ignore */ '/tests/agent/helpers/'+'page-snapshot-react.ts');
+    const {SnapshotPresentationProvider}=await import(/* @vite-ignore */ '/app/project-report-views/'+'snapshot-presentation.tsx');
+    const {InlineReportText}=await import(/* @vite-ignore */ '/app/'+'product-definition-inline.tsx');
+    const {inlineDefinitionStyles}=await import(/* @vite-ignore */ '/app/'+'product-definition-inline-styles.ts');
+    const {serializePageSnapshot}=await import(/* @vite-ignore */ '/app/project-export/'+'serialize-page-snapshot.ts');
+    const css=inlineDefinitionStyles+'body{margin:0;font:14px sans-serif}.responsive-copy{max-width:600px;width:100%}';
+    const style=document.createElement('style');style.textContent=css;document.head.append(style);
+    const host=document.createElement('div');host.className='responsive-copy';document.body.append(host);const root=createRoot(host);
+    root.render(React.createElement(SnapshotPresentationProvider,null,React.createElement(InlineReportText,{text:'短文本在宽屏里只有一行，窄屏仍必须完整可读。'})));
+    await new Promise(r=>setTimeout(r,100));
+    const result=serializePageSnapshot({root:host,cssText:css,title:'窄屏全文',capturedAt:'2026-09-26'});root.unmount();host.remove();return result;
+  });
+  await page.setContent(html);
+  assert.equal(await page.locator('.definition-native-text').count(),0);
+  await page.setViewportSize({width:90,height:600});
+  assert.equal(await page.locator('.definition-inline-body').evaluate(e=>e.scrollHeight<=e.clientHeight+1),true);
+});
+
 test('cancelled preparation leaves no hidden host', async t => {
   const page=await browser.newPage(); t.after(()=>page.close());
   await page.goto(origin+'/tests/agent/helpers/page-snapshot-harness.html');

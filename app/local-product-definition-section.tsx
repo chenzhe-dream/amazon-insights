@@ -14,6 +14,7 @@ import { LaunchSection, LaunchTable } from "./launch-section";
 import { AnalysisRuleExplanation } from "./analysis-rule-explanation";
 import { presentDefinitionConclusion, hasVisibleQualification } from "./lib/product-definition-presentation";
 import { DefinitionConclusion, OverviewDefinitionValue, ReportParagraphs } from "./product-definition-conclusion";
+import { useSnapshotPresentation } from "./project-report-views/snapshot-presentation";
 
 function ReadableReportText({text}: {text: string}) {
   return hasVisibleQualification(text) ? <ReportParagraphs text={text} /> : <InlineReportText text={text} />;
@@ -114,6 +115,7 @@ export function LocalProductDefinitionSection({ products, sources, savedAnalysis
   savedAnalysis?: ProductLaunchAnalysis;
   savedReport?: FinalProductDefinitionReport;
 }) {
+  const snapshotMode = useSnapshotPresentation();
   const analysis = useMemo(
     () => savedAnalysis ?? (savedReport ? null : buildProductLaunchAnalysis(products, sources)),
     [products, savedAnalysis, savedReport, sources],
@@ -177,7 +179,7 @@ export function LocalProductDefinitionSection({ products, sources, savedAnalysis
       {!ready ? (
         <section className="card launch-block">
           <div className="pending-box">
-            待 VOC 核心主题就绪后生成最终产品定义。请先完成「竞品 VOC 洞察」与「产品定义结论」页同步。
+            {snapshotMode ? "暂无已有分析输入，当前没有可展示的新品定义。" : "待 VOC 核心主题就绪后生成最终产品定义。请先完成「竞品 VOC 洞察」与「产品定义结论」页同步。"}
           </div>
         </section>
       ) : (

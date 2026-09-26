@@ -39,7 +39,7 @@ function TextDisclosure({ parts, lines, showAsinLabels = false }: { parts: strin
     const match = showAsinLabels ? part.match(/^([\s\S]*?)(\[[A-Z0-9]{10}\]|【[A-Z0-9]{10}】)([\s\S]*)$/) : null;
     return <div className="definition-inline-fragment" key={index}>{match ? <div className="definition-inline-asin-heading">{match[1]}<span className="definition-inline-asin-label">{match[2]}</span></div> : null}<div className="definition-inline-body">{match ? match[3] : part}</div></div>;
   });
-  if (snapshot && !overflow) return <div className="definition-inline-text"><div ref={content} className="definition-inline-copy" style={{"--definition-inline-lines":lines} as CSSProperties}>{fragments}</div></div>;
+  if (snapshot && !overflow) return <div className="definition-inline-text"><div ref={content} className="definition-inline-copy expanded">{fragments}</div></div>;
   if (snapshot) return <details className="definition-inline-text definition-native-text" style={{"--definition-inline-lines":lines} as CSSProperties}>
     <summary><div ref={content} className="definition-native-preview definition-inline-copy">{fragments}</div><span className="definition-native-more">展开全文 ▾</span><span className="definition-native-less">收起 ▴</span></summary>
     <div className="definition-inline-copy expanded">{fragments}</div>

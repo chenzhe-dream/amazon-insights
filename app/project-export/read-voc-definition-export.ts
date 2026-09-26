@@ -41,7 +41,8 @@ export function readManualVocRecords(context: ExportModuleContext, read: ExportM
     const parsed = ManualAlexaVocListResponseSchema.safeParse(await json(read, path, 'Manual Alexa VOC'));
     if (!parsed.success) throw new Error('Manual Alexa VOC 响应格式无效');
     const records = parsed.data.records;
-    if (records.some(record => record.marketplace !== context.marketplace || !context.asins.includes(record.asin))
+    if (records.some(record => record.marketplace !== context.marketplace || !context.asins.includes(record.asin)
+      || record.normalizedRecord.asin !== record.asin)
       || new Set(records.map(record => record.asin)).size !== records.length) throw new Error('Manual Alexa VOC 来源范围不匹配');
     return records;
   }
