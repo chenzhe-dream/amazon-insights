@@ -207,8 +207,10 @@ export function catalogGapNote(context: ExportModuleContext): string[] {
   return missing.length ? [`商品资料缺失：${missing.join('、')}。保留已有 VOC 和报告内容；价格、销量和产品结构按未知处理，不套用特定类目的规则。`] : [];
 }
 
-/** Replays the page's existing pure display builder only on explicitly scoped, already read sources. */
-export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: readonly ManualAlexaVocRecord[]): ProductLaunchAnalysis | null {
+export type CurrentPageAnalysisInputs = Readonly<{ products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources }>;
+
+/** Same explicit sources as the page; review candidates do not opt in to rule analysis. */
+export function buildCurrentPageAnalysisInputs(context: ExportModuleContext, manual: readonly ManualAlexaVocRecord[]): CurrentPageAnalysisInputs | null {
   if (!context.version || context.marketplace !== 'US' || context.asins.length === 0) return null;
   const products: LaunchProductInput[] = context.asins.map(asin => {
     const matches = context.version!.catalog.filter(item => item && typeof item === 'object' && 'asin' in item && item.asin === asin);
@@ -253,5 +255,12 @@ export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: r
     keywordSources: keywordSources as ProductLaunchRuntimeSources['keywordSources'],
     keywordDemand: buildKeywordDemandAnalysis(products, keywordSources as ProductLaunchRuntimeSources['keywordSources']),
   };
-  return hasProductLaunchAnalysis(products, sources) ? buildProductLaunchAnalysis(products, sources) : null;
+  return {products, sources};
+}
+
+/** Replays the page's existing pure display builder only on explicitly scoped, already read sources. */
+export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: readonly ManualAlexaVocRecord[]): ProductLaunchAnalysis | null {
+  const inputs = buildCurrentPageAnalysisInputs(context, manual);
+  return inputs && hasProductLaunchAnalysis(inputs.products, inputs.sources)
+    ? buildProductLaunchAnalysis(inputs.products, inputs.sources) : null;
 }

@@ -1,4 +1,10 @@
 export const inlineDefinitionStyles = `
+.definition-native-text>summary{list-style:none;color:inherit!important;padding:0!important;cursor:pointer}
+.definition-native-text>summary::-webkit-details-marker{display:none}
+.definition-native-more,.definition-native-less{display:inline-block;text-decoration:underline;color:#526891;line-height:24px}
+.definition-native-less,.definition-native-text[open]>summary>.definition-native-preview,.definition-native-text[open]>summary>.definition-native-more{display:none}
+.definition-native-text[open]>summary>.definition-native-less{display:inline-block}
+.definition-native-decision>summary{padding:6px 14px!important;font-size:11px}
 .definition-reading-paragraphs{white-space:pre-wrap;overflow-wrap:anywhere}
 .definition-reading-paragraph+.definition-reading-paragraph{margin-top:5px}
 .final-oneliner-value .definition-reading-more{font-weight:400}

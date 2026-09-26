@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { describeRulePredicate, type AnalysisRuleTrace, type DecisionRecord, type EvidenceSource } from "../shared/product-structure-rules";
 import { inlineDefinitionStyles } from "./product-definition-inline-styles";
+import {useSnapshotPresentation} from "./project-report-views/snapshot-presentation";
 
 type DecisionProps = { trace?: AnalysisRuleTrace; decisionIds?: string[] };
 
@@ -11,32 +12,42 @@ export function ProductDefinitionInlineStyles() {
 }
 
 function TextDisclosure({ parts, lines, showAsinLabels = false }: { parts: string[]; lines: number; showAsinLabels?: boolean }) {
+  const snapshot = useSnapshotPresentation();
   const [expanded, setExpanded] = useState(false);
-  const [overflow, setOverflow] = useState(false);
+  const [overflow, setOverflow] = useState(snapshot);
   const content = useRef<HTMLDivElement>(null);
   const id = useId();
   useEffect(() => {
     const node = content.current;
     if (!node || expanded) return;
+    // Ancestor details may be closed during capture; keep their full native disclosure.
+    if (snapshot && !node.getClientRects().length) return;
     const measure = () => setOverflow(Array.from(node.querySelectorAll('.definition-inline-body')).some(child => child.scrollHeight > child.clientHeight + 1));
     measure();
+    if (snapshot) return;
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [expanded, parts, lines]);
+  }, [expanded, parts, lines, snapshot]);
   function toggle() {
     if (expanded && content.current && content.current.getBoundingClientRect().top < 0) {
       content.current.scrollIntoView({ block: "start" });
     }
     setExpanded(!expanded);
   }
+  const fragments = parts.map((part, index) => {
+    const match = showAsinLabels ? part.match(/^([\s\S]*?)(\[[A-Z0-9]{10}\]|【[A-Z0-9]{10}】)([\s\S]*)$/) : null;
+    return <div className="definition-inline-fragment" key={index}>{match ? <div className="definition-inline-asin-heading">{match[1]}<span className="definition-inline-asin-label">{match[2]}</span></div> : null}<div className="definition-inline-body">{match ? match[3] : part}</div></div>;
+  });
+  if (snapshot && !overflow) return <div className="definition-inline-text"><div ref={content} className="definition-inline-copy" style={{"--definition-inline-lines":lines} as CSSProperties}>{fragments}</div></div>;
+  if (snapshot) return <details className="definition-inline-text definition-native-text" style={{"--definition-inline-lines":lines} as CSSProperties}>
+    <summary><div ref={content} className="definition-native-preview definition-inline-copy">{fragments}</div><span className="definition-native-more">展开全文 ▾</span><span className="definition-native-less">收起 ▴</span></summary>
+    <div className="definition-inline-copy expanded">{fragments}</div>
+  </details>;
   return (
     <div className="definition-inline-text">
       <div ref={content} id={id} className={expanded ? "definition-inline-copy expanded" : "definition-inline-copy"} style={{ "--definition-inline-lines": lines } as CSSProperties}>
-        {parts.map((part, index) => {
-          const match = showAsinLabels ? part.match(/^([\s\S]*?)(\[[A-Z0-9]{10}\]|【[A-Z0-9]{10}】)([\s\S]*)$/) : null;
-          return <div className="definition-inline-fragment" key={index}>{match ? <div className="definition-inline-asin-heading">{match[1]}<span className="definition-inline-asin-label">{match[2]}</span></div> : null}<div className="definition-inline-body">{match ? match[3] : part}</div></div>;
-        })}
+        {fragments}
       </div>
       {overflow || expanded ? <button type="button" className="definition-inline-link" aria-expanded={expanded} aria-controls={id} onClick={toggle}>{expanded ? "收起 ▴" : "展开全文 ▾"}</button> : null}
     </div>
@@ -119,6 +130,7 @@ export function InlineDecisionContent({ trace, decisionIds }: DecisionProps) {
 }
 
 export function InlineFeatureDecision(props: DecisionProps) {
+  const snapshot = useSnapshotPresentation();
   const details = useRef<HTMLDetailsElement>(null);
   const summary = useRef<HTMLElement>(null);
   function close() {
@@ -128,14 +140,16 @@ export function InlineFeatureDecision(props: DecisionProps) {
     summary.current?.focus({ preventScroll: true });
     if (aboveViewport) details.current.scrollIntoView({ block: "start" });
   }
-  return <details ref={details} className="definition-inline-feature"><summary ref={summary}>判定依据</summary><InlineDecisionContent {...props} /><button type="button" className="definition-inline-link" onClick={close}>收起判定依据 ▴</button></details>;
+  return <details ref={details} className="definition-inline-feature"><summary ref={summary}>判定依据</summary><InlineDecisionContent {...props} />{!snapshot && <button type="button" className="definition-inline-link" onClick={close}>收起判定依据 ▴</button>}</details>;
 }
 
 export function InlineDecisionTableRow({ children, colSpan, label, ...props }: DecisionProps & { children: ReactNode; colSpan: number; label: string }) {
+  const snapshot = useSnapshotPresentation();
   const [expanded, setExpanded] = useState(false);
   const row = useRef<HTMLTableRowElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const id = useId();
+  if (snapshot) return <Fragment><tr>{children}<td className="definition-inline-trigger-cell">见下方判定依据</td></tr><tr className="definition-inline-detail-row"><td colSpan={colSpan}><details className="definition-native-decision"><summary>{label} · 判定依据</summary><div className="definition-inline-panel"><InlineDecisionContent {...props}/></div></details></td></tr></Fragment>;
   function close() {
     const aboveViewport = row.current && row.current.getBoundingClientRect().top < 0;
     setExpanded(false);

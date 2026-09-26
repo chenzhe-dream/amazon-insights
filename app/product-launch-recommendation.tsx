@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import {useSnapshotPresentation} from "./project-report-views/snapshot-presentation";
 import {
   buildProductLaunchAnalysis,
   hasProductLaunchAnalysis,
@@ -42,6 +43,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
   products: LaunchProduct[];
   sources: ProductLaunchRuntimeSources;
 }) {
+  const snapshot = useSnapshotPresentation();
   const analysis = useMemo(() => buildProductLaunchAnalysis(products, sources), [products, sources]);
   const ready = hasProductLaunchAnalysis(products, sources);
 
@@ -76,7 +78,7 @@ export function ProductLaunchRecommendationSection({ products, sources }: {
       {!ready ? (
         <section className="card launch-block">
           <div className="pending-box">
-            待 VOC 核心主题或 Sorftime 智能评论分析就绪后，自动生成 VOC 立项分析报告。请先在「竞品VOC 汇总」页确认七维数据已同步。
+            {snapshot ? "暂无可用于当前 VOC 立项结论的已保存数据。" : "待 VOC 核心主题或 Sorftime 智能评论分析就绪后，自动生成 VOC 立项分析报告。请先在「竞品VOC 汇总」页确认七维数据已同步。"}
           </div>
         </section>
       ) : (

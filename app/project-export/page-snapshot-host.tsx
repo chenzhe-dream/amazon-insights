@@ -8,16 +8,19 @@ import { readPageSnapshotSources, type PageSnapshotSources } from "./read-page-s
 import type { ExportFetcher, ExportRequest } from "./read-export-content";
 import {PageSnapshotVariants} from "./page-snapshot-variants";
 import {PageSnapshotImages} from "./page-snapshot-images";
+import {SnapshotPresentationProvider} from "../project-report-views/snapshot-presentation";
+import {PageSnapshotVoc} from "./page-snapshot-voc";
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
-  return <main className="page-snapshot">
+  return <SnapshotPresentationProvider><main className="page-snapshot">
     <header className="card"><h1>{content.project.name}</h1><p>{content.project.marketplace} · {content.project.asins.length} 个 ASIN · 快照时间 {new Date(content.capturedAt).toLocaleString("zh-CN", {timeZone:"Asia/Shanghai"})}（北京时间）</p><p>{content.sourceLabel}</p></header>
     {content.moduleIds.includes("competitor-overview") && <section className="compare-page" data-snapshot-module="competitor-overview">{content.overview
       ? <CompetitorOverviewSnapshotView {...content.overview}/>
       : <div className="card"><h2>竞品参数总览</h2><p>暂无已发布的竞品结果。</p></div>}</section>}
     {content.moduleIds.includes("variants-orders") && content.variants && <section className="compare-page" data-snapshot-module="variants-orders"><PageSnapshotVariants {...content.variants}/></section>}
     {content.moduleIds.includes("listing-images") && content.images && <section className="compare-page" data-snapshot-module="listing-images"><PageSnapshotImages {...content.images}/></section>}
-  </main>;
+    {content.moduleIds.includes("voc") && content.voc && <section className="compare-page" data-snapshot-module="voc"><PageSnapshotVoc {...content.voc}/></section>}
+  </main></SnapshotPresentationProvider>;
 }
 class SnapshotBoundary extends Component<{children: ReactNode; onError: (error: Error) => void}, {failed: boolean}> {
   state = {failed:false};
@@ -32,7 +35,7 @@ const snapshotLayout = `
 html,body{margin:0!important;min-width:0!important;height:auto!important;overflow:auto!important}
 .page-snapshot{padding:24px;max-width:1800px;margin:0 auto;color:var(--text,#20344e)}
 .page-snapshot>header{margin-bottom:24px;padding:20px}.page-snapshot>header h1{font-size:20px;font-weight:700;margin-bottom:8px}
-.page-snapshot>header p{font-size:12px;color:var(--muted);margin:4px 0}.page-snapshot [data-snapshot-module]>.card{margin-bottom:24px}
+.page-snapshot>header p{font-size:12px;color:var(--muted);margin:4px 0}.page-snapshot [data-snapshot-module]{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}
 .page-snapshot details>summary{cursor:pointer;color:#385ba0;padding:8px 0}
 .page-snapshot .matrix-wrap{max-height:720px;overflow:auto}
 .page-snapshot a{overflow-wrap:anywhere}

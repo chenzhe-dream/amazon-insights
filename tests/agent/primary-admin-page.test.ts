@@ -8,6 +8,7 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { PathnameContext, SearchParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { sorftimeReviewAnalysisMeta } from "../../app/seller-sprite-review-analysis";
+import { reviewEmptyMessage } from "../../app/lib/voc-review-display";
 import type { AuthenticatedWebSession } from "../../app/auth-session-gate";
 import type { VocRunObservation } from "../../app/lib/voc-run-browser";
 import type { User } from "../../shared/agent-contracts";
@@ -165,11 +166,12 @@ test("failed VOC observation with a malformed empty stage renders only its truth
 test("Sorftime ready-empty review cells render their truthful status and independent source", () => {
   const asin = "B0G5N593D6";
   const statusMessage = "Sorftime product_detail 已确认该 ASIN 评论数为 0";
+  const record = { asin, marketplace: "US", sampledReviews: 0, mentionTopics: 0, fetchedAt: "2026-09-02", status: "ready" as const, statusMessage, blocks: [] };
   const html = renderToStaticMarkup(createElement(ReviewAnalysisMatrixSection, {
     title: "智能评论分析",
     description: "Sorftime MCP · Customers Say 主题 + 近一年评论样本",
     badge: "Sorftime MCP",
-    data: { [asin]: { asin, marketplace: "US", sampledReviews: 0, mentionTopics: 0, fetchedAt: "2026-09-02", status: "ready", statusMessage, blocks: [] } },
+    data: { [asin]: record },
     dataMeta: { source: "Sorftime MCP", updatedAt: "2026-09-02" },
     configMeta: sorftimeReviewAnalysisMeta,
     pendingSteps: null,
@@ -177,7 +179,8 @@ test("Sorftime ready-empty review cells render their truthful status and indepen
     market: "US",
   }));
 
-  assert.match(html, new RegExp(statusMessage));
+  assert.ok(html.includes(reviewEmptyMessage(record)));
   assert.doesNotMatch(html, /暂无匹配主题/);
-  assert.match(renderBuilder(user("member@example.com", "member"), "voc"), /独立 Sorftime 数据源，不继承上方 Alexa VOC/);
+  assert.match(html, /来源：Sorftime · 评论样本：0 · Customers Say 主题：0/);
+  assert.doesNotMatch(html, /来源：Alexa|Manual Alexa/);
 });

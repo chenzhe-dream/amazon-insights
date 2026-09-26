@@ -77,6 +77,34 @@ test('DOM snapshot keeps native details, original styles, live form values and c
   assert.equal(await recipient.locator('.compare-matrix').evaluate(e => getComputedStyle(e).color), 'rgb(25, 50, 75)');
 });
 
+test('long text and text inside closed rule panels remain expandable without React', async t => {
+  const page=await browser.newPage();t.after(()=>page.close());
+  await page.goto(origin+'/tests/agent/helpers/page-snapshot-harness.html');
+  const html=await page.evaluate(async()=>{
+    const {React,createRoot}=await import(/* @vite-ignore */ '/tests/agent/helpers/'+'page-snapshot-react.ts');const h=React.createElement;
+    const {SnapshotPresentationProvider}=await import(/* @vite-ignore */ '/app/project-report-views/'+'snapshot-presentation.tsx');
+    const {InlineReportText}=await import(/* @vite-ignore */ '/app/'+'product-definition-inline.tsx');
+    const {inlineDefinitionStyles}=await import(/* @vite-ignore */ '/app/'+'product-definition-inline-styles.ts');
+    const {serializePageSnapshot}=await import(/* @vite-ignore */ '/app/project-export/'+'serialize-page-snapshot.ts');
+    const css=inlineDefinitionStyles+'body{font:14px sans-serif}.reading-fixture{width:300px}';
+    const style=document.createElement('style');style.textContent=css;document.head.append(style);
+    const host=document.createElement('div');host.className='reading-fixture';document.body.append(host);const root=createRoot(host);
+    root.render(h(SnapshotPresentationProvider,null,h(InlineReportText,{text:'长段正文和全部业务依据。'.repeat(100)}),h('details',{className:'rule-panel'},h('summary',null,'规则入口'),h(InlineReportText,{text:'规则内部的完整引用。'.repeat(100)}))));
+    await new Promise<void>(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(()=>r()))));
+    const result=serializePageSnapshot({root:host,cssText:css,title:'展开验证',capturedAt:'2026-09-26'});root.unmount();host.remove();return result;
+  });
+  await page.setContent(html);
+  const text=page.locator('.definition-native-text').first();
+  const before=await text.evaluate(e=>e.clientHeight);
+  await text.locator(':scope > summary').click();
+  assert.ok(await text.evaluate(e=>e.clientHeight)>before*2);
+  await page.locator('.rule-panel > summary').click();
+  const nested=page.locator('.rule-panel .definition-native-text');
+  await nested.locator(':scope > summary').click();
+  assert.equal(await nested.locator(':scope > .expanded').isVisible(),true);
+  assert.equal(await page.locator('button,script').count(),0);
+});
+
 test('style capture preserves CSS rules and variables and fails rather than ignoring unavailable required styles', async t => {
   const page = await browser.newPage(); t.after(() => page.close());
   await page.goto(origin + '/tests/agent/helpers/page-snapshot-harness.html');

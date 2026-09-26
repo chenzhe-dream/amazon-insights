@@ -8,14 +8,16 @@ import type { ExportSectionId } from "./module-catalog";
 import {readVariantsSnapshot} from "./read-variants-export";
 import type {VariantsSnapshotSources} from "./page-snapshot-variants";
 import {readPageSnapshotImages, type ImagesSnapshotSources} from "./read-page-snapshot-images";
+import {readPageSnapshotVoc, type VocSnapshotSources} from "./read-page-snapshot-voc";
 
 // Extend only after each original view has passed its snapshot acceptance.
-export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images"];
+export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc"];
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;
   variants?: VariantsSnapshotSources;
   images?: ImagesSnapshotSources;
+  voc?: VocSnapshotSources;
 };
 
 export function stageData(context: ExportModuleContext, stage: keyof NonNullable<ExportModuleContext["version"]>["stageOutputs"]): Record<string, unknown> {
@@ -89,11 +91,12 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   }
   const variants = request.moduleIds.includes("variants-orders") ? await readVariantsSnapshot(context,read) : undefined;
   const images = request.moduleIds.includes("listing-images") ? readPageSnapshotImages(context,snapshotProducts(context)) : undefined;
+  const voc = request.moduleIds.includes("voc") ? await readPageSnapshotVoc(context,read,snapshotProducts(context)) : undefined;
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
     sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds],
     sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
-    overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}),
+    overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}), ...(voc ? {voc} : {}),
   });
 }

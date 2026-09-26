@@ -1,6 +1,7 @@
 "use client";
 
 import { hasVisibleQualification } from './lib/product-definition-presentation';
+import {useSnapshotPresentation} from './project-report-views/snapshot-presentation';
 
 const ACTION_TAG_CLASS: Record<string, string> = {
   产品: "product",
@@ -51,6 +52,8 @@ export function ActionStepsCell({
   maxItems?: number;
   expandable?: boolean;
 }) {
+  const snapshot = useSnapshotPresentation();
+  expandable = expandable || snapshot;
   const steps = parseActionSteps(value);
   if (!steps.length) return <span className="launch-muted">—</span>;
 
