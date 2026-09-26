@@ -344,8 +344,8 @@ test("the existing job poll fetches and renders ten scoped stage outputs without
   const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
   assert.match(
     pageSource,
-    /<TrafficAnalysisConclusionSection products=\{products\} market=\{market\} trafficData=\{stageOutputView\.trafficData\} \/>/,
-    "the production conclusion consumes the same accepted traffic overlay as status and charts",
+    /<TrafficReportView products=\{products\} market=\{market\} trafficData=\{stageOutputView\.trafficData\} \/>/,
+    "the production traffic presenter consumes the same accepted traffic overlay as status and charts",
   );
   assert.doesNotMatch(pageSource, /overview-aplus/, "the listing stage data no longer creates an A+ tab");
   const page = await browser.newPage();

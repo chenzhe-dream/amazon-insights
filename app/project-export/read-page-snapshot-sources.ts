@@ -11,9 +11,10 @@ import {readPageSnapshotImages, type ImagesSnapshotSources} from "./read-page-sn
 import {readPageSnapshotVoc, type VocSnapshotSources} from "./read-page-snapshot-voc";
 import {readPageSnapshotKeywords, type KeywordsSnapshotSources} from "./read-page-snapshot-keywords";
 import {readPageSnapshotDefinition, type DefinitionSnapshotSources} from "./read-page-snapshot-definition";
+import {readPageSnapshotTraffic, type TrafficSnapshotSources} from "./read-page-snapshot-traffic";
 
 // Extend only after each original view has passed its snapshot acceptance.
-export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist"];
+export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic"];
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;
@@ -23,6 +24,7 @@ export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourc
   keywords?: KeywordsSnapshotSources;
   definition?: DefinitionSnapshotSources;
   checklist?: DefinitionSnapshotSources;
+  traffic?: TrafficSnapshotSources;
 };
 
 export function stageData(context: ExportModuleContext, stage: keyof NonNullable<ExportModuleContext["version"]>["stageOutputs"]): Record<string, unknown> {
@@ -100,6 +102,7 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   const keywords = request.moduleIds.includes("keywords") ? readPageSnapshotKeywords(context,snapshotProducts(context)) : undefined;
   const definition = request.moduleIds.includes("definition") ? await readPageSnapshotDefinition(context,read) : undefined;
   const checklist = request.moduleIds.includes("checklist") ? definition ?? await readPageSnapshotDefinition(context,read) : undefined;
+  const traffic = request.moduleIds.includes("traffic") ? await readPageSnapshotTraffic(context,read,snapshotProducts(context)) : undefined;
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
@@ -107,5 +110,6 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
     sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
     overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}), ...(voc ? {voc} : {}), ...(keywords ? {keywords} : {}), ...(definition ? {definition} : {}),
     ...(checklist ? {checklist} : {}),
+    ...(traffic ? {traffic} : {}),
   });
 }

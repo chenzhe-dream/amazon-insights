@@ -13,6 +13,7 @@ import {PageSnapshotVoc} from "./page-snapshot-voc";
 import {PageSnapshotKeywords} from "./page-snapshot-keywords";
 import {PageSnapshotDefinition} from "./page-snapshot-definition";
 import {PageSnapshotChecklist} from "./page-snapshot-checklist";
+import {PageSnapshotTraffic} from "./page-snapshot-traffic";
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
   return <SnapshotPresentationProvider><main className="page-snapshot">
@@ -26,6 +27,7 @@ export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
     {content.moduleIds.includes("keywords") && content.keywords && <section className="compare-page" data-snapshot-module="keywords"><PageSnapshotKeywords {...content.keywords}/></section>}
     {content.moduleIds.includes("definition") && content.definition && <section className="compare-page" data-snapshot-module="definition"><PageSnapshotDefinition {...content.definition}/></section>}
     {content.moduleIds.includes("checklist") && content.checklist && <section className="compare-page" data-snapshot-module="checklist"><PageSnapshotChecklist {...content.checklist}/></section>}
+    {content.moduleIds.includes("traffic") && content.traffic && <section className="compare-page" data-snapshot-module="traffic"><PageSnapshotTraffic {...content.traffic}/></section>}
   </main></SnapshotPresentationProvider>;
 }
 class SnapshotBoundary extends Component<{children: ReactNode; onError: (error: Error) => void}, {failed: boolean}> {
