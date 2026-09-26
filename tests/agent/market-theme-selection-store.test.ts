@@ -29,6 +29,12 @@ test('immutable selection revisions isolate actors, replay commands and never cr
  const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector('sellerSprite'),sorftime:connector('sorftime')}}),'prepare-members':createMarketSourceProjectionStep(f.context),'prepare-model-batches':async()=>({kind:'settlement',value:{outcome:{status:'failed',error:{code:'internal',retryable:false}}}}),rules:createMarketThemeRulesStep(f.context),report:createMarketThemeReportStep(f.context)}});t.after(()=>worker.stop());
  for(let i=0;i<20;i++)if(!await worker.tick())break;
  const saved=await service.findRun(f.actor,started.run.id),base=saved.run.currentReport!;assert.ok(base,JSON.stringify(saved));const before=JSON.stringify(saved),sourceCalls=calls;
+ assert.equal(base.report.reportVersion,'market-theme-report/v3');
+ assert.equal(base.report.semanticStatus,'skipped');
+ const ruleView=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:started.run.id}))!;
+ assert.equal(ruleView.run.versions.planner,'market-theme-flow/rules-v2');
+ assert.equal(ruleView.run.versions.model,null);
+ assert.ok(ruleView.steps.every(s=>!['prepare-model-batches','model-batch'].includes(s.kind)));
  const store=new MarketThemeSelectionStore(f.context),identity={actor:f.actor,moduleRunId:started.run.id,attemptId:base.attemptId};
  const initial=await store.read(identity);assert.ok(initial);assert.equal(initial.samples[0].title.value,'Lamp 1');assert.equal(initial.samples[0].sourceRank.value,11);assert.equal(initial.samples[0].customerSay.value,'Frozen overall summary',JSON.stringify({samples:initial.samples,baseline:initial.baseline,steps:(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:started.run.id}))?.attempts}));
  const counts=async()=> (await pg.pool.query('SELECT (SELECT count(*) FROM market_analysis_steps) steps,(SELECT count(*) FROM market_agent_runs) models,(SELECT count(*) FROM market_analysis_inputs) inputs')).rows[0];const countBefore=await counts();

@@ -162,7 +162,7 @@ test('automatic keyword flow persists partial sources, resumes after restart and
   // Use the production combined runtime as well: real queue and audit storage,
   // synthetic SDK only. Unknown fixture output is not a semantic quality claim.
   let modelCalls = 0;
-  const base = loadVocPositioningRuntimeConfig({ OPENAI_API_KEY: 'synthetic-key', AGENT_VOC_MODEL: 'synthetic-model',
+  const base = loadVocPositioningRuntimeConfig({ OPENAI_API_KEY: 'synthetic-key', AGENT_VOC_MODEL: 'gpt-5.6',
     AGENT_VOC_ESTIMATED_INPUT_TOKENS: '10000', AGENT_VOC_MAX_OUTPUT_TOKENS: '4000', AGENT_VOC_TIMEOUT_MS: '90000',
     AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS: '1', AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS: '2', AGENT_VOC_CALL_MAX_TOKENS: '100000',
     AGENT_VOC_CALL_MAX_COST_MICROS: '1000000', AGENT_VOC_RUN_MAX_TOKENS: '100000', AGENT_VOC_RUN_MAX_COST_MICROS: '1000000',
@@ -179,11 +179,12 @@ test('automatic keyword flow persists partial sources, resumes after restart and
     connectors: { sorftime: connector, sellerSprite: { ...connector, id: 'sellerSprite' } } });
   t.after(() => runtime.stop());
   const configuredRequest = { ...request, idempotencyKey: randomUUID(), collectionRevision: 'model/v1',
-    versions: { ...request.versions, model: 'market.semantic.text.v1', prompt: runtime.promptVersion, configuration: runtime.configurationVersion } };
+    params: { ...request.params, flow: MARKET_KEYWORD_FLOW_VERSION },
+    versions: { ...request.versions, planner: MARKET_KEYWORD_FLOW_VERSION, model: 'market.semantic.text.v1', prompt: runtime.promptVersion, configuration: runtime.configurationVersion } };
   const configured = await steps.createModuleRun({ ...configuredRequest, initialSteps: marketKeywordFlowInitialSteps(configuredRequest) });
   for (let i = 0; i < 30; i++) { if (!await runtime.tick()) break; assert.ok(i < 29); }
   const configuredView = (await steps.findModuleRun({ actor, moduleRunId: configured.run.id }))!;
-  assert.ok(modelCalls > 0);
+  assert.ok(modelCalls > 0, JSON.stringify({ steps: configuredView.steps.map(s => ({kind:s.kind,status:s.status})), errors: configuredView.attempts.filter(a => a.error) }));
   assert.ok(configuredView.steps.every(s => s.status === 'succeeded'), JSON.stringify(configuredView.attempts.filter(a => a.error)));
   const configuredCurrent = inspectMarketKeywordContinuation(configuredView, new Date().toISOString()).currentStepKeys;
   assert.equal(configuredCurrent.length, configuredView.steps.length);

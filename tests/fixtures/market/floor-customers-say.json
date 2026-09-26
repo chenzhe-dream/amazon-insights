@@ -1,0 +1,161 @@
+{
+  "payload": {
+    "data": {
+      "customer_say": "Customers find the floor lamp easy to assemble and appreciate its amazing light quality, beautiful appearance, and good value for money. The foot pedal switch is a convenient feature, and customers like that it provides bright light. While some customers find it sturdy, others report that it can easily topple over.",
+      "details": [
+        {
+          "keyword": "quality",
+          "content": "Customers find the floor lamp to be a great light source.",
+          "mention": 25,
+          "positive": 18,
+          "negative": 7,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "size",
+          "content": "Customers have mixed opinions about the lamp’s size, with several noting that the shade is smaller than expected.",
+          "mention": 16,
+          "positive": 6,
+          "negative": 10,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "functionality",
+          "content": "Customers find that the floor lamp works well.",
+          "mention": 7,
+          "positive": 5,
+          "negative": 2,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "assembly",
+          "content": "Customers find the floor lamp easy to assemble.",
+          "mention": 15,
+          "positive": 15,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "appearance",
+          "content": "Customers find the lamp pretty and highly recommend it, with one customer noting that it makes the whole room look comforting.",
+          "mention": 17,
+          "positive": 17,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "value for money",
+          "content": "Customers find the floor lamp worth its price, noting that it offers good quality for the cost.",
+          "mention": 11,
+          "positive": 9,
+          "negative": 2,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "brightness",
+          "content": "Customers like the brightness of the floor lamp, with one mentioning that the shade provides the perfect level of opacity.",
+          "mention": 6,
+          "positive": 5,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "floor switch",
+          "content": "Customers appreciate the floor lamp’s on/off switch, which can be activated by stepping on it.",
+          "mention": 199,
+          "positive": 179,
+          "negative": 20,
+          "update_time": "2026-09-09"
+        },
+        {
+          "keyword": "switch",
+          "content": "Customers appreciate the floor lamp’s on/off switch, which is conveniently located on the floor and can be activated by stepping on it.",
+          "mention": 200,
+          "positive": 180,
+          "negative": 20,
+          "update_time": "2026-09-10"
+        },
+        {
+          "keyword": "ease of assembly",
+          "content": "Customers find the floor lamp easy to assemble and use.",
+          "mention": 10,
+          "positive": 10,
+          "negative": 0,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "durability",
+          "content": "Customers report that the lamp is flimsy and breaks after a few months of use.",
+          "mention": 10,
+          "positive": 2,
+          "negative": 8,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "ease of use",
+          "content": "Customers find the floor lamp easy to use and convenient, with one customer specifically mentioning the convenient step switch.",
+          "mention": 108,
+          "positive": 106,
+          "negative": 2,
+          "update_time": "2026-09-10"
+        },
+        {
+          "keyword": "stability",
+          "content": "Customers have mixed experiences with the floor lamp’s stability, with some finding it sturdy while others report it being wobbly and breaking within a month of use.",
+          "mention": 8,
+          "positive": 4,
+          "negative": 4,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "lighting performance",
+          "content": "Customers find that the lamp works well, with one mentioning it performs better in its designated space.",
+          "mention": 5,
+          "positive": 5,
+          "negative": 0,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "easy to set up",
+          "content": "Customers find the floor lamp easy to set up.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "brightness settings",
+          "content": "Customers like the brightness settings of the floor lamp.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "remote control",
+          "content": "Customers appreciate the remote control feature of the floor lamp, with one customer noting that it works well and can be used to control the lamps from a distance.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "lighting quantity",
+          "content": "Customers are satisfied with the lamp’s light output, with one mentioning that the shade provides good coverage.",
+          "mention": 5,
+          "positive": 4,
+          "negative": 1,
+          "update_time": "2026-09-03"
+        },
+        {
+          "keyword": "build quality",
+          "content": "Customers find the floor lamp to be of excellent quality, exceeding their expectations.",
+          "mention": 15,
+          "positive": 13,
+          "negative": 2,
+          "update_time": "2026-09-03"
+        }
+      ]
+    }
+  }
+}

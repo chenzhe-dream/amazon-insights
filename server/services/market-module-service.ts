@@ -175,8 +175,7 @@ export class MarketModuleService {
     // calculation uses that detached basis after releasing the database lock.
     const {facts,reconciliation}=result.run;
     const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:reconciliation?{kind:'global',report:reconciliation}:null}):null;
-    const rulesOnly=obj(result.run.params).flow===MARKET_KEYWORD_RULES_FLOW_VERSION;
-    return {...result,run:{...result.run,...(rulesOnly?{ruleStatus:facts?.ruleBaseline?.status??'unavailable',semanticStatus:'skipped' as const}:{}),...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
+    return {...result,run:{...result.run,...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
   }
   async saveKeywordRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);

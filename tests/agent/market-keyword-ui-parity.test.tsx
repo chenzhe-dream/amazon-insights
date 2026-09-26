@@ -22,6 +22,13 @@ test('keyword query preserves site chips and core-name entry with supported mark
  assert.doesNotMatch(html,/<button[^>]*disabled=""[^>]*>英国站<\/button>/);
 });
 
+test('independent keyword category is visible before optional collection settings', () => {
+ const html=renderToStaticMarkup(<MarketKeywordSection selection={{nodeIdPath:'',fromMonth:'2026-07',toMonth:'2026-08'}} onSelectionChange={()=>{}} maxMonth="2026-08"/>);
+ const query=html.slice(0,html.indexOf('market-insights-query-options'));
+ assert.match(query,/id="market-keyword-node"/);
+ assert.match(query,/类目节点或路径/);
+});
+
 test('keyword report restores five-dimension and demand synthesis areas even when evidence is unavailable',()=>{
  const html=renderToStaticMarkup(<MarketKeywordFactsReport facts={keywordPageRun().run.facts!}/>);
  for(const label of ['五维综合结论','W1 产品','W2 人群','W3 场景','W4 功能属性','W5 需求变化','需求簇合成'])assert.ok(html.includes(label),`missing demand area: ${label}`);

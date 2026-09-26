@@ -8,7 +8,7 @@ import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
 import { PostgresMarketAgentRunStore } from '../db/postgres/market-agent-run-store';
-import { isMarketKeywordFlow, inspectMarketKeywordContinuation, MarketKeywordFlowParamsSchema } from '../domain/market-research/keyword-flow';
+import { isMarketKeywordFlow, inspectMarketKeywordContinuation, MarketKeywordFlowParamsSchema, MARKET_KEYWORD_RULES_FLOW_VERSION } from '../domain/market-research/keyword-flow';
 import { assembleMarketKeywordPool } from '../domain/market-research/keyword-source-pool';
 import { keywordRuleBaselineFromPool } from '../domain/market-research/keyword-rule-baseline';
 import { readMarketKeywordTrendEvidence } from '../domain/market-research/keyword-trend-evidence';
@@ -34,7 +34,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
     const audits = new PostgresMarketAgentRunStore(context), view = await steps.findModuleRun({ actor, moduleRunId: id });
     if (!view || !isMarketKeywordFlow(view.run)) return null;
     const { flow: _flow, ...params } = MarketKeywordFlowParamsSchema.parse(view.run.params);
-    void _flow;
+    const rulesOnly = _flow === MARKET_KEYWORD_RULES_FLOW_VERSION;
     // Cancellation stops execution, not access to the last durable input/result.
     const current = new Set(inspectMarketKeywordContinuation(view, new Date().toISOString(), { readCancelled: true }).currentStepKeys);
     const readScope = { actor, studyId: view.run.scope.researchId, moduleRunId: id };
@@ -160,6 +160,7 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
       facts = MarketKeywordFactsSchema.parse({ ...value, factsId: `market-keyword-facts:${digest(value)}` });
     }
     return MarketKeywordRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, params, facts,
+      ...(rulesOnly ? { ruleStatus: facts?.ruleBaseline?.status ?? 'unavailable', semanticStatus: 'skipped' } : {}),
       steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status,
         latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled' && !(s.kind==='collect-keyword-aba'&&view.run.scope.marketplace!=='US'),
         asin: null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? s.kind==='collect-keyword-aba'&&view.run.scope.marketplace!=='US'?'unsupported-marketplace':obj(a?.error).code ?? 'internal' : null }; }) } });
