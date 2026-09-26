@@ -12,7 +12,7 @@ import {createMarketSourceProjectionStep} from '../../server/runtime/market-sour
 import {ConnectorError,type RemoteMcpConnector} from '../../server/connectors/connector-contract';
 import {marketShapeFlowInitialSteps} from '../../server/domain/market-research/shape-price-flow';
 
-test('new shape runs persist independent history, retry only failed ASINs and keep legacy reads/replays inert',{timeout:120000},async t=>{
+test('rules-v3 shape runs persist independent history, retry only failed ASINs and keep older reads inert',{timeout:120000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
  const f=await createMarketSemanticFixture(pg.pool);await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
  const calls:string[]=[];const categoryCalls:string[]=[];let fail=true;let categoryFail=true;
@@ -33,7 +33,8 @@ test('new shape runs persist independent history, retry only failed ASINs and ke
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
  const study=await service.createStudy(f.actor,{marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,fromMonth:'2026-08',toMonth:'2026-08'},randomUUID());
  const body={poolSize:2,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion:'history/v1',allowedLabels:[]}},key=randomUUID();
- const started=await service.startShapes(f.actor,study.study.id,body,key);await drain();
+ const historyRequest={actor:f.actor,scope:study.study.scope,moduleKind:'shape-price' as const,params:{...body,flow:'market-shape-price-flow/rules-v3'},versions:{source:'market-source-handlers/v1',rule:'market-shape-price-catalog/v3',mapping:'history/v1',planner:'market-shape-price-flow/rules-v3',model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey:key};
+ const started=await f.stores.steps.createModuleRun({...historyRequest,initialSteps:marketShapeFlowInitialSteps(historyRequest)});await drain();
  let current=(await service.findShapes(f.actor,started.run.id)).run;
  assert.equal(current.semanticStatus,'skipped');assert.equal(current.latestRevision,null);assert.equal(current.source!.summary!.totalUnits,201);
  assert.equal(current.source!.productHistory!.products[0].periods[0].units,30,'must not use SellerSprite reference 100');
@@ -53,7 +54,7 @@ test('new shape runs persist independent history, retry only failed ASINs and ke
  assert.equal(current.categoryDashboard!.estimatedAmount.at(-1)!.value,400);
  assert.equal(current.status,'succeeded');assert.equal(current.source!.productHistory!.products[1].periods[0].units,30);
  assert.equal(calls.filter(c=>c==='pool').length,1);assert.equal(calls.filter(c=>c==='B000000001').length,1);assert.equal(calls.filter(c=>c==='B000000002').length,2);
- const before=[...calls];await service.findShapes(f.actor,current.id);const replay=await service.startShapes(f.actor,study.study.id,body,key);assert.equal(replay.created,false);await drain();assert.deepEqual(calls,before);assert.equal(categoryCalls.length,7);
+ const before=[...calls];await service.findShapes(f.actor,current.id);const replay=await f.stores.steps.createModuleRun({...historyRequest,initialSteps:marketShapeFlowInitialSteps(historyRequest)});assert.equal(replay.created,false);await drain();assert.deepEqual(calls,before);assert.equal(categoryCalls.length,7);
  await assert.rejects(service.findShapes({...f.actor,organizationId:randomUUID()},current.id));
  assert.equal((await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:current.id}))!.steps.some(s=>s.kind==='model-batch'),false);
  // New software must preserve old planner definitions and avoid new requests on legacy reads/resumption.

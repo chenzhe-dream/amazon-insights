@@ -1,3 +1,4 @@
+import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
 import {MarketShapeExplanationRunResponseSchema} from '../../shared/market-shape-explanation-public-contracts';
 import {isMarketShapeExplanationFlow} from '../domain/market-research/shape-explanation-flow';
 import {PostgresMarketShapeExplanationRunStore} from '../db/postgres/market-shape-explanation-run-store';
@@ -22,13 +23,14 @@ import {MarketOverviewReportService} from './market-overview-report-service';
 import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../domain/market-research/module-flow';
-import {MarketShapeStartRequestSchema,MARKET_SHAPE_CATEGORY_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
-import {MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,assertMarketProductQueryWindow} from '../../shared/market-product-source-policy';
+import {MarketShapeStartRequestSchema,MARKET_SHAPE_REFERENCE_RULE_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
+import {assertMarketProductQueryWindow} from '../../shared/market-product-source-policy';
 import {PostgresMarketShapePriceRevisionStore} from '../db/postgres/market-shape-price-revision-store';
 import {readMarketShapeRun,marketShapePublicRevision} from './market-shape-read-service';
 import {isMarketKeywordFlow,MarketKeywordStartRequestSchema,MARKET_KEYWORD_RULES_FLOW_VERSION,marketKeywordFlowInitialSteps} from '../domain/market-research/keyword-flow';
 import {MARKET_KEYWORD_POOL_VERSION} from '../domain/market-research/keyword-source-pool';
 import {readMarketKeywordRun} from './market-keyword-read-service';
+import {MarketThemeSourceIssueSchema} from '../../shared/market-theme-source-issue';
 import {readMarketKeywordReconciliationReport} from './market-keyword-reconciliation-read';
 import {buildMarketKeywordRuleReport} from '../domain/market-research/keyword-rule-report';
 import {buildMarketKeywordScoreInputAudit} from '../domain/market-research/keyword-score-input-audit';
@@ -144,8 +146,8 @@ export class MarketModuleService {
     const previous=await replay();if(previous)return previous;
     const {study}=await this.findStudy(actor,studyId);
     assertMarketProductQueryWindow(study.scope,new Date(this.now()));
-    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_CATEGORY_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_CATEGORY_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
+    const request={actor,scope:study.scope,moduleKind:'shape-price' as const,params:{...params,flow:MARKET_SHAPE_SORFTIME_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REFERENCE_RULE_VERSION,mapping:params.catalog.taxonomyVersion,planner:MARKET_SHAPE_SORFTIME_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketShapeFlowInitialSteps(request)});}
     catch(error){if(!(error instanceof MarketExecutionConflictError))throw error;const winner=await replay();if(winner)return winner;throw error;}
@@ -174,8 +176,7 @@ export class MarketModuleService {
     // calculation uses that detached basis after releasing the database lock.
     const {facts,reconciliation}=result.run;
     const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:reconciliation?{kind:'global',report:reconciliation}:null}):null;
-    const rulesOnly=obj(result.run.params).flow===MARKET_KEYWORD_RULES_FLOW_VERSION;
-    return {...result,run:{...result.run,...(rulesOnly?{ruleStatus:facts?.ruleBaseline?.status??'unavailable',semanticStatus:'skipped' as const}:{}),...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
+    return {...result,run:{...result.run,...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
   }
   async saveKeywordRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);
@@ -196,6 +197,7 @@ export class MarketModuleService {
   }
   async saveShapeRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();
+    if(obj(view.run.params).flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION)return new PostgresMarketShapeReferenceRevisionStore(this.deps.context).save({actor,moduleRunId:id,request:body,idempotencyKey:MarketModuleIdSchema.parse(key)});
     const rulesOnly=isMarketShapeRulesFlow(obj(view.run.params).flow);
     const identity=rulesOnly?null:this.deps.shapeModelIdentity?.();
     if(identity){
@@ -207,6 +209,7 @@ export class MarketModuleService {
   }
   async shapeRevision(actor:MarketExecutionActor,id:string,revisionId:string){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();
+    if(obj(view.run.params).flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION){const result=await new PostgresMarketShapeReferenceRevisionStore(this.deps.context).find({actor,moduleRunId:id,revisionId});if(!result)throw unavailable();return result;}
     const result=await new PostgresMarketShapePriceRevisionStore(this.deps.context).find({actor,moduleRunId:id,revisionId});if(!result)throw unavailable();
     const explanations=await new PostgresMarketShapeExplanationRunStore(this.deps.context).listForRevision({actor,parentRunId:id,revisionId});
     return {revision:marketShapePublicRevision(result),explanations};
@@ -248,11 +251,16 @@ export class MarketModuleService {
       const view = await this.steps.findModuleRun({ actor, moduleRunId: id }); if (!view || !isMarketThemeFlow(view.run)) throw unavailable();
       const reports = await new MarketThemeReportService(this.deps.context).read({ actor, moduleRunId: id }); if (!reports) throw unavailable();
       const currentKeys = new Set(inspectMarketThemeContinuation(view, this.now()).currentStepKeys), p = obj(view.run.params);
+      const failedThemeAttempts=view.steps.filter(s=>s.kind==='collect-customer-themes'&&s.status==='failed'&&s.latestAttemptId).map(s=>s.latestAttemptId!);
+      const issues=failedThemeAttempts.length?new Map((await this.deps.context.query<{id:string;issue:unknown}>(
+        "SELECT id,diagnostic_json->'themeIssue' AS issue FROM market_analysis_step_attempts WHERE organization_id=$1 AND run_id=$2 AND id=ANY($3::uuid[]) AND status='failed'",
+        [actor.organizationId,id,failedThemeAttempts])).rows.map(row=>[row.id,MarketThemeSourceIssueSchema.safeParse(row.issue)])):new Map();
       return MarketThemeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, planRevision: view.run.planRevision,
         params: { memberCount: p.memberCount, poolSize: p.poolSize, newProductMonths: p.newProductMonths, ...(p.topN !== undefined ? { topN: p.topN } : {}) },
-        steps: view.steps.map(step => { const attempt = view.attempts.find(a => a.id === step.latestAttemptId), current = currentKeys.has(step.stepKey);
+        steps: view.steps.map(step => { const attempt = view.attempts.find(a => a.id === step.latestAttemptId), current = currentKeys.has(step.stepKey), issue=issues.get(step.latestAttemptId);
           return { id: step.id, kind: step.kind, status: step.status, latestAttemptId: step.latestAttemptId, attemptCount: step.attemptCount,nextAttemptAt:step.nextAttemptAt??null, current,
             canRetry: current && step.status === 'failed' && view.run.status !== 'cancelled', asin: obj(step.input).asin ?? null,
+            ...(issue?.success?{sourceIssue:issue.data}:{}),
             errorCode: ['failed', 'interrupted'].includes(attempt?.status ?? '') ? obj(attempt?.error).code ?? 'internal' : null }; }),
         currentReport: reports.currentReport, latestSavedReport: reports.latestSavedReport, history: reports.history } });
     });

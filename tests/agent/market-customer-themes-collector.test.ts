@@ -18,7 +18,7 @@ const row = (patch: Record<string, unknown> = {}) => ({
   update_time: "2026-09-03", ...patch,
 });
 const payload = (details: unknown[] = [row()]) => ({ data: { customer_say: "A source summary", details } });
-const saved = JSON.parse(readFileSync(new URL("../../test-results/market-research-goal/real-source-samples/floor-theme-first.json", import.meta.url), "utf8")) as {
+const saved = JSON.parse(readFileSync(new URL("../fixtures/market/floor-customers-say.json", import.meta.url), "utf8")) as {
   payload: { data: { customer_say: string; details: Record<string, unknown>[] } };
 };
 function connector(handler: (request: ConnectorRequest) => ConnectorResult["data"] | Promise<ConnectorResult["data"]>, sourcePatch: Partial<ConnectorResult["source"]> = {}): RemoteMcpConnector {

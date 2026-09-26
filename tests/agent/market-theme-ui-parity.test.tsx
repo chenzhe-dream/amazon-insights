@@ -2,13 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MarketThemeSection } from '../../app/market-theme-section';
+import { MarketThemeSection, MarketThemeStepStatus } from '../../app/market-theme-section';
+import {MarketThemeSourceIssueSchema} from '../../shared/market-theme-source-issue';
 import { themeRunLabel } from '../../app/market-theme-section';
 import { MarketThemeReport } from '../../app/market-theme-report';
 import { ThemeEvidenceContent } from '../../app/market-theme-evidence';
 import { themePresentationStatus } from '../../app/market-theme-insight-panel';
 import { MarketThemeTopicTable, MarketThemeSampleTable, selectThemeSentiment } from '../../app/market-theme-insight-panel';
 import { themeDetails, themeEntry, themeEvidence, themeRuleEntry, themeRuleRun } from './helpers/market-theme-page-fixture';
+
+test('source count failure names the affected row and preserves the saved report semantics',()=>{
+ const sourceIssue=MarketThemeSourceIssueSchema.parse({code:'count-exceeds-mention',themeIndex:1,field:'negative'});
+ const step={...themeRuleRun().run.steps[0],status:'failed' as const,errorCode:'invalid-data' as const,sourceIssue};
+ const html=renderToStaticMarkup(<MarketThemeStepStatus step={step}/>);
+ assert.match(html,/第 2 条主题的负面提及数超过总提及数/);assert.match(html,/该商品未纳入本次统计/);
+ const repaired=renderToStaticMarkup(<MarketThemeStepStatus step={{...step,status:'succeeded',errorCode:null}}/>);
+ assert.doesNotMatch(repaired,/超过|未纳入/);
+ const old=renderToStaticMarkup(<MarketThemeStepStatus step={{...step,sourceIssue:undefined}}/>);
+ assert.match(old,/返回数据未通过校验/);assert.doesNotMatch(old,/第 2 条/);
+ assert.equal(MarketThemeSourceIssueSchema.safeParse({...sourceIssue,raw:'private upstream content'}).success,false);
+ assert.equal(MarketThemeSourceIssueSchema.safeParse({...sourceIssue,field:'authorization'}).success,false);
+});
 
 const details=(section:string)=>themeDetails(new URL(`https://test.invalid/reports/${themeEntry().attemptId}/details?section=${section}`));
 test('theme query keeps reference site chips and category search composition without enabling unsupported sites',()=>{

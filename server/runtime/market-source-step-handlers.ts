@@ -1,3 +1,5 @@
+import {collectMarketShapeProductImage} from '../services/market-shape-product-image';
+import {collectSorftimeShapePoolPage} from '../services/market-shape-sorftime-pool';
 import {collectShapeCategory} from '../services/market-shape-category-collector';
 import {ShapeCategoryMetricSchema} from '../../shared/market-shape-category-contracts';
 import {collectMarketProductHistory} from '../services/market-product-history-collector';
@@ -15,6 +17,7 @@ import { collectMarketKeywordPage, collectMarketKeywordTrend } from '../services
 import {collectMarketKeywordAba} from '../services/market-keyword-aba-collector';
 import {inspectMarketKeywordContinuation} from '../domain/market-research/keyword-flow';
 import { collectMarketCustomerThemes } from '../services/market-customer-themes-collector';
+import {MarketThemeSourceIssueSchema,type MarketThemeSourceIssue} from '../../shared/market-theme-source-issue';
 import { collectMarketOverviewSource, MarketOverviewSourceStepInputSchema } from '../services/market-overview-source-collector';
 import {collectMarketOverviewDistribution,MarketOverviewDistributionStepInputSchema} from '../services/market-overview-distribution-collector';
 import { createMarketInputSnapshot } from '../domain/market-research/snapshot';
@@ -48,14 +51,14 @@ function evidenceProposal(evidence: MarketSourceEvidence) {
   if (digest(createMarketSourceEvidence(proposal)) !== digest(evidence)) invalid('Source evidence could not be preserved');
   return proposal;
 }
-function failure(sourceCode: string, retryable: boolean): MarketStepWork {
+function failure(sourceCode: string, retryable: boolean, themeIssue?:MarketThemeSourceIssue): MarketStepWork {
   const code: MarketStepError['code'] = ['scope-mismatch', 'identity-conflict', 'identity-mismatch', 'source-mismatch'].includes(sourceCode) ? 'scope-mismatch'
     : sourceCode === 'authentication' ? 'authentication'
     : ['configuration', 'local-admission', 'governor-rejected'].includes(sourceCode) ? 'governance'
     : sourceCode === 'timeout' ? 'timeout' : ['interrupted', 'cancelled'].includes(sourceCode) ? 'interrupted'
     : ['rate-limit', 'upstream-temporary'].includes(sourceCode) ? 'upstream-temporary' : 'invalid-data';
   return { kind: 'settlement', value: { outcome: { status: 'failed', error: { code, retryable },
-    diagnostic: { handlerVersion: MARKET_SOURCE_HANDLER_VERSION, sourceCode } } } };
+    diagnostic: { handlerVersion: MARKET_SOURCE_HANDLER_VERSION, sourceCode, ...(themeIssue?{themeIssue}:{}) } } } };
 }
 function collected(scope: MarketAnalysisScope, kind: 'products' | 'keywords' | 'customer-themes' | 'overview', expectedRecordIds: string[],
   records: { id: string; data: unknown }[], status: string, evidence: MarketSourceEvidence, metadata: Record<string, unknown>): MarketStepWork {
@@ -100,15 +103,29 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
       result.products.map(product => ({ id: product.asin, data: { collection: 'product-month', month: result.month, product } })), result.status, result.evidence,
       { month: result.month, sampling: result.sampling, boundaries: result.boundaries, issues: result.issues });
   };
+  const sorftimePool:MarketStepHandler=async({claim,signal})=>{
+    const input=z.object({poolSize:z.number().int().min(1).max(300),page:z.number().int().min(1).max(20).optional(),categoryName:z.string().max(500).optional(),referenceAttemptId:z.string().uuid().optional()}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
+    const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+    if(!view||view.run.moduleKind!=='shape-price'||object(view.run.params).flow!=='market-shape-price-flow/rules-v4'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('Pool outside Sorftime frontier');
+    const result=await collectSorftimeShapePoolPage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+    if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+    return collected(scope,'products',result.products.map(p=>p.asin),result.products.map(product=>({id:product.asin,data:{collection:'sorftime-shape-pool',product}})),result.status,result.evidence,{productCount:result.products.length,productAsins:result.products.map(p=>p.asin),receivedCount:result.receivedCount,categoryName:result.categoryName});
+  };
   const productHistory: MarketStepHandler = async ({claim,signal}) => {
     const input=themesInput.parse(claim.step.input),scope=await scopeFor(claim,signal);
     const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
     if(!view||view.run.moduleKind!=='shape-price'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('History is outside the current shape frontier');
     const pool=await selected(claim,input.selectionInputSnapshotId,scope);
-    if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&object(r.data).collection==='product-month'&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
-    const result=await collectMarketProductHistory({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+    if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection))&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
+    if(claim.step.kind==='collect-product-image'){
+      const result=await collectMarketShapeProductImage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
+      if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
+      return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-image',asin:input.asin,imageUrl:result.imageUrl}}],result.status,result.evidence,{asin:input.asin,selectionInputSnapshotId:input.selectionInputSnapshotId});
+    }
+    const metric=claim.step.kind==='collect-product-amount-history'?'SalesAmount':'SalesVolume';
+    const result=await collectMarketProductHistory({...input,metric,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
-    return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-history',asin:input.asin,metric:'SalesVolume',points:result.points}}],result.status,result.evidence,{asin:input.asin,metric:'SalesVolume',selectionInputSnapshotId:input.selectionInputSnapshotId});
+    return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:metric==='SalesAmount'?'product-amount-history':'product-history',asin:input.asin,metric,points:result.points}}],result.status,result.evidence,{asin:input.asin,metric,selectionInputSnapshotId:input.selectionInputSnapshotId});
   };
   const category:MarketStepHandler=async({claim,signal})=>{
     const input=z.object({metric:ShapeCategoryMetricSchema,selectionInputSnapshotId:snapshotId}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
@@ -161,7 +178,12 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if (selection.kind !== 'products' || !selection.records.some(r => r.id === input.asin && object(r.data).collection === 'product-month' && object(object(r.data).product).asin === input.asin)) invalid('ASIN is outside the saved source pool');
     signal.throwIfAborted();
     const result = await collectMarketCustomerThemes({ asin: input.asin, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
-    if (result.result.status === 'failed' || !result.evidence) return failure(result.issues[0]?.code ?? 'invalid-source', result.issues[0]?.retryable ?? false);
+    if (result.result.status === 'failed' || !result.evidence) {
+      const first=result.issues[0],path=first?.path;
+      const detail=first?.code==='invalid-theme'&&path?.length===4&&path[0]==='data'&&path[1]==='details'
+        ?MarketThemeSourceIssueSchema.safeParse({code:first.reason??'invalid-theme',themeIndex:path[2],field:path[3]}):null;
+      return failure(first?.code??'invalid-source',first?.retryable??false,detail?.success?detail.data:undefined);
+    }
     return collected(scope, 'customer-themes', [input.asin], [{ id: input.asin, data: { collection: 'customer-themes', result: result.result } }],
       result.result.status === 'empty' ? 'empty' : 'ready', result.evidence, { asin: input.asin, selectionInputSnapshotId: input.selectionInputSnapshotId, issues: result.issues });
   };
@@ -174,7 +196,7 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope,'overview',[id],[{id,data:{collection:'overview-month',month:input.month,operation:input.operation,parameters:result.parameters}}],result.status,result.evidence,
       {month:input.month,operation:input.operation,parameters:result.parameters,issues:result.issues});
   };
-  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-shape-category':category, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
+  return Object.freeze({ 'collect-product-month': products, 'collect-product-history':productHistory, 'collect-product-amount-history':productHistory,'collect-product-image':productHistory, 'collect-shape-pool':sorftimePool, 'collect-shape-category':category, 'collect-overview-month':overview, 'collect-keyword-page': pages, 'collect-keyword-trend': trends, 'collect-keyword-aba':aba, 'collect-customer-themes': themes });
 }
 
 /** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */

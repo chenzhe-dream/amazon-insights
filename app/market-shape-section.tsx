@@ -1,4 +1,5 @@
 'use client';
+import {MarketShapeReferencePanel} from './market-shape-reference-panel';
 import {MarketShapeCategoryDashboard} from './market-shape-category-dashboard';
 
 import { browserRequestId } from "./lib/browser-request-id";
@@ -94,16 +95,16 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         setHistoric(r); }, e => { if (!abort.signal.aborted)
         setHistoryError(e instanceof Error ? e.message : '读取报告失败'); }); return () => abort.abort(); }, [runId, choice]);
     const remember = (id: string) => { const url = new URL(window.location.href); url.searchParams.set('shapeRun', id); url.searchParams.set('themeView', 'shapes'); window.history.replaceState(window.history.state, '', url); setRestoreId(id); };
-    async function start(e: FormEvent) {
-        e.preventDefault();
+    async function start(e?: FormEvent, requestedPoolSize = poolSize, requestedSelection = selection) {
+        e?.preventDefault();
         const signal = owner.current?.signal;
         if (!signal || busy)
             return;
         setBusy(true);
         setError(null);
         try {
-            assertMarketProductQueryWindow(selection,new Date());
-            const scope = { ...selection, marketplace: selection.marketplace??'US', currency: marketSiteCurrency(selection.marketplace??'US') }, params = { poolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-after-collection/v1', allowedLabels: [] } }, hash = JSON.stringify({ scope, params });
+            assertMarketProductQueryWindow(requestedSelection,new Date());
+            const scope = { nodeIdPath:requestedSelection.nodeIdPath,fromMonth:requestedSelection.fromMonth,toMonth:requestedSelection.toMonth,marketplace: requestedSelection.marketplace??'US', currency: marketSiteCurrency(requestedSelection.marketplace??'US') }, params = { poolSize: requestedPoolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-after-collection/v1', allowedLabels: [] } }, hash = JSON.stringify({ scope, params });
             const command = pendingStart.current?.hash === hash ? pendingStart.current : { hash, studyKey: browserRequestId(), runKey: browserRequestId() };
             pendingStart.current = command;
             const study = await createShapeStudy(scope, command.studyKey, signal), next = await startShapeRun(study.id, params, command.runKey, signal);
@@ -183,15 +184,15 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
    <div className="ss-market-query-row"><span className="ss-market-query-label">选择站点</span><MarketSiteSelector value={selection.marketplace??'US'} onChange={marketplace=>onSelectionChange({marketplace,nodeIdPath:''})} disabled={busy}/></div>
    <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={busy}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!selection.nodeIdPath} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID，例如 13280971" required disabled={busy}/></div></div>
     <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><label>起始月 <input type="month" value={selection.fromMonth} max={selection.toMonth} onChange={e=>onSelectionChange({fromMonth:e.target.value})} required disabled={busy}/></label><label>结束月 <input type="month" value={selection.toMonth} max={maxMonth} onChange={e=>onSelectionChange({toMonth:e.target.value})} required disabled={busy}/></label></div>
-    <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={100} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={busy}/></label></details>
+    <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={300} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={busy}/></label></details>
     <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={busy}>{busy?'提交中…':'筛选市场'}</button><button className="ss-market-reset-btn" type="button" disabled={busy} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);}}>重置条件</button></div>
    </div></form>
   <div className="market-shape-query-footer"><details><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p></details>
   {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</div>
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，变更操作暂停。</p>}
  </section>
- {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>先采集商品，再在 TOP 销售表标注形态并保存价格带报告；缺失字段保持未知。</span></div></LaunchSection>}
- {run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
+ {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>采集完成后直接查看看板，在 TOP 销售表修改形态即可更新统计；保存可保留当前版本。</span></div></LaunchSection>}
+ {run && run.referenceHistory!==undefined?<MarketShapeReferencePanel key={run.id} run={run} readError={readError} starting={busy} onRefresh={()=>setReload(n=>n+1)} onPoolSizeChange={size=>{setPoolSize(size);const nextSelection={marketplace:run.scope.marketplace,nodeIdPath:run.scope.nodeIdPath,fromMonth:run.scope.fromMonth,toMonth:run.scope.toMonth};onSelectionChange(nextSelection);void start(undefined,size,nextSelection);}}/>:run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
    {!report && !run.source?.summary && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>

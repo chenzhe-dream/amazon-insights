@@ -1,3 +1,4 @@
+import {inspectSorftimeShapeContinuation} from './shape-sorftime-flow';
 import { z } from 'zod';
 import {SHAPE_CATEGORY_METRICS} from '../../../shared/market-shape-category-contracts';
 import { MarketShapeStartRequestSchema } from '../../../shared/market-shape-price-contracts';
@@ -9,9 +10,11 @@ import {MarketShapeCatalogVersionSchema} from '../../../shared/market-shape-stru
 export const MARKET_SHAPE_FLOW_VERSION = 'market-shape-price-flow/v1';
 export const MARKET_SHAPE_RULES_FLOW_VERSION = 'market-shape-price-flow/rules-v1';
 export const MARKET_SHAPE_HISTORY_FLOW_VERSION = 'market-shape-price-flow/rules-v2';
+export const MARKET_SHAPE_REFERENCE_RULE_VERSION='market-shape-reference-rules/v1';
+export const MARKET_SHAPE_SORFTIME_FLOW_VERSION = 'market-shape-price-flow/rules-v4';
 export const MARKET_SHAPE_CATEGORY_FLOW_VERSION = 'market-shape-price-flow/rules-v3';
-export const isMarketShapeRulesFlow = (flow:unknown) => [MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(String(flow));
-export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION]) });
+export const isMarketShapeRulesFlow = (flow:unknown) => [MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION, MARKET_SHAPE_SORFTIME_FLOW_VERSION].includes(String(flow));
+export const MarketShapeFlowParamsSchema = MarketShapeStartRequestSchema.extend({ flow: z.enum([MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION, MARKET_SHAPE_SORFTIME_FLOW_VERSION]) });
 export const MarketShapeSelectionSchema = z.object({ referenceAttemptId: z.string().uuid(), selectionInputSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/),
     sourceRef: z.string().regex(/^market-source:[a-f0-9]{64}$/), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(100), dataCutoffAt: z.string().datetime(),
     selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false) }).strict();
@@ -21,19 +24,21 @@ const success = (s: MarketExecutionStep) => s.status === 'succeeded' || s.status
 const key = (phase: string, basis: unknown) => `shape-flow/${phase}:${digest(basis)}`;
 export const isMarketShapeFlow = (run: {
     params: unknown;
-}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(String(obj(run.params).flow));
+}) => [MARKET_SHAPE_FLOW_VERSION, MARKET_SHAPE_RULES_FLOW_VERSION, MARKET_SHAPE_HISTORY_FLOW_VERSION, MARKET_SHAPE_CATEGORY_FLOW_VERSION, MARKET_SHAPE_SORFTIME_FLOW_VERSION].includes(String(obj(run.params).flow));
 function params(r: Request) {
     const p = MarketShapeFlowParamsSchema.parse(r.params);
     MarketAnalysisScopeSchema.parse(r.scope);
-    if (r.moduleKind !== 'shape-price' || r.versions.source !== 'market-source-handlers/v1' || !MarketShapeCatalogVersionSchema.safeParse(r.versions.rule).success || r.versions.mapping !== p.catalog.taxonomyVersion || r.versions.planner !== p.flow ||
+    if (r.moduleKind !== 'shape-price' || r.versions.source !== 'market-source-handlers/v1' || !(p.flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION?r.versions.rule===MARKET_SHAPE_REFERENCE_RULE_VERSION:MarketShapeCatalogVersionSchema.safeParse(r.versions.rule).success) || r.versions.mapping !== p.catalog.taxonomyVersion || r.versions.planner !== p.flow ||
         !(r.versions.model === null && r.versions.configuration === null && r.versions.prompt === null || r.versions.model === 'market.semantic.text.v1' && r.versions.configuration && r.versions.prompt))
         throw new TypeError('Shape flow versions differ');
+    if(p.flow!==MARKET_SHAPE_SORFTIME_FLOW_VERSION&&p.poolSize>100)throw new TypeError('Legacy shape pool limit exceeded');
     if (new Set(p.catalog.allowedLabels.map(l => l.labelId)).size !== p.catalog.allowedLabels.length)
         throw new TypeError('Duplicate shape labels');
     return p;
 }
 export function marketShapeFlowInitialSteps(r: Request): MarketStepDefinition[] {
     const p = params(r);
+    if(p.flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION)return [{stepKey:'shape-flow/anchor',kind:'collect-shape-pool',subject:{flow:p.flow},input:{poolSize:p.poolSize},inputRefs:[]}];
     return [{ stepKey: 'shape-flow/anchor', kind: 'collect-product-month', subject: { flow: p.flow }, input: { month: r.scope.toMonth, poolSize: p.poolSize, newProductMonths: p.newProductMonths }, inputRefs: [] }];
 }
 /** A source/model frontier only. Human revisions are separate explicit commands;
@@ -46,6 +51,7 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
     if (!isMarketShapeFlow(view.run) || view.run.status === 'cancelled')
         return result();
     const p = params(view.run);
+    if(p.flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION)return inspectSorftimeShapeContinuation(view);
     z.string().datetime().parse(now);
     function find(d: MarketStepDefinition) {
         currentStepKeys.push(d.stepKey);
@@ -89,7 +95,7 @@ export function inspectMarketShapeContinuation(view: MarketModuleRunView, now: s
         const [y, m] = month.split('-').map(Number);
         month = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}`;
     }
-    if ([MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(p.flow)) for (const asin of selection.selectedAsins) {
+    if ([MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION, MARKET_SHAPE_SORFTIME_FLOW_VERSION].includes(p.flow)) for (const asin of selection.selectedAsins) {
         const d: MarketStepDefinition = { stepKey: key('product-history', { reference: a.id, asin }), kind: 'collect-product-history', subject: { flow: p.flow, asin }, input: { asin, selectionInputSnapshotId: selection.selectionInputSnapshotId }, inputRefs: [{ kind: 'input', id: selection.selectionInputSnapshotId }] };
         if (!find(d)) children.push(d);
     }

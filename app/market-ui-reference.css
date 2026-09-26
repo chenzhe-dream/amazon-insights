@@ -3257,3 +3257,50 @@
 .market-ui-reference .demo-welcome-tabs a b{font-size:11px}
 .market-ui-reference .demo-welcome-tabs a small{font-size:10px;color:#8b96a4}
 @media(max-width:760px){.market-ui-reference .demo-welcome-card{margin-left:16px;margin-right:16px}}
+
+/* Brand/price conclusions: labels and evidence stay scoped to this report area. */
+.market-ui-reference .brand-price-opportunity-grid{grid-template-columns:minmax(0,1fr);align-items:start}
+.market-ui-reference .brand-price-opportunity-card{min-width:0;padding:16px;overflow-wrap:anywhere}
+.market-ui-reference .brand-price-opportunity .listing-age-conclusion-summary{margin-top:10px;font-size:12px}
+
+/* Saved shape-report summaries: presentation only, scoped away from other reports. */
+.market-ui-reference .shape-summary-panel{font-size:13px;line-height:1.7;min-width:0;overflow-wrap:anywhere}
+.market-ui-reference .shape-summary-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.market-ui-reference .shape-summary-lead{margin:10px 0 14px;font-size:14px;font-weight:600;color:#34465d}
+.market-ui-reference .shape-summary-note{margin:10px 0;font-size:12px;color:#607086;line-height:1.7}
+.market-ui-reference .shape-summary-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}
+.market-ui-reference .shape-summary-metrics>div{min-width:0;padding:12px 14px;border:1px solid #e3eaf1;border-radius:8px;background:#f8fafc}
+.market-ui-reference .shape-summary-metrics dt{font-size:12px;color:#607086}
+.market-ui-reference .shape-summary-metrics dd{margin:6px 0 0;font-size:20px;font-weight:650;color:#24354a;font-variant-numeric:tabular-nums}
+.market-ui-reference .shape-summary-tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.market-ui-reference .shape-summary-tier{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;border:1px solid #e3eaf1;border-left:3px solid #98a6b8;border-radius:6px;background:#fff}
+.market-ui-reference .shape-summary-tier strong{margin-left:auto;font-variant-numeric:tabular-nums}
+.market-ui-reference .shape-summary-tier-green{border-left-color:#48b18b}
+.market-ui-reference .shape-summary-tier-yellow{border-left-color:#d5a43b}
+.market-ui-reference .shape-summary-tier-red{border-left-color:#d87976}
+.market-ui-reference .shape-summary-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.market-ui-reference .shape-summary-evidence{min-width:0;padding:14px 16px;border:1px solid #e3eaf1;border-radius:8px;background:#fbfcfd}
+.market-ui-reference .shape-summary-evidence h5{margin:0 0 8px;font-size:13px;color:#34465d}
+.market-ui-reference .shape-summary-evidence ul{display:grid;gap:7px;margin:0;padding-left:18px;list-style:disc}
+.market-ui-reference .shape-summary-evidence li,.market-ui-reference .shape-summary-evidence p{font-size:13px;line-height:1.75;color:#53657a}
+.market-ui-reference .shape-summary-selection{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+.market-ui-reference .shape-summary-selection>span{padding:4px 10px;background:#f5f7fb;border:1px solid #e3eaf1;border-radius:6px;font-size:12px}
+.market-ui-reference .shape-summary-gap{padding:14px 16px;margin:16px 0;border:1px solid #edcf99;border-radius:8px;background:#fff9ef;color:#725221}
+.market-ui-reference .shape-summary-gap p{margin:6px 0 0}
+.market-ui-reference .shape-summary-source{margin-top:16px;padding-top:12px;border-top:1px solid #e3eaf1}
+.market-ui-reference .shape-summary-source summary{font-size:12px;color:#607086;cursor:pointer}
+@media(max-width:760px){.market-ui-reference .shape-summary-metrics,.market-ui-reference .shape-summary-columns{grid-template-columns:1fr}.market-ui-reference .shape-summary-tiers{grid-template-columns:1fr}.market-ui-reference .shape-summary-panel .market-structure-synthesis-extra-split{grid-template-columns:1fr}}
+.market-ui-reference .brand-price-scope-note{margin:0 0 16px;font-size:12px;line-height:1.65;color:#607086}
+.market-ui-reference .brand-price-opportunity-card .market-structure-dimension-head{align-items:center}
+.market-ui-reference .brand-price-opportunity-card h5{font-size:14px}
+.market-ui-reference .brand-price-grade{flex:none;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:650;line-height:1.5;background:#edf1f5;color:#475569}
+.market-ui-reference .brand-price-grade-green{background:#e7f5ed;color:#17653b}
+.market-ui-reference .brand-price-grade-yellow{background:#fff3d6;color:#805500}
+.market-ui-reference .brand-price-grade-red{background:#fff0ee;color:#a43125}
+.market-ui-reference .brand-price-sample{margin:0 0 10px;font-size:12px;color:#607086;line-height:1.5}
+.market-ui-reference .brand-price-finding{margin:0 0 4px;font-size:13px;font-weight:600;line-height:1.6;color:#24354a}
+.market-ui-reference .brand-price-trend{margin:0 0 12px;font-size:12px;line-height:1.6;color:#53657a}
+.market-ui-reference .brand-price-limitations{margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#f4f6f9;font-size:12px;line-height:1.6;color:#475569}
+.market-ui-reference .brand-price-limitations ul{margin:4px 0 0;padding-left:16px}
+.market-ui-reference .brand-price-opportunity-card .market-structure-dimension-list li{font-size:12px;line-height:1.65}
+@media(min-width:1100px){.market-ui-reference .brand-price-opportunity-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

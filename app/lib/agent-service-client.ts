@@ -132,13 +132,22 @@ type AdminProxyTiming={event:'admin-proxy-timing';requestId:string;route:string;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 export function agentRequestTimeoutMs(contractPath: string, override?: number) {
-  return override ?? (ADMIN_READ_WRITE_ROUTES.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
+  return override ?? (ADMIN_READ_WRITE_ROUTES.has(contractPath) || SHAPE_REPORT_PATHS.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
 }
 const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 // Overview responses include evidence-backed rule baselines and saved versions.
 // A real single-month run exceeds 1 MiB; give only these contracts a bounded
 // report budget, keeping the default and explicit caller limits unchanged.
 const OVERVIEW_MAX_RESPONSE_BYTES = 8 * DEFAULT_MAX_RESPONSE_BYTES;
+const SHAPE_REPORT_ROUTES = new Set([
+ 'POST /v1/market-analysis/studies/:id/shape-price',
+ 'GET /v1/market-analysis/runs/:id/shape-price',
+ 'POST /v1/market-analysis/runs/:id/shape-price/revisions',
+ 'GET /v1/market-analysis/runs/:id/shape-price/revisions/:revisionId',
+]);
+// Restoring a 300-product report verifies persisted history/image snapshots.
+// Bound these database-only reads and revision captures separately from small APIs.
+const SHAPE_REPORT_PATHS = new Set([...SHAPE_REPORT_ROUTES].map(route => route.slice(route.indexOf(' ') + 1)));
 const OVERVIEW_REPORT_ROUTES = new Set([
   'POST /v1/market-analysis/studies/:id/overview',
   'GET /v1/market-analysis/runs/:id/overview',
@@ -385,7 +394,7 @@ export function createAgentServiceClient(
     }
 
     const maxResponseBytes = options.maxResponseBytes ?? (
-      OVERVIEW_REPORT_ROUTES.has(`${request.method} ${contract.path}`)
+      (OVERVIEW_REPORT_ROUTES.has(`${request.method} ${contract.path}`)||SHAPE_REPORT_ROUTES.has(`${request.method} ${contract.path}`))
         ? OVERVIEW_MAX_RESPONSE_BYTES : DEFAULT_MAX_RESPONSE_BYTES
     );
     const secrets = [config.internalUrl, config.proxyToken];

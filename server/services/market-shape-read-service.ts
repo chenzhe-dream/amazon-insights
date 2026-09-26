@@ -1,6 +1,10 @@
+import {readMarketShapeImages} from './market-shape-product-image';
+import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
+import {readMarketShapeSorftimePool} from './market-shape-sorftime-reader';
+import {readMarketShapeAmountHistory} from './market-shape-history-reader';
 import {readShapeCategoryDashboard} from './market-shape-category-reader';
 import {readMarketShapeHistory} from './market-shape-history-reader';
-import {isMarketShapeRulesFlow,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION} from '../domain/market-research/shape-price-flow';
+import {isMarketShapeRulesFlow,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION} from '../domain/market-research/shape-price-flow';
 import {buildMarketShapeSourceSummary} from '../domain/market-research/shape-source-summary';
 import {marketProductSourcePolicy,MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION} from '../../shared/market-product-source-policy';
 import { z } from 'zod';
@@ -46,7 +50,7 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
     const readScope = { actor, studyId: view.run.scope.researchId, moduleRunId: id };
     const anchor = view.steps.find(s => s.stepKey === 'shape-flow/anchor'), a = view.attempts.find(a => a.id === anchor?.latestAttemptId);
     let source: z.infer<typeof MarketShapeRunResponseSchema>['run']['source'] = null;
-    if (a && ['succeeded', 'empty'].includes(a.status)) {
+    if (params.flow!==MARKET_SHAPE_SORFTIME_FLOW_VERSION && a && ['succeeded', 'empty'].includes(a.status)) {
         const out = obj(a.output), saved = await snapshots.findInput({ ...readScope, id: z.string().parse(out.inputSnapshotId) }), raw = await snapshots.findSource({ ...readScope, id: z.string().parse(out.sourceRef) });
         if (!saved || !raw)
             invalid();
@@ -61,6 +65,13 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         }));
         source.summary=buildMarketShapeSourceSummary(checked,history,view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION);
         if([MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION].includes(params.flow))source.productHistory=await readMarketShapeHistory({view,actor,current,snapshots,asins:source.products.map(p=>p.asin),selectionInputSnapshotId:source.referenceSnapshotId});
+    }
+    if(params.flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION){
+        const pool=await readMarketShapeSorftimePool({view,actor,current,snapshots});
+        if(pool){
+            const common={view,actor,current,snapshots,asins:pool.publicPool.products.map(p=>p.asin),selectionInputSnapshotId:pool.snapshot.snapshotId};
+            source={referenceAttemptId:pool.attempt.id,historyAttemptIds:[],referenceSnapshotId:pool.snapshot.snapshotId,fetchedAt:pool.publicPool.fetchedAt,selectionBasis:'provider-row-order',bsrTopVerified:false,sorftimePool:pool.publicPool,productImages:await readMarketShapeImages(common),products:pool.publicPool.products.map(p=>({asin:p.asin,title:p.title,brand:p.brand,price:p.price,units:p.units})),productHistory:await readMarketShapeHistory(common),productAmountHistory:await readMarketShapeAmountHistory(common)};
+        }
     }
     const items: MarketShapeSuggestionOutput['products'] = [];
     const modelSteps = view.steps.filter(s => current.has(s.stepKey) && s.kind === 'model-batch');
@@ -89,12 +100,14 @@ export async function readMarketShapeRun(context: PostgresQueryContext, actor: M
         invalid();
     const pending = view.steps.some(s => current.has(s.stepKey) && ['queued', 'running'].includes(s.status) && ['prepare-members', 'prepare-model-batches', 'model-batch'].includes(s.kind));
     const suggestionStatus = !view.run.versions.model ? 'unavailable' : !source ? 'not-ready' : pending ? 'running' : source.products.length > 0 && items.length === source.products.length ? 'complete' : 'partial';
-    const latest = await revisions.find({ actor, moduleRunId: id });
+    const v4=params.flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION;
+    const referenceStore=new PostgresMarketShapeReferenceRevisionStore(context),referenceRevision=v4?await referenceStore.findSummary({actor,moduleRunId:id}):null,referenceHistory=v4?await referenceStore.list({actor,moduleRunId:id}):[];
+    const latest = v4?null:await revisions.find({ actor, moduleRunId: id });
     const history = (await context.query<{
         revision_id: string;
         ordinal: number;
         stored_at: Date;
     }>('SELECT revision_id,ordinal,stored_at FROM market_shape_price_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 100', [actor.organizationId, id])).rows.map(r => ({ revisionId: r.revision_id, ordinal: r.ordinal, createdAt: new Date(r.stored_at).toISOString() }));
-    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), ...(rulesOnly?{ruleStatus:ruleBaseline?.status??(source?'partial':'unavailable'),semanticStatus:'skipped' as const,...(ruleBaseline?{ruleBaseline}: {})}:{}), ...(params.flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION?{categoryDashboard:await readShapeCategoryDashboard({view,actor,current,snapshots})}:{}),source, suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
-            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', ...(s.kind==='collect-shape-category'?{categoryMetric:obj(s.input).metric}:{}),asin: s.kind==='collect-product-history'?obj(s.input).asin:null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
+    return MarketShapeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, params: publicParams,...(params.flow!==MARKET_SHAPE_SORFTIME_FLOW_VERSION&&view.run.versions.rule===MARKET_SHAPE_REQUEST_BOUND_CATALOG_VERSION?{sourcePolicy:marketProductSourcePolicy(view.run.scope.marketplace)}:{}), ...(rulesOnly?{ruleStatus:ruleBaseline?.status??(source?'partial':'unavailable'),semanticStatus:'skipped' as const,...(ruleBaseline?{ruleBaseline}: {})}:{}), ...([MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION].includes(params.flow)?{categoryDashboard:await readShapeCategoryDashboard({view,actor,current,snapshots})}:{}),source, ...(v4?{referenceRevision:referenceRevision?.revision??null,referenceHistory}:{}), suggestions: { status: suggestionStatus, items }, latestRevision: latest ? marketShapePublicRevision(latest) : null, history,
+            steps: view.steps.map(s => { const a = view.attempts.find(a => a.id === s.latestAttemptId); return { id: s.id, kind: s.kind, status: s.status, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount,nextAttemptAt:s.nextAttemptAt??null, current: current.has(s.stepKey), canRetry: current.has(s.stepKey) && s.status === 'failed' && view.run.status !== 'cancelled', ...(s.kind==='collect-shape-category'?{categoryMetric:obj(s.input).metric}:{}),asin: ['collect-product-history','collect-product-amount-history','collect-product-image'].includes(s.kind)?obj(s.input).asin:null, month: s.kind === 'collect-product-month' ? obj(s.input).month : null, errorCode: ['failed', 'interrupted'].includes(a?.status ?? '') ? obj(a?.error).code ?? 'internal' : null }; }) } });
 }

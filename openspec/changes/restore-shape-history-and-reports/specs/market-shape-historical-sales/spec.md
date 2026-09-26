@@ -11,7 +11,7 @@ The system SHALL collect Sorftime SalesVolume history for each frozen ASIN on ne
 - **WHEN** a rules-v1 run is read or resumed
 - **THEN** no product-history steps or network calls are added
 ### Requirement: Exact periods and source isolation
-The system SHALL sum only complete calendar intervals from a single supplier and preserve missing values and real zeros.
+Legacy rules-v2/v3 SHALL sum only complete calendar intervals from a single supplier and preserve missing values and real zeros. New rules-v4 SHALL follow the approved reference returned-point aggregation while exposing actual available months without fabricating missing values.
 #### Scenario: Missing July
 - **WHEN** Sorftime returns June and August but not July
 - **THEN** last-three-month units are unknown with a missing-month reason, even if SellerSprite has July
@@ -42,3 +42,12 @@ The system SHALL distinguish category_report recent statistics from category_tre
 #### Scenario: Mixed percentage bases
 - **WHEN** report cards and concentration trend charts are displayed
 - **THEN** cards identify sales-volume shares and trend charts identify sales-amount shares
+
+### Requirement: Restore reference data and business flow
+New rules-v4 runs SHALL use Sorftime category_report and reference product_search expansion up to 300 products, persist separate SalesVolume and SalesAmount sources, and expose provider gross_profit_margin for reference local entry classifications. The reference seven sections, 10-unit price bands, filtering, sorting and local conclusions SHALL operate without a mandatory save or model invocation.
+#### Scenario: First source becomes ready
+- **WHEN** Sorftime products have been stored without a manual revision
+- **THEN** available sections render from saved data, unknown shapes remain unclassified, and edits update draft statistics without collection
+#### Scenario: Legacy runs remain frozen
+- **WHEN** a rules-v3 task is reopened after upgrade
+- **THEN** its supplier, rules and source snapshots do not change and no new collection is scheduled

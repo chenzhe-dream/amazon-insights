@@ -6,10 +6,12 @@ import { loadVocPositioningRuntimeConfig } from '../../server/config';
 import { runPostgresMigrations } from '../../server/db/postgres/migrations';
 import { PostgresQueryContext } from '../../server/db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../../server/db/postgres/market-module-execution-store';
+import type { CreateMarketModuleRunInput } from '../../server/db/market-module-execution-repository';
 import { MarketModuleService } from '../../server/services/market-module-service';
 import {readMarketKeywordReconciliationSource} from '../../server/services/market-keyword-reconciliation-source';
 import {MarketSemanticBatchPreparationService} from '../../server/runtime/market-semantic-batch-preparation';
 import { registerMarketModuleRoutes } from '../../server/routes/market-modules';
+import { MARKET_KEYWORD_FLOW_VERSION, MARKET_KEYWORD_RULES_FLOW_VERSION, marketKeywordFlowInitialSteps } from '../../server/domain/market-research/keyword-flow';
 import { createMarketModelRuntime } from '../../server/runtime/market-model-runtime';
 import { MarketKeywordRunResponseSchema } from '../../shared/market-keyword-public-contracts';
 import {MarketKeywordRevisionEntrySchema} from '../../shared/market-keyword-revision-contracts';
@@ -63,6 +65,34 @@ test('public keyword start and read bind source months and native audited batche
   const study = await service.createStudy(actor, { marketplace: 'US', nodeIdPath: '12:34', fromMonth: '2026-07', toMonth: '2026-08', currency: 'USD' }, randomUUID());
   const body = { plannedPages: [{ seed: 'lamp', page: 1 }, { seed: 'lamp', page: 2 }], maxMembers: 20,
     catalog: { task: 'market-keyword-semantics', dictionaryVersion: 'synthetic/v1', categoryContext: 'Synthetic lamp', dimensionLabels: { W1: [], W2: [], W3: [], W4: [] }, clusterCatalog: [] } };
+  await t.test('new public rule tasks ignore configured models and replay reads without collection', async () => {
+    const key = randomUUID(), input = { ...body, plannedPages: [{ seed: 'lamp', page: 1 }] };
+    const started = await service.startKeywords(actor, study.study.id, input, key);
+    for (let i = 0; i < 30; i++) { if (!await runtime.tick()) break; assert.ok(i < 29); }
+    const saved = (await service.findKeywords(actor, started.run.id)).run;
+    assert.equal((await steps.findModuleRun({ actor, moduleRunId: started.run.id }))!.run.versions.planner, MARKET_KEYWORD_RULES_FLOW_VERSION);
+    assert.equal(saved.semanticStatus, 'skipped');
+    assert.ok(saved.ruleReport); assert.equal(saved.facts!.members[0].reference.searchVolume, 0);
+    assert.equal(modelCalls, 0);
+    assert.ok(saved.steps.every(step => !['model-batch', 'prepare-model-batches', 'reconcile'].includes(step.kind)));
+    const beforeCalls = calls;
+    assert.deepEqual((await service.findKeywords(actor, started.run.id)).run, saved);
+    assert.equal((await service.startKeywords(actor, study.study.id, input, key)).run.id, started.run.id);
+    assert.equal(calls, beforeCalls); assert.equal(modelCalls, 0);
+  });
+  // Seed historical semantic runs through the repository. New public commands stay rules-only.
+  let seedLegacyModels = true;
+  const createRun = PostgresMarketModuleExecutionStore.prototype.createModuleRun;
+  t.mock.method(PostgresMarketModuleExecutionStore.prototype, 'createModuleRun', async function(this: PostgresMarketModuleExecutionStore, request: CreateMarketModuleRunInput) {
+    const params = request.params as { flow?: string; analysisMode?: string; catalog?: { discoveryMode?: string; outputProtocol?: string } };
+    if (!seedLegacyModels || request.moduleKind !== 'keywords' || params.flow !== MARKET_KEYWORD_RULES_FLOW_VERSION) return createRun.call(this, request);
+    const global = params.analysisMode === 'global-reconciliation/v1' || params.analysisMode === 'global-reconciliation/v2';
+    const explicit = params.catalog?.outputProtocol === 'explicit-shape/v1', discovery = params.catalog?.discoveryMode === 'labels-and-clusters/v1';
+    const legacy = { ...request, params: { ...params, flow: MARKET_KEYWORD_FLOW_VERSION }, versions: { ...request.versions, planner: MARKET_KEYWORD_FLOW_VERSION,
+      model: 'market.semantic.text.v1', configuration: explicit ? runtime.keywordExplicitConfigurationVersion : global ? runtime.keywordReconciliationConfigurationVersion : discovery ? runtime.keywordDiscoveryConfigurationVersion : runtime.configurationVersion,
+      prompt: explicit ? runtime.keywordExplicitPromptVersion : global ? runtime.keywordReconciliationPromptVersion : discovery ? runtime.keywordDiscoveryPromptVersion : runtime.promptVersion } };
+    return createRun.call(this, { ...legacy, initialSteps: marketKeywordFlowInitialSteps(legacy) });
+  });
   const http = Fastify(); t.after(() => http.close()); http.decorateRequest('authPrincipal', null);
   let principal = actor;
   http.addHook('preHandler', async req => { req.authPrincipal = { kind: 'user', ...principal, role: 'member', email: 'native@example.test', sessionId: randomUUID() }; });
@@ -179,7 +209,7 @@ test('public keyword start and read bind source months and native audited batche
   assert.equal((await http.inject(save)).statusCode, 200); // Acknowledgement replay is not a new write.
   assert.equal((await steps.findModuleRun({ actor, moduleRunId: initial.run.id }))!.steps.some(s => s.kind === 'report'), false);
 
-  missingHistory = true; const modelsBefore = modelCalls;
+  seedLegacyModels = false; missingHistory = true; const modelsBefore = modelCalls;
   const missing = await unconfigured.startKeywords(actor, study.study.id, { ...body, plannedPages: [{ seed: 'missing-history', page: 1 }] }, randomUUID());
   await drain();
   const missingFacts = (await unconfigured.findKeywords(actor, missing.run.id)).run.facts!;
@@ -194,6 +224,7 @@ test('public keyword start and read bind source months and native audited batche
   assert.equal(modelCalls, modelsBefore);
   // Both immutable protocols run in the same real runtime and disposable DB.
   // Retry uses the discovery identity, not the old four-task identity.
+  seedLegacyModels = true;
   const discovered=await browser.startKeywordRun(study.study.id,{...body,plannedPages:[{seed:'lamp',page:1}],catalog:{...body.catalog,discoveryMode:'labels-and-clusters/v1'}},randomUUID());
   const discoveredView=await steps.findModuleRun({actor,moduleRunId:discovered.id});
   assert.equal(discoveredView!.run.versions.configuration,runtime.keywordDiscoveryConfigurationVersion);

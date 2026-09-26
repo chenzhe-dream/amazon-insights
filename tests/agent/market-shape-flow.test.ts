@@ -87,6 +87,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
     assert.equal(saved.catalog.products[0].classificationBasis, 'unclassified');
     assert.equal(saved.catalog.analysis.totals.totalUnits, 20);
     const report = await service.shapeRevision(f.actor, run.id, saved.catalog.revision.revisionId);
+    assert.ok('catalogId' in report.revision);
     assert.equal(report.revision.totalUnits, 20);
     assert.equal(report.revision.groups[0].labelId, null);
     assert.equal(report.revision.structure, undefined, 'legacy v1 report must not gain new structure');
@@ -125,7 +126,9 @@ test('shape flow freezes members, collects their history and audits suggestions 
     await t.test('missing model configuration does not block collection, manual statistics or a failed-month retry', async () => {
         const offline = new MarketModuleService({ context: f.context, modelIdentity: () => null });
         failHistory = true; emitEcho=false;
-        const start = await offline.startShapes(f.actor, f.scope.researchId, { poolSize: 100, newProductMonths: 6, catalog: { ...request.params.catalog, allowedLabels: [] } }, randomUUID());
+        const offlineRequest={...request,params:{...request.params,flow:'market-shape-price-flow/rules-v3',catalog:{...request.params.catalog,allowedLabels:[]}},versions:{...request.versions,rule:'market-shape-price-catalog/v3',planner:'market-shape-price-flow/rules-v3',model:null,prompt:null,configuration:null},idempotencyKey:randomUUID()};
+        const offlineRun=await f.stores.steps.createModuleRun({...offlineRequest,initialSteps:marketShapeFlowInitialSteps(offlineRequest)});
+        const start=await offline.findShapes(f.actor,offlineRun.run.id);
         assert.deepEqual(start.run.params.catalog.allowedLabels, [], 'product collection does not require a prewritten shape directory');
         assert.equal(start.run.suggestions.status, 'unavailable');
         assert.equal(start.run.source, null);
@@ -135,6 +138,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
         assert.equal(first.run.source!.historyAttemptIds.length, 0);
         const command = { referenceAttemptId: first.run.source!.referenceAttemptId, historyAttemptIds: [], expectedParentRevisionId: null, selectedAsins: ['B000000001'], taxonomyVersion: 'test-shapes/v1', labels, assignments: [], bands: [{ id: 'all', minInclusive: 0, maxExclusive: null }] };
         const partial = await offline.saveShapeRevision(f.actor, start.run.id, command, randomUUID());
+        assert.ok('catalogId' in partial.revision);
         assert.equal(partial.revision.labels[0].label,'层架式');
         assert.equal(partial.revision.totalUnits, null);
         assert.equal(partial.revision.coverage, 'none');
@@ -155,11 +159,14 @@ test('shape flow freezes members, collects their history and audits suggestions 
         assert.equal(modelCalls, 1);
         const next = await offline.findShapes(f.actor, start.run.id);
         assert.equal(next.run.source!.historyAttemptIds.length, 1);
+        assert.ok(next.run.latestRevision && 'catalogId' in next.run.latestRevision);
         assert.equal(next.run.latestRevision!.totalUnits, null);
         const complete = await offline.saveShapeRevision(f.actor, start.run.id, { ...command, expectedParentRevisionId: partial.revision.revisionId, historyAttemptIds: next.run.source!.historyAttemptIds }, randomUUID());
+        assert.ok('catalogId' in complete.revision);
         assert.equal(complete.revision.totalUnits, 20);
         assert.equal(complete.revision.structure!.segments[0].brands[0].stats.units,20);
         const oldStructure=await offline.shapeRevision(f.actor,start.run.id,partial.revision.revisionId);
+        assert.ok('catalogId' in oldStructure.revision);
         assert.equal(oldStructure.revision.structure!.segments[0].brands[0].stats.units,null);
         const reopened=await new PostgresMarketShapePriceRevisionStore(f.context).find({actor:f.actor,moduleRunId:start.run.id});
         assert.deepEqual(reopened!.catalog.structure,complete.revision.structure);
@@ -169,6 +176,7 @@ test('shape flow freezes members, collects their history and audits suggestions 
         for(let i=0;i<8&&await runtime.tick();i++){}
         const archiveView=await offline.findShapes(f.actor,archive.run.id);
         const archiveReport=await offline.saveShapeRevision(f.actor,archive.run.id,{...command,referenceAttemptId:archiveView.run.source!.referenceAttemptId,historyAttemptIds:archiveView.run.source!.historyAttemptIds},randomUUID());
+        assert.ok('catalogId' in archiveReport.revision);
         assert.equal(archiveReport.revision.sourcePolicy,undefined);
         assert.equal(archiveReport.revision.totalUnits,null,'v2 must keep its frozen echo-required admission');
         assert.equal(archiveReport.revision.structure!.ruleVersion,'market-shape-structure/v1');
