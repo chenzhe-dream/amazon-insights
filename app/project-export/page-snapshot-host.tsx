@@ -6,13 +6,15 @@ import { collectPageSnapshotStyles } from "./page-snapshot-styles";
 import { serializePageSnapshot } from "./serialize-page-snapshot";
 import { readPageSnapshotSources, type PageSnapshotSources } from "./read-page-snapshot-sources";
 import type { ExportFetcher, ExportRequest } from "./read-export-content";
+import {PageSnapshotVariants} from "./page-snapshot-variants";
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
   return <main className="page-snapshot">
     <header className="card"><h1>{content.project.name}</h1><p>{content.project.marketplace} · {content.project.asins.length} 个 ASIN · 快照时间 {new Date(content.capturedAt).toLocaleString("zh-CN", {timeZone:"Asia/Shanghai"})}（北京时间）</p><p>{content.sourceLabel}</p></header>
-    {content.moduleIds.includes("competitor-overview") && <section data-snapshot-module="competitor-overview">{content.overview
+    {content.moduleIds.includes("competitor-overview") && <section className="compare-page" data-snapshot-module="competitor-overview">{content.overview
       ? <CompetitorOverviewSnapshotView {...content.overview}/>
       : <div className="card"><h2>竞品参数总览</h2><p>暂无已发布的竞品结果。</p></div>}</section>}
+    {content.moduleIds.includes("variants-orders") && content.variants && <section className="compare-page" data-snapshot-module="variants-orders"><PageSnapshotVariants {...content.variants}/></section>}
   </main>;
 }
 class SnapshotBoundary extends Component<{children: ReactNode; onError: (error: Error) => void}, {failed: boolean}> {
@@ -36,7 +38,6 @@ html,body{margin:0!important;min-width:0!important;height:auto!important;overflo
 `;
 export async function renderPageSnapshot(content: PageSnapshotSources, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted();
-  const css = await collectPageSnapshotStyles(document, signal);
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true"); host.inert = true;
   Object.assign(host.style, {position:"fixed", left:"-20000px", top:"0", width:"1440px", pointerEvents:"none"});
@@ -60,6 +61,8 @@ export async function renderPageSnapshot(content: PageSnapshotSources, signal: A
     signal.throwIfAborted();
     const view = host.querySelector<HTMLElement>(".page-snapshot");
     if (!view || !view.getBoundingClientRect().width) throw new Error("页面快照尚未准备完成");
+    // Business presenters can mount their own scoped <style> blocks.
+    const css = await collectPageSnapshotStyles(document, signal);
     return serializePageSnapshot({root:view,cssText:css + snapshotLayout,title:content.project.name,capturedAt:content.capturedAt});
   } finally { root.unmount(); host.remove(); }
 }

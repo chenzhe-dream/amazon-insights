@@ -12,7 +12,7 @@ import {
   xydcAnnualInspectionIdentity,
 } from "./xydc-annual-inspection";
 import { XydcOrderCard, type XydcOrderCardModel } from "./xydc-order-card";
-import { XydcOrderDetail } from "./xydc-order-detail";
+import { XydcOrderDetail, XydcOrderSnapshotDetail } from "./xydc-order-detail";
 import { XydcOrderProgress } from "./xydc-order-progress";
 import type { XydcOrderProgressView } from "../shared/xydc-order-progress";
 
@@ -23,12 +23,14 @@ import { groupXydcVariantFamilies, type XydcVariantFamilyGroup } from "../shared
 export { groupXydcVariantFamilies };
 export type { XydcVariantFamilyGroup };
 
-type XydcVariantSectionProps = {
+export type XydcVariantSectionProps = {
   progress?: XydcOrderProgressView | null;
   products: readonly XydcVariantProduct[];
   families: readonly XydcVariantFamily[];
   orderFamilies?: readonly XydcOrderSnapshot[];
   market: XydcVariantMarket;
+  presentation?: "page" | "snapshot";
+  capturedAt?: string;
 };
 
 function familyIdentity(group: XydcVariantFamilyGroup): XydcVariantFamily {
@@ -57,7 +59,7 @@ function resolveOrderSnapshot(
 
 function buildModels(props: XydcVariantSectionProps) {
   const productByAsin = new Map(props.products.map((product, index) => [product.asin, { product, index }]));
-  const now = new Date();
+  const now = props.presentation === "snapshot" ? new Date(props.capturedAt ?? "") : new Date();
   const window = getXydcOrderWindow(now);
   return groupXydcVariantFamilies(props.families).map(group => {
     const familyInputOrder = new Map(group.inputAsins.map((asin, index) => [asin, index]));
@@ -105,7 +107,7 @@ function XydcVariantSectionBody({
         <span className="xydc-order-source-badge">西柚洞察 · 子体汇总</span>
       </div>
       <p className="xydc-order-scope-note">按当前变体关系汇总全部子体；总量、份额与排序使用同一12个月窗口。</p>
-      <XydcOrderProgress value={props.progress ?? null} />
+      {props.presentation === "snapshot" ? props.progress?.progress ? <div className="xydc-order-progress" role="status">已发现子体：已就绪 {props.progress.progress.ready}/{props.progress.progress.total}（缓存复用 {props.progress.progress.cached}）</div> : null : <XydcOrderProgress value={props.progress ?? null} />}
       {requested.size > discovered.size && <p className="xydc-order-scope-note">商品变体发现 {discovered.size}/{requested.size}
         {missing.length > 0 && <span> · 尚未取得变体关系 {missing.length} 个商品（{missing.join("、")}），整组数据尚不完整。</span>}
       </p>}
@@ -115,7 +117,10 @@ function XydcVariantSectionBody({
       </p>}
       {models.length === 0 ? <p className="xydc-order-section-empty">暂无已授权范围内的西柚变体缓存。</p> : (
         <div className="xydc-order-grid">
-          {models.map(model => <XydcOrderCard
+          {models.map(model => props.presentation === "snapshot" ? <div className="xydc-order-snapshot-family" key={`${model.group.country}:${model.group.parentAsin}`}>
+            <XydcOrderCard model={model} market={props.market} presentation="snapshot" />
+            <details className="xydc-order-snapshot-detail"><summary>查看全部 {model.group.children.length} 个子体{model.snapshot ? "与月度趋势" : ""}</summary><XydcOrderSnapshotDetail model={model} market={props.market}/></details>
+          </div> : <XydcOrderCard
             key={`${model.group.country}:${model.group.parentAsin}`}
             model={model}
             market={props.market}
@@ -169,6 +174,11 @@ function InteractiveXydcVariantSection(props: XydcVariantSectionProps) {
 }
 
 export function XydcVariantSection(props: XydcVariantSectionProps) {
+  if (props.presentation === "snapshot") {
+    if (!props.capturedAt || !Number.isFinite(Date.parse(props.capturedAt))) throw new Error("变体快照时间无效");
+    const models = buildModels(props);
+    return <XydcVariantSectionBody props={props} models={models} />;
+  }
   if (typeof window === "undefined") {
     const models = buildModels(props);
     return <XydcAnnualInspectionProvider models={models}>

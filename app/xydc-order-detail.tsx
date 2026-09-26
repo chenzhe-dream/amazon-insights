@@ -8,6 +8,8 @@ import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
 import {
   formatOrderCount,
   formatOrderShare,
+  formatPrice,
+  formatListingDate,
   orderAttributeLabel,
   orderColorMap,
   orderColorTitle,
@@ -238,4 +240,68 @@ export function XydcOrderDetail({
   );
 
   return typeof document === "undefined" ? null : ReactDom.createPortal(content, document.body);
+}
+
+/** Static copy of the original detail regions, populated by the same frozen card model. */
+export function XydcOrderSnapshotDetail({model, market}: {model: XydcOrderCardModel; market: XydcVariantMarket}) {
+  const {group, product, snapshot} = model;
+  const summary = snapshot ? summarizeXydcOrders(snapshot) : null;
+  const childAsins = snapshot?.childAsins ?? group.children.map(child => child.asin);
+  const childByAsin = new Map(group.children.map(child => [child.asin, child]));
+  const colors = orderColorMap(childAsins, group.children);
+  const orderWindow = snapshot?.window ?? model.window;
+  const maximum = Math.max(1, ...orderWindow.months.map(month => snapshot ? monthDisclosedTotal(snapshot, month) : 0));
+  const rows = [...(summary?.rows ?? group.children.map(child => ({asin: child.asin, complete: false, total: null,
+    share: null, missingMonths: orderWindow.months, undisclosedMonths: 0})))].sort((left, right) =>
+    (right.total ?? -1) - (left.total ?? -1) || left.asin.localeCompare(right.asin));
+  return <section className="xydc-order-dialog xydc-order-snapshot-content">
+    <header><div><span>全部子体与12个月趋势</span><h4>{product?.brand || "父体"} · {group.parentAsin}</h4>
+      <small>{orderWindow.startMonth} — {orderWindow.endMonth}</small>
+      <strong className="xydc-order-dialog-total">12个月订单量：{formatOrderCount(summary?.total ?? null, summary?.complete ?? false)}</strong>
+    </div></header>
+    <p className="xydc-order-chart-description">堆叠柱状图按月展示全部 {summary?.expectedChildren ?? group.children.length} 个子体的已披露订单；缺失月份保留为空缺，原始零值标记为未披露。{variantColorNote} 未识别颜色用中性纹理表示。</p>
+    <div className="xydc-order-chart" role="group" aria-label="各子体月度订单占比">
+      {orderWindow.months.map(month => {
+        const values = summary?.months.find(item => item.date === month)?.values ?? childAsins.map(asin => ({asin, orders: null}));
+        const monthTotal = snapshot ? monthDisclosedTotal(snapshot, month) : 0;
+        return <div className="xydc-order-month" data-order-month={month} key={month}>
+          <div className="xydc-order-month-plot">{monthTotal > 0 ? <div className="xydc-order-month-bar" style={{height: `${monthTotal / maximum * 100}%`}}>
+            {values.filter(value => value.orders !== null && value.orders > 0).map(value => <span key={value.asin}
+              data-order-asin={value.asin} data-order-color={colors.get(value.asin)}
+              title={`${month} · ${value.asin} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders!.toLocaleString("en-US")}+ · 占当月已披露订单 ${formatOrderShare(value.orders! / monthTotal * 100)}`}
+              style={{height: `${value.orders! / monthTotal * 100}%`, background: colors.get(value.asin)}}
+              role="img" tabIndex={0} aria-label={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${value.orders!.toLocaleString("en-US")}+ · 占当月已披露订单 ${formatOrderShare(value.orders! / monthTotal * 100)}`}/>)}
+          </div> : null}</div>
+          <div className="xydc-order-month-markers">{values.filter(value => value.orders === null || value.orders === 0).map(value => <span key={value.asin}
+            className={value.orders === null ? "xydc-order-month-gap" : "xydc-order-month-undisclosed"}
+            title={`${month} · ${orderAttributeLabel(childByAsin.get(value.asin))} · ${accessibleMonthlyOrder(value.orders)}`}/>)}</div>
+          <small>{month.slice(2)}</small>
+        </div>;
+      })}
+    </div>
+    <div className="xydc-order-dialog-legend">{childAsins.map(asin => <span key={asin} data-order-asin={asin} data-order-color={colors.get(asin)} title={orderColorTitle(childByAsin.get(asin))}>
+      <i style={{background: colors.get(asin)}}/>{orderAttributeLabel(childByAsin.get(asin))}</span>)}</div>
+    <details className="xydc-order-snapshot-monthly"><summary>逐月全部子体订单明细</summary><div className="xydc-order-detail-table-wrap"><table className="xydc-order-detail-table">
+      <thead><tr><th>月份</th>{childAsins.map(asin => <th key={asin}>{asin}</th>)}</tr></thead><tbody>{orderWindow.months.map(month => {
+        const values = summary?.months.find(item => item.date === month)?.values ?? childAsins.map(asin => ({asin, orders: null}));
+        const byAsin = new Map(values.map(value => [value.asin, value.orders]));
+        const disclosedTotal = snapshot ? monthDisclosedTotal(snapshot, month) : 0;
+        return <tr key={month}><th>{month}</th>{childAsins.map(asin => {
+          const amount = byAsin.get(asin) ?? null;
+          return <td key={asin}>{accessibleMonthlyOrder(amount)}{amount !== null && amount > 0 && disclosedTotal > 0 ? <small> · 当月占比 {formatOrderShare(amount / disclosedTotal * 100)}</small> : null}</td>;
+        })}</tr>;
+      })}</tbody>
+    </table></div></details>
+    <details className="xydc-order-snapshot-annual"><summary>全部子体 · 年度份额</summary><div className="xydc-order-detail-table-wrap" role="region" aria-label={`${group.parentAsin} 全部子体年度订单`}>
+      <table className="xydc-order-detail-table"><thead><tr><th>变体 / ASIN</th><th>12个月订单量</th><th>年度份额</th><th>当前价格</th><th>上架时间</th><th>缺失 / 未披露月份</th></tr></thead>
+        <tbody>{rows.map(row => <tr key={row.asin} data-order-asin={row.asin} data-order-color={colors.get(row.asin)}>
+          <th scope="row"><span><i style={{background: colors.get(row.asin)}}/>{orderAttributeLabel(childByAsin.get(row.asin))}</span><a href={orderHref(market.domain, row.asin)} target="_blank" rel="noopener noreferrer">{row.asin}<span aria-hidden="true">↗</span></a></th>
+          <td>{formatOrderCount(row.total, row.complete)}</td><td>{formatOrderShare(row.share)}</td><td>{formatPrice(childByAsin.get(row.asin))}</td><td>{formatListingDate(childByAsin.get(row.asin))}</td><td>{row.missingMonths.length} / {row.undisclosedMonths}</td>
+        </tr>)}</tbody>
+      </table>
+    </div></details>
+    <footer>来源：西柚洞察 · 按自然月披露订单汇总{snapshot ? ` · 本次采集时间：${snapshot.fetchedAt}` : " · 订单数据待采集"}
+      {snapshot && snapshot.window.endMonth !== model.window.endMonth ? <strong>历史缓存 · 当前统计区间待补齐</strong> : snapshot?.cacheState === "stale" ? <strong>缓存数据 · 待更新</strong> : null}
+    </footer>
+  </section>;
 }

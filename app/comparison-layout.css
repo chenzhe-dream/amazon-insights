@@ -185,11 +185,14 @@
 .xydc-order-share>button { display: grid; min-width: 0; place-items: center; overflow: hidden; padding: 0; border: 0; color: #fff; font-size: 12px; font-weight: 750; white-space: nowrap; text-shadow: 0 1px 1px rgba(0,0,0,.18); cursor: pointer; }
 .xydc-order-share>button,.xydc-order-month-bar>span { box-shadow: inset 0 0 0 1px #64748b80; text-shadow: none; }
 .xydc-order-share>button { container-type: inline-size; }
+.xydc-order-share>span { display: grid; min-width: 0; place-items: center; overflow: hidden; color: #fff; font-size: 12px; font-weight: 750; white-space: nowrap; box-shadow: inset 0 0 0 1px #64748b80; container-type: inline-size; }
 .xydc-order-share>button>span { font-size: clamp(8px,22cqw,12px); }
+.xydc-order-share>span>span { font-size: clamp(8px,22cqw,12px); }
 .xydc-order-share-label-backed { padding: 1px 2px; border-radius: 3px; background: #fff; color: #000; }
 @container (max-width: 28px) { .xydc-order-share>button>span { visibility: hidden; } }
 .xydc-order-legend,.xydc-order-dialog-legend { display: flex; flex-wrap: wrap; gap: 7px 13px; padding: 9px 2px; }
 .xydc-order-legend button,.xydc-order-dialog-legend button { display: inline-flex; min-width: 0; align-items: center; gap: 5px; padding: 3px 4px; border: 0; border-radius: 4px; background: transparent; color: #4f6075; font-size: 12px; text-align: left; cursor: pointer; }
+.xydc-order-legend>span,.xydc-order-dialog-legend>span { display: inline-flex; min-width: 0; align-items: center; gap: 5px; padding: 3px 4px; color: #4f6075; font-size: 12px; text-align: left; }
 .xydc-order-legend button:hover,.xydc-order-dialog-legend button:hover { background: #f0f6ff; color: #1769d3; }
 .xydc-order-legend i,.xydc-order-dialog-legend i,.xydc-order-table th i,.xydc-order-detail-table th i { width: 9px; height: 9px; flex: none; border-radius: 50%; }
 .xydc-order-legend i,.xydc-order-dialog-legend i,.xydc-order-table th i,.xydc-order-detail-table th i,.xydc-order-month-tooltip i { box-shadow: inset 0 0 0 1px #64748b80; }

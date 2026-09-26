@@ -73,6 +73,21 @@ test("download invalidates changed project scope without refreshing frozen repor
   await assert.rejects(verifyExportEligibility(request, content, fetcher), /来源已变化/);
 });
 
+test("catalog, listing and category sources cannot cross marketplace or ASIN scope", async () => {
+  const {state,request,fetcher}=fixture();
+  Object.assign(state.version.catalog[0],{marketplace:"UK"});
+  await assert.rejects(readExportContent(request,fetcher),/来源范围不匹配/);
+  state.version=exportVersionFixture();
+  const v=state.version;
+  const stage=(name:string,data:unknown)=>({stage:name,stageStatus:"done",data,projectId:v.projectId,runId:v.runId,jobId:v.jobId,
+    jobVersion:1,outputVersion:1,contentHash:"c".repeat(64),updatedAt:v.publishedAt});
+  Object.assign(state.version.stageOutputs,{listing:stage("listing",{contentByAsin:{[state.project.asins[0]]:{asin:"B099999999",marketplace:"US",mainImage:"https://example.com/other.jpg"}}})});
+  await assert.rejects(readExportContent(request,fetcher),/来源范围不匹配/);
+  state.version=exportVersionFixture();
+  Object.assign(state.version.stageOutputs,{category:stage("category",{trendByNode:{other:{nodeId:"other",marketplace:"UK",status:"ready",asins:state.project.asins}}})});
+  await assert.rejects(readExportContent(request,fetcher),/站点不匹配/);
+});
+
 test("optional translation failures retain snapshot originals; mismatched originals still fail", async () => {
   const { request, fetcher } = fixture();
   let mode = "configuration";

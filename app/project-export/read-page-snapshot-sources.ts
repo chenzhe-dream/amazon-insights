@@ -5,12 +5,15 @@ import { exportFetcher, scopedFetcher, readExportEligibility, readExportSellingT
   type ExportFetcher, type ExportRequest, type PreparedProjectExport } from "./read-export-content";
 import type { ExportModuleContext } from "./export-module-context";
 import type { ExportSectionId } from "./module-catalog";
+import {readVariantsSnapshot} from "./read-variants-export";
+import type {VariantsSnapshotSources} from "./page-snapshot-variants";
 
 // Extend only after each original view has passed its snapshot acceptance.
-export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview"];
+export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders"];
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;
+  variants?: VariantsSnapshotSources;
 };
 
 export function stageData(context: ExportModuleContext, stage: keyof NonNullable<ExportModuleContext["version"]>["stageOutputs"]): Record<string, unknown> {
@@ -82,11 +85,12 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
       sellingTranslationsByAsin: Object.fromEntries(selling.map(item => [item.asin, item])),
     };
   }
+  const variants = request.moduleIds.includes("variants-orders") ? await readVariantsSnapshot(context,read) : undefined;
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
     sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds],
     sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
-    overview,
+    overview, ...(variants ? {variants} : {}),
   });
 }

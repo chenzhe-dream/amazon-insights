@@ -29,4 +29,3 @@ export function safeOnlineUrl(value: string | undefined, unwrapImage = false): s
     return null;
   }
 }
-

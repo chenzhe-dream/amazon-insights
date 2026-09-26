@@ -92,3 +92,30 @@ test('style capture preserves CSS rules and variables and fails rather than igno
   });
   assert.match(result.css, /--snapshot-color/); assert.match(result.error, /样式/);
 });
+
+test('cancelled preparation leaves no hidden host', async t => {
+  const page=await browser.newPage(); t.after(()=>page.close());
+  await page.goto(origin+'/tests/agent/helpers/page-snapshot-harness.html');
+  const result=await page.evaluate(async()=>{
+    const {renderPageSnapshot}=await import(/* @vite-ignore */ '/app/project-export/'+'page-snapshot-host.tsx');
+    const style=document.createElement('style');style.textContent='.card{color:rgb(20,30,40)}';document.head.append(style);
+    const controller=new AbortController();controller.abort(new Error('用户已取消'));
+    let message='';try{await renderPageSnapshot({project:{id:'x',name:'x',marketplace:'US',asins:[]},sourceProjectId:'x',capturedAt:new Date().toISOString(),sourceLabel:'已有数据',moduleIds:['competitor-overview'],overview:null},controller.signal);}catch(e){message=String(e);}
+    return {message,hosts:document.querySelectorAll('[aria-hidden="true"]').length};
+  });
+  assert.match(result.message,/用户已取消/);assert.equal(result.hosts,0);
+});
+
+test('font styles keep inherited variables and embed a same-origin static font', async t => {
+  const page=await browser.newPage();t.after(()=>page.close());
+  await page.route('**/assets/test.woff2',r=>r.fulfill({contentType:'font/woff2',body:Buffer.from('wOF2-test')}));
+  await page.goto(origin+'/tests/agent/helpers/page-snapshot-harness.html');
+  const result=await page.evaluate(async()=>{
+    const {collectPageSnapshotStyles}=await import(/* @vite-ignore */ '/app/project-export/'+'page-snapshot-styles.ts');
+    const style=document.createElement('style');style.textContent='@font-face{font-family:SnapshotTest;src:url(/assets/test.woff2)}';document.head.append(style);
+    document.body.style.setProperty('--font-geist-sans','SnapshotTest');
+    return await collectPageSnapshotStyles(document,new AbortController().signal);
+  });
+  assert.match(result,/data:font\/woff2;base64,/);assert.match(result,/--font-geist-sans:SnapshotTest/);
+  assert.doesNotMatch(result,/\/assets\/test.woff2/);
+});

@@ -1,3 +1,4 @@
+import type {CSSProperties, ReactNode} from "react";
 import type { XydcOrderSnapshot, XydcOrderSummary, XydcOrderWindow } from "../shared/xydc-order-contract";
 import { summarizeXydcOrders } from "../shared/xydc-order-summary";
 import { XydcAnnualInspectionTrigger } from "./xydc-annual-inspection";
@@ -61,12 +62,12 @@ export function formatOrderShare(value: number | null) {
   return value === null ? "—" : `${value.toFixed(2)}%`;
 }
 
-function formatPrice(child: XydcVariantFamilyGroup["children"][number] | undefined) {
+export function formatPrice(child: XydcVariantFamilyGroup["children"][number] | undefined) {
   if (!child || child.price === null) return "—";
   return `${child.currency ?? ""} ${child.price.toFixed(2)}`.trim();
 }
 
-function formatListingDate(child: XydcVariantFamilyGroup["children"][number] | undefined) {
+export function formatListingDate(child: XydcVariantFamilyGroup["children"][number] | undefined) {
   return child?.listingDate ?? "未提供";
 }
 
@@ -88,14 +89,26 @@ export type XydcOrderCardModel = Readonly<{
   window: XydcOrderWindow;
 }>;
 
+function OrderInspectionMark({presentation, model, asin, className, style, label, title, dataOrderColor, children}: {
+  presentation: "page" | "snapshot"; model: XydcOrderCardModel; asin: string; className?: string;
+  style?: CSSProperties; label?: string; title?: string; dataOrderColor?: string; children: ReactNode;
+}) {
+  if (presentation === "snapshot") return <span className={className} style={style} title={title} aria-label={label}
+    data-order-asin={asin} data-order-color={dataOrderColor}>{children}</span>;
+  return <XydcAnnualInspectionTrigger model={model} asin={asin} className={className} style={style}
+    label={label} title={title} dataOrderColor={dataOrderColor}>{children}</XydcAnnualInspectionTrigger>;
+}
+
 export function XydcOrderCard({
   model,
   market,
   onOpen,
+  presentation = "page",
 }: {
   model: XydcOrderCardModel;
   market: XydcVariantMarket;
   onOpen?: (trigger: HTMLButtonElement) => void;
+  presentation?: "page" | "snapshot";
 }) {
   const { group, product, competitorNumber, snapshot, window } = model;
   const summary = snapshot ? summarizeXydcOrders(snapshot) : null;
@@ -171,7 +184,7 @@ export function XydcOrderCard({
       {summary?.complete && summary.total !== null && summary.total > 0 ?
         <div className="xydc-order-share" aria-label="已披露订单量年度份额">
           {summary.rows.filter(row => row.share !== null && row.share > 0).map(row => (
-            <XydcAnnualInspectionTrigger
+            <OrderInspectionMark presentation={presentation}
               key={row.asin}
               model={model}
               asin={row.asin}
@@ -181,18 +194,18 @@ export function XydcOrderCard({
               title={`${orderColorTitle(childByAsin.get(row.asin))} · ${formatOrderShare(row.share)}`}
               style={{ width: `${row.share}%`, background: colors.get(row.asin), color: resolveVariantColor(childByAsin.get(row.asin)?.attributes ?? []).textColor }}
             >{row.share !== null && row.share >= 8 ? <span className={resolveVariantColor(childByAsin.get(row.asin)?.attributes ?? []).kind === "single" ? undefined : "xydc-order-share-label-backed"}>{formatOrderShare(row.share)}</span> : ""}
-            </XydcAnnualInspectionTrigger>
+            </OrderInspectionMark>
           ))}
         </div>
       : null}
       <div className="xydc-order-legend">
-        {rows.map(row => <XydcAnnualInspectionTrigger
+        {rows.map(row => <OrderInspectionMark presentation={presentation}
           key={row.asin}
           model={model}
           asin={row.asin}
           dataOrderColor={colors.get(row.asin)}
           title={orderColorTitle(childByAsin.get(row.asin))}
-        ><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</XydcAnnualInspectionTrigger>)}
+        ><i style={{ background: colors.get(row.asin) }} />{orderAttributeLabel(childByAsin.get(row.asin))}</OrderInspectionMark>)}
       </div>
 
       <div className="xydc-order-table-wrap" role="region" aria-label={`${group.parentAsin} 子体订单预览`} tabIndex={0}>
@@ -214,9 +227,9 @@ export function XydcOrderCard({
 
       {snapshot?.reasonCode ? <p className="xydc-order-warning">原因：{orderReasonLabels[snapshot.reasonCode]}</p> : null}
       {summary && summary.undisclosedChildMonths > 0 ? <p className="xydc-order-warning">{summary.undisclosedChildMonths} 个子体月份未披露；汇总值不代表精确成交量。</p> : null}
-      <button type="button" className="xydc-order-open-detail" onClick={event => onOpen?.(event.currentTarget)}>
+      {presentation === "page" ? <button type="button" className="xydc-order-open-detail" onClick={event => onOpen?.(event.currentTarget)}>
         查看全部 {group.children.length} 个子体{snapshot ? "与月度趋势" : ""}
-      </button>
+      </button> : null}
       <footer className="xydc-order-meta">
         <span>{variantColorNote} 未识别颜色用中性纹理表示。</span>
         <span>统计窗口：{sourceWindow.startMonth} — {sourceWindow.endMonth}</span>
