@@ -7,7 +7,8 @@ import type { AnalysisProject } from "../project-library-panel";
 import { useModalInteraction } from "../lib/use-modal-interaction";
 import { visibleExportSections, type ExportSectionId } from "./module-catalog";
 import styles from "./project-export.module.css";
-import { connectedExportModules, type ExportIdentity } from "./read-export-content";
+import type { ExportIdentity } from "./read-export-content";
+import { pageSnapshotModules as connectedExportModules } from "./read-page-snapshot-sources";
 import { useProjectExport } from "./use-project-export";
 
 export function ProjectExportDialog({ project, visibleModules, identity, onClose }: {

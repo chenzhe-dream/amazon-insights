@@ -27,10 +27,10 @@ export type ExportFetcher = (path: string, init?: RequestInit) => Promise<Respon
 export const connectedExportModules: readonly ExportSectionId[] = [
   "competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic",
 ];
-const exportFetcher: ExportFetcher = (path, init) => path.startsWith("/api/")
+export const exportFetcher: ExportFetcher = (path, init) => path.startsWith("/api/")
   ? fetch(path, { ...init, credentials: "same-origin" }) : localAgentFetch(path, init);
 
-function scopedFetcher(request: ExportRequest, fetcher: ExportFetcher): ExportFetcher {
+export function scopedFetcher(request: ExportRequest, fetcher: ExportFetcher): ExportFetcher {
   return async (path, init) => {
     request.signal.throwIfAborted();
     const response = await fetcher(path, { ...init, method: "GET", cache: "no-store", signal: request.signal });
@@ -44,7 +44,7 @@ async function json(fetcher: ExportFetcher, path: string, label: string): Promis
   if (!response.ok) throw new Error(localAgentErrorMessage(body, label + "读取失败"));
   return body;
 }
-async function session(request: ExportRequest, fetcher: ExportFetcher) {
+export async function verifyExportSession(request: ExportRequest, fetcher: ExportFetcher) {
   request.signal.throwIfAborted();
   const identity = await readWebSession(fetcher).catch(() => {
     request.signal.throwIfAborted();
@@ -55,10 +55,10 @@ async function session(request: ExportRequest, fetcher: ExportFetcher) {
   const allowed = visibleExportSections(identity.visibleModules).map(item => item.id);
   if (request.moduleIds.some(id => !allowed.includes(id))) throw new Error("所选模块的查看权限已变化");
 }
-async function eligibility(request: ExportRequest, fetcher: ExportFetcher) {
+export async function readExportEligibility(request: ExportRequest, fetcher: ExportFetcher) {
   if (!request.moduleIds.length) throw new Error("请至少选择一个模块");
   if (request.moduleIds.some(id => !connectedExportModules.includes(id))) throw new Error("所选模块尚未接入导出");
-  await session(request, fetcher);
+  await verifyExportSession(request, fetcher);
   const favorites = AnalysisFavoritesResponseSchema.parse(await json(fetcher, "/v1/local-data/project-favorites", "收藏"));
   if (!favorites.projectIds.includes(request.libraryProjectId)) throw new Error("项目已取消收藏，请重新打开导出");
   const { project } = LocalDataProjectResponseSchema.parse(await json(fetcher,
@@ -74,18 +74,18 @@ async function eligibility(request: ExportRequest, fetcher: ExportFetcher) {
   }
   return { project, source, sourceProjectId };
 }
-export async function verifyExportEligibility(request: ExportRequest, prepared: PreparedProjectExport, fetcher: ExportFetcher = exportFetcher) {
+export async function verifyExportEligibility(request: ExportRequest, prepared: Pick<PreparedProjectExport, "sourceProjectId" | "project">, fetcher: ExportFetcher = exportFetcher) {
   const read = scopedFetcher(request, fetcher);
-  const current = await eligibility(request, read);
+  const current = await readExportEligibility(request, read);
   if (current.sourceProjectId !== prepared.sourceProjectId || current.project.id !== prepared.project.id
       || current.project.marketplace !== prepared.project.marketplace
       || JSON.stringify([...current.project.asins].sort()) !== JSON.stringify([...prepared.project.asins].sort())) {
     throw new Error("项目来源已变化，请重新打开导出");
   }
-  await session(request, read);
+  await verifyExportSession(request, read);
 }
 
-async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: readonly string[], read: ExportFetcher): Promise<ExportBlock[]> {
+export async function readExportSellingTranslations(version: CurrentProjectDisplayVersion, asins: readonly string[], read: ExportFetcher) {
   const readAll = () => Promise.all(asins.map(async asin => {
     const product = version.catalog.find(item => item && typeof item === "object" && "asin" in item && item.asin === asin);
     const expected = readOriginalSellingPoints(product && typeof product === "object" ? product : {});
@@ -114,6 +114,10 @@ async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: r
   const points = await readAll();
   const checked = await readAll();
   if (JSON.stringify(points) !== JSON.stringify(checked)) throw new Error("主要卖点在读取期间变化，请重试");
+  return points;
+}
+async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: readonly string[], read: ExportFetcher): Promise<ExportBlock[]> {
+  const points = await readExportSellingTranslations(version, asins, read);
   return [{ kind: "table", title: "主要卖点（已有中文翻译与原文）", columns: ["ASIN", "中文卖点", "对应原文", "状态"],
     rows: points.flatMap(item => item.state === "ready" ? item.points.map((point, index) =>
       [{ text: item.asin }, { text: point }, { text: item.original[index] },
@@ -123,7 +127,7 @@ async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: r
 }
 export async function readExportContent(request: ExportRequest, fetcher: ExportFetcher = exportFetcher): Promise<PreparedProjectExport> {
   const read = scopedFetcher(request, fetcher);
-  const { project, source, sourceProjectId } = await eligibility(request, read);
+  const { project, source, sourceProjectId } = await readExportEligibility(request, read);
   const version = await readCurrentProjectDisplayVersion({
     organizationId: request.organizationId, projectId: sourceProjectId, marketplace: source.marketplace, asins: source.asins,
   }, read);
@@ -155,7 +159,7 @@ export async function readExportContent(request: ExportRequest, fetcher: ExportF
     try { return await readers[id](); }
     catch(error) { throw new Error(`${labels.get(id)}：${error instanceof Error?error.message:"读取失败，请重试"}`); }
   }));
-  await session(request, read);
+  await verifyExportSession(request, read);
   request.signal.throwIfAborted();
   return structuredClone({
     schemaVersion: "1", sourceProjectId,

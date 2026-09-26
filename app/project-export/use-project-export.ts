@@ -2,12 +2,13 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ExportSectionId } from "./module-catalog";
-import { readExportContent, verifyExportEligibility, type ExportIdentity, type ExportRequest, type PreparedProjectExport } from "./read-export-content";
-import { renderExportHtml } from "./render-export-html";
+import { verifyExportEligibility, type ExportIdentity, type ExportRequest } from "./read-export-content";
+import { preparePageSnapshot } from "./page-snapshot-host";
+import type { PageSnapshotSources } from "./read-page-snapshot-sources";
 import { buildExportFileName, downloadExportHtml } from "./download-export-html";
 
 type Receipt = { key: string } & (
-  { kind: "ready"; content: PreparedProjectExport; html: string }
+  { kind: "ready"; content: PageSnapshotSources; html: string }
   | { kind: "error"; message: string }
 );
 export function useProjectExport(projectId: string, moduleIds: readonly ExportSectionId[], identity?: ExportIdentity) {
@@ -32,8 +33,8 @@ export function useProjectExport(projectId: string, moduleIds: readonly ExportSe
     let active = true;
     const request: ExportRequest = { libraryProjectId: projectId, moduleIds: JSON.parse(modules),
       sessionIdentity, organizationId, signal: controller.signal };
-    void readExportContent(request).then(content => {
-      if (active) setReceipt({ key, kind: "ready", content, html: renderExportHtml(content) });
+    void preparePageSnapshot(request).then(({content,html}) => {
+      if (active) setReceipt({ key, kind: "ready", content, html });
     }).catch(error => {
       if (active) setReceipt({ key, kind: "error", message: error instanceof Error ? error.message : "报告读取失败，请重试" });
     }).finally(() => clearTimeout(timer));

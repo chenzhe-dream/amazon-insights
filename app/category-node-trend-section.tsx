@@ -74,7 +74,7 @@ function readyCategoryRecords(
   return scoped.length ? scoped : ready;
 }
 
-function pickCategoryRecords(
+export function pickCategoryRecords(
   products: ProductRef[],
   marketplace: string | undefined,
   trendByNode: typeof sorftimeCategoryTrendData,
@@ -111,6 +111,22 @@ function mergeTrendPoints(volume: SorftimeCategoryTrendPoint[], amount: Sorftime
     volume: point.value,
     amount: amountMap.get(point.month) ?? 0,
   }));
+}
+
+/** The charts expose these values on hover; a static snapshot needs the same source months in native HTML. */
+function CategoryMonthlySnapshotDetail({record}: {record: SorftimeCategoryTrendRecord}) {
+  const months = [...new Set([
+    ...record.volume, ...record.amount, ...record.listingMonopoly,
+    ...record.brandMonopoly, ...record.sellerMonopoly,
+  ].map(point => point.month))].sort();
+  const values = (points: SorftimeCategoryTrendPoint[]) => new Map(points.map(point => [point.month, point.value]));
+  const volume = values(record.volume), amount = values(record.amount);
+  const listing = values(record.listingMonopoly), brand = values(record.brandMonopoly), seller = values(record.sellerMonopoly);
+  return <details className="category-monthly-snapshot-detail"><summary>全部月份明细</summary>
+    <div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>月份</th><th>小类销量</th><th>小类销售额</th><th>Listing 垄断系数</th><th>品牌垄断系数</th><th>卖家垄断系数</th></tr></thead>
+      <tbody>{months.map(month => <tr key={month}><th>{month}</th><td>{volume.has(month) ? formatVolume(volume.get(month)!) : "—"}</td><td>{amount.has(month) ? formatAmountExact(amount.get(month)!) : "—"}</td><td>{listing.has(month) ? formatPct(listing.get(month)!) : "—"}</td><td>{brand.has(month) ? formatPct(brand.get(month)!) : "—"}</td><td>{seller.has(month) ? formatPct(seller.get(month)!) : "—"}</td></tr>)}</tbody>
+    </table></div>
+  </details>;
 }
 
 function CategoryComboChart({ series }: { series: MergedPoint[] }) {
@@ -457,10 +473,12 @@ export function CategoryNodeTrendSection({
   products,
   marketplace,
   trendByNode = sorftimeCategoryTrendData,
+  snapshotNodeId,
 }: {
   products: ProductRef[];
   marketplace?: string;
   trendByNode?: typeof sorftimeCategoryTrendData;
+  snapshotNodeId?: string;
 }) {
   const records = useMemo(() => pickCategoryRecords(products, marketplace, trendByNode), [products, marketplace, trendByNode]);
   const boundAsinCount = products.filter(product => product.asin).length;
@@ -468,8 +486,8 @@ export function CategoryNodeTrendSection({
 
   const activeRecord = useMemo(() => {
     if (!records.length) return null;
-    return records.find(record => record.nodeId === activeNodeId) ?? records[0];
-  }, [records, activeNodeId]);
+    return records.find(record => record.nodeId === (snapshotNodeId ?? activeNodeId)) ?? records[0];
+  }, [records, activeNodeId, snapshotNodeId]);
 
   const series = useMemo(
     () => (activeRecord ? mergeTrendPoints(activeRecord.volume, activeRecord.amount) : []),
@@ -516,7 +534,7 @@ export function CategoryNodeTrendSection({
           </p>
         </div>
         <div className="chart-head-actions">
-          {records.length > 0 ? (
+          {records.length > 0 && !snapshotNodeId ? (
             <label className="category-node-select">
               节点
               <select value={activeRecord?.nodeId ?? ""} onChange={event => setActiveNodeId(event.target.value)}>
@@ -599,6 +617,7 @@ export function CategoryNodeTrendSection({
               <MonopolyTrendChart key={`${activeRecord.nodeId}-monopoly`} series={monopolySeries} />
             </div>
           </div>
+          {snapshotNodeId ? <CategoryMonthlySnapshotDetail record={activeRecord}/> : null}
         </>
       )}
     </section>

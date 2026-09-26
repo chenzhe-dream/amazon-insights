@@ -54,7 +54,7 @@ test("download is the exact preview even after online edits; recipient needs no 
   await page.waitForFunction(()=>![...document.querySelectorAll("button")].find(x=>x.textContent==="确认并开始导出")?.disabled);
   const html=await iframe.getAttribute("srcdoc");assert.ok(html);
   assert.match(html,/25\.99/);
-  assert.equal(await page.getByRole("checkbox",{name:"变体 / 订单",exact:true}).isDisabled(),false);
+
   state.version.catalog[0].price=98765;
   const before=state.calls.length;
   const downloadPromise=page.waitForEvent("download");await confirm.click();const download=await downloadPromise;

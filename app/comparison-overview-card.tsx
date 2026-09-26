@@ -4,11 +4,24 @@ import {useEffect, useId, useRef, useState, type ReactNode} from "react";
 import "./comparison-overview-card.css";
 
 /** The same table stays mounted: expanding must not repeat paid data requests. */
-export function ComparisonOverviewCard({description, badge, children}: {
+export function ComparisonOverviewCard({description, badge, children, presentation = "page"}: {
   description: ReactNode;
   badge: ReactNode;
   children: ReactNode;
+  presentation?: "page" | "snapshot";
 }) {
+  if (presentation === "snapshot") return <section className="card compare-table-card comparison-overview-shell">
+    <div className="section-head">
+      <div><h3>竞品参数总览</h3><p>{description}</p></div>
+      <div className="comparison-overview-actions">{badge}</div>
+    </div>
+    {children}
+  </section>;
+
+  return <InteractiveComparisonOverviewCard description={description} badge={badge}>{children}</InteractiveComparisonOverviewCard>;
+}
+
+function InteractiveComparisonOverviewCard({description, badge, children}: {description: ReactNode; badge: ReactNode; children: ReactNode}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
