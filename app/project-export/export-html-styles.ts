@@ -1,9 +1,0 @@
-// Fixed report styles: no external assets, application classes or runtime theme.
-export const EXPORT_HTML_STYLES = `
-:root{color-scheme:light;font-family:Arial,"Microsoft YaHei",sans-serif;color:#293e5c;background:#f7f9fd;font-size:14px;line-height:1.65}
-*{box-sizing:border-box}body{margin:0;padding:28px}main{max-width:1440px;margin:auto}header,section{background:#fff;border:1px solid #dce5ef;border-radius:12px;padding:24px;margin-bottom:22px}
-header{border-top:5px solid #7964e5}h1{font-size:26px;margin:0 0 12px;overflow-wrap:anywhere}h2{font-size:20px;color:#584694;margin:0 0 18px}h3{font-size:16px;margin:20px 0 12px}p{margin:10px 0;overflow-wrap:anywhere}
-.meta,.note{color:#657b9a;font-size:12px}.notice{border-left:3px solid #7964e5;padding:10px 13px;background:#f3f0ff;color:#584694}.text{white-space:pre-wrap}.table-wrap{overflow-x:auto;margin:12px 0 20px}table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}th,td{padding:10px 12px;border:1px solid #dce5ef;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere;min-width:90px}th{background:#edf1fc;color:#465981;font-weight:600}tbody tr:nth-child(even){background:#f9faff}a{color:#6351c2;overflow-wrap:anywhere}figure{margin:8px 0}img{display:block;max-width:180px;max-height:180px;object-fit:contain;margin-bottom:6px}figcaption{font-size:12px}.chart{width:100%;height:auto;display:block;border:1px solid #e4eaf4;border-radius:6px}.legend{display:flex;flex-wrap:wrap;gap:8px 20px}.legend span{border-left:4px solid;padding-left:7px}.missing{color:#657b9a}.block{margin-bottom:20px}
-@media(max-width:650px){body{padding:10px}header,section{padding:15px}h1{font-size:22px}th,td{padding:8px}}
-@media print{body{background:#fff;padding:0}header,section{border-radius:0;break-inside:auto}.table-wrap{overflow:visible}thead{display:table-header-group}tr,img,svg{break-inside:avoid}a{color:inherit}}
-`;

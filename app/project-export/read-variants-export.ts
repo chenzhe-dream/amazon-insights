@@ -1,7 +1,5 @@
 import { RuntimeAnalysisDataSnapshotSchema, type RuntimeAnalysisDataSnapshot } from "../lib/runtime-analysis-data";
-import type { ExportSection } from "./export-contracts";
 import type { ExportModuleContext, ExportModuleRead } from "./export-module-context";
-import { buildVariantsOrdersExportSection } from "./variants-orders-export-section";
 import { marketSites } from "../../shared/market-sites";
 import type { VariantsSnapshotSources } from "./page-snapshot-variants";
 
@@ -77,10 +75,4 @@ export async function readVariantsSnapshot(context: ExportModuleContext, read: E
   });
   return {products, families, orderFamilies, market: {label: site.label, domain: `www.${site.amazonDomain}`},
     capturedAt: context.capturedAt, progress: snapshot.xydcOrderProgress};
-}
-
-export async function readVariantsExportSection(context: ExportModuleContext, read: ExportModuleRead): Promise<ExportSection> {
-  const first = await readValidatedVariants(context, read);
-  return buildVariantsOrdersExportSection({ snapshot: first, selectedAsins: context.asins,
-    sourceAsins: context.sourceAsins, marketplace: context.marketplace, capturedAt: context.capturedAt, version: context.version });
 }

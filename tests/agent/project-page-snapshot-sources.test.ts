@@ -1,7 +1,7 @@
-import { readPageSnapshotSources as readExportContent } from "../../app/project-export/read-page-snapshot-sources";
+import { readPageSnapshotSources } from "../../app/project-export/read-page-snapshot-sources";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { verifyExportEligibility, type ExportRequest } from "../../app/project-export/read-export-content";
+import { verifyExportEligibility, type ExportRequest } from "../../app/project-export/read-export-eligibility";
 import { exportOrganizationId, exportProjectFixture, exportSessionFixture, exportSessionIdentity, exportVersionFixture, exportSourceProjectFixture, exportTranslationFixture } from "./helpers/project-export-fixture";
 
 function fixture() {
@@ -28,7 +28,7 @@ function fixture() {
 }
 test("export follows explicit source binding and freezes results with GET only", async () => {
   const { state, request, fetcher } = fixture();
-  const content = await readExportContent(request, fetcher);
+  const content = await readPageSnapshotSources(request, fetcher);
   assert.equal(content.project.id, state.project.id);
   assert.equal(content.sourceProjectId, state.project.sourceProjectId);
   assert.equal(content.moduleIds[0], "competitor-overview");
@@ -44,30 +44,30 @@ test("export follows explicit source binding and freezes results with GET only",
 test("cross-project scope and read failures cannot become missing data", async () => {
   const { state, request, fetcher } = fixture();
   state.version.projectId = "99999999-9999-4999-8999-999999999999";
-  await assert.rejects(readExportContent(request, fetcher), /范围|匹配/);
+  await assert.rejects(readPageSnapshotSources(request, fetcher), /范围|匹配/);
   state.version = exportVersionFixture(); state.versionStatus = 500;
-  await assert.rejects(readExportContent(request, fetcher), /失败/);
+  await assert.rejects(readPageSnapshotSources(request, fetcher), /失败/);
   state.versionStatus = 404;
-  const content = await readExportContent(request, fetcher);
+  const content = await readPageSnapshotSources(request, fetcher);
   assert.equal(content.overview, null);
   assert.match(JSON.stringify(content), /暂无已发布/);
 });
 test("unknown modules, hidden modules, session mismatch, removed favorites and cancellation reject", async () => {
   const { state, request, fetcher } = fixture();
-  await assert.rejects(readExportContent({...request, moduleIds: []},fetcher), /选择/);
-  await assert.rejects(readExportContent({...request, moduleIds: ["voc"]},fetcher), /接入|权限/);
+  await assert.rejects(readPageSnapshotSources({...request, moduleIds: []},fetcher), /选择/);
+  await assert.rejects(readPageSnapshotSources({...request, moduleIds: ["unsupported" as never]},fetcher), /接入|权限/);
   state.session.visibleModules = [];
-  await assert.rejects(readExportContent(request,fetcher), /权限/);
+  await assert.rejects(readPageSnapshotSources(request,fetcher), /权限/);
   state.session = exportSessionFixture(); state.session.sessionIdentity = "t".repeat(43);
-  await assert.rejects(readExportContent(request,fetcher), /登录|会话/);
+  await assert.rejects(readPageSnapshotSources(request,fetcher), /登录|会话/);
   state.session = exportSessionFixture(); state.favorite = false;
-  await assert.rejects(readExportContent(request,fetcher), /收藏/);
-  await assert.rejects(readExportContent({...request,signal:AbortSignal.abort()},fetcher), /abort/i);
+  await assert.rejects(readPageSnapshotSources(request,fetcher), /收藏/);
+  await assert.rejects(readPageSnapshotSources({...request,signal:AbortSignal.abort()},fetcher), /abort/i);
 });
 
 test("download invalidates changed project scope without refreshing frozen report", async () => {
   const { state, request, fetcher } = fixture();
-  const content = { ...await readExportContent(request, fetcher), project: {
+  const content = { ...await readPageSnapshotSources(request, fetcher), project: {
     ...state.project, asins: [...state.project.asins, "B000000004"],
   } };
   await assert.rejects(verifyExportEligibility(request, content, fetcher), /来源已变化/);
@@ -76,16 +76,16 @@ test("download invalidates changed project scope without refreshing frozen repor
 test("catalog, listing and category sources cannot cross marketplace or ASIN scope", async () => {
   const {state,request,fetcher}=fixture();
   Object.assign(state.version.catalog[0],{marketplace:"UK"});
-  await assert.rejects(readExportContent(request,fetcher),/来源范围不匹配/);
+  await assert.rejects(readPageSnapshotSources(request,fetcher),/来源范围不匹配/);
   state.version=exportVersionFixture();
   const v=state.version;
   const stage=(name:string,data:unknown)=>({stage:name,stageStatus:"done",data,projectId:v.projectId,runId:v.runId,jobId:v.jobId,
     jobVersion:1,outputVersion:1,contentHash:"c".repeat(64),updatedAt:v.publishedAt});
   Object.assign(state.version.stageOutputs,{listing:stage("listing",{contentByAsin:{[state.project.asins[0]]:{asin:"B099999999",marketplace:"US",mainImage:"https://example.com/other.jpg"}}})});
-  await assert.rejects(readExportContent(request,fetcher),/来源范围不匹配/);
+  await assert.rejects(readPageSnapshotSources(request,fetcher),/来源范围不匹配/);
   state.version=exportVersionFixture();
   Object.assign(state.version.stageOutputs,{category:stage("category",{trendByNode:{other:{nodeId:"other",marketplace:"UK",status:"ready",asins:state.project.asins}}})});
-  await assert.rejects(readExportContent(request,fetcher),/站点不匹配/);
+  await assert.rejects(readPageSnapshotSources(request,fetcher),/站点不匹配/);
 });
 
 test("optional translation failures retain snapshot originals; mismatched originals still fail", async () => {
@@ -99,11 +99,11 @@ test("optional translation failures retain snapshot originals; mismatched origin
     return Promise.resolve(Response.json({error:{code: mode === "configuration" ? "CONFIGURATION_ERROR" : "INFRASTRUCTURE_ERROR",
       message:"翻译服务不可用"}},{status:503}));
   };
-  assert.match(JSON.stringify(await readExportContent(request, read)), /翻译服务尚未配置/);
+  assert.match(JSON.stringify(await readPageSnapshotSources(request, read)), /翻译服务尚未配置/);
   mode = "temporary";
-  assert.match(JSON.stringify(await readExportContent(request, read)), /保留已有原文/);
+  assert.match(JSON.stringify(await readPageSnapshotSources(request, read)), /保留已有原文/);
   mode = "mismatch";
-  await assert.rejects(readExportContent(request, read), /原文不匹配/);
+  await assert.rejects(readPageSnapshotSources(request, read), /原文不匹配/);
 });
 
 test('selling translation reads pin the preview report version and preserve every original on missing translation', async () => {
@@ -117,7 +117,7 @@ test('selling translation reads pin the preview report version and preserve ever
     return Response.json({ ...exportTranslationFixture(asin), state: 'missing',
       ...(asin === state.project.asins[0] ? { original: ['Original one', 'Original two'], sourceComplete: true } : {}) });
   };
-  const text = JSON.stringify(await readExportContent(request, read));
+  const text = JSON.stringify(await readPageSnapshotSources(request, read));
   assert.match(text, /Original one/); assert.match(text, /Original two/);
 });
 
@@ -131,11 +131,11 @@ test("changed mutable translations and revoked session during preparation invali
       sourceHash: count > state.project.asins.length ? "new" : "old",
     }));
   };
-  await assert.rejects(readExportContent(request, changing), /读取期间变化/);
+  await assert.rejects(readPageSnapshotSources(request, changing), /读取期间变化/);
   const revoked = async (path: string, init?: RequestInit) => {
     const response = await fetcher(path, init);
     if (path.endsWith("/current-display-version")) state.session.visibleModules = [];
     return response;
   };
-  await assert.rejects(readExportContent(request, revoked), /权限/);
+  await assert.rejects(readPageSnapshotSources(request, revoked), /权限/);
 });

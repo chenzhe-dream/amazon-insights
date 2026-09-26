@@ -14,6 +14,10 @@ const EXPORT_SECTIONS = [
 ] as const satisfies readonly { id: string; module: ModuleKey; label: string; description: string }[];
 
 export type ExportSectionId = (typeof EXPORT_SECTIONS)[number]["id"];
+// Admit a module only after its original-view snapshot has passed acceptance.
+export const connectedExportModules: readonly ExportSectionId[] = [
+  "competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic",
+];
 
 export function visibleExportSections(visibleModules: readonly ModuleKey[] | undefined) {
   return EXPORT_SECTIONS.filter(section => isModuleVisible(visibleModules, section.module));

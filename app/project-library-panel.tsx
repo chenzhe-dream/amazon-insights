@@ -11,7 +11,7 @@ import type { AnalysisProjectFavorites } from "./use-analysis-project-favorites"
 import type { ModuleKey } from "../shared/module-visibility-contracts";
 import { ProjectExportButton } from "./project-export/project-export-button";
 import { ProjectExportDialog } from "./project-export/project-export-dialog";
-import type { ExportIdentity } from "./project-export/read-export-content";
+import type { ExportIdentity } from "./project-export/read-export-eligibility";
 import {
   AMAZON_MAJOR_CATEGORIES,
   AMAZON_MAJOR_CATEGORY_IDS,

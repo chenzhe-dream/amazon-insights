@@ -4,29 +4,20 @@ import { SellingTranslationResponse } from "../../shared/selling-point-translati
 import { readOriginalSellingPoints } from "../../shared/selling-point-source";
 import { localAgentFetch, localAgentErrorMessage } from "../lib/local-agent-browser";
 import { readWebSession } from "../lib/web-auth-session";
-import { readCurrentProjectDisplayVersion, type CurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
-import { visibleExportSections, type ExportSectionId } from "./module-catalog";
-import type { ExportBlock, PreparedExportContent } from "./export-contracts";
-import { buildOverviewExportSection } from "./overview-export-section";
-import { buildListingImagesExportSection } from "./listing-images-export-section";
-import { buildKeywordsExportSection } from "./keywords-export-section";
-import { readVariantsExportSection } from "./read-variants-export";
-import { readVocExportSection } from "./voc-export-section";
-import { readDefinitionExportSection } from "./definition-export-section";
-import { readChecklistExportSection } from "./checklist-export-section";
-import { readTrafficExportSection } from "./read-traffic-export";
-import type { ExportModuleContext } from "./export-module-context";
-import type { ExportSection } from "./export-contracts";
+import type { CurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
+import { connectedExportModules, visibleExportSections, type ExportSectionId } from "./module-catalog";
 
 export type ExportIdentity = Readonly<{ sessionIdentity: string; organizationId: string }>;
 export type ExportRequest = ExportIdentity & Readonly<{
   libraryProjectId: string; moduleIds: readonly ExportSectionId[]; signal: AbortSignal;
 }>;
-export type PreparedProjectExport = PreparedExportContent & Readonly<{ sourceProjectId: string }>;
+export type PreparedProjectExport = Readonly<{
+  sourceProjectId: string;
+  project: { id: string; name: string; marketplace: string; asins: readonly string[] };
+  capturedAt: string;
+  sourceLabel: string;
+}>;
 export type ExportFetcher = (path: string, init?: RequestInit) => Promise<Response>;
-export const connectedExportModules: readonly ExportSectionId[] = [
-  "competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic",
-];
 export const exportFetcher: ExportFetcher = (path, init) => path.startsWith("/api/")
   ? fetch(path, { ...init, credentials: "same-origin" }) : localAgentFetch(path, init);
 
@@ -115,57 +106,4 @@ export async function readExportSellingTranslations(version: CurrentProjectDispl
   const checked = await readAll();
   if (JSON.stringify(points) !== JSON.stringify(checked)) throw new Error("主要卖点在读取期间变化，请重试");
   return points;
-}
-async function readSellingPoints(version: CurrentProjectDisplayVersion, asins: readonly string[], read: ExportFetcher): Promise<ExportBlock[]> {
-  const points = await readExportSellingTranslations(version, asins, read);
-  return [{ kind: "table", title: "主要卖点（已有中文翻译与原文）", columns: ["ASIN", "中文卖点", "对应原文", "状态"],
-    rows: points.flatMap(item => item.state === "ready" ? item.points.map((point, index) =>
-      [{ text: item.asin }, { text: point }, { text: item.original[index] },
-        { text: item.sourceComplete ? "已翻译" : "历史原文仅保留部分卖点" }]) :
-      [[{ text: item.asin }, { text: item.message || "暂无已生成的中文卖点" },
-        { text: item.original.join("\n") || "—" }, { text: ({ missing: "暂无中文翻译", pending: "翻译中（本次保留原文）", failed: "翻译未完成（保留原文）", unavailable: "中文翻译不可用" } as const)[item.state] }]]) }];
-}
-export async function readExportContent(request: ExportRequest, fetcher: ExportFetcher = exportFetcher): Promise<PreparedProjectExport> {
-  const read = scopedFetcher(request, fetcher);
-  const { project, source, sourceProjectId } = await readExportEligibility(request, read);
-  const version = await readCurrentProjectDisplayVersion({
-    organizationId: request.organizationId, projectId: sourceProjectId, marketplace: source.marketplace, asins: source.asins,
-  }, read);
-  const scopedVersion = version ? { ...version, asins: [...project.asins],
-    catalog: version.catalog.filter(item => item && typeof item === "object" && "asin" in item && project.asins.includes(String(item.asin))),
-    gaps: version.gaps.filter(item => project.asins.includes(item.asin)) } : null;
-  const context: ExportModuleContext = {
-    projectId: sourceProjectId, organizationId: request.organizationId, marketplace: project.marketplace,
-    asins: project.asins, sourceAsins: source.asins, currentRunId: source.currentRunId,
-    version: scopedVersion, capturedAt: new Date().toISOString(), sharedReads: new Map(),
-  };
-  const readers: Record<ExportSectionId, () => Promise<ExportSection> | ExportSection> = {
-    "competitor-overview": async () => {
-      if (!scopedVersion) return {id:"competitor-overview",title:"竞品概览",status:"missing",
-        blocks:[{kind:"text",text:"暂无已发布的竞品概览结果；导出不会自动发起分析。"}]};
-      const section=buildOverviewExportSection(scopedVersion);
-      return {...section,blocks:[...section.blocks,...await readSellingPoints(scopedVersion,project.asins,read)]};
-    },
-    "variants-orders": () => readVariantsExportSection(context,read),
-    "listing-images": () => buildListingImagesExportSection(context),
-    voc: () => readVocExportSection(context,read),
-    keywords: () => buildKeywordsExportSection(context),
-    definition: () => readDefinitionExportSection(context,read),
-    checklist: () => readChecklistExportSection(context,read),
-    traffic: () => readTrafficExportSection(context,read),
-  };
-  const labels = new Map(visibleExportSections(undefined).map(section=>[section.id,section.label]));
-  const sections = await Promise.all(request.moduleIds.map(async id => {
-    try { return await readers[id](); }
-    catch(error) { throw new Error(`${labels.get(id)}：${error instanceof Error?error.message:"读取失败，请重试"}`); }
-  }));
-  await verifyExportSession(request, read);
-  request.signal.throwIfAborted();
-  return structuredClone({
-    schemaVersion: "1", sourceProjectId,
-    project: { id: project.id, name: project.name, marketplace: project.marketplace, asins: project.asins },
-    capturedAt: new Date().toISOString(),
-    sourceLabel: version ? `基础报告 ${version.versionId} · 来源完成 ${version.sourceCompletedAt}；各模块补充来源与时间见正文` : "暂无已发布基础报告；其他已有来源与时间见各模块",
-    sections,
-  });
 }

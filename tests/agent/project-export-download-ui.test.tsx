@@ -15,7 +15,7 @@ before(async () => {
   origin=`http://127.0.0.1:${address.port}`; browser=await chromium.launch({headless:true});
 });
 after(async () => { await browser?.close();await server?.close(); });
-async function fixture(t: test.TestContext, modules = "overview") {
+async function fixture(t: test.TestContext, modules = "overview", missing = false) {
   const page=await browser.newPage(); t.after(()=>page.close()); page.setDefaultTimeout(30000);
   await page.route("https://m.media-amazon.com/**", route => route.abort());
   const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));t.after(()=>assert.deepEqual(errors,[]));
@@ -37,6 +37,7 @@ async function fixture(t: test.TestContext, modules = "overview") {
     if(path===`/v1/projects/${project.sourceProjectId}`)return reply({project:{...exportSourceProjectFixture(),currentRunId:null}});
     if(path.endsWith("/current-display-version")) {
       if (state.delay) await new Promise(resolve => setTimeout(resolve, state.delay));
+      if (missing) return reply({error:{code:"PROJECT_REPORT_NOT_PUBLISHED",message:"未发布",requestId:"test"}},404);
       return state.fail?reply({error:"报告读取失败"},500):reply(state.version);
     }
     if(path.includes("/selling-point-translations/"))return reply(exportTranslationFixture(new URL(path, "http://test").pathname.split("/").at(-1)!));
@@ -73,6 +74,20 @@ test("download is the exact preview even after online edits; recipient needs no 
   assert.deepEqual(apiRequests,[]);
   await page.screenshot({path:"test-results/favorite-export-overview-preview.png",fullPage:true});
 });
+
+test("an unpublished project exports explicit empty states without borrowed example data or internal gaps",async t=>{
+  const {page,state}=await fixture(t,"overview,voc,keywords,definition,checklist,traffic",true);
+  const frame=page.locator('iframe[title="HTML 快照预览"]');await frame.waitFor();
+  const html=await frame.getAttribute('srcdoc');assert.ok(html);
+  assert.equal((html.match(/data-snapshot-module=/g)??[]).length,8);
+  assert.match(html,/暂无已发布的竞品结果/);
+  assert.match(html,/暂无已有分析输入/);
+  assert.doesNotMatch(html,/UPSTREAM_EMPTY|catalog\.sellerSprite|<script|\$0\.00/);
+  const downloaded=page.waitForEvent('download');await page.getByRole('button',{name:'确认并开始导出'}).click();
+  const file=await downloaded,path=resolve('test-results','empty-project-snapshot.html');await file.saveAs(path);
+  assert.equal(await readFile(path,'utf8'),html);assert.deepEqual(state.writes,[]);
+  await page.screenshot({path:'test-results/favorite-export-empty-preview.png',fullPage:true});
+});
 test("failed reads retry without analysis, and changed eligibility blocks confirmation",async t=>{
   const {page,state}=await fixture(t);
   await page.locator('iframe[title="HTML 快照预览"]').waitFor();
@@ -100,12 +115,18 @@ test("all eight modules prepare and download together; deselected module is abse
   await iframe.waitFor();
   assert.equal(await page.getByRole("checkbox",{checked:true}).count(),8);
   const html=await iframe.getAttribute("srcdoc");assert.ok(html);
-  for(const title of ["竞品参数总览","变体 / 订单","主副图分析","VOC 分析","关键词调研","新品定义","立项前确认清单","竞品流量分析"])assert.ok(html.includes(title),title);
+  for(const id of ["competitor-overview","variants-orders","listing-images","voc","keywords","definition","checklist","traffic"])
+    assert.ok(html.includes(`data-snapshot-module="${id}"`),id);
+  assert.doesNotMatch(html, /UPSTREAM_EMPTY|catalog\.sellerSprite|<script|data-internal-secret/);
   await page.screenshot({path:"test-results/favorite-export-all-modules-preview.png",fullPage:true});
+  const completeDownload=page.waitForEvent("download");
+  await page.getByRole("button",{name:"确认并开始导出"}).click();
+  const complete=await completeDownload,completePath=resolve("test-results","all-eight-modules-snapshot.html");
+  await complete.saveAs(completePath);assert.equal(await readFile(completePath,"utf8"),html);
   await page.getByRole("checkbox",{name:"VOC 分析",exact:true}).uncheck();
-  await page.waitForFunction(()=>document.querySelector('iframe[title="HTML 快照预览"]')?.getAttribute("srcdoc")?.includes('id="voc"')===false);
+  await page.waitForFunction(()=>document.querySelector('iframe[title="HTML 快照预览"]')?.getAttribute("srcdoc")?.includes('data-snapshot-module="voc"')===false);
   const reduced=await iframe.getAttribute("srcdoc");assert.ok(reduced);
-  assert.doesNotMatch(reduced,/<h2[^>]*>VOC 分析<\/h2>/);
+  assert.doesNotMatch(reduced,/data-snapshot-module="voc"/);
   const downloaded=page.waitForEvent("download");await page.getByRole("button",{name:"确认并开始导出"}).click();
   const file=await downloaded;const path=resolve("test-results","all-modules-snapshot.html");await file.saveAs(path);
   assert.equal(await readFile(path,"utf8"),reduced);assert.deepEqual(state.writes,[]);

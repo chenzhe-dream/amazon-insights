@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ExportSectionId } from "./module-catalog";
-import { verifyExportEligibility, type ExportIdentity, type ExportRequest } from "./read-export-content";
+import { verifyExportEligibility, type ExportIdentity, type ExportRequest } from "./read-export-eligibility";
 import { preparePageSnapshot } from "./page-snapshot-host";
 import type { PageSnapshotSources } from "./read-page-snapshot-sources";
 import { buildExportFileName, downloadExportHtml } from "./download-export-html";

@@ -1,8 +1,6 @@
-import { GetRunResponseSchema, ListReportsResponseSchema, ManualAlexaVocListResponseSchema, type AnalysisReport, type ManualAlexaVocRecord } from '../../shared/agent-contracts';
-import type { LocalRuleReport } from '../../shared/local-rule-report';
-import { VocEvidenceManifestSchema, type VocEvidenceManifest } from '../../shared/voc-evidence-contracts';
+import { ManualAlexaVocListResponseSchema, type ManualAlexaVocRecord } from '../../shared/agent-contracts';
 import { buildKeywordDemandAnalysis } from '../keyword-demand-analysis';
-import { buildProductLaunchAnalysis, hasProductLaunchAnalysis, type LaunchProductInput, type ProductLaunchAnalysis, type ProductLaunchRuntimeSources } from '../product-launch-analysis';
+import type { LaunchProductInput, ProductLaunchRuntimeSources } from '../product-launch-analysis';
 import type { ExportModuleContext, ExportModuleRead } from './export-module-context';
 
 function object(value: unknown): Record<string, unknown> {
@@ -14,11 +12,6 @@ async function json(read: ExportModuleRead, path: string, label: string): Promis
   const response = await read(path);
   if (!response.ok) throw new Error(`${label}读取失败（${response.status}）`);
   try { return await response.json(); } catch { throw new Error(`${label}响应格式无效`); }
-}
-
-function sameAsins(left: readonly string[], right: readonly string[]): boolean {
-  const sortedRight = [...right].sort();
-  return left.length === sortedRight.length && [...left].sort().every((asin, index) => asin === sortedRight[index]);
 }
 
 function memo<T>(context: ExportModuleContext, key: string, read: () => Promise<T>): Promise<T> {
@@ -51,132 +44,6 @@ export function readManualVocRecords(context: ExportModuleContext, read: ExportM
   if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error('Manual Alexa VOC 在读取期间变化，请重新准备');
   return first;
   });
-}
-
-function validLocalReport(value: unknown, context: ExportModuleContext): LocalRuleReport {
-  const report = object(value);
-  const scope = object(report.inputScope);
-  if (report.schemaVersion !== 'local-rule-report/v1' || typeof report.id !== 'string' || typeof report.createdAt !== 'string'
-    || scope.organizationId !== context.organizationId || scope.projectId !== context.projectId
-    || scope.marketplace !== context.marketplace || !Array.isArray(scope.asins)
-    || !sameAsins(scope.asins as string[], context.asins)) throw new Error('已保存规则报告来源范围不匹配');
-  if (!Array.isArray(report.products) || !sameAsins(report.products.map(item => object(item).asin as string), context.asins))
-    throw new Error('已保存规则报告商品范围不匹配');
-  const analysis = object(report.analysis);
-  const finalDefinition = object(report.finalDefinition);
-  if (report.sourceBindings !== undefined) {
-    const bindings = object(report.sourceBindings);
-    if (!Array.isArray(bindings.manualVoc) || bindings.manualVoc.some(raw => !context.asins.includes(object(raw).asin as string)))
-      throw new Error('已保存规则报告 VOC 来源 ASIN 不匹配');
-  }
-  function sameScope(raw: unknown): boolean {
-    const nested = object(raw);
-    return nested.organizationId === context.organizationId && nested.projectId === context.projectId
-      && nested.marketplace === context.marketplace && nested.inputRevision === scope.inputRevision
-      && Array.isArray(nested.asins) && sameAsins(nested.asins as string[], context.asins);
-  }
-  function validateSource(raw: unknown) {
-    const source = object(raw);
-    if ((source.scope === 'asin' && !context.asins.includes(source.asin as string))
-      || (source.scope !== 'asin' && source.scope !== 'project')
-      || (source.asin !== undefined && !context.asins.includes(source.asin as string))
-      || (source.inputScope !== undefined && !sameScope(source.inputScope))) {
-      throw new Error('已保存规则判定来源范围不匹配');
-    }
-  }
-  function validateTrace(raw: unknown) {
-    if (raw === undefined) return;
-    const trace = object(raw);
-    if (!sameScope(trace.inputScope) || !Array.isArray(trace.decisions) || !Array.isArray(trace.sources))
-      throw new Error('已保存规则判定范围不匹配');
-    trace.sources.forEach(validateSource);
-    for (const rawDecision of trace.decisions) {
-      const decision = object(rawDecision);
-      if (!context.asins.includes(decision.asin as string) || !sameScope(decision.inputScope))
-        throw new Error('已保存规则判定 ASIN 或范围不匹配');
-    }
-    if (trace.contexts !== undefined) {
-      if (!Array.isArray(trace.contexts)) throw new Error('已保存规则上下文格式无效');
-      for (const rawContext of trace.contexts) {
-        const item = object(rawContext);
-        if (!context.asins.includes(item.asin as string) || !sameScope(item.inputScope))
-          throw new Error('已保存规则上下文范围不匹配');
-        for (const key of ['evidence', 'needs']) {
-          if (!Array.isArray(item[key])) throw new Error('已保存规则上下文格式无效');
-          item[key].forEach(validateSource);
-        }
-      }
-    }
-  }
-  validateTrace(analysis.ruleTrace);
-  validateTrace(finalDefinition.ruleTrace);
-  return value as LocalRuleReport;
-}
-
-export function readLocalRuleReportsForExport(context: ExportModuleContext, read: ExportModuleRead): Promise<LocalRuleReport[]> {
-  return memo(context, 'local-rule-reports', async () => {
-  if (context.asins.length === 0 || context.marketplace !== 'US') return [];
-  const query = new URLSearchParams({ projectId: context.projectId, asins: [...context.asins].sort().join(',') });
-  const path = `/api/local-rule-reports?${query.toString()}`;
-  async function snapshot() {
-    const body = object(await json(read, path, '已保存规则报告'));
-    if (!Array.isArray(body.reports)) throw new Error('已保存规则报告响应格式无效');
-    return body.reports.map(item => validLocalReport(item, context));
-  }
-  const first = await snapshot();
-  const second = await snapshot();
-  if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error('已保存规则报告在读取期间变化，请重新准备');
-  return first.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id));
-  });
-}
-
-export function readRunReportsForExport(context: ExportModuleContext, read: ExportModuleRead): Promise<AnalysisReport[]> {
-  return memo(context, 'run-reports', async () => {
-  if (!context.currentRunId) return [];
-  const runId = context.currentRunId;
-  const run = GetRunResponseSchema.safeParse(await json(read, `/v1/runs/${encodeURIComponent(runId)}`, '分析运行'));
-  if (!run.success || run.data.run.id !== runId || run.data.run.projectId !== context.projectId)
-    throw new Error('分析运行与项目来源不匹配');
-  const selection = run.data.evidenceSelection;
-  if (!selection && !sameAsins(context.asins, context.sourceAsins)) return [];
-  if (selection && (selection.organizationId !== context.organizationId || selection.projectId !== context.projectId
-    || !sameAsins(selection.selectedAsins, context.asins))) return [];
-  async function snapshot() {
-    const parsed = ListReportsResponseSchema.safeParse(await json(read, `/v1/runs/${encodeURIComponent(runId)}/reports`, '已保存分析报告'));
-    if (!parsed.success || parsed.data.reports.some(report => report.runId !== runId)) throw new Error('已保存分析报告来源不匹配');
-    for (const report of parsed.data.reports) {
-      const result = object(report.result);
-      if (result.evidenceSelection === undefined) continue;
-      const nested = VocEvidenceManifestSchema.safeParse(result.evidenceSelection);
-      if (!nested.success) throw new Error('已保存分析报告证据范围无效');
-      assertManifestScope(nested.data, context, selection);
-      const identity = result.identity;
-      if (identity && typeof identity === 'object' && !Array.isArray(identity)
-        && 'inputFingerprint' in identity && identity.inputFingerprint !== nested.data.fingerprint) {
-        throw new Error('已保存分析报告输入指纹不匹配');
-      }
-    }
-    return parsed.data.reports;
-  }
-  const first = await snapshot();
-  const second = await snapshot();
-  if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error('已保存分析报告在读取期间变化，请重新准备');
-  return first;
-  });
-}
-
-function assertManifestScope(manifest: VocEvidenceManifest, context: ExportModuleContext, runSelection?: VocEvidenceManifest): void {
-  if (manifest.organizationId !== context.organizationId || manifest.projectId !== context.projectId
-    || manifest.marketplace !== context.marketplace || !sameAsins(manifest.selectedAsins, context.asins)
-    || (context.version && manifest.baseSyncRunId !== context.version.runId)) throw new Error('已保存分析报告证据范围不匹配');
-  if (runSelection && (manifest.fingerprint !== runSelection.fingerprint
-    || manifest.baseSyncRunId !== runSelection.baseSyncRunId || manifest.sourcePolicy !== runSelection.sourcePolicy
-    || manifest.sourceMode !== runSelection.sourceMode)) throw new Error('已保存分析报告证据指纹与运行不匹配');
-}
-
-export function selectedReport(reports: readonly AnalysisReport[], stage: AnalysisReport['stage']): AnalysisReport | null {
-  return [...reports].filter(report => report.stage === stage && report.status === 'complete')
-    .sort((a, b) => b.version - a.version || Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null;
 }
 
 function dataMap(context: ExportModuleContext, stage: 'keywords' | 'reviews', key: string): Record<string, unknown> {
@@ -257,11 +124,4 @@ export function buildCurrentPageAnalysisInputs(context: ExportModuleContext, man
     keywordDemand: buildKeywordDemandAnalysis(products, keywordSources as ProductLaunchRuntimeSources['keywordSources']),
   };
   return {products, sources};
-}
-
-/** Replays the page's existing pure display builder only on explicitly scoped, already read sources. */
-export function buildCurrentPageAnalysis(context: ExportModuleContext, manual: readonly ManualAlexaVocRecord[]): ProductLaunchAnalysis | null {
-  const inputs = buildCurrentPageAnalysisInputs(context, manual);
-  return inputs && hasProductLaunchAnalysis(inputs.products, inputs.sources)
-    ? buildProductLaunchAnalysis(inputs.products, inputs.sources) : null;
 }

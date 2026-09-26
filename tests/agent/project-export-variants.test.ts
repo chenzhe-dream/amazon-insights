@@ -7,8 +7,7 @@ import { createHash } from "node:crypto";
 
 import { RuntimeAnalysisDataSnapshotSchema } from "../../app/lib/runtime-analysis-data";
 import { readGeneratedRuntimeAnalysisData } from "../../app/lib/runtime-analysis-data-server";
-import { buildVariantsOrdersExportSection } from "../../app/project-export/variants-orders-export-section";
-import { readVariantsExportSection } from "../../app/project-export/read-variants-export";
+import { readVariantsSnapshot } from "../../app/project-export/read-variants-export";
 import { getXydcOrderWindow } from "../../shared/xydc-order-summary";
 import { xydcVariantCachePath } from "../../scripts/lib/xydc-variant-cache";
 import { xydcOrderCachePath } from "../../scripts/lib/xydc-order-cache";
@@ -40,50 +39,6 @@ function snapshot() {
 const context = { projectId: "project", organizationId: "org", marketplace: "US", asins: [asins[0]!], sourceAsins: asins,
   currentRunId: null, version: null, capturedAt };
 
-test("unpublished variant export excludes global catalog while retaining its own cached child details", () => {
-  const cached = snapshot();
-  cached.catalog = [{ asin: asins[0], brand: "UNBOUND_CATALOG_BRAND", title: "UNBOUND_CATALOG_TITLE",
-    image: "https://example.com/UNBOUND_CATALOG_IMAGE.jpg" }];
-  for (const version of [null, undefined]) {
-    const section = buildVariantsOrdersExportSection({ snapshot: cached, selectedAsins: context.asins,
-      sourceAsins: asins, marketplace: "US", capturedAt, version });
-    const serialized = JSON.stringify(section);
-    assert.equal(section.status, "ready");
-    assert.doesNotMatch(serialized, /UNBOUND_CATALOG/);
-    assert.match(serialized, /B000000010/);
-    assert.match(serialized, /B000000001/);
-    assert.match(serialized, /Child 0/);
-    assert.match(serialized, /https:\/\/example\.com\/B000000011\.jpg/);
-    const product = section.blocks.find(block => block.kind === "table" && block.title.includes("页面商品资料"));
-    assert.ok(product?.kind === "table");
-    assert.equal(product.rows[0]?.[2]?.text, "—");
-    assert.equal(product.rows[0]?.[3]?.text, "—");
-    assert.equal(product.rows[0]?.[4]?.imageUrl, undefined);
-  }
-});
-
-test("variant export retains every child and all 12 months with missing and undisclosed distinct", () => {
-  const section = buildVariantsOrdersExportSection({ snapshot: snapshot(), selectedAsins: context.asins,
-    sourceAsins: asins, marketplace: "US", capturedAt });
-  const annual = section.blocks.find(block => block.kind === "table" && block.title.includes("年度份额"));
-  const monthly = section.blocks.find(block => block.kind === "table" && block.title.includes("逐月"));
-  const shares = section.blocks.find(block => block.kind === "table" && block.title.includes("逐月子体披露订单占比"));
-  const chart = section.blocks.find(block => block.kind === "chart");
-  assert.equal(section.status, "ready");
-  assert.equal(annual?.kind === "table" && annual.rows.length, 4);
-  assert.equal(monthly?.kind === "table" && monthly.rows.length, 12);
-  assert.equal(chart?.kind === "chart" && chart.series.length, 4);
-  assert.equal(monthly?.kind === "table" && monthly.rows[0]?.[1]?.text, "未披露（源值 0）");
-  assert.equal(monthly?.kind === "table" && monthly.rows[0]?.[4]?.text, "缺失");
-  assert.equal(shares?.kind === "table" && shares.rows.length, 12);
-  assert.equal(shares?.kind === "table" && shares.rows[0]?.[1]?.text, "未披露");
-  assert.equal(shares?.kind === "table" && shares.rows[0]?.[2]?.text, "40.00%");
-  assert.equal(shares?.kind === "table" && shares.rows[0]?.[4]?.text, "缺失");
-  assert.equal(chart?.kind === "chart" && chart.series[0]?.color, "#ff0000");
-  assert.match(JSON.stringify(section), /红色/);
-  assert.equal(JSON.stringify(section).includes(asins[1]!), false, "unselected input ASIN must not appear in export");
-});
-
 test("reader checks authorization scope and rejects cache changes between strict reads", async () => {
   const first = snapshot();
   let calls = 0;
@@ -96,9 +51,9 @@ test("reader checks authorization scope and rejects cache changes between strict
     if (calls === 2) value.variants.families[0]!.children[0]!.attributes[0]!.labelZh = "深红色";
     return Response.json(value);
   };
-  await assert.rejects(readVariantsExportSection(context, read), /缓存正在变化/);
+  await assert.rejects(readVariantsSnapshot(context, read), /缓存正在变化/);
   assert.equal(calls, 2);
-  await assert.rejects(readVariantsExportSection({ ...context, organizationId: "other" }, async () => Response.json(first)), /来源范围/);
+  await assert.rejects(readVariantsSnapshot({ ...context, organizationId: "other" }, async () => Response.json(first)), /来源范围/);
 });
 
 test("strict cache reads distinguish absent files from malformed variant and order caches", async () => {

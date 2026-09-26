@@ -2,9 +2,9 @@ import { MarketSiteSchema } from "../../shared/market-sites";
 import { readCurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
 import type { CompetitorOverviewSnapshotProps, Product } from "../project-report-views/competitor-overview";
 import { exportFetcher, scopedFetcher, readExportEligibility, readExportSellingTranslations, verifyExportSession,
-  type ExportFetcher, type ExportRequest, type PreparedProjectExport } from "./read-export-content";
+  type ExportFetcher, type ExportRequest, type PreparedProjectExport } from "./read-export-eligibility";
 import type { ExportModuleContext } from "./export-module-context";
-import type { ExportSectionId } from "./module-catalog";
+import { connectedExportModules, type ExportSectionId } from "./module-catalog";
 import {readVariantsSnapshot} from "./read-variants-export";
 import type {VariantsSnapshotSources} from "./page-snapshot-variants";
 import {readPageSnapshotImages, type ImagesSnapshotSources} from "./read-page-snapshot-images";
@@ -13,8 +13,7 @@ import {readPageSnapshotKeywords, type KeywordsSnapshotSources} from "./read-pag
 import {readPageSnapshotDefinition, type DefinitionSnapshotSources} from "./read-page-snapshot-definition";
 import {readPageSnapshotTraffic, type TrafficSnapshotSources} from "./read-page-snapshot-traffic";
 
-// Extend only after each original view has passed its snapshot acceptance.
-export const pageSnapshotModules: readonly ExportSectionId[] = ["competitor-overview", "variants-orders", "listing-images", "voc", "keywords", "definition", "checklist", "traffic"];
+export const pageSnapshotModules: readonly ExportSectionId[] = connectedExportModules;
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;

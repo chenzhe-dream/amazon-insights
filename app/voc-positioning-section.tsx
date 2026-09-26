@@ -187,8 +187,8 @@ export function VocPositioningSection({ products, sources }: {
                 </tr>
               </thead>
               <tbody>
-                {positioning.optimizeRows.map(row => (
-                  <tr key={`${row.priority}-${row.direction}`}>
+                {positioning.optimizeRows.map((row, index) => (
+                  <tr key={`${row.priority}-${row.direction}-${index}`}>
                     <th>
                       <PriorityChip priority={row.priority} />
                     </th>

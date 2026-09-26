@@ -5,7 +5,7 @@ import { CompetitorOverviewSnapshotView } from "../project-report-views/competit
 import { collectPageSnapshotStyles } from "./page-snapshot-styles";
 import { serializePageSnapshot } from "./serialize-page-snapshot";
 import { readPageSnapshotSources, type PageSnapshotSources } from "./read-page-snapshot-sources";
-import type { ExportFetcher, ExportRequest } from "./read-export-content";
+import type { ExportFetcher, ExportRequest } from "./read-export-eligibility";
 import {PageSnapshotVariants} from "./page-snapshot-variants";
 import {PageSnapshotImages} from "./page-snapshot-images";
 import {SnapshotPresentationProvider} from "../project-report-views/snapshot-presentation";
