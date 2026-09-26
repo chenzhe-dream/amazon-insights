@@ -7,6 +7,7 @@ import { serializePageSnapshot } from "./serialize-page-snapshot";
 import { readPageSnapshotSources, type PageSnapshotSources } from "./read-page-snapshot-sources";
 import type { ExportFetcher, ExportRequest } from "./read-export-content";
 import {PageSnapshotVariants} from "./page-snapshot-variants";
+import {PageSnapshotImages} from "./page-snapshot-images";
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
   return <main className="page-snapshot">
@@ -15,6 +16,7 @@ export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
       ? <CompetitorOverviewSnapshotView {...content.overview}/>
       : <div className="card"><h2>竞品参数总览</h2><p>暂无已发布的竞品结果。</p></div>}</section>}
     {content.moduleIds.includes("variants-orders") && content.variants && <section className="compare-page" data-snapshot-module="variants-orders"><PageSnapshotVariants {...content.variants}/></section>}
+    {content.moduleIds.includes("listing-images") && content.images && <section className="compare-page" data-snapshot-module="listing-images"><PageSnapshotImages {...content.images}/></section>}
   </main>;
 }
 class SnapshotBoundary extends Component<{children: ReactNode; onError: (error: Error) => void}, {failed: boolean}> {

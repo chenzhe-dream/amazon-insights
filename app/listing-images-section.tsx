@@ -11,7 +11,6 @@ import type { ImageRemarkOverlayEntry } from "../shared/image-remark-overlay";
 import {
   sorftimeListingContentData,
   sorftimeListingContentMeta,
-  type SorftimeListingContentRecord,
 } from "./sorftime-listing-content-data";
 
 type ProductRef = {
@@ -48,6 +47,7 @@ type ResolvedGallery = {
   urls: string[];
   source: GallerySource | null;
 };
+type ListingGalleryRecord = {mainImage?: string | null; galleryImages?: string[]; fetchedAt?: string; previousGalleryImages?: string[]};
 
 type ImageRemarkOutcomeStatus = "ready" | "upstream-empty" | "timeout" | "connector-failed";
 
@@ -73,17 +73,19 @@ function getListingImageOutcome(asin: string, slotIndex: number): ImageRemarkOut
 }
 
 type ListingImagesSectionProps = {
+  presentation?: "normal" | "snapshot";
   onImageAction?: (asin:string, action:ListingImageAction) => Promise<string | void>;
   imageActionJob?: SyncJob | null;
   imageActionPending?: boolean;
   products: ProductRef[];
   market: MarketInfo;
   colors: string[];
-  listingByAsin?: Readonly<Record<string, SorftimeListingContentRecord>>;
+  listingByAsin?: Readonly<Record<string, ListingGalleryRecord>>;
   reportUnavailableReason?: string;
   resolveImageRemark?: typeof getListingImageRemark;
   resolveImageOutcome?: (asin: string, slotIndex: number) => ImageRemarkOutcome | null;
   resolveImageOverlay?: (asin: string, slotIndex: number) => ImageRemarkOverlayEntry | null;
+  snapshotSourceDate?: string | null;
 };
 
 export const LISTING_IMAGES_SOURCE_LABEL = "MCP 商品图";
@@ -91,7 +93,7 @@ export const LISTING_IMAGES_SOURCE_LABEL = "MCP 商品图";
 function resolveGallery(
   asin: string,
   fallbackImage: string | null,
-  listingByAsin: Readonly<Record<string, SorftimeListingContentRecord>>,
+  listingByAsin: Readonly<Record<string, ListingGalleryRecord>>,
 ): ResolvedGallery {
   const record = listingByAsin[asin];
   if (record?.galleryImages?.length) return { urls: record.galleryImages, source: "sorftime" };
@@ -105,6 +107,7 @@ function isVideoThumbnail(url: string) {
 }
 
 export function ListingImagesSection({
+  presentation = "normal",
   products,
   onImageAction,
   imageActionPending,
@@ -116,15 +119,31 @@ export function ListingImagesSection({
   resolveImageRemark = getListingImageRemark,
   resolveImageOutcome = getListingImageOutcome,
   resolveImageOverlay = () => null,
+  snapshotSourceDate,
 }: ListingImagesSectionProps) {
+  const snapshot = presentation === "snapshot";
   const listingDates = [...new Set(Object.values(listingByAsin).map(record => record.fetchedAt).filter(Boolean))].sort();
-  const listingSourceDate = listingDates.length ? listingDates.join("、") : sorftimeListingContentMeta.updatedAt;
+  const listingSourceDate = listingDates.length ? listingDates.join("、") : snapshot ? snapshotSourceDate : sorftimeListingContentMeta.updatedAt;
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const [pinnedPreview, setPinnedPreview] = useState<PinnedPreview | null>(null);
+  const publishedRemarkForImage = (asin: string, slotIndex: number) => {
+    const record = listingByAsin[asin];
+    const url = record?.galleryImages?.length ? record.galleryImages[slotIndex] : slotIndex === 0 ? record?.mainImage : undefined;
+    if (snapshot && !url) return null;
+    if (snapshot && url) {
+      const atSlot = resolveImageRemark(asin, slotIndex);
+      if (atSlot && "imageUrl" in atSlot && atSlot.imageUrl === url) return atSlot;
+      const bound = Array.from({length: Math.max(record?.previousGalleryImages?.length ?? 0, record?.galleryImages?.length ?? 0, slotIndex + 1)},
+        (_, index) => resolveImageRemark(asin, index)).filter(note => note && "imageUrl" in note && note.imageUrl === url);
+      if (bound.length === 1) return bound[0];
+      if (bound.length > 1) return null;
+    }
+    return url ? resolveRemarkForGalleryImage(url, slotIndex, record?.previousGalleryImages, index => resolveImageRemark(asin, index)) : resolveImageRemark(asin, slotIndex);
+  };
   const remarkForImage = (asin: string, slotIndex: number) => {
-    const record = listingByAsin[asin] as (SorftimeListingContentRecord & {previousGalleryImages?: string[]}) | undefined;
-    const url = record?.galleryImages?.[slotIndex];
-    const current = url ? resolveRemarkForGalleryImage(url, slotIndex, record?.previousGalleryImages, index => resolveImageRemark(asin, index)) : resolveImageRemark(asin, slotIndex);
+    const record = listingByAsin[asin];
+    const url = record?.galleryImages?.length ? record.galleryImages[slotIndex] : slotIndex === 0 ? record?.mainImage : undefined;
+    const current = publishedRemarkForImage(asin, slotIndex);
     if (current || !url) return current;
     const overlay = resolveImageOverlay(asin, slotIndex);
     return overlay?.asin === asin && overlay.index === slotIndex && overlay.imageUrl === url
@@ -132,7 +151,7 @@ export function ListingImagesSection({
       : null;
   };
   const imageColumnCount = Math.min(
-    MAX_IMAGE_COLUMNS,
+    snapshot ? Number.MAX_SAFE_INTEGER : MAX_IMAGE_COLUMNS,
     Math.max(
       1,
       ...products.map(product => resolveGallery(product.asin, product.image, listingByAsin).urls.length),
@@ -141,6 +160,7 @@ export function ListingImagesSection({
   const imageColumns = Array.from({ length: imageColumnCount }, (_, index) => index);
 
   useEffect(() => {
+    if (snapshot) return;
     if (!pinnedPreview) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setPinnedPreview(null);
@@ -151,7 +171,7 @@ export function ListingImagesSection({
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [pinnedPreview]);
+  }, [pinnedPreview, snapshot]);
 
   const pendingRemarkCount = products.reduce((count, product) => {
     const gallery = resolveGallery(product.asin, product.image, listingByAsin);
@@ -183,12 +203,12 @@ export function ListingImagesSection({
           <h3>主辅图横向对比</h3>
           <p>
             纵向为竞品 ASIN，横向为图片 1–{imageColumnCount}（第 1 张为主图，其余为辅图）· 每张图下方为视觉结构摘要 · Sorftime 图册优先，SellerSprite 商品图兜底
-            {reportUnavailableReason ? ` · ${reportUnavailableReason}` : <> · Listing 数据采集于 {listingSourceDate}</>}
+            {reportUnavailableReason ? ` · ${reportUnavailableReason}` : listingSourceDate ? <> · Listing 数据采集于 {listingSourceDate}</> : " · Listing 数据时间未记录"}
           </p>
         </div>
         <span className="source-badge">{LISTING_IMAGES_SOURCE_LABEL}</span>
       </div>
-      {pendingRemarkCount > 0 ? (
+      {!snapshot && pendingRemarkCount > 0 ? (
         <p className="listing-images-pending-note">
           MCP 商品图已到位；{pendingRemarkCount} 张图缺少 AI 备注，具体原因见对应图片。
         </p>
@@ -224,9 +244,7 @@ export function ListingImagesSection({
                         {index + 1}
                       </span>
                       {(() => {
-                        const mainImage = amazonMediaSrc(
-                          gallery.urls[0] || "",
-                        );
+                        const mainImage = snapshot ? gallery.urls[0] || "" : amazonMediaSrc(gallery.urls[0] || "");
                         return mainImage ? (
                           <img
                             className="listing-images-asin-thumb"
@@ -246,17 +264,17 @@ export function ListingImagesSection({
                         </a>
                         {gallery.source === "sorftime" ? (
                           <small className="listing-images-count">
-                            Sorftime MCP · Provider 返回 {gallery.urls.length} 张{videoThumbnailCount ? `（含 ${videoThumbnailCount} 个视频位缩略图）` : ""} · AI 备注 {readyRemarkCount}/{gallery.urls.length} 张
-                            {readyRemarkCount < gallery.urls.length ? " · 分析待处理" : ""}
+                            Sorftime MCP · Provider 返回 {gallery.urls.length} 张{videoThumbnailCount ? `（含 ${videoThumbnailCount} 个视频位缩略图）` : ""} · {snapshot ? "已有备注" : "AI 备注"} {readyRemarkCount}/{gallery.urls.length} 张
+                            {!snapshot && readyRemarkCount < gallery.urls.length ? " · 分析待处理" : ""}
                           </small>
                         ) : gallery.source === "sellerSpriteCatalog" ? (
                           <small className="listing-images-count">
                             SellerSprite MCP · 商品图 {gallery.urls.length} 张
                           </small>
                         ) : (
-                          <small className="listing-images-count muted">{reportUnavailableReason ?? "MCP 暂未返回商品图 · upstream-empty"}</small>
+                          <small className="listing-images-count muted">{reportUnavailableReason ?? (snapshot ? "暂无已保存商品图数据" : "MCP 暂未返回商品图 · upstream-empty")}</small>
                         )}
-                        <ListingImageActions asin={product.asin} onAction={onImageAction} job={imageActionJob} disabled={imageActionPending} />
+                        {!snapshot && <ListingImageActions asin={product.asin} onAction={onImageAction} job={imageActionJob} disabled={imageActionPending} />}
                       </div>
                     </div>
                   </th>
@@ -267,24 +285,24 @@ export function ListingImagesSection({
                     const sourceKey = `${product.asin}-${slotIndex}`;
                     const isPinnedSource = pinnedPreview?.sourceKey === sourceKey;
                     const imageRemark = remarkForImage(product.asin, slotIndex);
-                    const imageOverlay = imageRemark && !resolveRemarkForGalleryImage(url ?? "", slotIndex,
-                      (listingByAsin[product.asin] as SorftimeListingContentRecord & {previousGalleryImages?: string[]})?.previousGalleryImages,
-                      imageIndex => resolveImageRemark(product.asin, imageIndex))
+                    const imageOverlay = imageRemark && !publishedRemarkForImage(product.asin, slotIndex)
                       ? resolveImageOverlay(product.asin, slotIndex) : null;
                     const imageOutcome = resolveImageOutcome(product.asin, slotIndex);
                     const imageOutcomeReason = imageOutcome
                       ? IMAGE_REMARK_OUTCOME_REASONS[imageOutcome.status]
-                      : "尚无图片分析结果";
+                      : snapshot ? "暂无已保存图片备注" : "尚无图片分析结果";
                     return (
                       <td
                         key={sourceKey}
                         className={`listing-images-slot-col${slotIndex === 0 ? " is-main-slot" : ""}`}
                       >
                         {!url ? (
-                          <span className="listing-image-empty">—</span>
+                          <span className="listing-image-empty">{snapshot && url === "" ? "图片链接不可分享" : "—"}</span>
                         ) : (
                           <div className="listing-image-cell">
-                            <button
+                            {snapshot ? <a className="listing-image-frame" href={url} target="_blank" rel="noreferrer" aria-label={`${label}，打开在线原图`}>
+                              <img src={url} alt={label} loading="lazy" referrerPolicy="no-referrer" />
+                            </a> : <button
                               type="button"
                               className={`listing-image-frame${isPinnedSource ? " is-pinned-source" : ""}`}
                               aria-label={`${label}，点击进一步放大`}
@@ -309,7 +327,7 @@ export function ListingImagesSection({
                               }}
                             >
                               <img src={amazonMediaSrc(url)} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                            </button>
+                            </button>}
                             {imageRemark ? (
                               <div className="listing-image-remark-block">
                                 {imageOverlay?.imageUrl === url ? <p className="listing-image-caption muted">
@@ -324,9 +342,7 @@ export function ListingImagesSection({
                                     {imageRemark.image_types.slice(0, 2).join(" · ")}
                                   </p>
                                 ) : null}
-                                <p className="listing-image-remark" title={imageRemark.remark}>
-                                  {imageRemark.remark}
-                                </p>
+                                {snapshot ? <details className="listing-image-remark-details"><summary className="listing-image-remark" title={imageRemark.remark}>{imageRemark.remark}</summary><p>{imageRemark.remark}</p></details> : <p className="listing-image-remark" title={imageRemark.remark}>{imageRemark.remark}</p>}
                               </div>
                             ) : (
                               <p className="listing-image-caption muted">
@@ -344,11 +360,11 @@ export function ListingImagesSection({
           </tbody>
         </table>
       </div>
-      <p className="listing-images-footnote">
+      {!snapshot && <p className="listing-images-footnote">
         悬停约 2 倍预览 · 点击再放大至约 4 倍 · 点击空白处或按 Esc 关闭
-      </p>
+      </p>}
 
-      {hoverPreview && !pinnedPreview ? (
+      {!snapshot && hoverPreview && !pinnedPreview ? (
         <div
           className="listing-image-hover-float"
           style={{
@@ -361,7 +377,7 @@ export function ListingImagesSection({
         </div>
       ) : null}
 
-      {pinnedPreview ? (
+      {!snapshot && pinnedPreview ? (
         <div className="listing-image-focus-zoom" role="dialog" aria-modal="true" aria-label={pinnedPreview.label}>
           <button
             type="button"
