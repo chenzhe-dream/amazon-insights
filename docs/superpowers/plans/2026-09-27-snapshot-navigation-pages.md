@@ -131,10 +131,10 @@ assert.throws(() => resolveSnapshotSelection({
 
 **Consumes:** Task 1 目录与两个已净化页面。**Produces:** renderSnapshotNavigation、单文件无脚本导航样板。
 
-- [ ] 用两个带不同表格和 SVG 的样本编写失败用例，覆盖默认首选、切换单页、父子高亮和不显示另一页；确认当前长页不满足。
-- [ ] 生成可信 radio/label/details 外壳及作用域 CSS；保持旧业务正文清理策略，加入专门断言：业务输入仍 disabled/name 被剥离，只有生成器控件可切换。
-- [ ] 测试鼠标、键盘、窄屏、长二级菜单、文件直接打开和 sandbox iframe；关闭脚本仍可切换，零应用 API。
-- [ ] 运行 `node --import tsx --test tests/agent/project-snapshot-navigation-shell.test.tsx` 与 `tests/agent/project-page-snapshot.test.tsx`，通过后保存桌面/窄屏样板截图并提交。
+- [x] 用两个带不同表格和 SVG 的样本编写失败用例，覆盖默认首选、切换单页、父子高亮和不显示另一页；确认当前长页不满足。
+- [x] 生成可信 radio/label/details 外壳及作用域 CSS；保持旧业务正文清理策略，加入专门断言：业务输入仍 disabled/name 被剥离，只有生成器控件可切换。
+- [x] 测试鼠标、键盘、窄屏、长二级菜单、文件直接打开和 sandbox iframe；关闭脚本仍可切换，零应用 API。
+- [x] 运行 `node --import tsx --test tests/agent/project-snapshot-navigation-shell.test.tsx` 与 `tests/agent/project-page-snapshot.test.tsx`，通过后保存桌面/窄屏样板截图并提交。
 
 ### Task 3：十页原内容路由
 
