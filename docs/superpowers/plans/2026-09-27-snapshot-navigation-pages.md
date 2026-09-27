@@ -154,11 +154,11 @@ assert.throws(() => resolveSnapshotSelection({
 
 **Consumes:** Task 1 选择契约与 Task 3 页面渲染。**Produces:** 同一套父子页面选择驱动预览、准备结果和下载资格。
 
-- [ ] 先覆盖父选全选/取消/半选、隐藏无权限节点、空选禁止确认、仅选一页、变体内容选项和菜单顺序。
-- [ ] 将准备结果身份扩展为 project+session+pageIds+includeVariants，不能只比较 moduleIds；资格核验仍沿用既有来源权限。
-- [ ] 加入 voc-summary→voc-insight→voc-summary 的晚返回测试，以及确认期间切换两个共用来源的子页、撤销权限、关闭/重开、60 秒超时与重试测试。
-- [ ] 子页切换仅操作 iframe 内的原生控件，不触发外层选择、reader 或新分析；取消勾选当前页后重新准备默认首个剩余页。
-- [ ] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-snapshot-navigation-selection.test.tsx tests/agent/project-page-snapshot-lifecycle.test.tsx tests/agent/analysis-project-favorites-ui.test.tsx`，通过后提交。
+- [x] 先覆盖父选全选/取消/半选、隐藏无权限节点、空选禁止确认、仅选一页、变体内容选项和菜单顺序。
+- [x] 将准备结果身份扩展为 project+session+pageIds+includeVariants，不能只比较 moduleIds；资格核验仍沿用既有来源权限。
+- [x] 加入 voc-summary→voc-insight→voc-summary 的晚返回测试，以及确认期间切换两个共用来源的子页、撤销权限、关闭/重开、60 秒超时与重试测试。
+- [x] 子页切换仅操作 iframe 内的原生控件，不触发外层选择、reader 或新分析；取消勾选当前页后重新准备默认首个剩余页。
+- [x] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-snapshot-navigation-selection.test.tsx tests/agent/project-page-snapshot-lifecycle.test.tsx tests/agent/analysis-project-favorites-ui.test.tsx`，通过后提交。
 
 ### Task 5：完整文件与普通页面回归
 
