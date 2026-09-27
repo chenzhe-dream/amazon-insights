@@ -79,7 +79,25 @@ test("amount history stays visible when volume history is unavailable", () => {
   amountOnly.products[0].monthlyTrend.volume = [];
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={amountOnly} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
   assert.ok(html.includes('2026-08：销量 未知；销售额 4,000'));
-  assert.ok(html.includes('2026-08　未知 / 4,000'));
+  assert.ok(html.includes('销量 未知'));assert.ok(html.includes('销售额 4,000'));
+});
+
+test('single-month history displays values without pretending to be a trend',()=>{
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(html,/仅1个月数据，暂无法判断趋势/);
+ assert.doesNotMatch(html,/class="shape-ref-trend-pair"/);
+ assert.match(html,/2026-08/);assert.match(html,/4,000/);
+ const multiple=structuredClone(report);multiple.products[0].monthlyTrend.volume.unshift({month:'2026-07',value:100});
+ const multiHtml=renderToStaticMarkup(<MarketShapeReferenceView report={multiple} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(multiHtml,/class="shape-ref-trend-pair"/);
+});
+
+test('original business tables show metrics and keep coverage in tooltips or collapsed details',()=>{
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ const tables=html.match(/<table[^>]*shape-price-table[\s\S]*?<\/table>/g)??[];
+ assert.equal(tables.length,4);
+ for(const table of tables)assert.doesNotMatch(table.replace(/<[^>]*>/g,''),/可计算/);
+ assert.match(html,/<details class="shape-history-coverage"/);
 });
 
 test('known aggregate coverage, original editing tools and missing year average column are visible',()=>{

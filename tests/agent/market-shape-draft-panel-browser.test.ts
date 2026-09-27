@@ -41,7 +41,14 @@ test('draft autosave survives reload and capacity change; offline edits and conf
   assert.equal(await page.getByRole('button',{name:'保存报告版本'}).isDisabled(),true,'snapshot save waits for a trusted draft');
   releaseDraftRead();
   const first=page.getByLabel('B000000001 人工形态',{exact:true}),second=page.getByLabel('B000000002 人工形态',{exact:true});
-  await first.waitFor();await second.fill('Tall');await page.getByText(/草稿：已保存/).waitFor();
+  await first.waitFor();await page.getByText(/草稿：已保存/).waitFor();
+  const controls=page.locator('.market-shape-controls');
+  const heightBefore=(await controls.boundingBox())!.height;
+  await second.fill('Tall');
+  const heightPending=(await controls.boundingBox())!.height;
+  assert.ok(Math.abs(heightPending-heightBefore)<1,`autosave moved the report by ${heightPending-heightBefore}px`);
+  await page.getByText(/草稿：已保存/).waitFor();
+  assert.ok(Math.abs((await controls.boundingBox())!.height-heightBefore)<1,'saved status must not move the report');
   assert.equal(serverDraft.items.find(item=>item.asin==='B000000002')?.label,'Tall');
   await page.getByRole('button',{name:'缩容'}).click();await page.getByText(/目标上限1件/).waitFor();
   await page.getByRole('button',{name:'扩容'}).click();await second.waitFor();assert.equal(await second.inputValue(),'Tall');

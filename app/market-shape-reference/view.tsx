@@ -51,6 +51,13 @@ function Trend({ product }: { product: SorftimeCategoryDashboardProduct }) {
   const months = [...new Set([...volume, ...amount].map(point => point.month))].sort();
   const max = Math.max(1, ...volume.map(p => known(p.value) ?? 0));
   const maxAmount = Math.max(1, ...amount.map(p => known(p.value) ?? 0));
+  if (months.length === 1) {
+    const month = months[0], units = volume.find(p => p.month === month)?.value, revenue = amount.find(p => p.month === month)?.value;
+    return <div className="shape-ref-trend shape-ref-trend-single" aria-label={`${product.asin} 月度销量与销售额趋势`} title={`${month}：销量 ${n(units)}；销售额 ${n(revenue, 2)}`}>
+      <small>{month}</small><div>销量 {n(units)}</div><div>销售额 {n(revenue, 2)}</div>
+      <small style={{display:'block',whiteSpace:'normal'}}>仅1个月数据，暂无法判断趋势</small>
+    </div>;
+  }
   return <div className="shape-ref-trend" aria-label={`${product.asin} 月度销量与销售额趋势`}>
     {months.length ? <div className="shape-ref-trend-bars">{months.map(month => {
       const units = volume.find(p => p.month === month)?.value;
@@ -239,4 +246,4 @@ function FragmentRows({ shape: row, bands }: { shape: ReferenceGroupRow; bands: 
   </>;
 }
 
-function RowSales({row,period}:{row:ReferenceGroupRow;period:Period}){const c=row.coverage[period];return <span>{c.notApplicable===c.total&&c.total>0?'不适用':`${c.missing>0&&row.sales[period]!==null?'已知 ':''}${n(row.sales[period])}`}<small style={{display:'block'}}>{`可计算 ${c.known}/${c.total}${c.notApplicable?` · 不适用 ${c.notApplicable}`:''}`}</small></span>;}
+function RowSales({row,period}:{row:ReferenceGroupRow;period:Period}){const c=row.coverage[period];return <span title={`可计算 ${c.known}/${c.total}${c.notApplicable?` · 不适用 ${c.notApplicable}`:''}${c.missing?` · 缺失 ${c.missing}`:''}`}>{c.notApplicable===c.total&&c.total>0?'不适用':`${c.missing>0&&row.sales[period]!==null?'已知 ':''}${n(row.sales[period])}`}</span>;}

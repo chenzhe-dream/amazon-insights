@@ -24,7 +24,17 @@ try{
   await page.goto(origin+'?sample='+count);await page.getByRole('heading',{name:'市场结构综合结论',exact:true}).waitFor();
   const renderMs=await page.evaluate(()=>performance.now()-(window as any).replayBegin);
   assert.equal(await page.locator('input[aria-label$=" 人工形态"]').count(),count);
-  if(count===140){const year=page.locator('section').filter({has:page.getByRole('heading',{name:'上架年份 · 销量结构分析',exact:true})});await year.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/real-140-year-desktop.png'});await page.setViewportSize({width:390,height:844});await page.getByLabel(`${sample.products[0].asin} 人工形态`,{exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:out+'/real-140-edit-mobile.png'});await page.setViewportSize({width:1500,height:1100});}
+  if(count===140){
+   const input=page.getByLabel(`${sample.products[0].asin} 人工形态`,{exact:true});await input.scrollIntoViewIfNeeded();await input.click();
+   const before=await input.boundingBox();const editStart=performance.now();
+   for(const value of ['层','层架','层架式','层架式落地灯']){await input.fill(value);const after=await input.boundingBox();assert.ok(before&&after&&Math.abs(before.y-after.y)<1,'typing must not move the input');assert.ok(await input.evaluate(el=>el===document.activeElement));}
+   console.log(JSON.stringify({sample:140,fourEditsMs:performance.now()-editStart,inputStable:true}));
+   const single=page.locator('.shape-ref-trend-single').filter({hasText:'2,287'});assert.equal(await single.count(),1);assert.match(await single.innerText(),/83,841.42/);
+   const top=page.locator('section').filter({has:page.getByRole('heading',{name:/TOP 销售商品/})});await top.screenshot({path:out+'/single-month-and-input-desktop.png'});
+   const year=page.locator('section').filter({has:page.getByRole('heading',{name:'上架年份 · 销量结构分析',exact:true})});await year.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/real-140-year-desktop.png'});
+   const bands=page.locator('section').filter({has:page.getByRole('heading',{name:'商品形态 · 价格带分析',exact:true})});assert.doesNotMatch(await bands.locator('table').innerText(),/可计算/);assert.equal(await bands.locator('details.shape-history-coverage').getAttribute('open'),null);await bands.screenshot({path:out+'/compact-price-bands.png'});
+   await page.setViewportSize({width:390,height:844});await input.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/real-140-edit-mobile.png'});await page.setViewportSize({width:1500,height:1100});
+  }
   results.push({count,source:count===report.products.length?'saved real result':'synthetic capacity replay from saved product rows',ruleMs,serialMs,bytes:Buffer.byteLength(payload),renderMs,totals:analysis.synthesis.totalSales,coverage:analysis.synthesis.coverage});
  }
  assert.deepEqual(errors,[]);await writeFile(out+'/render-performance.json',JSON.stringify({results,errors},null,2));console.log(JSON.stringify({results,errors},null,2));
