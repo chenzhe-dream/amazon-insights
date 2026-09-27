@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { MarketInputSnapshot } from '../../../shared/market-analysis-contracts';
-import { MarketThemeReadinessCountsSchema } from '../../../shared/market-module-contracts';
+import { MarketThemeReadinessCountsSchema, MarketThemeReportSchema } from '../../../shared/market-module-contracts';
 import type { MarketModuleRunView, MarketStepDefinition } from '../../db/market-module-execution-repository';
 import { MarketThemeFlowParamsSchema, MARKET_THEME_RULES_FLOW_VERSION, MARKET_THEME_RULES_FLOW_V2, MARKET_THEME_RULES_FLOW_V3 } from './customer-theme-flow';
 import { MARKET_THEME_MAPPING_RULE_VERSION } from './customer-theme-mapping-rules';
@@ -39,6 +39,19 @@ export const MarketThemeReportStepInputSchema = z.discriminatedUnion('basis', [
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const same = (a: unknown, b: unknown) => { if (digest(a) !== digest(b)) throw new TypeError('Theme report lineage differs'); };
 const asins = z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20);
+
+/** Validate the saved envelope against rebuilt evidence without rewriting history.
+ * Pre-rules v1/v2 reports predate the two separate readiness fields. */
+export function restoreMarketThemeReportEnvelope(rebuilt: ReturnType<typeof createMarketThemeReport>, stored: unknown) {
+  const parsed = MarketThemeReportSchema.safeParse(stored);
+  if (!parsed.success) return null;
+  if (digest(rebuilt) === digest(stored)) return parsed.data;
+  if (!['market-theme-flow/v1', 'market-theme-flow/v2'].includes(rebuilt.versions.planner) ||
+      Object.hasOwn(parsed.data, 'ruleStatus') || Object.hasOwn(parsed.data, 'semanticStatus')) return null;
+  const { ruleStatus: _rule, semanticStatus: _semantic, reportHash: _hash, ...original } = rebuilt;
+  const legacy = { ...original, reportHash: digest(original) };
+  return digest(legacy) === digest(stored) ? parsed.data : null;
+}
 
 /** A bounded report envelope references the immutable rule rows instead of copying
  * counts or model output into a second, independently mutable representation. */

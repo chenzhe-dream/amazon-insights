@@ -3,9 +3,8 @@ import { MarketExecutionConflictError } from '../db/market-module-execution-repo
 import { PostgresQueryContext } from '../db/postgres/query-context';
 import { PostgresMarketModuleExecutionStore } from '../db/postgres/market-module-execution-store';
 import { PostgresMarketAnalysisSnapshotStore } from '../db/postgres/market-analysis-snapshot-store';
-import { createMarketThemeReport, MarketThemeReportStepInputSchema } from '../domain/market-research/customer-theme-report';
+import { createMarketThemeReport, restoreMarketThemeReportEnvelope, MarketThemeReportStepInputSchema } from '../domain/market-research/customer-theme-report';
 import { inspectMarketThemeContinuation, isMarketThemeFlow } from '../domain/market-research/customer-theme-flow';
-import { canonicalJsonSha256 as digest } from '../runtime/model-request-accounting';
 import { readMarketThemeDetailPage } from '../domain/market-research/customer-theme-details';
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from '../../shared/market-theme-detail-contracts';
 import { MarketModuleIdSchema } from '../../shared/market-module-contracts';
@@ -42,7 +41,8 @@ export class MarketThemeReportService {
       const saved = await new PostgresMarketAnalysisSnapshotStore(this.context).findInput({ actor: input.actor, studyId: view.run.scope.researchId, id: definition.inputSnapshotId });
       if (!saved) throw new MarketExecutionConflictError();
       const priorEvaluations=definition.basis==='reconciliation-evaluation'?await loadMarketThemeEvaluationHistory(this.context,input.actor,view,definition.evaluationAttemptId,saved.snapshot):[];
-      const report = createMarketThemeReport(view, step, saved.snapshot,priorEvaluations); if (digest(report) !== digest(attempt.output)) throw new MarketExecutionConflictError();
+      const report = restoreMarketThemeReportEnvelope(createMarketThemeReport(view, step, saved.snapshot,priorEvaluations),attempt.output);
+      if (!report) throw new MarketExecutionConflictError();
       const current = inspectMarketThemeContinuation(view, new Date().toISOString()).currentStepKeys.includes(step.stepKey) && step.latestAttemptId === attemptId;
       return {entry:{attemptId,current,report},snapshot:saved.snapshot,view,priorEvaluations};
     });
@@ -64,8 +64,8 @@ export class MarketThemeReportService {
         const saved = await snapshots.findInput({ actor: input.actor, studyId: view.run.scope.researchId, id: definition.inputSnapshotId });
         if (!saved) throw new MarketExecutionConflictError();
         const history=definition.basis==='reconciliation-evaluation'?await loadMarketThemeEvaluationHistory(this.context,input.actor,view,definition.evaluationAttemptId,saved.snapshot):[];
-        const report = createMarketThemeReport(view, step, saved.snapshot,history);
-        if (digest(report) !== digest(attempt.output)) throw new MarketExecutionConflictError();
+        const report = restoreMarketThemeReportEnvelope(createMarketThemeReport(view, step, saved.snapshot,history),attempt.output);
+        if (!report) throw new MarketExecutionConflictError();
         reports.push({ attemptId: attempt.id, current: currentKeys.has(step.stepKey) && step.latestAttemptId === attempt.id, report });
       }
       const latestSaved = reports.find(r => r.attemptId === view.run.latestReportAttemptId) ?? null;
