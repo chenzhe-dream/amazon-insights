@@ -7,7 +7,9 @@ import {canonicalJsonSha256 as digest} from '../../runtime/model-request-account
 import {buildMarketKeywordRevision} from './keyword-revision';
 import {aggregateKeywordClusters} from './keyword-clusters';
 import {scoreKeywordDemandClusters} from './keyword-scoring';
-type Input={facts:MarketKeywordFacts;classification:null|{kind:'manual';revision:MarketKeywordRevisionCatalog}|{kind:'global';report:MarketKeywordReconciliationReport}};
+import {buildKeywordOriginalClassification} from './keyword-original-classification';
+import type {MarketKeywordOriginalClassification} from '../../../shared/market-keyword-original-contracts';
+type Input={facts:MarketKeywordFacts;classification:null|{kind:'manual';revision:MarketKeywordRevisionCatalog}|{kind:'global';report:MarketKeywordReconciliationReport}|{kind:'local';report:MarketKeywordOriginalClassification}};
 function unique(ids:readonly string[],name:string){if(new Set(ids).size!==ids.length)throw new TypeError(`Duplicate ${name}`);return new Set(ids);}
 function prior(month:string,offset:number){const [y,m]=month.split('-').map(Number),n=y*12+m-1-offset;return `${Math.floor(n/12)}-${String(n%12+1).padStart(2,'0')}`;}
 const missing=(reason:string):KeywordScoringMetric=>({value:null,evidence:null,missingReason:reason});
@@ -22,7 +24,13 @@ export function buildMarketKeywordRuleReport(input:Input):MarketKeywordRuleRepor
  const members=unique(facts.members.map(m=>m.keywordId),'facts member');
  const mappings:{keywordId:string;clusterId:string}[]=[],labels=new Map<string,string>();
  let classification:MarketKeywordRuleReport['classification']={kind:'none',identity:null};
- if(input.classification?.kind==='manual'){
+ if(input.classification?.kind==='local'){
+  const report=input.classification.report,rebuilt=buildKeywordOriginalClassification(facts,report.productSeed);
+  if(digest(report)!==digest(rebuilt))throw new TypeError('Local classification binding mismatch');
+  classification={kind:'local',identity:report.identity};
+  for(const c of report.classification.clusters)labels.set(c.clusterId,c.label);
+  for(const a of report.classification.assignments)if(a.clusterId!==null)mappings.push({keywordId:a.keywordId,clusterId:a.clusterId});
+ }else if(input.classification?.kind==='manual'){
   const revision=MarketKeywordRevisionCatalogSchema.parse(input.classification.revision);
   if(digest(revision.facts)!==digest(facts))throw new TypeError('Classification facts mismatch');
   const rebuilt=buildMarketKeywordRevision({facts,request:{...revision.classification,factsId,expectedParentRevisionId:revision.revision.parentRevisionId,note:revision.revision.note},authorId:revision.revision.authorId,createdAt:revision.revision.createdAt});

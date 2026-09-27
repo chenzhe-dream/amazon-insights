@@ -72,6 +72,11 @@ test('public keyword start and read bind source months and native audited batche
     const saved = (await service.findKeywords(actor, started.run.id)).run;
     assert.equal((await steps.findModuleRun({ actor, moduleRunId: started.run.id }))!.run.versions.planner, MARKET_KEYWORD_RULES_FLOW_VERSION);
     assert.equal(saved.semanticStatus, 'skipped');
+    assert.equal(saved.automaticClassification?.factsId,saved.facts!.factsId);
+    assert.equal(saved.ruleReport?.classification.kind,'local');
+    assert.equal(saved.ruleReport?.classification.identity,saved.automaticClassification?.identity);
+    assert.equal(saved.automaticClassification?.classification.assignments.length,saved.facts!.members.length);
+    assert.ok(saved.ruleReport!.clusters.length>0);
     assert.ok(saved.ruleReport); assert.equal(saved.facts!.members[0].reference.searchVolume, 0);
     assert.equal(modelCalls, 0);
     assert.ok(saved.steps.every(step => !['model-batch', 'prepare-model-batches', 'reconcile'].includes(step.kind)));

@@ -9,6 +9,7 @@ import {MarketKeywordComparisonMonthsSchema} from './market-keyword-comparison-c
 import {MarketKeywordAbaMemberSchema} from './market-keyword-aba-source-contracts';
 import {MarketKeywordScoreInputAuditSchema} from './market-keyword-score-input-audit-contracts';
 import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
+import {MarketKeywordOriginalClassificationSchema} from './market-keyword-original-contracts';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const inputId = z.string().regex(/^market-input:[a-f0-9]{64}$/);
@@ -58,6 +59,7 @@ export const MarketKeywordRunResponseSchema = z.object({ run: z.object({ id: z.s
   status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), createdAt: z.string().datetime(),
   params: MarketKeywordStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), facts: MarketKeywordFactsSchema.nullable(), ruleStatus:z.enum(['complete','partial','unavailable']).optional(), semanticStatus:z.enum(['skipped','pending','partial','complete','unavailable']).optional(),
   reconciliation:MarketKeywordReconciliationReportSchema.optional(),
+  automaticClassification:MarketKeywordOriginalClassificationSchema.optional(),
   ruleReport:MarketKeywordRuleReportSchema.optional(),
   scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional(),
   history: z.array(z.object({ revisionId: z.string().regex(/^market-keyword-revision:[a-f0-9]{64}$/),

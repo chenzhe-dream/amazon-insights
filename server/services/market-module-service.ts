@@ -35,6 +35,7 @@ import {readMarketKeywordRun} from './market-keyword-read-service';
 import {MarketThemeSourceIssueSchema} from '../../shared/market-theme-source-issue';
 import {readMarketKeywordReconciliationReport} from './market-keyword-reconciliation-read';
 import {buildMarketKeywordRuleReport} from '../domain/market-research/keyword-rule-report';
+import {buildKeywordOriginalClassification} from '../domain/market-research/keyword-original-classification';
 import {buildMarketKeywordScoreInputAudit} from '../domain/market-research/keyword-score-input-audit';
 import {PostgresMarketKeywordRevisionStore} from '../db/postgres/market-keyword-revision-store';
 import {MarketKeywordRevisionIdSchema} from '../../shared/market-keyword-revision-contracts';
@@ -189,8 +190,9 @@ export class MarketModuleService {
     // Facts and classification are captured under the same read lock. Pure rule
     // calculation uses that detached basis after releasing the database lock.
     const {facts,reconciliation}=result.run;
-    const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:reconciliation?{kind:'global',report:reconciliation}:null}):null;
-    return {...result,run:{...result.run,...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
+    const automaticClassification=facts&&result.run.semanticStatus==='skipped'?buildKeywordOriginalClassification(facts,result.run.params.plannedPages[0].seed):undefined;
+    const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:automaticClassification?{kind:'local',report:automaticClassification}:reconciliation?{kind:'global',report:reconciliation}:null}):null;
+    return {...result,run:{...result.run,...(automaticClassification?{automaticClassification}:{}),...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
   }
   async saveKeywordRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);

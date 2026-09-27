@@ -30,13 +30,14 @@ function checkFacts(facts:MarketKeywordFacts,runId:string){
  if(facts.referenceMonth!==facts.scope.toMonth)throw new Error('事实参考月份与研究范围不一致，未加载该结果。');
 }
 function checkRun(run:MarketKeywordRunResponse['run']){
+ if(run.automaticClassification&&(run.semanticStatus!=='skipped'||run.automaticClassification.factsId!==run.facts?.factsId))throw new Error('自动分类与事实版本不一致，未加载该结果。');
  if(run.reconciliation&&(run.reconciliation.moduleRunId!==run.id||run.reconciliation.inputSnapshotId!==(run.facts?.pool.semanticInputSnapshotId??null)))throw new Error('归并结果与当前词池不一致，未加载该结果。');
  if(run.facts){checkFacts(run.facts,run.id);if(!same(run.scope,run.facts.scope))throw new Error('事实与任务研究范围不一致，未加载该结果。');}
- if(run.ruleReport){if(!run.facts)throw new Error('规则报告缺少事实基线，未加载该结果。');checkRules(run.ruleReport,run.facts,run.reconciliation?'global':'none',run.reconciliation?.resultHash??null);}
+ if(run.ruleReport){if(!run.facts)throw new Error('规则报告缺少事实基线，未加载该结果。');checkRules(run.ruleReport,run.facts,run.automaticClassification?'local':run.reconciliation?'global':'none',run.automaticClassification?.identity??run.reconciliation?.resultHash??null);}
  if(run.scoreInputAudit){if(!run.facts||!run.ruleReport)throw new Error('输入核对缺少事实或规则报告，未加载该结果。');assertKeywordScoreInputAuditBinding(run.scoreInputAudit,run.facts,run.ruleReport);}
  return run;
 }
-function checkRules(report:MarketKeywordRuleReport,facts:MarketKeywordFacts,kind:'none'|'manual'|'global',identity:string|null){
+function checkRules(report:MarketKeywordRuleReport,facts:MarketKeywordFacts,kind:'none'|'manual'|'global'|'local',identity:string|null){
  if(report.factsId!==facts.factsId||report.moduleRunId!==facts.moduleRunId||report.referenceMonth!==facts.referenceMonth||!same(report.scope,facts.scope)||report.classification.kind!==kind||report.classification.identity!==identity)
   throw new Error('规则报告与事实或分类版本不一致，未加载该结果。');
 }

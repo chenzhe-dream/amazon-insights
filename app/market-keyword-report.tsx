@@ -9,6 +9,7 @@ import {MarketKeywordDemandSummary} from './market-keyword-demand-summary';
 import {MarketKeywordTable} from './market-keyword-table';
 import type {MarketKeywordScoreInputAudit} from '../shared/market-keyword-score-input-audit-contracts';
 import {MarketKeywordRulesReport} from './market-keyword-rule-report';
+import type {MarketKeywordOriginalClassification} from '../shared/market-keyword-original-contracts';
 import {MarketKeywordTaxonomyView} from './market-keyword-taxonomy-view';
 
 const dimensions=['W1','W2','W3','W4'] as const;
@@ -93,17 +94,17 @@ function GlobalSemantics({facts,result}:{facts:MarketKeywordFacts;result:MarketK
   <Pages items={result.decisions} label="跨批归并明细" render={rows=><ul className="market-theme-rows">{rows.map(row=><li key={row.keywordId}><h4>{words.get(row.keywordId)??row.keywordId}</h4>{([...dimensions,'cluster'] as const).map(d=>{const cell=row[d];return <div key={d}><p><strong>{d==='cluster'?'需求簇':dimensionNames[d]}：</strong>{cell.status==='supported'?cell.candidateIds.map(id=>labels.get(id)?.label??'标签名称缺失').join('、'):`${cell.status==='unknown'?'未知':'不可用'}（${reasons[cell.reason??'']??'待验证'}）`}</p><details><summary>定义与原词证据</summary>{cell.candidateIds.map(id=><p key={id}>{labels.get(id)?.definition}</p>)}<Evidence spans={cell.evidence}/></details></div>;})}</li>)}</ul>}/>
  </section>;
 }
-export function MarketKeywordFactsReport({facts,catalog,reconciliation,ruleReport,scoreInputAudit,queryName,semanticSkipped=false}:{queryName?:string;facts:MarketKeywordFacts;catalog?:SourceCatalog;reconciliation?:MarketKeywordReconciliationReport;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;semanticSkipped?:boolean}){
+export function MarketKeywordFactsReport({facts,catalog,reconciliation,ruleReport,scoreInputAudit,queryName,semanticSkipped=false,automaticClassification}:{automaticClassification?:MarketKeywordOriginalClassification;queryName?:string;facts:MarketKeywordFacts;catalog?:SourceCatalog;reconciliation?:MarketKeywordReconciliationReport;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;semanticSkipped?:boolean}){
  return <section className="market-research-result market-keyword-report-stack" aria-label="关键词来源事实报告"><h3 className="market-research-sr-only">关键词来源事实</h3>
-  <MarketKeywordTable queryName={queryName} facts={facts} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped} details={m=><MemberDetails member={m}/>}/>
-  <MarketKeywordDemandSummary queryName={queryName} facts={facts} reconciliation={semanticSkipped?undefined:reconciliation} ruleReport={ruleReport} semanticSkipped={semanticSkipped}/>
+  <MarketKeywordTable automaticClassification={automaticClassification} queryName={queryName} facts={facts} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped} details={m=><MemberDetails member={m}/>}/>
+  <MarketKeywordDemandSummary automaticClassification={automaticClassification} queryName={queryName} facts={facts} reconciliation={semanticSkipped?undefined:reconciliation} ruleReport={ruleReport} semanticSkipped={semanticSkipped}/>
   <details className="card market-insights-evidence"><summary>{semanticSkipped?'来源范围与覆盖':'来源范围、覆盖与原始模型证据'}</summary><Scope facts={facts}/><Boundaries facts={facts}/>  <p className="market-research-note">参考月搜索量只采用 {facts.referenceMonth} 明确月份数据。同比比较去年同月，环比比较上月；原始增长比例按百分比展示。来源未注明月份的指标独立保留，不能补齐参考月。推荐竞价非实际 CPC，实际 CPC 未知。</p>
   <p>固定词池共 {facts.members.length} 个词，分页不改变统计分母。</p>
 {semanticSkipped?<p>语义分析未启用；本报告展示本地规则与已保存来源。</p>:<SemanticBatches facts={facts} catalog={catalog}/>}</details>
   {!semanticSkipped&&reconciliation&&<details className="card market-insights-evidence"><summary>跨批标签与需求簇明细</summary><GlobalSemantics facts={facts} result={reconciliation}/></details>}
   {ruleReport&&<MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/>}
-  <MarketKeywordTaxonomyView catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped}/>
-  <p className="market-research-note">{semanticSkipped?'W5 / PVS 按本次已保存规则报告展示；W1–W4 未分类时保持未知，缺少输入保持待验证。':'标签提案保留原词证据；跨批归并和 W5 / PVS 按本次已保存报告展示，语义质量仍需独立校对，缺少输入保持待验证。'}</p>
+  <MarketKeywordTaxonomyView automaticClassification={automaticClassification} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped}/>
+  <p className="market-research-note">{semanticSkipped?automaticClassification?'W1–W4 与需求簇按原版规则自动分类，可在下方人工校对；W5 / PVS 缺少输入保持待验证。':'W5 / PVS 按本次已保存规则报告展示；W1–W4 未分类时保持未知，缺少输入保持待验证。':'标签提案保留原词证据；跨批归并和 W5 / PVS 按本次已保存报告展示，语义质量仍需独立校对，缺少输入保持待验证。'}</p>
   <details className="market-research-boundaries"><summary>事实版本与来源截止时间</summary><p>数据截止：{facts.pool.dataCutoffAt}<br/>事实版本：{facts.factsId}<br/>原始词池快照：{facts.pool.rawInputSnapshotId}<br/>语义快照：{facts.pool.semanticInputSnapshotId}</p></details>
  </section>;
 }

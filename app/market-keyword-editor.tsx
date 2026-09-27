@@ -11,7 +11,7 @@ export function MarketKeywordEditor({facts,draft,onChange,disabled,semanticSkipp
  const currentPage=Math.min(page,pages-1),shown=members.slice(currentPage*20,currentPage*20+20);
  function removeLabel(d:typeof keywordDimensions[number],id:string){onChange({...draft,labels:{...draft.labels,[d]:draft.labels[d].filter(l=>l.labelId!==id)},assignments:draft.assignments.map(a=>({...a,[d]:a[d].filter(v=>v!==id)}))});}
  return <fieldset className="market-keyword-editor" disabled={disabled}><legend>人工分类与需求簇</legend>
-  <p className="market-research-note">每词每维度最多选择 3 项；未选择表示待分类。{semanticSkipped?'本地规则不会自动填写 W1–W4；请按原词和来源人工确认。':'模型建议需人工判断，不会自动覆盖这里的选择。'}删除标签或需求簇会清除草稿中相应归属，保存后才形成新版本。</p>
+  <p className="market-research-note">每词每维度最多选择 3 项；未选择表示待分类。{semanticSkipped?'已有自动分类可按原词和来源校对；人工保存的版本优先恢复。':'模型建议需人工判断，不会自动覆盖这里的选择。'}删除标签或需求簇会清除草稿中相应归属，保存后才形成新版本。</p>
   <details><summary>编辑分类目录与需求簇</summary><div className="market-keyword-catalogs">
    {keywordDimensions.map(d=><section key={d}><h4>{d} {keywordDimensionNames[d]}</h4>{draft.labels[d].map((l,i)=><div className="market-keyword-catalog-row" key={l.labelId}>
     <input aria-label={`${d} 标签 ${i+1} 名称`} value={l.label} maxLength={240} onChange={e=>onChange({...draft,labels:{...draft.labels,[d]:draft.labels[d].map(v=>v.labelId===l.labelId?{...v,label:e.target.value}:v)}})}/>
