@@ -17,6 +17,7 @@ test("catalog follows the published six groups and ten leaf labels in menu order
     ["checklist", "立项前确认清单", "合规 · 专利 · 一票否决"],
     ["traffic", "竞品流量分析", "结构 · 月趋势 · 推广结论"],
   ]);
+  assert.deepEqual(snapshotNavigationGroups.map(group => group.tone), ["teal", "red", "orange", "green", "red", "blue"]);
   assert.deepEqual(snapshotNavigationGroups.map(group => group.pages.map(page => [page.id, page.label, page.sub])), [
     [["overview", "竞品参数总览", "参数 · 趋势 · 变体"], ["images", "主辅图", "主图 · 辅图 · 图册对比"]],
     [["voc-summary", "竞品VOC 汇总", "七维 · 评论 · 综合"], ["voc-insight", "竞品 VOC 洞察", "摘要 · 好评 · 差评 · 未满足"], ["voc-positioning", "产品定义结论", "定位 · 三表合并 · 优化优先级"]],

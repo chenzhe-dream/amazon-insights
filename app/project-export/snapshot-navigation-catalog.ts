@@ -20,23 +20,23 @@ type SnapshotGroup = Readonly<{
 
 // The export's sole page-level navigation catalog. Labels and order match app/page.tsx allNav.
 export const snapshotNavigationGroups = [
-  { id: "overview-group", label: "竞品概览", sub: "参数 · 主辅图 · 变体", tone: "blue", kind: "submenu", pages: [
+  { id: "overview-group", label: "竞品概览", sub: "参数 · 主辅图 · 变体", tone: "teal", kind: "submenu", pages: [
     { id: "overview", label: "竞品参数总览", sub: "参数 · 趋势 · 变体", module: "overview", sourceId: "competitor-overview" },
     { id: "images", label: "主辅图", sub: "主图 · 辅图 · 图册对比", module: "overview", sourceId: "listing-images" },
   ] },
-  { id: "voc-group", label: "VOC", sub: "原始矩阵 · 洞察立项", tone: "teal", kind: "submenu", pages: [
+  { id: "voc-group", label: "VOC", sub: "原始矩阵 · 洞察立项", tone: "red", kind: "submenu", pages: [
     { id: "voc-summary", label: "竞品VOC 汇总", sub: "七维 · 评论 · 综合", module: "voc", sourceId: "voc" },
     { id: "voc-insight", label: "竞品 VOC 洞察", sub: "摘要 · 好评 · 差评 · 未满足", module: "voc", sourceId: "voc" },
     { id: "voc-positioning", label: "产品定义结论", sub: "定位 · 三表合并 · 优化优先级", module: "voc", sourceId: "voc" },
   ] },
-  { id: "keywords-group", label: "关键词调研", sub: "竞品词分析 · 洞察", tone: "red", kind: "submenu", pages: [
+  { id: "keywords-group", label: "关键词调研", sub: "竞品词分析 · 洞察", tone: "orange", kind: "submenu", pages: [
     { id: "keyword-analysis", label: "竞品关键词分析", sub: "含义分类 · 流量词对比", module: "keywords", sourceId: "keywords" },
     { id: "keyword-insight", label: "关键词洞察", sub: "开品结论 · 需求分层", module: "keywords", sourceId: "keywords" },
   ] },
-  { id: "definition", label: "新品定义", sub: "VOC×关键词 · 最终定义", tone: "orange", kind: "direct", pages: [
+  { id: "definition", label: "新品定义", sub: "VOC×关键词 · 最终定义", tone: "green", kind: "direct", pages: [
     { id: "definition", label: "新品定义", sub: "VOC×关键词 · 最终定义", module: "definition", sourceId: "definition" },
   ] },
-  { id: "checklist", label: "立项前确认清单", sub: "合规 · 专利 · 一票否决", tone: "green", kind: "direct", pages: [
+  { id: "checklist", label: "立项前确认清单", sub: "合规 · 专利 · 一票否决", tone: "red", kind: "direct", pages: [
     { id: "checklist", label: "立项前确认清单", sub: "合规 · 专利 · 一票否决", module: "checklist", sourceId: "checklist" },
   ] },
   { id: "traffic", label: "竞品流量分析", sub: "结构 · 月趋势 · 推广结论", tone: "blue", kind: "direct", pages: [
