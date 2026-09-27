@@ -476,7 +476,7 @@ test("queues malformed normalized report metadata as encrypted normalization inp
   assert.equal(harness.normalizationEncryptionInput()?.plaintext, malformed);
 });
 
-test("strict fast-path import publishes a cutoff-visible cumulative snapshot and wakes downstream", async () => {
+test("strict fast-path import publishes a cutoff-visible cumulative snapshot in local-rule mode", async () => {
   const harness = successfulHarness();
   const response = await harness.service.importReport({
     principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
@@ -485,6 +485,7 @@ test("strict fast-path import publishes a cutoff-visible cumulative snapshot and
   assert.equal(response.disposition, "success");
   assert.equal((harness.putInput() as unknown as { capturedAt?: string })?.capturedAt, NOW);
   assert.deepEqual(harness.cumulativePublications(), [{
+    positioningMode: "local-rules",
     actorId: USER_ID,
     actorOrganizationId: ORGANIZATION_ID,
     projectId: PROJECT_ID,
@@ -753,6 +754,7 @@ test("reuses one successful fingerprint for an authorized new run and same-organ
   assert.equal(harness.queueInput(), null);
   assert.equal(harness.normalizationEncryptionInput(), null);
   assert.deepEqual(harness.cumulativePublications(), [{
+    positioningMode: "local-rules",
     actorId: USER_ID,
     actorOrganizationId: ORGANIZATION_ID,
     projectId: targetProjectId,

@@ -37,6 +37,7 @@ import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 import {
   publishCumulativeVocSnapshotAndWake,
   type AlexaVocCumulativePublicationInput,
+  type VocPositioningMode,
 } from "../runtime/alexa-voc-normalization-runtime";
 import type {
   AlexaVocNormalizationInputCipher,
@@ -76,6 +77,7 @@ export class ManualAlexaVocService {
   readonly #normalizationInputCipher: AlexaVocNormalizationInputCipher | null;
   readonly #writeEnabled: boolean;
   readonly #publicationEnabled: boolean;
+  readonly #positioningMode: VocPositioningMode;
   readonly #createId: () => string;
   readonly #now: () => string;
   readonly #executionIdentity: AlexaVocNormalizationExecutionIdentity | null;
@@ -87,6 +89,7 @@ export class ManualAlexaVocService {
     normalizationInputCipher?: AlexaVocNormalizationInputCipher;
     writeEnabled?: boolean;
     publicationEnabled?: boolean;
+    positioningMode?: VocPositioningMode;
     createId?: () => string;
     now?: () => string;
     normalizationExecutionIdentity?: AlexaVocNormalizationExecutionIdentity | null;
@@ -97,6 +100,7 @@ export class ManualAlexaVocService {
     this.#normalizationInputCipher = options.normalizationInputCipher ?? null;
     this.#writeEnabled = options.writeEnabled ?? true;
     this.#publicationEnabled = options.publicationEnabled ?? true;
+    this.#positioningMode = options.positioningMode ?? "local-rules";
     this.#createId = options.createId ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#executionIdentity = options.normalizationExecutionIdentity
@@ -207,6 +211,7 @@ export class ManualAlexaVocService {
         capturedAt: trustedRun.dataCutoffAt,
       });
       await this.#publishCumulativeVocSnapshotAndWake(repository, {
+        positioningMode: this.#positioningMode,
         actorId: input.principal.userId,
         actorOrganizationId: input.principal.organizationId,
         projectId: trustedProject.id,
@@ -398,6 +403,7 @@ export class ManualAlexaVocService {
       });
       if (committed) {
         await this.#publishCumulativeVocSnapshotAndWake(repository, {
+          positioningMode: this.#positioningMode,
           actorId: input.principal.userId,
           actorOrganizationId: input.principal.organizationId,
           projectId: trustedProject.id,

@@ -33,7 +33,10 @@ import {
   type WorkerLogger,
 } from "./worker-loop";
 
+export type VocPositioningMode = "local-rules" | "model";
+
 export interface AlexaVocNormalizationRuntimeOptions {
+  positioningMode?: VocPositioningMode;
   queueTimeoutMs?: number;
   repository: RuntimeAgentRepository;
   config: VocPositioningRuntimeConfig;
@@ -94,7 +97,7 @@ export async function createAlexaVocNormalizationRuntime(
       findCommittedNormalizationByFingerprint: (input) =>
         options.repository.manualAlexaVoc.findCommittedNormalizationByFingerprint(input),
       commitNormalizationAndWake: (input) =>
-        commitNormalizationAndWake(options.repository, input),
+        commitNormalizationAndWake(options.repository, input, options.positioningMode ?? "local-rules"),
     },
     normalizationInputCipher:
       options.normalizationInputCipher ?? createAlexaVocNormalizationInputCipher(),
@@ -221,6 +224,7 @@ export async function createAlexaVocNormalizationRuntime(
       options.repository,
       input,
       clock().toISOString(),
+      options.positioningMode ?? "local-rules",
     ),
     onTerminal: async (terminal) => {
       if (terminal.status === "success") return;
@@ -372,6 +376,7 @@ async function retryableNormalizationPublication<TResult>(operation: () => Promi
 async function commitNormalizationAndWake(
   repository: RuntimeAgentRepository,
   input: AlexaVocNormalizationCommitInput,
+  positioningMode: VocPositioningMode,
 ) {
   return persistNormalizationBeforePublication({
     persistRevision: () => repository.transaction(async (baseRepository) => {
@@ -436,6 +441,7 @@ async function commitNormalizationAndWake(
           completedAt: committedAt,
         });
         const publication = await publishCumulativeVocSnapshotAndWake(scoped, {
+          positioningMode,
           actorId: input.actorId,
           actorOrganizationId: input.actorOrganizationId,
           projectId: input.projectId,
@@ -454,6 +460,7 @@ async function commitNormalizationAndWake(
 }
 
 export type AlexaVocCumulativePublicationInput = Readonly<{
+  positioningMode?: VocPositioningMode;
   actorId: string;
   actorOrganizationId: string;
   projectId: string;
@@ -526,7 +533,9 @@ export async function publishCumulativeVocSnapshotAndWake(
     createdAt: input.createdAt,
     candidate,
   });
-  const wakeCreated = snapshot.created
+  // Normalization is also used by local rules. Saving its evidence must not
+  // silently start a separate model analysis or invalidate historical reports.
+  const wakeCreated = snapshot.created && input.positioningMode === "model"
     ? await wakeVocPositioning(repository, input.runId, input.createdAt)
     : false;
   return Object.freeze({ snapshotCreated: snapshot.created, wakeCreated });
@@ -549,6 +558,7 @@ async function recordReplayedNormalizationTerminal(
     revision: string;
   }>,
   completedAt: string,
+  positioningMode: VocPositioningMode,
 ): Promise<void> {
   if (!replay.job.leasedBy) throw trustedSubjectError();
   await retryableNormalizationPublication(() => repository.transaction(async (baseRepository) => {
@@ -597,6 +607,7 @@ async function recordReplayedNormalizationTerminal(
       completedAt,
     });
     await publishCumulativeVocSnapshotAndWake(scoped, {
+      positioningMode,
       actorId: subject.actorId,
       actorOrganizationId: subject.organizationId,
       projectId: subject.projectId,

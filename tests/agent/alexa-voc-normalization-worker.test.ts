@@ -547,6 +547,7 @@ test("new cumulative snapshots durably follow up running and succeeded positioni
       runningJobs.push({
         ...(input as Record<string, unknown>),
         status: "queued",
+        startedAt: null,
       } as never);
       return input;
     },
