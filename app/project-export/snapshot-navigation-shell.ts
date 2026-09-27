@@ -60,7 +60,7 @@ export function renderSnapshotNavigation(pages: readonly SnapshotPageMarkup[]): 
     const selected = `${target} label[for="snapshot-page-${page.id}"]`;
     const parent = group.kind === 'submenu' ? `${target} [data-snapshot-group="${group.id}"]>summary,` : '';
     const focusedParent = group.kind === 'submenu' ? `${focus} [data-snapshot-group="${group.id}"]>summary,` : '';
-    return `${target} [data-snapshot-page="${page.id}"]{display:block}${parent}${selected}{box-shadow:0 2px 7px #263a501a,inset 3px 0 0 var(--snap-tone);border-color:var(--snap-tone)}${focusedParent}${focus} label[for="snapshot-page-${page.id}"]{outline:3px solid #155eef;outline-offset:2px}`;
+    return `${target} [data-snapshot-page="${page.id}"]{display:block}${parent}${selected}{box-shadow:inset 3px 0 0 var(--snap-tone);border-color:var(--snap-tone);background:color-mix(in srgb,var(--snap-tone) 7%,white)}${selected} b{color:var(--snap-tone)}${focusedParent}${focus} label[for="snapshot-page-${page.id}"]{outline:2px solid #155eef;outline-offset:2px}`;
   }).join('');
-  return `<style>${snapshotNavigationStyles}\n${rules}</style><div class="snapshot-shell">${radios}<div class="snapshot-layout"><nav class="snapshot-nav" aria-label="快照页面导航"><details class="snapshot-mobile-menu" open><summary>选择快照页面</summary><div class="snapshot-nav-list">${nav}</div></details></nav><main class="snapshot-body">${content}</main></div></div>`;
+  return `<style>${snapshotNavigationStyles}\n${rules}</style><div class="snapshot-shell">${radios}<div class="snapshot-layout"><nav class="snapshot-nav" aria-label="快照页面导航"><div class="snapshot-nav-heading">报告目录<span>${sorted.length} 个页面</span></div><details class="snapshot-mobile-menu" open><summary>选择快照页面</summary><div class="snapshot-nav-list">${nav}</div></details></nav><main class="snapshot-body">${content}</main></div></div>`;
 }

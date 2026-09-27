@@ -61,7 +61,8 @@ function Ready({children, onReady}: {children: ReactNode; onReady: () => void}) 
   useLayoutEffect(onReady, [onReady]); return children;
 }
 const snapshotLayout = `
-html,body{margin:0!important;min-width:0!important;height:auto!important;overflow:auto!important}
+html,body{margin:0!important;min-width:0!important;height:auto!important}
+html{overflow:auto!important}body{overflow:visible!important}
 .page-snapshot{padding:24px;max-width:1800px;margin:0 auto;color:var(--text,#20344e)}
 .page-snapshot>header{margin-bottom:24px;padding:20px}.page-snapshot>header h1{font-size:20px;font-weight:700;margin-bottom:8px}
 .page-snapshot>header p{font-size:12px;color:var(--muted);margin:4px 0}.page-snapshot [data-snapshot-module]{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}

@@ -262,3 +262,12 @@
 - 使用用户已登录浏览器直接访问正式环境，三轮滑板车1与融蜡灯均完成真实导出：10 页内容、收起选择后增宽、桌面无外层正文滚动、390px 窄屏确认按钮可见、实际下载与预览字节一致；无 JavaScript 的独立 HTML 可切至新品定义且无应用 API 请求。前者如实保留失败/等待输入，后者保留最终定义表，监测页面错误及接口 4xx/5xx 为 0。
 - 下载文件分别为 2991488 / 6340447 字节；正式构建 CSS 与本地回放不同，按正式预览和实际文件自身做字节比较，不跨环境比较文件大小。未重新采集或重跑模型。
 - 证据存于本工作区忽略目录 test-results/export-fix-release-assets.json、export-fix-release-online/result.json、export-fix-formal-release.log 及对应截图/HTML；真实业务内容未提交。没有推送远程 Git、没有合入 main。
+
+### 2026-09-27 导出导航固定与紧凑目录（本地验证完成，未发布）
+
+- 复现正式下载的融蜡灯 HTML：正文 window.scrollY=1200 时 nav.top=-1008，body 的 overflow:auto 成为错误的 sticky 滚动祖先。文件回归先失败于 navigation stays visible，再修复 html/body 滚动职责。
+- 桌面导航距离视口顶部 16px，超长目录单独滚动；224px 白色目录栏、紧凑子项、浅色选中背景与键盘焦点，消除重复布局边距。父子目录、业务正文、原表格和图表保留。窄屏仍为折叠菜单，打印隐藏导航并展示全部已选页面。
+- 文件与导航 8 项回归通过；补充 iframe 吸顶断言后文件 3 项再次通过（不重复计数），覆盖独立文件/iframe 长页滚动、矮窗口末项可达、实际下载字节一致、无脚本/键盘/窄屏/打印。类型检查、修改文件定向 ESLint、构建和 OpenSpec strict 通过。
+- 当前正式真实接口只读回放融蜡灯成功，10 页、5931613 字节、预览与下载一致，未触发模型或采集。1870×960 视觉复核：继续滚动 500px 前后导航 top 均为 16；390px 窄屏无整页横向溢出，原宽表使用自身横向滚动。截图制作时外网图片拦截，仅验证布局，不将图片可用性计为通过。
+- 本地成品预览 test-results/export-navigation-preview.html；截图 export-navigation-optimized.png、export-navigation-scrolled.png、export-navigation-mobile.png；日志 export-nav-pinned-green.log、export-nav-preview-check.log、export-nav-build.log。均为忽略产物，未提交真实项目数据。
+- 没有修改正式目录，没有发布。既有已下载 HTML 是固定快照；后续发布后重新导出才会包含本轮样式，旧文件不会自动变化。

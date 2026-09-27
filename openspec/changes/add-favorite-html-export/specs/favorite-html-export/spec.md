@@ -190,3 +190,8 @@ The downloaded artifact SHALL remain one HTML file with embedded styles and comp
 #### Scenario: Preview workspace scrolling
 - **WHEN** the export modal is opened on a desktop or narrow viewport
 - **THEN** header and confirmation actions remain reachable, the outer body SHALL NOT add a second vertical report scrollbar, and the user MAY collapse page selection without changing the prepared HTML or chosen pages
+
+#### Scenario: 固定目录与长报告滚动互不干扰
+- **WHEN** 用户在桌面独立 HTML 或导出预览中向下滚动长报告
+- **THEN** 目录保留在视口上方可用区域，超出视口的目录项可在目录内滚动到达
+- **AND** 切页与目录优化不修改已保存业务内容，窄屏可折叠菜单和打印全部页面保持可用
