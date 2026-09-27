@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   buildReferenceShapeAnalysis,
   formatPriceBand,
+  parseReferenceListingDate,
   resolveSorftimeMarginEntryLabel,
   resolveY2025MonthDivisor,
 } from "../../app/market-shape-reference/rules";
@@ -53,17 +54,19 @@ test('pre-launch annual periods do not erase other products known totals, but mi
   source.products[1].onlineDate='2025-07-01';source.products[1].sales.y2024=null;
   assert.equal(buildReferenceShapeAnalysis(source,{}).synthesis.totalSales.y2024,120);
   source.products[1].onlineDate='';
-  assert.equal(buildReferenceShapeAnalysis(source,{}).synthesis.totalSales.y2024,null);
+  assert.equal(buildReferenceShapeAnalysis(source,{}).synthesis.totalSales.y2024,120);
+  assert.deepEqual(buildReferenceShapeAnalysis(source,{}).synthesis.coverage.y2024,{known:1,total:2,missing:1,notApplicable:0});
 });
 
-test("unknown sales remain unknown through groups, shares and summary", () => {
+test("partial sales retain known totals and disclose coverage", () => {
   const result = buildReferenceShapeAnalysis(report(), { A1: "Shape A", A2: "Shape A" });
-  assert.equal(result.shapes[0].sales.last6Months, null);
-  assert.equal(result.shapes[0].sharePct.last6Months, null);
+  assert.equal(result.shapes[0].sales.last6Months, 90);
+  assert.equal(result.shapes[0].coverage.last6Months.missing, 1);
+  assert.equal(result.shapes[0].sharePct.last6Months, 100);
   assert.equal(result.shapePriceBands.length, 2);
   assert.equal(result.shapePriceBands[0].sales.last6Months, 90);
   assert.equal(result.shapePriceBands[1].sales.last6Months, null);
-  assert.equal(result.synthesis.totalSales.last6Months, null);
+  assert.equal(result.synthesis.totalSales.last6Months, 90);
   assert.equal(result.synthesis.marginCounts["—"], 1);
 });
 
@@ -90,4 +93,75 @@ test("shape price-band shares use their own shape and numeric band order", () =>
   assert.equal(result.shapePriceBands[0].sharePct.last6Months, 30);
   assert.equal(result.shapePriceBands[1].sharePct.last6Months, 70);
   assert.equal(result.shapePriceBands[2].sharePct.last6Months, 100);
+});
+
+test("known totals expose coverage and divide shares over same-period known observations", () => {
+  const source = report();
+  source.products = [
+    { ...product("A1", 25, 100, 65), brand: "A" },
+    { ...product("A2", 35, null, 65), brand: "A" },
+    { ...product("A3", 45, 100, 65), brand: "B" },
+  ];
+  const result = buildReferenceShapeAnalysis(source, { A1: "Floor", A2: "Floor", A3: "Desk" });
+  assert.equal(result.synthesis.totalSales.last6Months, 200);
+  assert.deepEqual(result.synthesis.coverage.last6Months, { known: 2, total: 3, missing: 1, notApplicable: 0 });
+  assert.equal(result.shapes.find(row => row.label === "Floor")?.sales.last6Months, 100);
+  assert.equal(result.shapes.find(row => row.label === "Floor")?.sharePct.last6Months, 50);
+  assert.equal(result.shapePriceBands.find(row => row.shape === "Floor" && row.priceBand === "$20-30")?.sharePct.last6Months, 100);
+});
+
+test("all unknown stays null while confirmed prelaunch is separately not applicable", () => {
+  const source = report();
+  source.products[0].sales.last6Months = null;
+  const unknown = buildReferenceShapeAnalysis(source, {});
+  assert.equal(unknown.synthesis.totalSales.last6Months, null);
+  assert.equal(unknown.synthesis.coverage.last6Months.missing, 2);
+  source.products[0].onlineDate = "2026-08-01";
+  source.products[1].onlineDate = "";
+  const annual = buildReferenceShapeAnalysis(source, {});
+  assert.deepEqual(annual.synthesis.coverage.y2024, { known: 0, total: 2, missing: 1, notApplicable: 1 });
+  assert.equal(annual.synthesis.totalSales.y2024, 0);
+});
+
+test("structured shape keys keep delimiters and similar prefixes separate", () => {
+  const source = report();
+  source.products = [product("A1", 25, 100, 65), product("A2", 35, 100, 65), product("A3", 45, 100, 65)];
+  const result = buildReferenceShapeAnalysis(source, { A1: "Lamp · Tall", A2: "Lamp", A3: "Lamp · Tall Extra" });
+  assert.deepEqual(result.shapePriceBands.map(row => row.shape), ["Lamp", "Lamp · Tall", "Lamp · Tall Extra"]);
+  assert.ok(result.shapePriceBands.every(row => row.sharePct.last6Months === 100));
+});
+
+test("different structured pairs cannot collide when their display labels match", () => {
+  const source = report();
+  source.products = [
+    { ...product("A1", 25, 100, 65), brand: "A · B", priceBand: "C" },
+    { ...product("A2", 35, 100, 65), brand: "A", priceBand: "B · C" },
+  ];
+  const result = buildReferenceShapeAnalysis(source, { A1: "A · B", A2: "A" });
+  assert.equal(result.shapePriceBands.length, 2);
+  assert.equal(result.brandPriceBands.length, 2);
+  assert.ok(result.shapePriceBands.every(row => row.sales.last6Months === 100));
+});
+
+test("1970 source dates remain visible but uncertain for grouping and launch-year decisions", () => {
+  assert.deepEqual(parseReferenceListingDate("1970-01-01"), { raw: "1970-01-01", status: "uncertain", year: null, month: null });
+  const source = report();
+  source.products[0].onlineDate = "1970-01-01";
+  assert.equal(buildReferenceShapeAnalysis(source, {}).listingYears.some(row => row.label === "待核实"), true);
+});
+
+test("legacy calculation version retains saved revision aggregate semantics", () => {
+  const source = report();
+  source.calculationVersion = "shape-reference/1";
+  const result = buildReferenceShapeAnalysis(source, { A1: "Shape A", A2: "Shape A" });
+  assert.equal(result.synthesis.totalSales.last6Months, null);
+  assert.equal(result.shapes[0].sales.last6Months, null);
+});
+
+test("explicitly cleared manual shape remains unclassified", () => {
+  const source = report();
+  source.products[0].productShape = 'Previously classified';
+  const result = buildReferenceShapeAnalysis(source, { A1: '' });
+  assert.equal(result.shapes.some(row => row.label === '未分类'), true);
+  assert.equal(result.shapes.some(row => row.label === 'Previously classified'), false);
 });

@@ -67,12 +67,26 @@ test("missing historical sales stay unknown instead of becoming zero-valued conc
   assert.equal(result.margin.status, "ready");
   assert.equal(result.shapeSales.status, "insufficient");
   assert.equal(result.shapePrice.status, "insufficient");
-  assert.equal(result.brandPrice.status, "insufficient");
+  assert.equal(result.brandPrice.status, "ready");
   assert.equal(result.synthesis.status, "insufficient");
   if (result.synthesis.status === "insufficient") assert.match(result.synthesis.reason, /2024/);
   const html = renderToStaticMarkup(createElement(ReferenceConclusionsView, { result }));
   assert.match(html, /上架年份 · 新品准入结论/);
   assert.match(html, /缺少 2024 销量/);
+});
+
+test("brand price uses complete recent periods without requiring unrelated annual history", () => {
+  const incomplete: SorftimeCategoryDashboardReport = { ...report, products: [{ ...report.products[0], sales: { ...report.products[0].sales, y2024: null, y2025: null } }] };
+  const result = buildReferenceConclusions(incomplete, { A: "Desk" });
+  assert.equal(result.brandPrice.status, "ready");
+  assert.equal(result.shapeSales.status, "insufficient");
+});
+
+test("uncertain 1970 launch does not yield an unsupported listing-age conclusion", () => {
+  const uncertain: SorftimeCategoryDashboardReport = { ...report, products: [{ ...report.products[0], onlineDate: "1970-01-01" }] };
+  const result = buildReferenceConclusions(uncertain, {});
+  assert.equal(result.listingYear.status, "insufficient");
+  if (result.listingYear.status === "insufficient") assert.match(result.listingYear.reason, /日期待核实/);
 });
 
 test("missing six-month sales blocks only modules that need that period", () => {

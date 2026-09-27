@@ -49,7 +49,7 @@ export class PostgresMarketShapeReferenceRevisionStore{
   const productHistory=await readMarketShapeHistory(common);
   const productAmountHistory=await readMarketShapeAmountHistory(common);
   const categoryDashboard=await readShapeCategoryDashboard({view,actor,current,snapshots:this.snapshots});
-  const data=MarketShapeReferenceRevisionDataSchema.parse({scope:view.run.scope,pool:pool.publicPool,productImages:await readMarketShapeImages(common),productHistory,productAmountHistory,categoryDashboard});
+  const data=MarketShapeReferenceRevisionDataSchema.parse({calculationVersion:'shape-known-coverage/2',scope:view.run.scope,pool:pool.publicPool,productImages:await readMarketShapeImages(common),productHistory,productAmountHistory,categoryDashboard});
   const attempts=view.steps.filter(s=>current.has(s.stepKey)&&['succeeded','empty'].includes(s.status)).map(s=>view.attempts.find(a=>a.id===s.latestAttemptId)).filter((a):a is NonNullable<typeof a>=>!!a);
   const binding=bindingSchema.parse({
    sourceRefs:[...new Set(attempts.map(a=>obj(a.output).sourceRef).filter((v):v is string=>typeof v==='string'))].sort(),

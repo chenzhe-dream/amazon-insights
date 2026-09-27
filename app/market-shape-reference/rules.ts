@@ -3,11 +3,18 @@ import type { SorftimeCategoryDashboardProduct, SorftimeCategoryDashboardReport 
 export type ReferencePeriod = "last3Months" | "last6Months" | "y2025" | "y2024";
 export const REFERENCE_PERIODS: readonly ReferencePeriod[] = ["last3Months", "last6Months", "y2025", "y2024"];
 export type ReferencePeriodValues = Record<ReferencePeriod, number | null>;
+export type ReferenceCoverage = { known: number; total: number; missing: number; notApplicable: number };
+export type ReferencePeriodCoverage = Record<ReferencePeriod, ReferenceCoverage>;
+export const CURRENT_SHAPE_CALCULATION_VERSION = 'shape-known-coverage/2' as const;
 
 export type ReferenceGroupRow = {
   label: string;
+  shape?: string;
+  brand?: string;
+  priceBand?: string;
   linkCount: number;
   sales: ReferencePeriodValues;
+  coverage: ReferencePeriodCoverage;
   sharePct: ReferencePeriodValues;
   avgLast6MonthsMonthlyPerLink: number | null;
   avgY2025MonthlyPerLink: number | null;
@@ -18,6 +25,7 @@ export type ReferenceMarginLabel = "优先进入" | "建议进入" | "谨慎进�
 export type ReferenceMarginCounts = Record<ReferenceMarginLabel, number>;
 
 export type ReferenceShapeAnalysis = {
+  calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION;
   overview: SorftimeCategoryDashboardReport["stats"] & { history: SorftimeCategoryDashboardReport["history"] };
   products: SorftimeCategoryDashboardProduct[];
   listingYears: ReferenceGroupRow[];
@@ -27,6 +35,7 @@ export type ReferenceShapeAnalysis = {
   synthesis: {
     linkCount: number;
     totalSales: ReferencePeriodValues;
+    coverage: ReferencePeriodCoverage;
     currentMonthlyVolume: number | null;
     currentMonthlyAmount: number | null;
     marginCounts: ReferenceMarginCounts;
@@ -51,6 +60,19 @@ export function sumKnown(values: readonly (number | null | undefined)[]): number
     total += numeric;
   }
   return total;
+}
+
+export function sumObserved(values: readonly (number | null | undefined)[]): number | null {
+  const observed = values.map(known).filter((value): value is number => value !== null);
+  return observed.length ? observed.reduce((sum, value) => sum + value, 0) : null;
+}
+
+export function getReferencePeriodCoverage(products: readonly SorftimeCategoryDashboardProduct[]): ReferencePeriodCoverage {
+  return Object.fromEntries(REFERENCE_PERIODS.map(period => {
+    const notApplicable = products.filter(product => isReferencePeriodBeforeLaunch(product, period) && !hasReferencePeriodDateConflict(product, period)).length;
+    const knownCount = products.filter(product => !isReferencePeriodBeforeLaunch(product, period) && referencePeriodContribution(product, period) !== null).length;
+    return [period, { known: knownCount, total: products.length, missing: products.length - knownCount - notApplicable, notApplicable }];
+  })) as ReferencePeriodCoverage;
 }
 
 function percentage(part: number | null, whole: number | null): number | null {
@@ -93,19 +115,40 @@ export function resolveY2025MonthDivisor(fetchedAt?: string, referenceDate = new
   return Math.max(1, date.getMonth() + 1);
 }
 
-export function getReferencePeriodTotals(products: readonly SorftimeCategoryDashboardProduct[]): ReferencePeriodValues {
+export function getReferencePeriodTotals(products: readonly SorftimeCategoryDashboardProduct[], calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION = CURRENT_SHAPE_CALCULATION_VERSION): ReferencePeriodValues {
   return Object.fromEntries(REFERENCE_PERIODS.map(period => [
     period,
-    sumKnown(products.map(product => referencePeriodContribution(product, period))),
+    (calculationVersion === 'shape-reference/1' ? sumKnown : sumObserved)(products.map(product => referencePeriodContribution(product, period))),
   ])) as ReferencePeriodValues;
+}
+
+export function resolveReferenceProductShape(product: Pick<SorftimeCategoryDashboardProduct, 'asin' | 'productShape'>, assignments: Readonly<Record<string, string>>): string {
+  return Object.prototype.hasOwnProperty.call(assignments, product.asin)
+    ? assignments[product.asin]?.trim() || '未分类'
+    : product.productShape?.trim() || '—';
+}
+
+export type ReferenceListingDate = { raw: string | null; status: 'known' | 'uncertain' | 'missing'; year: number | null; month: number | null };
+export function parseReferenceListingDate(value: string | null | undefined): ReferenceListingDate {
+  const raw = value?.trim() || null;
+  if (!raw || raw === 'null' || raw === '—') return { raw, status: 'missing', year: null, month: null };
+  const text = raw.match(/^(\d{4})[-/](\d{1,2})(?:[-/](\d{1,2}))?$/);
+  const numeric = Number(raw);
+  const timestamp = !text && Number.isFinite(numeric) && numeric > 1e11 ? new Date(numeric) : null;
+  const year = text ? Number(text[1]) : timestamp && !Number.isNaN(timestamp.getTime()) ? timestamp.getUTCFullYear() : null;
+  const month = text ? Number(text[2]) : timestamp && !Number.isNaN(timestamp.getTime()) ? timestamp.getUTCMonth() + 1 : null;
+  const day = text ? Number(text[3] ?? 1) : timestamp && !Number.isNaN(timestamp.getTime()) ? timestamp.getUTCDate() : null;
+  const date = year !== null && month !== null && day !== null ? new Date(Date.UTC(year, month - 1, day)) : null;
+  const valid = date && date.getUTCFullYear() === year && date.getUTCMonth() === month! - 1 && date.getUTCDate() === day;
+  if (!valid) return { raw, status: 'uncertain', year: null, month: null };
+  if (year === 1970) return { raw, status: 'uncertain', year: null, month: null };
+  return { raw, status: 'known', year, month };
 }
 
 export function isReferencePeriodBeforeLaunch(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod): boolean {
   if (period !== 'y2024' && period !== 'y2025') return false;
-  const launch = product.onlineDate?.match(/^(\d{4})-(0[1-9]|1[0-2])(?:-(\d{2}))?$/);
-  if(!launch)return false;
-  const year=Number(launch[1]),month=Number(launch[2]),day=Number(launch[3]??1),date=new Date(Date.UTC(year,month-1,day));
-  return year>=1900&&date.getUTCFullYear()===year&&date.getUTCMonth()===month-1&&date.getUTCDate()===day&&year>Number(period.slice(1));
+  const launch = parseReferenceListingDate(product.onlineDate);
+  return launch.status === 'known' && launch.year! > Number(period.slice(1));
 }
 
 export function hasReferencePeriodDateConflict(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod): boolean {
@@ -119,9 +162,8 @@ export function referencePeriodContribution(product: SorftimeCategoryDashboardPr
 }
 
 export function resolveListingYear(value: string | null | undefined): string {
-  const text = value?.trim() ?? "";
-  const year = text.match(/^(\d{4})[-/]/)?.[1];
-  return year ?? "—";
+  const listing = parseReferenceListingDate(value);
+  return listing.status === 'known' ? String(listing.year) : listing.status === 'uncertain' ? '待核实' : '—';
 }
 
 function groupRows(
@@ -129,16 +171,21 @@ function groupRows(
   getLabel: (product: SorftimeCategoryDashboardProduct) => string,
   totals: ReferencePeriodValues,
   y2025Divisor: number,
-  denominatorForGroup?: (label: string) => ReferencePeriodValues,
+  denominatorForGroup?: (members: SorftimeCategoryDashboardProduct[]) => ReferencePeriodValues,
+  calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION = CURRENT_SHAPE_CALCULATION_VERSION,
+  parts?: (members: SorftimeCategoryDashboardProduct[]) => Pick<ReferenceGroupRow, 'shape' | 'brand' | 'priceBand'>,
+  getKey?: (product: SorftimeCategoryDashboardProduct) => string,
 ): ReferenceGroupRow[] {
   const groups = new Map<string, SorftimeCategoryDashboardProduct[]>();
   for (const product of products) {
-    const label = getLabel(product).trim() || "—";
-    groups.set(label, [...(groups.get(label) ?? []), product]);
+    const key = getKey?.(product) ?? (getLabel(product).trim() || "—");
+    groups.set(key, [...(groups.get(key) ?? []), product]);
   }
-  return [...groups].map(([label, members]) => {
-    const sales = getReferencePeriodTotals(members);
-    const denominator = denominatorForGroup?.(label) ?? totals;
+  return [...groups.values()].map(members => {
+    const label = getLabel(members[0]).trim() || '—';
+    const sales = getReferencePeriodTotals(members, calculationVersion);
+    const coverage = getReferencePeriodCoverage(members);
+    const denominator = denominatorForGroup?.(members) ?? totals;
     const sharePct = Object.fromEntries(REFERENCE_PERIODS.map(period => [
       period, percentage(sales[period], denominator[period]),
     ])) as ReferencePeriodValues;
@@ -146,11 +193,13 @@ function groupRows(
     const y2025 = sales.y2025;
     return {
       label,
+      ...parts?.(members),
       linkCount: members.length,
       sales,
+      coverage,
       sharePct,
-      avgLast6MonthsMonthlyPerLink: six === null ? null : Math.round(six / members.length / 6),
-      avgY2025MonthlyPerLink: y2025 === null ? null : Math.round(y2025 / members.length / y2025Divisor),
+      avgLast6MonthsMonthlyPerLink: six === null ? null : Math.round(six / (calculationVersion === 'shape-reference/1' ? members.length : coverage.last6Months.known) / 6),
+      avgY2025MonthlyPerLink: y2025 === null || (calculationVersion !== 'shape-reference/1' && coverage.y2025.known === 0) ? null : Math.round(y2025 / (calculationVersion === 'shape-reference/1' ? members.length : coverage.y2025.known) / y2025Divisor),
       trendMissingLinkCount: members.filter(product =>
         (product.sales?.monthsAvailable ?? 0) === 0 && (known(product.monthlySalesVolume) ?? 0) > 0,
       ).length,
@@ -168,34 +217,48 @@ export function buildReferenceShapeAnalysis(
   assignments: Readonly<Record<string, string>>,
   selectedAsins?: readonly string[],
 ): ReferenceShapeAnalysis {
+  const calculationVersion = report.calculationVersion ?? CURRENT_SHAPE_CALCULATION_VERSION;
   const selected = selectedAsins ? new Set(selectedAsins) : null;
   const products = report.products.filter(product => selected === null || selected.has(product.asin));
-  const totals = getReferencePeriodTotals(products);
+  const totals = getReferencePeriodTotals(products, calculationVersion);
+  const coverage = getReferencePeriodCoverage(products);
   const divisor = resolveY2025MonthDivisor(report.fetchedAt);
-  const shape = (product: SorftimeCategoryDashboardProduct) =>
-    assignments[product.asin]?.trim() || product.productShape?.trim() || "—";
+  const shape = (product: SorftimeCategoryDashboardProduct) => resolveReferenceProductShape(product, assignments);
   const priceBand = (product: SorftimeCategoryDashboardProduct) => resolveProductPriceBand(product);
-  const listingYears = groupRows(products, product => resolveListingYear(product.onlineDate), totals, divisor)
+  const listingYears = groupRows(products, product => calculationVersion === 'shape-reference/1'
+    ? product.onlineDate?.trim().match(/^(\d{4})[-/]/)?.[1] ?? '—'
+    : resolveListingYear(product.onlineDate), totals, divisor, undefined, calculationVersion)
     .sort((a, b) => b.label.localeCompare(a.label));
-  const shapes = groupRows(products, shape, totals, divisor)
+  const shapes = groupRows(products, shape, totals, divisor, undefined, calculationVersion)
     .sort((a, b) => (b.sales.last6Months ?? -1) - (a.sales.last6Months ?? -1));
   const shapeTotals = new Map(shapes.map(row => [row.label, row.sales]));
   const shapePriceBands = groupRows(products, product => `${shape(product)} · ${priceBand(product)}`, totals, divisor,
-    label => shapeTotals.get(label.split(" · ")[0]) ?? totals)
+    members => shapeTotals.get(calculationVersion === 'shape-reference/1' ? `${shape(members[0])} · ${priceBand(members[0])}`.split(' · ')[0] : shape(members[0])) ?? totals,
+    calculationVersion, members => ({ shape: shape(members[0]), priceBand: priceBand(members[0]) }),
+    calculationVersion === 'shape-reference/1' ? undefined : product => JSON.stringify([shape(product), priceBand(product)]))
     .sort((a, b) => {
-      const [ashape, aband] = a.label.split(" · "), [bshape, bband] = b.label.split(" · ");
-      return ashape.localeCompare(bshape, "zh-CN") || priceBandSortKey(aband) - priceBandSortKey(bband);
+      if (calculationVersion === 'shape-reference/1') {
+        const [ashape, aband] = a.label.split(' · '), [bshape, bband] = b.label.split(' · ');
+        return ashape.localeCompare(bshape, 'zh-CN') || priceBandSortKey(aband) - priceBandSortKey(bband);
+      }
+      return a.shape!.localeCompare(b.shape!, "zh-CN") || priceBandSortKey(a.priceBand!) - priceBandSortKey(b.priceBand!);
     });
-  const brandPriceBands = groupRows(products, product => `${product.brand?.trim() || "—"} · ${priceBand(product)}`, totals, divisor)
+  const brandPriceBands = groupRows(products, product => `${product.brand?.trim() || "—"} · ${priceBand(product)}`, totals, divisor, undefined, calculationVersion,
+    members => ({ brand: members[0].brand?.trim() || '—', priceBand: priceBand(members[0]) }),
+    calculationVersion === 'shape-reference/1' ? undefined : product => JSON.stringify([product.brand?.trim() || '—', priceBand(product)]))
     .sort((a, b) => {
-      const [abrand, aband] = a.label.split(" · "), [bbrand, bband] = b.label.split(" · ");
-      return abrand.localeCompare(bbrand, "zh-CN") || priceBandSortKey(aband) - priceBandSortKey(bband);
+      if (calculationVersion === 'shape-reference/1') {
+        const [abrand, aband] = a.label.split(' · '), [bbrand, bband] = b.label.split(' · ');
+        return abrand.localeCompare(bbrand, 'zh-CN') || priceBandSortKey(aband) - priceBandSortKey(bband);
+      }
+      return a.brand!.localeCompare(b.brand!, "zh-CN") || priceBandSortKey(a.priceBand!) - priceBandSortKey(b.priceBand!);
     });
   const marginCounts: ReferenceMarginCounts = {
     "优先进入": 0, "建议进入": 0, "谨慎进入": 0, "不建议进入": 0, "—": 0,
   };
   for (const product of products) marginCounts[resolveSorftimeMarginEntryLabel(product.grossProfitMargin).label]++;
   return {
+    calculationVersion,
     overview: { ...report.stats, history: report.history },
     products,
     listingYears,
@@ -205,8 +268,9 @@ export function buildReferenceShapeAnalysis(
     synthesis: {
       linkCount: products.length,
       totalSales: totals,
-      currentMonthlyVolume: sumKnown(products.map(product => product.monthlySalesVolume)),
-      currentMonthlyAmount: sumKnown(products.map(product => product.monthlySalesAmount)),
+      coverage,
+      currentMonthlyVolume: (calculationVersion === 'shape-reference/1' ? sumKnown : sumObserved)(products.map(product => product.monthlySalesVolume)),
+      currentMonthlyAmount: (calculationVersion === 'shape-reference/1' ? sumKnown : sumObserved)(products.map(product => product.monthlySalesAmount)),
       marginCounts,
       shapeCount: shapes.length,
       brandPriceBandCount: brandPriceBands.length,
