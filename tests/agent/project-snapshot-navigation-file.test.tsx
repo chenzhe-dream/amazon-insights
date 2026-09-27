@@ -102,6 +102,11 @@ test("complete ten-page preview and downloaded file navigate without scripts; br
   const frame = iframe.contentFrame();
   assert.equal(await frame.locator('.snapshot-radio').count(), 10);
   assert.equal(await frame.locator('[data-snapshot-page="overview"]').isVisible(), true);
+  await frame.locator('body').evaluate(() => window.scrollTo(0, 600));
+  const previewNav = await frame.locator('.snapshot-nav').evaluate(element => ({top:element.getBoundingClientRect().top,scrollY:window.scrollY}));
+  assert.ok(previewNav.scrollY >= 500);
+  assert.ok(previewNav.top >= 0 && previewNav.top <= 24, 'preview navigation stays visible while scrolling');
+  await frame.locator('body').evaluate(() => window.scrollTo(0, 0));
   const fullBodies = await frame.locator(".snapshot-page").evaluateAll(elements =>
     Object.fromEntries(elements.map(element => [element.getAttribute("data-snapshot-page"), element.textContent])));
   for (const [id, sentinel] of Object.entries(unselectedBodySentinels)) {
@@ -137,6 +142,19 @@ test("complete ten-page preview and downloaded file navigate without scripts; br
   const requests: string[] = [];
   file.on("request", request => { if (request.url().includes("/api/")) requests.push(request.url()); });
   await file.route("https://m.media-amazon.com/**", route => route.abort());
+  await file.goto(pathToFileURL(path).href);
+  await file.evaluate(() => window.scrollTo(0, 700));
+  const pinnedNav = await file.locator('.snapshot-nav').evaluate(element => ({top:element.getBoundingClientRect().top,scrollY:window.scrollY}));
+  assert.ok(pinnedNav.scrollY >= 600, 'exercise a long exported page');
+  assert.ok(pinnedNav.top >= 0 && pinnedNav.top <= 24, 'navigation stays visible while the report scrolls');
+  await file.setViewportSize({width:1440,height:600});
+  await file.locator('.snapshot-nav-group').evaluateAll(elements => elements.forEach(element => element.setAttribute('open','')));
+  const nav = file.locator('.snapshot-nav');
+  assert.ok(await nav.evaluate(element => element.scrollHeight > element.clientHeight), 'long navigation has its own scroll area');
+  await file.locator('label[for="snapshot-page-traffic"]').click();
+  assert.ok(await nav.evaluate(element => element.scrollTop > 0), 'last page remains reachable in a short viewport');
+  assert.equal(await file.locator('.snapshot-page:visible').getAttribute('data-snapshot-page'),'traffic');
+  await file.setViewportSize({width:1440,height:1000});
   await file.goto(pathToFileURL(path).href);
   await assertAllPagesNavigable(file);
   assert.deepEqual(requests, []);
