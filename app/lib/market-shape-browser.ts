@@ -1,4 +1,5 @@
 import {MarketShapeReferenceRevisionResponseSchema,MarketShapeReferenceRevisionRequestSchema} from '../../shared/market-shape-reference-revision-contracts';
+import {MarketShapeQueryRequestSchema} from '../../shared/market-shape-query-contracts';
 import { z } from 'zod';
 import { MarketModuleIdSchema } from '../../shared/market-module-contracts';
 import { MarketShapeStartRequestSchema, MarketShapeRevisionRequestSchema } from '../../shared/market-shape-price-contracts';
@@ -11,13 +12,20 @@ async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit 
     const response = await localAgentFetch(`/v1/market-analysis/${path}`, { ...init, cache: 'no-store' }), body: unknown = await response.json().catch(() => null);
     init.signal?.throwIfAborted();
     if (!response.ok)
-        throw new Error(localAgentErrorMessage(body, '形态分析请求失败，请保留输入并重试。'));
+        throw Object.assign(new Error(localAgentErrorMessage(body, '形态分析请求失败，请保留输入并重试。')), {status:response.status});
     const parsed = schema.safeParse(body);
     if (!parsed.success)
         throw new Error('形态分析响应格式不正确，未加载该结果。');
     return parsed.data;
 }
 const post = (body: unknown, key: string, signal?: AbortSignal): RequestInit => ({ method: 'POST', headers: { 'idempotency-key': MarketModuleIdSchema.parse(key) }, signal, body: JSON.stringify(body) });
+export async function queryShapeRun(body:unknown,key:string,signal?:AbortSignal){
+    const input=MarketShapeQueryRequestSchema.parse(body),{run}=await request('shape-price/query',MarketShapeRunResponseSchema,post(input,key,signal));
+    const scope=input.scope,actual=run.scope;
+    const sameNode=scope.nodeIdPath.includes(':')?scope.nodeIdPath===actual.nodeIdPath:scope.nodeIdPath===actual.nodeIdPath.split(':').at(-1);
+    if(!sameNode||scope.marketplace!==actual.marketplace||scope.currency!==actual.currency||scope.fromMonth!==actual.fromMonth||scope.toMonth!==actual.toMonth||JSON.stringify(input.params)!==JSON.stringify(run.params))throw Error('研究范围或参数不一致。');
+    return run;
+}
 export async function startShapeRun(studyId: string, body: unknown, key: string, signal?: AbortSignal) {
     const study = MarketModuleIdSchema.parse(studyId), params = MarketShapeStartRequestSchema.parse(body), result = await request(`studies/${study}/shape-price`, MarketShapeRunResponseSchema, post(params, key, signal));
     if (result.run.scope.researchId !== study || JSON.stringify(result.run.params) !== JSON.stringify(params))

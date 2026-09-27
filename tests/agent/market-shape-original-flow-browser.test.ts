@@ -24,13 +24,9 @@ test('original shape flow collects by category before any manual shape name and 
   const request=route.request(),url=new URL(request.url());if(url.hostname==='m.media-amazon.com')return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=','base64')});if(url.origin!==origin)return route.abort();
   if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-shape-browser-harness.tsx"></script></body></html>`)});
   if(!url.pathname.startsWith('/api/'))return route.continue();
-  if(request.method()==='POST'&&url.pathname.endsWith('/studies')){
-   studies++;const id=request.headers()['idempotency-key'],body=request.postDataJSON();
-   return route.fulfill({json:{study:{id,scope:{...body,organizationId:current.run.scope.organizationId,researchId:id},createdAt:'2026-09-13T00:00:00Z'}}});
-  }
-  if(request.method()==='POST'&&url.pathname.endsWith('/shape-price')&&!url.pathname.includes('/runs/')){
-   const body=request.postDataJSON();starts.push(body);current.run.params=body;
-   current.run.scope.researchId=url.pathname.split('/').at(-2)!;
+  if(request.method()==='POST'&&url.pathname.endsWith('/shape-price/query')){
+   const body=request.postDataJSON();starts.push(body.params);current.run.params=body.params;
+   current.run.scope={...current.run.scope,...body.scope};
    return route.fulfill({json:current});
   }
   if(request.method()==='POST'&&url.pathname.endsWith('/shape-price/revisions')){
@@ -46,7 +42,7 @@ test('original shape flow collects by category before any manual shape name and 
  assert.equal(await page.getByLabel('本次形态目录（每行：名称|判断依据）').count(),0);
  await page.getByRole('button',{name:'筛选市场',exact:true}).click();
  const row=page.getByLabel('B000000001 人工形态');await row.waitFor();
- assert.equal(studies,1);assert.equal(starts.length,1);assert.deepEqual((starts[0] as {catalog:{allowedLabels:unknown[]}}).catalog.allowedLabels,[]);
+ assert.equal(studies,0);assert.equal(starts.length,1);assert.deepEqual((starts[0] as {catalog:{allowedLabels:unknown[]}}).catalog.allowedLabels,[]);
  await page.getByText('123.45',{exact:true}).waitFor();
  assert.equal(await page.getByText('等待人工确认并保存',{exact:true}).count(),0);
  await page.getByRole('img',{name:'B000000001 商品图片',exact:true}).scrollIntoViewIfNeeded();

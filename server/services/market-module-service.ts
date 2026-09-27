@@ -1,4 +1,5 @@
 import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
+import {queryShapeRun} from './market-shape-query-service';
 import {MarketShapeExplanationRunResponseSchema} from '../../shared/market-shape-explanation-public-contracts';
 import {isMarketShapeExplanationFlow} from '../domain/market-research/shape-explanation-flow';
 import {PostgresMarketShapeExplanationRunStore} from '../db/postgres/market-shape-explanation-run-store';
@@ -140,6 +141,7 @@ export class MarketModuleService {
   async overviewDetails(actor:MarketExecutionActor,id:string,attemptId:string){
     const details=await new MarketOverviewReportService(this.deps.context).details({actor,moduleRunId:id,attemptId});if(!details)throw unavailable();return details;
   }
+  async queryShapes(actor:MarketExecutionActor,body:unknown,key:unknown){return queryShapeRun(this,this.deps.context,actor,body,key,this.now());}
   async startShapes(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     const params=MarketShapeStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);
     const replay=async()=>{const previous=await this.replayModuleStart(actor,studyId,idempotencyKey,'shape-price',params);return previous?{created:false,...await this.findShapes(actor,previous.id)}:null;};
