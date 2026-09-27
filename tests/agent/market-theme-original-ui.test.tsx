@@ -53,3 +53,16 @@ test('sample failures distinguish invalid source data from connection failures i
   assert.ok(html.includes(expected));assert.ok(!html.includes(reason));
  }
 });
+
+
+test('quarantined themes stay partial in business UI and show actual usable coverage',async()=>{
+ const {themePresentationStatus}=await import('../../app/market-theme-insight-panel');
+ const {themeSavedReportStatus}=await import('../../app/lib/market-theme-rule-status');
+ const entry=themeRuleEntry();entry.report.counts.quarantinedThemeCount=1;entry.report.reasons=['quarantined-themes'];entry.report.status='partial';
+ const quarantine={version:'theme-quarantine/v1' as const,receivedCount:2,rejected:[{index:0,fields:['negative' as const]}]};
+ assert.equal(themeSavedReportStatus(entry.report),'partial');
+ assert.equal(themePresentationStatus(entry,{status:'partial',selectedAsins:['B099WTN2TR'],baseSelectionShortfall:false,asins:[{status:'success',quarantine}]}),'partial');
+ const asin=themeDetails(new URL('https://test.invalid/details?section=asins')).page.items.find(i=>i.kind==='asin')!;
+ const html=renderToStaticMarkup(<MarketThemeSampleTable asins={[{...asin,status:'success',quarantine,memberCount:1}]} marketplace="US"/>);
+ assert.match(html,/有效 1\/2/);assert.match(html,/隔离 1 条异常主题/);
+});

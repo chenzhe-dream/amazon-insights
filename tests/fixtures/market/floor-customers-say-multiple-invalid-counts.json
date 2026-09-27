@@ -1,0 +1,97 @@
+{
+  "doc": {
+    "customer_say": "AI-summarized overview of customer voices.",
+    "details": "Per-topic breakdown of customer voices.",
+    "details.keyword": "Topic keyword (e.g. charging speed / quality / durability).",
+    "details.content": "Customer voice description for this topic.",
+    "details.mention": "Total mention count for this topic.",
+    "details.positive": "Positive mention count for this topic.",
+    "details.negative": "Negative mention count for this topic.",
+    "details.update_time": "Update time of this topic, in yyyy-MM-dd format."
+  },
+  "data": {
+    "customer_say": "Customers find the floor lamp to be of good quality. However, they report stability issues, noting that it can tip over fairly easily.",
+    "details": [
+      {
+        "keyword": "remote control",
+        "content": "Customers appreciate the remote control of the floor lamp, noting that it works well and makes it easy to go from one option to another.",
+        "mention": 117,
+        "positive": 95,
+        "negative": 22,
+        "update_time": "2026-09-27"
+      },
+      {
+        "keyword": "adjustability",
+        "content": "Customers appreciate the lamp’s adjustable features, which include multiple light settings, dimming capabilities, and various warmth and brightness options, making it perfect for reading.",
+        "mention": 150,
+        "positive": 141,
+        "negative": 9,
+        "update_time": "2026-09-27"
+      },
+      {
+        "keyword": "functionality",
+        "content": "Customers find that the floor lamp works well for its intended purpose, with one customer specifically mentioning it performs excellently for makeup application and reading.",
+        "mention": 182,
+        "positive": 166,
+        "negative": 16,
+        "update_time": "2026-09-27"
+      },
+      {
+        "keyword": "assembly",
+        "content": "Customers find the floor lamp easy to assemble, with one mentioning it requires no tools.",
+        "mention": 90,
+        "positive": 88,
+        "negative": 2,
+        "update_time": "2026-09-27"
+      },
+      {
+        "keyword": "brightness",
+        "content": "Customers appreciate the lamp’s brightness options, with one mentioning that it can be adjusted from bright to dim, and another noting that it can be toned down to provide basic lighting.",
+        "mention": 5,
+        "positive": 5,
+        "negative": 12,
+        "update_time": "2026-09-24"
+      },
+      {
+        "keyword": "quality",
+        "content": "Customers are satisfied with the quality of the floor lamp.",
+        "mention": 6,
+        "positive": 5,
+        "negative": 1,
+        "update_time": "2026-09-24"
+      },
+      {
+        "keyword": "stability",
+        "content": "Customers report that the floor lamp is unstable and can tip over easily.",
+        "mention": 6,
+        "positive": 41,
+        "negative": 6,
+        "update_time": "2026-09-24"
+      },
+      {
+        "keyword": "value for money",
+        "content": "Customers find the floor lamp to be excellent value for money.",
+        "mention": 5,
+        "positive": 5,
+        "negative": 19,
+        "update_time": "2026-09-24"
+      },
+      {
+        "keyword": "appearance",
+        "content": "Customers love the appearance of the floor lamp, describing it as beautiful and perfect for bedroom use.",
+        "mention": 7,
+        "positive": 6,
+        "negative": 1,
+        "update_time": "2026-09-24"
+      },
+      {
+        "keyword": "size",
+        "content": "Customers have mixed opinions about the lamp’s size, with some finding it smaller than expected.",
+        "mention": 5,
+        "positive": 2,
+        "negative": 3,
+        "update_time": "2026-09-24"
+      }
+    ]
+  }
+}

@@ -21,12 +21,12 @@ test('original theme flow freezes Sorftime sample, enriches only missing images 
  await db.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Theme original','member','active',clock_timestamp(),clock_timestamp())",[actor.userId,actor.organizationId,`${actor.userId}@example.test`]);
  const service=new MarketModuleService({context,modelIdentity:()=>null});
  const study=await service.createStudy(actor,{marketplace:'US',nodeIdPath:'1063294',fromMonth:'2026-08',toMonth:'2026-08',currency:'USD'},randomUUID());
- const image='https://m.media-amazon.com/images/I/fixture.jpg',calls:string[]=[];let repaired=false,emptyPool=false,badImage=false;
+ const image='https://m.media-amazon.com/images/I/fixture.jpg',calls:string[]=[];let repaired=false,emptyPool=false,badImage=false,mixed=false;
  const connector:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('No probes')},execute:async r=>{
   calls.push(`${r.operation}:${r.input.asin??''}`);
   const data=r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps'},top100_products:emptyPool?[]:[{asin:'B099WTN2TR',title:'Lamp A',main_image:image},{asin:'B07Z5NQPDS',title:'Lamp B'}]}}:
    r.operation==='product_detail'?(badImage?{error:'synthetic image failure'}:{data:{asin:r.input.asin,main_image:[image]}}):
-   {data:{customer_say:'Customers mention brightness.',details:[{keyword:r.input.asin==='B099WTN2TR'?'Brightness':'brightness',content:'Bright light',mention:10,positive:8,negative:!repaired&&r.input.asin==='B07Z5NQPDS'?76:2,update_time:'2026-08-01'}]}};
+   {data:{customer_say:'Customers mention brightness.',details:[...(mixed?[{keyword:'invalid',content:'Bad source row',mention:1,positive:99,negative:0,update_time:'2026-08-01'}]:[]),{keyword:r.input.asin==='B099WTN2TR'?'Brightness':'brightness',content:'Bright light',mention:10,positive:8,negative:!repaired&&r.input.asin==='B07Z5NQPDS'?76:2,update_time:'2026-08-01'}]}};
   return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const forbidden:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('No SellerSprite')},execute:async()=>{throw Error('No SellerSprite')}};
@@ -67,6 +67,21 @@ test('original theme flow freezes Sorftime sample, enriches only missing images 
   const refreshed=(await service.findRun(actor,begun.run.id)).run;
   const current=await loadThemeSelectionFacts(context,{...identity,attemptId:refreshed.currentReport!.attemptId});assert.equal(current!.samples[1].imageUrl.value,image);
   assert.deepEqual(await loadThemeSelectionFacts(context,identity),prior);
+ });
+ await t.test('mixed source themes stay partial through saved report, detail, selection and original row evidence',async()=>{
+  mixed=true;const fresh=await service.createStudy(actor,{marketplace:'US',nodeIdPath:'1063294',fromMonth:'2026-08',toMonth:'2026-08',currency:'USD'},randomUUID());
+  const begun=await service.startThemes(actor,fresh.study.id,{memberCount:2,poolSize:20},randomUUID());await drain();
+  const current=(await service.findRun(actor,begun.run.id)).run;assert.ok(current.currentReport,JSON.stringify(current.steps));
+  assert.equal(current.currentReport.report.status,'partial');assert.equal(current.currentReport.report.counts.successfulCount,2);assert.equal(current.currentReport.report.counts.quarantinedThemeCount,2);
+  const q={actor,moduleRunId:current.id,attemptId:current.currentReport.attemptId};const saved=await loadThemeSelectionFacts(context,q);assert.ok(saved);
+  const facts=restoreThemeSelectionFacts(saved).restored;assert.equal(facts.aggregation.totals!.mention,20);assert.equal(facts.aggregation.coverage.status,'partial');
+  const {deriveThemeSelection}=await import('../../server/domain/market-research/customer-theme-selection');
+  const baseline=deriveThemeSelection(facts,[],false,false,true,true);assert.equal(baseline.status,'partial');assert.equal(baseline.asins[0].quarantine!.rejected.length,1);
+  const removed=deriveThemeSelection(facts,[baseline.selectedAsins[0]],false,false,true,true);assert.equal(removed.totals!.mention,10);assert.equal(removed.status,'partial');
+  assert.deepEqual(deriveThemeSelection(facts,[],false,false,true,true),baseline);
+  const member=facts.aggregation.groups[0].members[0];assert.match(member.sourceThemeId,/:1$/);
+  const evidence=await new MarketThemeReportService(context).readEvidence({...q,query:{sourceThemeId:member.sourceThemeId}});assert.equal(evidence!.evidence.keyword,member.keyword);
+  mixed=false;
  });
  await t.test('empty Sorftime category creates readable no-data report without per-ASIN calls',async()=>{
   emptyPool=true;const n=calls.length;

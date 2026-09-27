@@ -14,7 +14,7 @@ export function restoreMarketThemeAggregate(savedValue:unknown,perAsin:CustomerT
     if(a.reportedStatus===null)continue;
     if(a.reportedStatus==='success'){
       if(!a.source)throw new TypeError('Missing successful ASIN source');
-      results.push({asin:a.asin,status:'success',source:a.source,themes:a.themes.map(t=>({sourceThemeId:t.sourceThemeId,keyword:t.keyword,content:t.content,
+      results.push({asin:a.asin,status:'success',source:a.source,...(a.quarantine?{quarantine:a.quarantine}:{}),themes:a.themes.map(t=>({sourceThemeId:t.sourceThemeId,keyword:t.keyword,content:t.content,
         mention:t.mention,positive:t.positive,negative:t.negative,sourceUpdatedAt:t.sourceUpdatedAt}))});
     }else{
       if((a.reportedStatus!=='empty'&&a.reportedStatus!=='failed')||!a.reason)throw new TypeError('Invalid ASIN result');

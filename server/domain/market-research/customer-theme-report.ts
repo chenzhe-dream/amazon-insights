@@ -22,6 +22,7 @@ export function classifyMarketThemeReport(value: z.input<typeof readinessSchema>
   if (p.selectedCount < p.requestedCount) reasons.push('selection-shortfall');
   if (!p.successfulCount) reasons.push('no-theme-data');
   if (p.emptyCount) reasons.push('empty-asins');
+  if(p.quarantinedThemeCount)reasons.push('quarantined-themes');
   if (p.failedCount || p.missingCount) reasons.push('source-results-missing');
   if (p.unavailableCount) reasons.push('model-results-missing');
   if (p.unknownCount) reasons.push('unknown-themes');
@@ -106,6 +107,7 @@ export function createMarketThemeReport(view: MarketModuleRunView, definition: M
     if (new Set(selectedAsins).size !== selectedAsins.length) throw new TypeError('Duplicate report selection');
     same(coverage.selectedAsinCount, selectedAsins.length);
     readiness = classifyMarketThemeReport(readinessSchema.parse({ requestedCount: params.memberCount, selectedCount: selectedAsins.length,
+      ...(coverage.quarantinedThemeCount?{quarantinedThemeCount:coverage.quarantinedThemeCount}:{}),
       successfulCount: coverage.successfulAsinCount, emptyCount: coverage.emptyAsinCount, failedCount: coverage.failedAsinCount, missingCount: coverage.missingAsinCount,
       expectedMemberCount: semantics.expectedMemberCount, validatedMemberCount: semantics.validatedMemberCount, mappedMemberCount: semantics.mappedMemberCount,
       unknownCount: z.array(z.string()).parse(semantics.unknownMemberIds).length, unavailableCount: z.array(z.string()).parse(semantics.unavailableMemberIds).length,

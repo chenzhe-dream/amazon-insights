@@ -11,7 +11,7 @@ import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 
 type Entry=z.infer<typeof MarketThemeReportEntrySchema>;
 type Page=z.infer<typeof MarketThemeDetailResponseSchema>['page'];
-const reasons={ 'selection-shortfall':'来源商品不足请求数量', 'no-theme-data':'未获得可用主题', 'empty-asins':'部分商品主题为空', 'source-results-missing':'部分商品采集失败或未返回',
+const reasons={ 'quarantined-themes':'部分来源主题异常，已隔离；仅统计有效主题', 'selection-shortfall':'来源商品不足请求数量', 'no-theme-data':'未获得可用主题', 'empty-asins':'部分商品主题为空', 'source-results-missing':'部分商品采集失败或未返回',
   'model-results-missing':'部分主题的模型分析未完成', 'unknown-themes':'部分主题尚未归类', 'reconciliation-required':'跨批分类仍待确认' };
 const statuses={success:'已取得',empty:'无主题',failed:'采集失败',missing:'尚未取得'};
 const decisions={mapped:'已归组',unknown:'尚未归类',unavailable:'模型结果不可用'};
@@ -40,7 +40,7 @@ function ThemePages({entry}:{entry:Entry}) {
           <p>提及 {num(item.totals.mention)} · 正向 {num(item.totals.positive)} · 负向 {num(item.totals.negative)} · 原主题 {item.memberCount} 项</p>
           <p>主题提及份额：{item.topicShare.valuePct===null?'未知':`${item.topicShare.valuePct.toFixed(1)}%`}（{item.topicShare.numerator}/{item.topicShare.denominator}）</p>
           <button type="button" className="ghost-btn" onClick={()=>move({section:'members',offset:0,groupIndex:item.index})}>查看第 {item.index+1} 组原主题</button></>:
-        item.kind==='asin'?<><h4>{item.asin} · {statuses[item.status]}</h4><p>提及 {num(item.totals?.mention??null)} · 主题 {num(item.totals?.themeCount??null)}</p><p>{item.reason}</p><small>来源记录：{item.sourceRecordId??'无'} · 采集时间：{item.fetchedAt??'未知'}</small></>:
+        item.kind==='asin'?<><h4>{item.asin} · {statuses[item.status]}</h4><p>提及 {num(item.totals?.mention??null)} · 主题 {num(item.totals?.themeCount??null)}</p><p>{item.reason}</p>{item.quarantine&&<p>有效 {item.memberCount}/{item.quarantine.receivedCount} 条；已隔离 {item.quarantine.rejected.length} 条异常主题，来源行号：{item.quarantine.rejected.map(r=>r.index+1).join("、")}。</p>}<small>来源记录：{item.sourceRecordId??'无'} · 采集时间：{item.fetchedAt??'未知'}</small></>:
         <><h4>{item.asin} · <Preview value={item.keyword}/></h4><p>{entry.report.semanticStatus==='skipped'&&item.decision.status==='unavailable'?'语义归组未启用':decisions[item.decision.status]}{entry.report.semanticStatus==='skipped'?'':item.decision.reason?` · ${item.decision.reason}`:''}</p>
           <p className="market-theme-evidence"><Preview value={item.content}/></p><p>原始提及 {item.mention} · 正向 {item.positive} · 负向 {item.negative} · 商品内份额 {item.withinAsinShare.valuePct===null?'未知':`${item.withinAsinShare.valuePct.toFixed(1)}%`}（{item.withinAsinShare.numerator}/{item.withinAsinShare.denominator}）</p>
           <small>原主题：{item.sourceThemeId}<br/>来源记录：{item.sourceRecordId} · 更新时间：{item.sourceUpdatedAt??'未知'}</small>

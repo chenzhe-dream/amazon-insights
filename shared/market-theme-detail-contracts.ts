@@ -1,3 +1,4 @@
+import {ThemeQuarantineSchema} from './market-theme-quality';
 import { z } from 'zod';
 import { MarketThemeReportEntrySchema } from './market-module-contracts';
 
@@ -21,7 +22,7 @@ export const MarketThemeDetailItemSchema = z.discriminatedUnion('kind', [
     keyword: MarketThemeTextPreviewSchema, content: MarketThemeTextPreviewSchema, mention: count, positive: count, negative: count,
     withinAsinShare: MarketThemeShareSchema, decision: MarketThemeDecisionSchema }).strict(),
   z.object({ kind: z.literal('asin'), asin, status: z.enum(['success', 'empty', 'failed', 'missing']), reason: z.string().max(240).nullable(),
-    sourceRecordId: identity.nullable(), fetchedAt: z.string().datetime({ offset: true }).nullable(), totals: MarketThemeTotalsSchema.nullable(), memberCount: count }).strict(),
+    sourceRecordId: identity.nullable(), fetchedAt: z.string().datetime({ offset: true }).nullable(), totals: MarketThemeTotalsSchema.nullable(), quarantine:ThemeQuarantineSchema.optional(), memberCount: count }).strict(),
 ]);
 export const MarketThemeDetailPageSchema = z.object({ section: z.enum(['groups', 'members', 'asins']), offset: count, limit: count.min(1).max(50), nextOffset: count.nullable(),
   totalItems: count, groupIndex: count.nullable(), metricKind: z.literal('customers_say_topic_share'), reviewDeduplication: z.literal('unavailable'),

@@ -1,3 +1,4 @@
+import {ThemeQuarantineSchema,type ThemeQuarantine} from '../../../shared/market-theme-quality';
 import { z } from "zod";
 
 export type CustomerThemeSource = {
@@ -18,7 +19,7 @@ export type CustomerSourceTheme = {
 };
 
 export type CustomerThemesAsinInput =
-  | { asin: string; status: "success"; source: CustomerThemeSource; themes: readonly CustomerSourceTheme[] }
+  | { asin: string; status: "success"; source: CustomerThemeSource; themes: readonly CustomerSourceTheme[]; quarantine?:ThemeQuarantine }
   | { asin: string; status: "empty" | "failed"; source: CustomerThemeSource | null; reason: string };
 
 export type CustomerThemeMapping = { sourceThemeId: string; groupId: string };
@@ -52,6 +53,7 @@ export type CustomerThemeEvidence = Omit<CustomerSourceTheme, "sourceUpdatedAt">
 export type CustomerThemesAsinSummary = {
   asin: string;
   status: "success" | "empty" | "failed" | "missing";
+  quarantine?:ThemeQuarantine;
   reportedStatus: "success" | "empty" | "failed" | null;
   reason: string | null;
   source: CustomerThemeSource | null;
@@ -80,6 +82,7 @@ export type CustomerThemeAggregation = {
     selectedAsinCount: number;
     returnedAsinCount: number;
     successfulAsinCount: number;
+    quarantinedThemeCount?:number;
     emptyAsinCount: number;
     failedAsinCount: number;
     missingAsinCount: number;
@@ -119,7 +122,7 @@ const themeSchema = z.object({
   }
 });
 const resultSchema = z.discriminatedUnion("status", [
-  z.object({ asin: asinSchema, status: z.literal("success"), source: sourceSchema, themes: z.array(themeSchema) }).strict(),
+  z.object({ asin: asinSchema, status: z.literal("success"), source: sourceSchema, themes: z.array(themeSchema), quarantine:ThemeQuarantineSchema.optional() }).strict(),
   z.object({ asin: asinSchema, status: z.literal("empty"), source: sourceSchema.nullable(), reason: nonemptyText }).strict(),
   z.object({ asin: asinSchema, status: z.literal("failed"), source: sourceSchema.nullable(), reason: nonemptyText }).strict(),
 ]);
@@ -189,6 +192,7 @@ export function aggregateCustomerThemes(input: AggregateCustomerThemesInput): Cu
       perAsin.push({ asin, status: "empty", reportedStatus: "success", reason: "success_without_themes", source: result.source, totals: null, themes: [] });
       continue;
     }
+    if(result.quarantine && result.themes.length+result.quarantine.rejected.length!==result.quarantine.receivedCount)throw new TypeError('Theme quarantine coverage differs');
     const evidence = result.themes.map((theme): CustomerThemeEvidence => {
       if (themeIds.has(theme.sourceThemeId)) throw new TypeError(`Duplicate source theme ID: ${theme.sourceThemeId}`);
       themeIds.add(theme.sourceThemeId);
@@ -199,6 +203,7 @@ export function aggregateCustomerThemes(input: AggregateCustomerThemesInput): Cu
     allThemes.push(...evidence);
     perAsin.push({
       asin, status: "success", reportedStatus: "success", reason: null, source: result.source, totals,
+      ...(result.quarantine?{quarantine:result.quarantine}:{}),
       themes: evidence.map((theme) => ({ ...theme, topicShare: topicShare(theme.mention, totals.mention, [asin]) })),
     });
   }
@@ -238,12 +243,14 @@ export function aggregateCustomerThemes(input: AggregateCustomerThemesInput): Cu
   const displayedGroups = parsed.topN === undefined ? groups : groups.slice(0, parsed.topN);
   const selectedCount = parsed.selectedAsins.length;
   const successfulCount = successfulAsins.length;
+  const quarantinedThemeCount=perAsin.reduce((n,a)=>n+(a.quarantine?.rejected.length??0),0);
   return {
     metricKind: "customers_say_topic_share", sentimentOverlap: "not_assumed_disjoint",
     dataReady: successfulCount > 0,
     scope: { selectedAsins: [...parsed.selectedAsins], successfulAsins },
     coverage: {
-      status: successfulCount === 0 ? "none" : successfulCount === selectedCount ? "complete" : "partial",
+      status: successfulCount === 0 ? "none" : successfulCount === selectedCount && !quarantinedThemeCount ? "complete" : "partial",
+      ...(quarantinedThemeCount?{quarantinedThemeCount}:{}),
       selectedAsinCount: selectedCount, returnedAsinCount: results.size, successfulAsinCount: successfulCount,
       emptyAsinCount: perAsin.filter((result) => result.status === "empty").length,
       failedAsinCount: perAsin.filter((result) => result.status === "failed").length,

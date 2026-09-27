@@ -182,12 +182,14 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     const input = themesInput.parse(claim.step.input), scope = await scopeFor(claim, signal), selection = await selected(claim, input.selectionInputSnapshotId, scope);
     if (selection.kind !== 'products' || !selection.records.some(r => r.id === input.asin && ['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection)) && object(object(r.data).product).asin === input.asin)) invalid('ASIN is outside the saved source pool');
     signal.throwIfAborted();
-    const result = await collectMarketCustomerThemes({ asin: input.asin, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
+    const result = await collectMarketCustomerThemes({ asin: input.asin, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal, quarantineInvalidThemes: selection.records.every(r=>object(r.data).collection==='sorftime-shape-pool') });
     if (result.result.status === 'failed' || !result.evidence) {
       const first=result.issues[0],path=first?.path;
       const detail=first?.code==='invalid-theme'&&path?.length===4&&path[0]==='data'&&path[1]==='details'
         ?MarketThemeSourceIssueSchema.safeParse({code:first.reason??'invalid-theme',themeIndex:path[2],field:path[3]}):null;
-      return failure(first?.code??'invalid-source',first?.retryable??false,detail?.success?detail.data:undefined);
+      const rejected=failure(first?.code??'invalid-source',first?.retryable??false,detail?.success?detail.data:undefined);
+      if(rejected.kind==='settlement'&&rejected.value.outcome.status==='failed'&&result.rawPayload)rejected.value.outcome.diagnostic=json({...object(rejected.value.outcome.diagnostic),rawPayload:result.rawPayload});
+      return rejected;
     }
     return collected(scope, 'customer-themes', [input.asin], [{ id: input.asin, data: { collection: 'customer-themes', result: result.result } }],
       result.result.status === 'empty' ? 'empty' : 'ready', result.evidence, { asin: input.asin, selectionInputSnapshotId: input.selectionInputSnapshotId, issues: result.issues });

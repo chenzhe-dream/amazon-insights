@@ -396,3 +396,44 @@ test("source payload and returned evidence detach from later connector-owned mut
   assert.notEqual(result.rawPayload, raw);
   assert.equal(Object.isFrozen(result.rawPayload), true);
 });
+
+
+test('quarantine mode retains valid rows at original indices and flags incomplete coverage',async()=>{
+ const {collectMarketCustomerThemes}=await api();
+ const raw=payload([row({mention:9,positive:9,negative:76}),row({keyword:'brightness',mention:10,positive:8,negative:2})]);
+ const result=await collectMarketCustomerThemes({...callInput(connector(()=>raw)),quarantineInvalidThemes:true});
+ assert.equal(result.result.status,'success');assert.deepEqual(result.rawPayload,raw);assert.deepEqual(result.evidence!.payload,raw);
+ if(result.result.status!=='success')return;
+ assert.equal(result.result.themes.length,1);assert.match(result.result.themes[0].sourceThemeId,/:1$/);
+ assert.equal(result.result.quarantine!.receivedCount,2);assert.deepEqual(result.result.quarantine!.rejected.map(r=>r.index),[0]);
+ const a=aggregateCustomerThemes({selectedAsins:[asin],results:[result.result],mappings:[]});
+ assert.equal(a.coverage.status,'partial');assert.equal(a.totals!.mention,10);assert.equal(a.coverage.quarantinedThemeCount,1);
+ assert.equal(a.groups[0].topicShare.denominator,10);
+ const allBad=await collectMarketCustomerThemes({...callInput(connector(()=>payload([row({positive:999})]))),quarantineInvalidThemes:true});
+ assert.equal(allBad.result.status,'failed');assert.ok(allBad.rawPayload);
+ const legacy=await collectMarketCustomerThemes(callInput(connector(()=>raw)));assert.equal(legacy.result.status,'failed');
+});
+
+
+test('oversized invalid theme partitions fail normally and retain raw evidence in both modes', async () => {
+ const { collectMarketCustomerThemes } = await api();
+ const raw = payload([...Array.from({length: 2001}, () => row({negative: 99})), row()]);
+ for (const quarantineInvalidThemes of [false, true]) {
+  const result = await collectMarketCustomerThemes({...callInput(connector(() => raw)), quarantineInvalidThemes});
+  assert.equal(result.result.status, 'failed');
+  assert.equal(result.issues[0].code, 'invalid-theme');
+  assert.deepEqual(result.rawPayload, raw);
+  assert.equal(result.evidence, null);
+ }
+});
+
+test('observed Sorftime contradictions isolate four rows while retaining the other 28 themes',async()=>{
+ const {collectMarketCustomerThemes}=await api();
+ for(const [file,usable,rejected] of [['floor-customers-say-invalid-count.json',21,[1]],['floor-customers-say-multiple-invalid-counts.json',7,[4,6,7]]] as const){
+  const saved=JSON.parse(readFileSync(new URL('../fixtures/market/'+file,import.meta.url),'utf8')),raw=saved.payload??saved;
+  const result=await collectMarketCustomerThemes({...callInput(connector(()=>raw)),quarantineInvalidThemes:true});assert.equal(result.result.status,'success');if(result.result.status!=='success')return;
+  assert.equal(result.result.themes.length,usable);assert.deepEqual(result.result.quarantine!.rejected.map(r=>r.index),rejected);
+  assert.deepEqual(result.evidence!.payload,raw);const expected=raw.data.details.filter((_:unknown,i:number)=>!(rejected as readonly number[]).includes(i)).reduce((n:number,r:any)=>n+r.mention,0);
+  const a=aggregateCustomerThemes({selectedAsins:[asin],results:[result.result],mappings:[]});assert.equal(a.totals!.mention,expected);assert.ok(a.groups.every(g=>g.topicShare.denominator===expected));
+ }
+});

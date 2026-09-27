@@ -75,7 +75,7 @@ export function readMarketThemeDetailPage(snapshot: MarketInputSnapshot, value: 
     return { kind: 'group' as const, index, groupId: g.groupId, mappingStatus: g.mappingStatus, labelZh: label?.labelZh ?? null, definition: label?.definition ?? null,
       labelOrigin: label?.origin ?? null, sourceLabel: g.mappingStatus === 'unmapped' ? preview(g.members[0].keyword) : null, memberCount: g.members.length, totals: g.totals, topicShare: g.topicShare }; })
     : query.section === 'asins' ? aggregation.perAsin.map(a => ({ kind: 'asin' as const, asin: a.asin, status: a.status, reason: a.reason,
-      sourceRecordId: a.source?.sourceRecordId ?? null, fetchedAt: a.source?.fetchedAt ?? null, totals: a.totals, memberCount: a.themes.length }))
+      sourceRecordId: a.source?.sourceRecordId ?? null, fetchedAt: a.source?.fetchedAt ?? null, totals: a.totals, memberCount: a.themes.length,...(a.quarantine?{quarantine:a.quarantine}:{}) }))
       : members.map(t => ({ kind: 'member' as const, sourceThemeId: t.sourceThemeId, asin: t.asin, sourceRecordId: t.sourceRecordId, sourceUpdatedAt: t.sourceUpdatedAt,
         keyword: preview(t.keyword), content: preview(t.content), mention: t.mention, positive: t.positive, negative: t.negative,
         withinAsinShare: t.topicShare, decision: decisionMap.get(t.sourceThemeId)! }));

@@ -1,3 +1,4 @@
+import {partitionSourceThemes} from '../../shared/market-theme-quality';
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import {sorftimeMarketSite,normalizeMarketSite} from '../../shared/market-sites';
@@ -29,6 +30,7 @@ export type CollectMarketCustomerThemesInput = {
   signal?: AbortSignal;
   now?: () => Date;
   timeoutMs?: number;
+  quarantineInvalidThemes?: boolean;
 };
 export type MarketCustomerThemesCollection = {
   scope: MarketAnalysisScope;
@@ -76,18 +78,6 @@ const sourceSchema = z.object({
   connectorId: z.literal("sorftime"), operation: z.literal(OPERATION),
   fetchedAt: z.string().datetime(), attemptCount: count.min(1),
 }).strict();
-const updateDate = z.string().regex(/^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}$/).refine((value) => {
-  const time = new Date(`${value}T00:00:00.000Z`);
-  return Number(value.slice(0, 4)) > 0 && Number.isFinite(time.getTime()) && time.toISOString().slice(0, 10) === value;
-}, "update_time must be a real calendar date");
-const themeSchema = z.object({
-  keyword: z.string().refine((value) => value.trim().length > 0, "keyword must not be empty"),
-  content: z.string(), mention: count, positive: count, negative: count, update_time: updateDate,
-}).passthrough().superRefine((theme, context) => {
-  for (const field of ["positive", "negative"] as const) {
-    if (theme[field] > theme.mention) context.addIssue({ code: "custom", path: [field], message: `${field} cannot exceed mention`, params: { reason: 'count-exceeds-mention' } });
-  }
-});
 
 function isRecord(value: MarketJsonValue | undefined): value is Record<string, MarketJsonValue> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -235,11 +225,18 @@ export async function collectMarketCustomerThemes(input: CollectMarketCustomerTh
     if (typeof body.customer_say !== "string") return failed([issue("malformed-response", false, ["data", "customer_say"])]);
     summary = body.customer_say;
   }
-  const themeResults = body.details.map((theme) => themeSchema.safeParse(theme));
+  let partition: ReturnType<typeof partitionSourceThemes>;
+  try { partition = partitionSourceThemes(body.details); }
+  catch (error) {
+    // Oversized quarantine metadata must still retain the bounded raw response.
+    if (error instanceof z.ZodError) return failed([issue("invalid-theme", false, ["data", "details"])]);
+    throw error;
+  }
+  const {parsed:themeResults,quarantine}=partition;
   const issues = themeResults.flatMap((result, index) => result.success ? [] : result.error.issues.map((error) =>
     ({...issue("invalid-theme", false, ["data", "details", index, ...error.path.filter((key): key is string | number => typeof key === "string" || typeof key === "number")]),
       ...(error.code==='custom'&&error.params?.reason==='count-exceeds-mention'?{reason:'count-exceeds-mention' as const}:{})})));
-  if (issues.length > 0) return failed(issues);
+  if (issues.length > 0 && (!input.quarantineInvalidThemes || themeResults.every(r=>!r.success))) return failed(issues);
   let totalMentions = 0;
   for (const [index, theme] of themeResults.entries()) {
     if (theme.success) {
@@ -269,14 +266,15 @@ export async function collectMarketCustomerThemes(input: CollectMarketCustomerTh
     ? { asin, status: "empty", source: sourceReference, reason: observedEmpty ? "No relevant data." : "Customers Say returned no source themes" }
     : {
       asin, status: "success", source: sourceReference,
-      themes: themeResults.map((theme, index) => {
-        if (!theme.success) throw new Error("Validated source theme is required");
-        return {
+      ...(quarantine?{quarantine}:{}),
+      themes: themeResults.flatMap((theme, index) => {
+        if (!theme.success) return [];
+        return [{
           sourceThemeId: `${sourceRecordId}:${index}`, keyword: theme.data.keyword, content: theme.data.content,
           mention: theme.data.mention, positive: theme.data.positive, negative: theme.data.negative,
           sourceUpdatedAt: theme.data.update_time,
-        };
+        }];
       }),
     };
-  return { scope, asin, result, summary, evidence, rawPayload: evidence.payload, rawUnavailableReason: null, issues: [] };
+  return { scope, asin, result, summary, evidence, rawPayload: evidence.payload, rawUnavailableReason: null, issues };
 }

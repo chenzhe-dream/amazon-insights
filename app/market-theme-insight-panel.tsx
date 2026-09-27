@@ -12,11 +12,11 @@ import {MarketThemeLaunchSection,MarketThemeTopicTable,MarketThemeSampleTable,se
 export {MarketThemeLaunchSection,MarketThemeTopicTable,MarketThemeSampleTable,selectThemeSentiment} from './market-theme-result-view';
 type Entry=z.infer<typeof MarketThemeReportEntrySchema>;
 type Page=z.infer<typeof MarketThemeDetailResponseSchema>['page'];
-type DisplayResult={status:'complete'|'partial'|'no-data';selectedAsins:readonly string[];baseSelectionShortfall:boolean;asins:readonly {status:'success'|'empty'|'failed'|'missing'}[]};
+type DisplayResult={status:'complete'|'partial'|'no-data';selectedAsins:readonly string[];baseSelectionShortfall:boolean;asins:readonly {status:'success'|'empty'|'failed'|'missing';quarantine?:{rejected:readonly unknown[]}}[]};
 export function themePresentationStatus(entry:Entry,result:DisplayResult|null){
  if(entry.report.semanticStatus!=='skipped'||!result)return result?.status??themeSavedReportStatus(entry.report);
  if(!result.selectedAsins.length||!result.asins.some(asin=>asin.status==='success'))return 'no-data';
- return result.baseSelectionShortfall||result.asins.some(asin=>asin.status!=='success')?'partial':'complete';
+ return result.baseSelectionShortfall||result.asins.some(asin=>asin.status!=='success'||!!asin.quarantine?.rejected.length)?'partial':'complete';
 }
 async function readAll(identity:{moduleRunId:string;attemptId:string;reportHash:string},section:Page['section'],signal:AbortSignal,groupIndex?:number) {
  const items:Page['items']=[];let offset=0;let last:Page|null=null;
@@ -43,6 +43,7 @@ export function MarketThemeInsightPanel({entry}:{entry:Entry}) {
  },[runId,attemptId,reportHash,reload]);
  const result=selection?(selection.revision?.result??selection.baseline):null;
  const presentationStatus=themePresentationStatus(entry,result);
+ const quarantinedCount=result?result.asins.reduce((n,a)=>n+(a.quarantine?.rejected.length??0),0):(entry.report.counts.quarantinedThemeCount??0);
  const shownGroups=result?.groups??groups,shownAsins=result?.asins??asins,shownDisplay=result?.display??display;
  const shownEvidence=result?Object.fromEntries(result.evidence.map(e=>[e.index,{members:e.members,topAsins:e.topAsins}])):evidence;
  const active=selectThemeSentiment(shownGroups??[],tab,original),visible=active.slice(0,12);
@@ -70,6 +71,7 @@ export function MarketThemeInsightPanel({entry}:{entry:Entry}) {
  return <>
   <MarketThemeLaunchSection title="买家评论见解" description={`基于 ${result?.selectedAsins.length??entry.report.counts.selectedCount} 个样本链接的 Amazon Customers Say 聚合 · ${entry.report.categoryName??entry.report.scope.nodeIdPath}`} badge={<span className="source-badge">Customers Say · 已保存来源</span>} toolbar={<div className="category-cs-actions"><button type="button" className={tab==='positive'?'active':''} aria-pressed={tab==='positive'} onClick={()=>setTab('positive')}>正面见解</button><button type="button" className={tab==='negative'?'active':''} aria-pressed={tab==='negative'} onClick={()=>setTab('negative')}>负面/分歧见解</button><button type="button" onClick={()=>setReload(n=>n+1)}>重读已存见解</button></div>}>
    <p className="category-cs-note">Customers Say 主题提及份额不代表独立评论发生率。正负向计数不假定互斥；{original?'主题按 1.2 倍阈值分栏，分歧主题进入负面/分歧栏。':'同一主题可以出现在两种见解中。'}更新 {entry.report.dataCutoffAt.slice(0,10)} · {entry.current?'当前报告':'历史报告'} · {presentationStatus==='complete'?semanticSkipped?'规则数据已完整':'分析完整':presentationStatus==='partial'?'部分结果':'暂无数据'} · 已取得主题 {result?result.asins.filter(a=>a.status==='success').length:entry.report.counts.successfulCount}/{result?.selectedAsins.length??entry.report.counts.selectedCount} 个商品。</p>
+   {quarantinedCount>0&&<p className="market-research-notice" role="status">已隔离 {quarantinedCount} 条异常主题；有效主题继续参与分析，份额仅按有效主题提及数计算。本报告为部分数据，异常原文已保留。</p>}
    {!result&&error?<div className="pending-box" role="alert"><strong>读取失败</strong><span>{error}</span></div>:!shownGroups?<div className="pending-box" role="status"><strong>正在读取 Customers Say…</strong><span>读取此版本已保存主题和摘要。</span></div>:visible.length?<MarketThemeTopicTable groups={visible} entry={entry} evidence={shownEvidence}/>:<div className="pending-box"><span>{result&&result.sentimentGroupCounts[tab]>0?'当前标签有 '+result.sentimentGroupCounts[tab]+' 个主题，本次受'+(result.display.omittedGroupCount>0?'报告展示上限'+(result.previewOmittedGroupCount>0?'或预览预算':''):'预览预算')+'限制未展示；完整事实和统计仍保留。':tab==='positive'?'暂无显著正面主题':'暂无显著负面/分歧主题'}</span></div>}
    {shownGroups&&<details className="market-insights-topic-notes"><summary>主题展示范围与正负向划分</summary><p className="category-cs-note">当前标签展示 {visible.length}/{result?.sentimentGroupCounts[tab]??active.length} 个主题；{original?'正向提及数大于负向的 1.2 倍进入正面栏；负向大于正向的 1.2 倍为负面，其余为分歧，统一进入负面/分歧栏。':'按已保存正向 / 负向计数是否大于零分别筛选。不执行原版 1.2 倍阈值分类；零正负计数的主题保留在完整证据中。'}展示上限 12 不改变分母。{result&&result.previewOmittedGroupCount>0?`此次预览未展示 ${result.previewOmittedGroupCount} 组，完整事实仍用于分母计算。`:null}主题份额分母为当前保留且成功取得有效主题的 ASIN 的全部主题提及数；失败、空结果和缺失样本不补零。{original?'分栏不代表来源正负计数互斥，不进行逐条评论去重。':'正负集合可重叠，不进行逐条评论去重。'}{shownDisplay&&shownDisplay.omittedGroupCount>0?`报告还省略 ${shownDisplay.omittedGroupCount} 组；完整来源范围见下方证据。`:''}</p>{selection&&<p className="category-cs-note">样本版本{selection.revision?` #${selection.revision.ordinal}`:'：基准'} · {selection.revision?.revisionId??entry.report.reportHash}。基准 {entry.attemptId} / {entry.report.reportHash}。{semanticSkipped?(original?'按原主题名称去首尾空格并忽略大小写归并；仅用冻结来源中保留的 ASIN 重算，不调用模型、不重新采集。':'仅按冻结来源中保留的 ASIN 重算；本任务未启用语义归组，也不重新采集。'):'继承基准映射，仅按保留 ASIN 重算；不重跑模型、不重新采集。未知和不可用映射保留原状态。'}{result?.baseSelectionShortfall?'基准来源返回的选样数量不足，修订不补位且保留此限制。':null}{!semanticSkipped&&result?.reconciliationRequired?'基准仍需主题 reconciliation，修订不代表其已完成。':''}</p>}</details>}
   </MarketThemeLaunchSection>

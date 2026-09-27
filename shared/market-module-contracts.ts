@@ -17,7 +17,7 @@ export const MarketModuleCancelResponseSchema = z.object({ moduleRunId: MarketMo
 const count = z.number().int().nonnegative().safe();
 export const MarketThemeReadinessCountsSchema = z.object({ requestedCount: count.min(1).max(20), selectedCount: count.max(20), successfulCount: count,
   emptyCount: count, failedCount: count, missingCount: count, expectedMemberCount: count, validatedMemberCount: count,
-  mappedMemberCount: count, unknownCount: count, unavailableCount: count, reconciliationRequired: z.boolean() }).strict();
+  quarantinedThemeCount:count.optional(), mappedMemberCount: count, unknownCount: count, unavailableCount: count, reconciliationRequired: z.boolean() }).strict();
 const hash = z.string().regex(/^[a-f0-9]{64}$/), version = z.string().min(1).max(240);
 export const MarketThemeReportSchema = z.object({ reportVersion: z.enum(['market-theme-report/v1','market-theme-report/v2','market-theme-report/v3']), moduleRunId: MarketModuleIdSchema,
   scope: MarketAnalysisScopeSchema, versions: z.object({ source: version, rule: version, mapping: version, planner: version, model: version.nullable(), prompt: version.nullable(), configuration: version.nullable() }).strict(),
@@ -25,7 +25,7 @@ export const MarketThemeReportSchema = z.object({ reportVersion: z.enum(['market
   dataCutoffAt: z.string().datetime(),categoryName:z.string().max(500).nullable().optional(), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20), selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false),
   metricKind: z.literal('customers_say_topic_share'), reviewDeduplication: z.literal('unavailable'), status: z.enum(['complete', 'partial', 'no-data']),
   dataReady: z.boolean(), semanticsReady: z.boolean(), counts: MarketThemeReadinessCountsSchema,
-  reasons: z.array(z.enum(['selection-shortfall', 'no-theme-data', 'empty-asins', 'source-results-missing', 'model-results-missing', 'unknown-themes', 'reconciliation-required'])).max(7), reportHash: hash,
+  reasons: z.array(z.enum(['selection-shortfall', 'no-theme-data', 'empty-asins', 'source-results-missing', 'model-results-missing', 'unknown-themes', 'reconciliation-required', 'quarantined-themes'])).max(8), reportHash: hash,
   ruleStatus: z.enum(['complete','partial','unavailable']).optional(), semanticStatus: z.enum(['skipped','pending','partial','complete','unavailable']).optional() }).strict()
   .refine(v=>(v.basis==='reconciliation-evaluation')===(v.reportVersion==='market-theme-report/v2')&&
     (['market-theme-flow/rules-v2','market-theme-flow/rules-v3'].includes(v.versions.planner))===(v.reportVersion==='market-theme-report/v3'),'Theme report version differs from its basis');

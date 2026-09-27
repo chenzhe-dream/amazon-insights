@@ -80,3 +80,22 @@ test('saved topN omissions remain explicit in sentiment tabs and never claim mis
  await page.getByText('Easy assembly',{exact:true}).first().waitFor();await page.getByRole('button',{name:'负面/分歧见解',exact:true}).click();await page.getByText('Breakage',{exact:true}).first().waitFor();
  assert.deepEqual(writes,[]);assert.deepEqual(outside,[]);assert.deepEqual(errors,[]);
 });
+
+
+test('quarantine warning survives reload and clears when the affected sample is excluded',{timeout:120000},async t=>{
+ const server=await createServer({configFile:false,cacheDir:'test-results/theme-quarantine-page-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),origin=server.resolvedUrls!.local[0].replace(/\/$/,'');page.setDefaultTimeout(8000);
+ const view=base();view.base.report.semanticStatus='skipped';view.base.report.versions.model=null;
+ view.baseline.asins[0].quarantine={version:'theme-quarantine/v1',receivedCount:2,rejected:[{index:0,fields:['negative']}]};view.baseline.status='partial';
+ await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==origin)return route.abort();
+  if(route.request().isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml(url.pathname,'<html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-theme-selection-browser-harness.tsx"></script></body></html>')});
+  if(!url.pathname.startsWith('/api/'))return route.continue();if(url.pathname.includes('/theme-selection'))return route.fulfill({json:view});if(url.pathname.endsWith('/details'))return route.fulfill({json:themeDetails(url)});return route.fulfill({status:404,json:{}});
+ });
+ await page.goto(origin);await page.getByText(/已隔离 1 条异常主题；有效主题继续参与分析/).waitFor();
+ await page.getByText('有效 1/2',{exact:false}).waitFor();await page.screenshot({path:'test-results/theme-quarantine-page.png'});
+ await page.reload();await page.getByText(/已隔离 1 条异常主题；有效主题继续参与分析/).waitFor();
+ view.baseline.asins=view.baseline.asins.slice(1);view.baseline.selectedAsins=view.baseline.selectedAsins.slice(1);view.baseline.status='complete';
+ await page.getByRole('button',{name:'重读已存见解',exact:true}).click();await page.getByRole('heading',{name:'样本 ASIN（1）',exact:true}).waitFor();
+ assert.equal(await page.getByText(/已隔离 1 条异常主题；有效主题继续参与分析/).count(),0);
+});

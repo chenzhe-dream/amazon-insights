@@ -83,3 +83,16 @@ test('an empty anchor pool creates no fabricated ASIN or verified ranking', asyn
   assert.deepEqual(selection.snapshot.records, []); assert.deepEqual(selection.manifest.selectedAsins, []);
   assert.equal(selection.manifest.requestedCountMet, false); assert.equal(selection.manifest.bsrTopVerified, false);
 });
+
+
+test('quarantine projection verifies rejected rows and original indices against immutable raw source',async()=>{
+ const selection=selectMarketThemeMembers({...await products(1),count:1}),id=selection.manifest.selectedAsins[0];
+ const raw={data:{details:[{keyword:'Invalid',content:'Bad counts',mention:1,positive:99,negative:0,update_time:'2026-08-01'},{keyword:'Assembly',content:'Easy',mention:10,positive:8,negative:2,update_time:'2026-08-01'}]}};
+ const collected=await collectMarketCustomerThemes({scope,asin:id,jobId:'test',quarantineInvalidThemes:true,connector:{id:'sorftime',probe:async()=>{throw Error('unused');},execute:async r=>({data:raw,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:at,attemptCount:1}})}});
+ const source=collected.evidence!,sourceRef=`market-source:${digest(source)}`;
+ const make=(result:any)=>createMarketInputSnapshot({scope,kind:'customer-themes',sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'source-normalization/v1',collectedAt:at,expectedRecordIds:[id],records:[{id,scope,data:{collection:'customer-themes',sourceRef,result}}]});
+ const assemble=(result:any)=>assembleMarketThemePool({selection:selection.snapshot,selectedAsins:[id],catalog,dataCutoffAt:at,failures:[],sources:{[sourceRef]:source},observations:[{sourceRef,snapshot:make(result)}]});
+ assert.equal(assemble(collected.result).aggregation.totals!.mention,10);
+ const forged=JSON.parse(JSON.stringify(collected.result));forged.quarantine.rejected[0].index=1;assert.throws(()=>assemble(forged));
+ const renumbered=JSON.parse(JSON.stringify(collected.result));renumbered.themes[0].sourceThemeId=renumbered.themes[0].sourceThemeId.replace(/:1$/,':0');assert.throws(()=>assemble(renumbered));
+});

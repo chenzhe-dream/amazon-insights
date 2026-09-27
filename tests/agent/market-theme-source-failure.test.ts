@@ -14,8 +14,10 @@ import {createMarketThemeRulesStep} from '../../server/runtime/market-theme-rule
 import {createMarketThemeReportStep} from '../../server/runtime/market-theme-report-step';
 import type {RemoteMcpConnector} from '../../server/connectors/connector-contract';
 
-test('invalid live theme counts explain the failed ASIN; retry preserves successful sources and old report',{timeout:90000},async t=>{
+test('all-invalid theme counts explain the failed ASIN; retry preserves successful sources and old report',{timeout:90000},async t=>{
  const invalid=JSON.parse(readFileSync(new URL('../fixtures/market/floor-customers-say-invalid-count.json',import.meta.url),'utf8')).payload;
+ // Mixed-valid rows now survive; force every row invalid to retain the failed-ASIN retry contract.
+ invalid.data.details=invalid.data.details.map((row:any)=>({...row,negative:row.mention+1}));
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
  const context=new PostgresQueryContext(pg.pool),steps=new PostgresMarketModuleExecutionStore(context),actor={organizationId:randomUUID(),userId:randomUUID()};
  await pg.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Theme failure fixture','member','active',clock_timestamp(),clock_timestamp())",[actor.userId,actor.organizationId,`${actor.userId}@example.test`]);
@@ -35,7 +37,8 @@ test('invalid live theme counts explain the failed ASIN; retry preserves success
  assert.equal(report.semanticStatus,'skipped');assert.equal(report.status,'partial');assert.equal(report.counts.failedCount,1);
  const failed=first.steps.find(s=>s.asin==='B07Z5NQPDS')!;
  assert.equal(failed.errorCode,'invalid-data');assert.equal(failed.canRetry,true);
- assert.deepEqual((failed as any).sourceIssue,{code:'count-exceeds-mention',themeIndex:1,field:'negative'});
+ assert.deepEqual((failed as any).sourceIssue,{code:'count-exceeds-mention',themeIndex:0,field:'negative'});
+ const diagnostic=(await pg.pool.query('SELECT diagnostic_json FROM market_analysis_step_attempts WHERE id=$1',[failed.latestAttemptId])).rows[0].diagnostic_json;assert.deepEqual(diagnostic.rawPayload,invalid);
  const before=[...calls];assert.deepEqual((await service.findRun(actor,started.run.id)).run,first);assert.deepEqual(calls,before);
  const key=randomUUID(),request={steps:[{stepId:failed.id,failedAttemptId:failed.latestAttemptId!}]};repaired=true;
  await service.retry(actor,started.run.id,request,key);await service.retry(actor,started.run.id,request,key);await drain();

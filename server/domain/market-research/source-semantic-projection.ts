@@ -1,3 +1,4 @@
+import {partitionSourceThemes} from '../../../shared/market-theme-quality';
 import { z } from 'zod';
 import { type MarketInputSnapshot, type MarketJsonValue, MarketInputRecordSchema } from '../../../shared/market-analysis-contracts';
 import { MARKET_SOURCE_HANDLER_VERSION, MarketSourceIdentityValueSchemas, type MarketSourceEvidence } from '../../../shared/market-source-contracts';
@@ -90,8 +91,12 @@ export function projectMarketSourceSnapshot(options: { snapshot: MarketInputSnap
       }
       if (result.status !== 'success') throw new TypeError('Failed theme source cannot be projected');
       const themes = array(result.themes), rawThemes = array(obj(payload.data).details);
-      if (!themes.length || themes.length !== rawThemes.length) throw new TypeError('Theme partition differs from source');
-      themes.forEach((value, index) => {
+      const partition=result.quarantine?partitionSourceThemes(rawThemes):null;
+      if(partition)same(result.quarantine,partition.quarantine);
+      const indices=partition?partition.validIndices:rawThemes.map((_,i)=>i);
+      if (!themes.length || themes.length !== indices.length) throw new TypeError('Theme partition differs from source');
+      themes.forEach((value, position) => {
+        const index=indices[position];
         const theme = obj(value), raw = obj(rawThemes[index]), id = `${sourceRecordId}:${index}`;
         same(theme.sourceThemeId, id);
         for (const key of ['keyword', 'content', 'mention', 'positive', 'negative']) same(theme[key], raw[key]);
