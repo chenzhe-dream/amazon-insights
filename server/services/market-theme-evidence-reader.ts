@@ -25,6 +25,7 @@ export async function readMarketThemeEvidence(context:PostgresQueryContext,actor
   const member=restored.aggregation.perAsin.flatMap(a=>a.themes).find(t=>t.sourceThemeId===sourceThemeId);
   const decision=restored.decisions.find(d=>d.sourceThemeId===sourceThemeId);if(!member||!decision)throw new MarketThemeDetailQueryError();
   const source={sourceThemeId,asin:member.asin,sourceRecordId:member.sourceRecordId,sourceUpdatedAt:member.sourceUpdatedAt,keyword:member.keyword,content:member.content,sourceKind:'customers-say-summary' as const,decision};
+  if(view.run.versions.planner==='market-theme-flow/rules-v3'&&decision.status==='mapped'&&decision.batchId===null&&restored.labels.some(l=>l.groupId===decision.groupId&&l.origin==='local-rule'))return MarketThemeEvidenceSchema.parse({...source,analysis:null});
   if(decision.status==='unavailable'){if(decision.batchId!==null)throw new MarketExecutionConflictError();return MarketThemeEvidenceSchema.parse({...source,analysis:null});}
   if(reconciled&&decision.status==='unknown'&&decision.batchId===null)return MarketThemeEvidenceSchema.parse({...source,analysis:null});
   const summary=obj(snapshot.records.find(r=>r.id==='summary')?.data);

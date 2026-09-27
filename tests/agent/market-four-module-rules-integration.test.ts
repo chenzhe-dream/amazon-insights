@@ -46,9 +46,9 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   const started = [overview.run.id, shapes.run.id, keywords.run.id, themes.run.id];
   const expected = new Map([
     [overview.run.id, 'market-overview-flow/rules-v2'],
-    [shapes.run.id, 'market-shape-price-flow/rules-v3'],
+    [shapes.run.id, 'market-shape-price-flow/rules-v4'],
     [keywords.run.id, 'market-keyword-flow/rules-v1'],
-    [themes.run.id, 'market-theme-flow/rules-v2'],
+    [themes.run.id, 'market-theme-flow/rules-v3'],
   ]);
   for (const id of started) {
     const view = await store.findModuleRun({ actor, moduleRunId: id });
@@ -69,7 +69,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
       sourceCalls++;
       const input = ((request.input as Record<string, unknown>).request ?? request.input) as Record<string, unknown>;
       const month = String(input.month ?? '2026-08');
-      const data = request.operation === 'category_report' ? {category_stats_report:{node_id:'34',top100_monthly_sales_volume:'200'}} : request.operation === 'category_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'product_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'market_product_concentration'
+      const data = request.operation === 'category_report' ? {category_stats_report:{node_id:'34',top100_monthly_sales_volume:'200'},top100_products:[{asin:'B000000001',title:'Synthetic shelf lamp',category_rank:'Category: Floor Lamps, Rank: 1',main_image:'https://m.media-amazon.com/images/I/lamp-1.jpg'}]} : request.operation === 'product_detail' ? {asin:String(input.asin),main_image:['https://m.media-amazon.com/images/I/lamp-1.jpg']} : request.operation === 'category_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'product_trend' ? ['2026-06=10','2026-07=0','2026-08=20'] : request.operation === 'market_product_concentration'
         ? Array.from({length:100},(_,index)=>({asin:`B${String(index+1).padStart(9,'0')}`,title:'Synthetic shelf lamp',totalUnits:20+index,totalRevenue:400+index,price:20,ranking:index+1}))
         : request.operation === 'market_research'
           ? { items: [{ marketplace: 'US', currency: 'USD', nodeIdPath: '12:34', month, topProducts: 1, products: 1, totalUnits: 20, totalRevenue: 400 }] }
@@ -80,7 +80,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
               : request.operation === 'keyword_trend'
                 ? { keyword: String(input.keyword ?? 'shelf lamp'), search_volume_trend: ['2026-08 search volume 20'], search_rank_trend: [], recommended_bid_trend: [] }
                 : { details: [{ keyword: 'easy assembly', content: 'Easy assembly', mention: 2, positive: 2, negative: 0, update_time: '2026-08-01' }] };
-      const connectorId = request.operation.startsWith('category_') || request.operation === 'product_trend' || request.operation === 'keyword_extends' || request.operation === 'keyword_trend' || request.operation === 'product_customers_say' ? 'sorftime' : 'sellerSprite';
+      const connectorId = request.operation.startsWith('category_') || request.operation === 'product_detail' || request.operation === 'product_trend' || request.operation === 'keyword_extends' || request.operation === 'keyword_trend' || request.operation === 'product_customers_say' ? 'sorftime' : 'sellerSprite';
       return { data: { code: 'OK', marketplace: 'US', currency: 'USD', nodeIdPath: '12:34', month, data }, source: { connectorId, operation: request.operation, fetchedAt: NOW.toISOString(), attemptCount: 1 } };
     },
   };
@@ -105,7 +105,12 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
     assert.ok(view);
     assert.equal(view.steps.some(step => ['queued', 'running'].includes(step.status)), false, JSON.stringify({ steps: view.steps.map(step => ({ kind: step.kind, status: step.status })), attempts: view.attempts.map(attempt => ({ status: attempt.status, error: attempt.error })) }));
     assert.equal(view.steps.some(step => step.kind === 'model-batch' || step.kind === 'prepare-model-batches'), false);
-    assert.ok(view.attempts.some(attempt => attempt.status === 'succeeded' && attempt.output && typeof attempt.output === 'object' && 'ruleBaseline' in attempt.output), `${id} did not persist a rule baseline`);
+    // Sorftime shape v4 saves its complete selected input; its reader derives the rules from that frozen pool.
+    if(id===shapes.run.id){
+      const selected=view.steps.find(step=>step.kind==='prepare-members'&&step.status==='succeeded');assert.ok(selected);
+      const attempt=view.attempts.find(attempt=>attempt.id===selected.latestAttemptId);assert.ok(attempt?.output&&typeof attempt.output==='object'&&'selectionInputSnapshotId' in attempt.output);
+      assert.equal(view.steps.some(step=>step.status==='failed'),false);
+    }else assert.ok(view.attempts.some(attempt => attempt.status === 'succeeded' && attempt.output && typeof attempt.output === 'object' && 'ruleBaseline' in attempt.output), `${id} did not persist a rule baseline`);
   }
   const overviewReport=await service.findOverview(actor,overview.run.id);
   assert.ok(overviewReport.run.currentReport);
@@ -124,7 +129,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   assert.equal(themeRun.run.currentReport.report.status, 'complete');
   assert.equal(themeRun.run.currentReport.report.reasons.includes('model-results-missing'), false);
   const themeDetails = await service.details(actor, themes.run.id, themeRun.run.currentReport.attemptId, { section: 'groups', offset: 0, limit: 20 });
-  assert.ok(themeDetails.page.items.some(item => item.kind === 'group' && item.sourceLabel?.text === 'easy assembly'));
+  assert.ok(themeDetails.page.items.some(item => item.kind === 'group' && item.labelZh === '安装便捷' && item.labelOrigin === 'local-rule'));
   const selectionStore = new MarketThemeSelectionStore(context);
   const identity = { actor, moduleRunId: themes.run.id, attemptId: themeRun.run.currentReport.attemptId };
   const selection = await selectionStore.read(identity);

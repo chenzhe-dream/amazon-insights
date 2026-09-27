@@ -10,9 +10,9 @@ type Identity={actor:MarketExecutionActor;moduleRunId:string;attemptId:string};
 type Row={organization_id:string;study_id:string;run_id:string;base_attempt_id:string;revision_id:string;parent_revision_id:string|null;ordinal:number;stored_by:string;stored_at:Date|string;idempotency_key:string;request_json:unknown;request_hash:string;facts_json:unknown;facts_hash:string;revision_json:unknown};
 const invalid=():never=>{throw new MarketExecutionConflictError();};
 const same=(a:unknown,b:unknown)=>{if(digest(a)!==digest(b))invalid();};
-function revision(facts:ThemeSelectionFacts,request:z.infer<typeof MarketThemeSelectionRequestSchema>,authorId:string,createdAt:string,ordinal:number,algorithmVersion:'v1'|'v2'){
+function revision(facts:ThemeSelectionFacts,request:z.infer<typeof MarketThemeSelectionRequestSchema>,authorId:string,createdAt:string,ordinal:number,algorithmVersion:'v1'|'v2'|'v3'){
  if(request.baseReportHash!==facts.base.report.reportHash)invalid();const restored=restoreThemeSelectionFacts(facts).restored;
- const result=deriveThemeSelection(restored,request.excludedAsins,facts.base.report.counts.reconciliationRequired,facts.base.report.counts.selectedCount<facts.base.report.counts.requestedCount,algorithmVersion==='v2'),resultHash=digest(result);
+ const result=deriveThemeSelection(restored,request.excludedAsins,facts.base.report.counts.reconciliationRequired,facts.base.report.counts.selectedCount<facts.base.report.counts.requestedCount,algorithmVersion!=='v1',algorithmVersion==='v3'),resultHash=digest(result);
  const value={parentRevisionId:request.expectedParentRevisionId,ordinal,authorId,createdAt,baseReportAttemptId:facts.base.attemptId,baseReportHash:request.baseReportHash,note:request.note,result,resultHash};
  return MarketThemeSelectionRevisionSchema.parse({...value,revisionId:`market-theme-selection-revision:${digest({version:`market-theme-selection-revision/${algorithmVersion}`,factsHash:digest(facts),...value})}`});
 }
@@ -30,7 +30,7 @@ export class MarketThemeSelectionStore{
    const request=MarketThemeSelectionRequestSchema.parse(row.request_json),facts=restoreThemeSelectionFacts(row.facts_json).facts;
    same(facts.base.report.scope.organizationId,row.organization_id);same(facts.base.report.scope.researchId,row.study_id);same(facts.base.report.moduleRunId,row.run_id);same(facts.base.attemptId,row.base_attempt_id);
    same(row.request_hash,digest({actor:{organizationId:row.organization_id,userId:row.stored_by},moduleRunId:row.run_id,attemptId:row.base_attempt_id,request}));same(row.facts_hash,digest(facts));same(row.request_json,request);
-   const versions=facts.base.report.semanticStatus==='skipped'?['v2','v1'] as const:['v1'] as const;
+   const versions=facts.base.report.versions.planner==='market-theme-flow/rules-v3'?['v3'] as const:facts.base.report.semanticStatus==='skipped'?['v2','v1'] as const:['v1'] as const;
    const saved=versions.map(version=>revision(facts,request,row.stored_by,new Date(row.stored_at).toISOString(),row.ordinal,version)).find(candidate=>candidate.revisionId===row.revision_id)??invalid();
    same(saved,row.revision_json);same(saved.parentRevisionId,row.parent_revision_id);
    return {facts,revision:saved};
@@ -40,7 +40,7 @@ export class MarketThemeSelectionStore{
  private view(input:Identity,facts:ThemeSelectionFacts,rows:Row[],selected:string|null){
   let parent:string|null=null;const revisions=rows.map((row,index)=>{const checked=this.restore(input,row);if(row.ordinal!==index+1||row.parent_revision_id!==parent)invalid();same(checked.facts,facts);parent=row.revision_id;return checked.revision;});
   const chosen=selected?revisions.find(r=>r.revisionId===selected):null;if(selected&&!chosen)invalid();
-  return MarketThemeSelectionResponseSchema.parse({version:'market-theme-selection-view/v1',base:facts.base,samples:facts.samples,baseline:deriveThemeSelection(restoreThemeSelectionFacts(facts).restored,[],facts.base.report.counts.reconciliationRequired,facts.base.report.counts.selectedCount<facts.base.report.counts.requestedCount,facts.base.report.semanticStatus==='skipped'),latestRevisionId:parent,revision:chosen,history:revisions.map(({revisionId,ordinal,createdAt,resultHash})=>({revisionId,ordinal,createdAt,resultHash}))});
+  return MarketThemeSelectionResponseSchema.parse({version:'market-theme-selection-view/v1',base:facts.base,samples:facts.samples,baseline:deriveThemeSelection(restoreThemeSelectionFacts(facts).restored,[],facts.base.report.counts.reconciliationRequired,facts.base.report.counts.selectedCount<facts.base.report.counts.requestedCount,facts.base.report.semanticStatus==='skipped',facts.base.report.versions.planner==='market-theme-flow/rules-v3'),latestRevisionId:parent,revision:chosen,history:revisions.map(({revisionId,ordinal,createdAt,resultHash})=>({revisionId,ordinal,createdAt,resultHash}))});
  }
  async read(input:Identity&{revisionId?:string}){
   if(input.revisionId)MarketThemeSelectionRevisionIdSchema.parse(input.revisionId);
@@ -58,7 +58,7 @@ export class MarketThemeSelectionStore{
    if(prior){if(prior.request_hash!==requestHash||prior.stored_by!==input.actor.userId)invalid();const checked=this.restore(input,prior);return {created:false,view:this.view(input,checked.facts,await this.rows(input),prior.revision_id)};}
    if(run.status==='cancelled')invalid();const rows=await this.rows(input),last=rows.at(-1);if((last?.revision_id??null)!==request.expectedParentRevisionId||rows.length>=1000)invalid();
    const facts=rows.length?this.restore(input,rows[0]).facts:await loadThemeSelectionFacts(this.context,input);if(!facts)throw new MarketExecutionConflictError();if(rows.length)this.view(input,facts,rows,last!.revision_id);
-   const now=new Date().toISOString(),saved=revision(facts,request,input.actor.userId,now,rows.length+1,facts.base.report.semanticStatus==='skipped'?'v2':'v1');
+   const now=new Date().toISOString(),saved=revision(facts,request,input.actor.userId,now,rows.length+1,facts.base.report.versions.planner==='market-theme-flow/rules-v3'?'v3':facts.base.report.semanticStatus==='skipped'?'v2':'v1');
    const inserted=await this.context.query<Row>(`INSERT INTO market_theme_selection_revisions(organization_id,study_id,run_id,base_attempt_id,revision_id,parent_revision_id,ordinal,stored_by,stored_at,idempotency_key,request_json,request_hash,facts_json,facts_hash,revision_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14,$15::jsonb) RETURNING *`,[input.actor.organizationId,run.study_id,input.moduleRunId,input.attemptId,saved.revisionId,saved.parentRevisionId,saved.ordinal,input.actor.userId,now,key,JSON.stringify(request),requestHash,JSON.stringify(facts),digest(facts),JSON.stringify(saved)]);
    return {created:true,view:this.view(input,facts,[...rows,inserted.rows[0]],saved.revisionId)};
   });}catch(error){if(error&&typeof error==='object'&&'code'in error&&error.code==='23505')invalid();throw error;}

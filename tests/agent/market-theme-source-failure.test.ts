@@ -24,7 +24,7 @@ test('invalid live theme counts explain the failed ASIN; retry preserves success
  let repaired=false;const calls:string[]=[];
  const connector=(id:'sorftime'|'sellerSprite'):RemoteMcpConnector=>({id,probe:async()=>{throw new Error('unused');},execute:async r=>{
   calls.push(r.operation+':'+(r.input.asin??''));
-  const data=r.operation==='market_product_concentration'?{code:'OK',data:[{asin:'B099WTN2TR',title:'Lamp 1',ranking:1},{asin:'B07Z5NQPDS',title:'Lamp 2',ranking:2}]}:
+  const data=r.operation==='category_report'?{data:{top100_products:[{asin:'B099WTN2TR',title:'Lamp 1',category_rank:1,main_image:'https://m.media-amazon.com/images/I/lamp-1.jpg'},{asin:'B07Z5NQPDS',title:'Lamp 2',category_rank:2,main_image:'https://m.media-amazon.com/images/I/lamp-2.jpg'}]}}:
    r.input.asin==='B07Z5NQPDS'&&!repaired?invalid:{data:{details:[{keyword:'assembly',content:'Easy assembly',mention:10,positive:8,negative:2,update_time:'2026-08-01'}]}};
   return {data,source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }});

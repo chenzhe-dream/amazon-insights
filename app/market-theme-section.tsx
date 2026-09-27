@@ -9,6 +9,7 @@ import {marketThemeSourceIssueText} from '../shared/market-theme-source-issue';
 import { MarketThemeReport } from './market-theme-report';
 import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 import { MarketThemeLaunchSection } from './market-theme-insight-panel';
+import {resolveShapeNodeInput} from './lib/market-shape-browser';
 
 type Run=MarketThemeRunResponse['run'];
 const labels:Record<Run['steps'][number]['kind'],string>={'collect-product-image':'取得商品图片','collect-shape-pool':'取得Sorftime商品池','collect-product-amount-history':'取得商品历史金额','collect-product-month':'取得类目商品池','collect-shape-category':'类目历史与指标', 'collect-product-history':'取得商品历史','collect-overview-month':'取得类目月度总览','collect-keyword-page':'取得关键词','collect-keyword-aba':'取得逐词 ABA 份额','collect-keyword-trend':'取得趋势','collect-customer-themes':'取得商品主题','prepare-members':'固定样本与汇总主题','prepare-keyword-pool':'汇总关键词','prepare-model-batches':'准备模型输入',reconcile:'确认跨批分类','model-batch':'模型分析主题',rules:'核算主题指标',report:'保存报告'};
@@ -37,8 +38,10 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const [runId,setRunId]=useState<string|null>(null),[restoreId,setRestoreId]=useState(''),[run,setRun]=useState<Run|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
   const [reportChoice,setReportChoice]=useState('latest');
+  const [retainedReport,setRetainedReport]=useState<Run['currentReport']>(null),[priorRuns,setPriorRuns]=useState<string[]>([]);
   const owner=useRef<AbortController|null>(null),writing=useRef(false),revision=useRef(0);
   const startCommand=useRef<{signature:string;studyKey:string;runKey:string}|null>(null);
+  const refreshCommand=useRef<{runId:string;studyKey:string;runKey:string}|null>(null);
   const command=useRef<{signature:string;key:string}|null>(null);
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=themeRunFromUrl();if(restored){setRunId(restored);setRestoreId(restored);}return()=>{abort.abort();owner.current=null;};},[]);
   useEffect(()=>{
@@ -54,29 +57,40 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     writing.current=true;revision.current++;setBusy(true);setError(null);
     try{await work(current.signal);}catch(e){if(!current.signal.aborted)setError(e instanceof Error?e.message:'提交失败');}
     finally{if(!current.signal.aborted){writing.current=false;revision.current++;setBusy(false);setReload(n=>n+1);}}}
-  async function submit(event:FormEvent){event.preventDefault();if(month>maxMonth||members>pool){setError('请选择完整月份，且商品池数量不得小于主题样本数量。');return;}
+  async function submit(event:FormEvent){event.preventDefault();if(run&&themeRunActive(run))return;if(month>maxMonth||members>pool){setError('请选择完整月份，且商品池数量不得小于主题样本数量。');return;}
     const scope={marketplace:selection?.marketplace??localSite,nodeIdPath:node,fromMonth:selection?.fromMonth??month,toMonth:month,currency:marketSiteCurrency(selection?.marketplace??localSite)},params={memberCount:members,poolSize:pool,newProductMonths:6 as const};
     const signature=JSON.stringify({scope,params});if(startCommand.current?.signature!==signature)startCommand.current={signature,studyKey:browserRequestId(),runKey:browserRequestId()};
-    const keys=startCommand.current;await mutate(async signal=>{const study=await createThemeStudy(scope,keys.studyKey,signal);const result=await startThemeRun(study.id,params,keys.runKey,signal);if(!signal.aborted)adopt(result);});
+    const keys=startCommand.current;await mutate(async signal=>{const nodeIdPath=await resolveShapeNodeInput(scope.marketplace,scope.nodeIdPath,signal);const study=await createThemeStudy({...scope,nodeIdPath},keys.studyKey,signal);const result=await startThemeRun(study.id,params,keys.runKey,signal);if(!signal.aborted){setRetainedReport(null);adopt(result);}});
+  }
+  async function recollect(){
+    if(!run||busy||readError||themeRunActive(run))return;
+    const previous=run;
+    if(refreshCommand.current?.runId!==previous.id)refreshCommand.current={runId:previous.id,studyKey:browserRequestId(),runKey:browserRequestId()};
+    const keys=refreshCommand.current,{marketplace,nodeIdPath,fromMonth,toMonth,currency}=previous.scope;
+    await mutate(async signal=>{
+      const study=await createThemeStudy({marketplace,nodeIdPath,fromMonth,toMonth,currency},keys.studyKey,signal);
+      const next=await startThemeRun(study.id,previous.params,keys.runKey,signal);
+      if(!signal.aborted){setRetainedReport(selected?{...selected,current:false}:null);setPriorRuns(ids=>[previous.id,...ids.filter(id=>id!==previous.id)]);refreshCommand.current=null;adopt(next);}
+    });
   }
   function restore(event:FormEvent){event.preventDefault();const parsed=MarketModuleIdSchema.safeParse(restoreId.trim());if(!parsed.success){setError('请输入有效的任务 UUID。');return;}
-    setError(null);setReadError(null);setRun(null);setRunId(parsed.data);setReportChoice('latest');rememberRun(parsed.data);setReload(n=>n+1);}
+    setError(null);setReadError(null);setRun(null);setRetainedReport(null);setRunId(parsed.data);setReportChoice('latest');rememberRun(parsed.data);setReload(n=>n+1);}
   async function action(kind:'retry'|'cancel',step?:Run['steps'][number]){if(!run)return;const id=run.id;
     const steps=step?.latestAttemptId?[{stepId:step.id,failedAttemptId:step.latestAttemptId}]:[];
     const signature=JSON.stringify({id,kind,steps});if(command.current?.signature!==signature)command.current={signature,key:browserRequestId()};const key=command.current.key;
     await mutate(async signal=>{if(kind==='retry')await retryThemeSteps(id,steps,key,signal);else await cancelThemeRun(id,key,signal);
       const next=await readThemeRun(id,signal);if(!signal.aborted){setRun(next);setReadError(null);}});
   }
-  const selected=run?(reportChoice==='latest'?(run.currentReport??run.latestSavedReport):run.history.find(e=>e.attemptId===reportChoice)??null):null;
+  const selected=run?(reportChoice==='latest'?(run.currentReport??run.latestSavedReport??retainedReport):run.history.find(e=>e.attemptId===reportChoice)??null):null;
   return <div className="market-research-page market-theme-page">
     <section className="card ss-market-query ss-market-query--lilac">
       <form onSubmit={e=>void submit(e)}><fieldset disabled={busy} style={{minWidth:0}}><legend className="market-research-sr-only">类目主题分析条件</legend>
         <div className="ss-market-query-row"><span className="ss-market-query-label">站点</span><MarketSiteSelector value={selection?.marketplace??localSite} onChange={marketplace=>{if(onSelectionChange)onSelectionChange({marketplace,nodeIdPath:''});else{setLocalSite(marketplace);setLocalNode('')}}} disabled={busy}/></div>
         <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field">
-          <button type="submit" className="ss-market-search-btn">{busy?'提交中…':'拉取见解'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!node} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button>
-          <input required aria-label="类目路径" pattern="[0-9]+(:[0-9]+)*" maxLength={240} value={node} placeholder="输入类目节点 ID 或完整节点路径，例如 13280971" onChange={e=>setNode(e.target.value.trim())}/>
-        </div></div><p className="ss-market-cache-note">{node?`当前类目：Node ${node} · 请求 ${members} 个样本 ASIN`:'在本模块输入类目节点后点击「拉取见解」。'}</p></div>
-        <details className="market-research-boundaries"><summary>分析月份与样本设置</summary><div className="market-research-fields"><label>完整月份<input required type="month" min="2000-01" max={maxMonth} value={month} onChange={e=>setMonth(e.target.value)}/></label>{selection&&<label>起始月份<input required type="month" min="2000-01" max={month} value={selection.fromMonth} onChange={e=>onSelectionChange?.({fromMonth:e.target.value})}/></label>}</div><div className="market-research-fields"><label>主题样本数量<input required type="number" min={1} max={20} value={members} onChange={e=>setMembers(Number(e.target.value))}/></label><label>商品池数量<input required type="number" min={members} max={100} value={pool} onChange={e=>setPool(Number(e.target.value))}/></label></div><p>样本按供应商返回顺序选择，尚未验证 BSR 排名；来源不足时保留实际数量。</p></details>
+          <button type="submit" className="ss-market-search-btn" disabled={!!run&&themeRunActive(run)}>{busy?'提交中…':'拉取见解'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!node} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button>
+          <input required aria-label="类目路径" maxLength={240} value={node} placeholder="输入类目节点 ID、完整节点路径或英文类目名" onChange={e=>setNode(e.target.value)}/>
+        </div></div><p className="ss-market-cache-note">{node?`当前类目：Node ${node} · 请求 ${members} 个样本 ASIN`:'在本模块输入类目节点后点击「拉取见解」。'}{run&&<> <button type="button" className="ghost-btn" style={{padding:'0 6px',minHeight:0,height:20,lineHeight:'18px',fontSize:12}} disabled={busy||!!readError||themeRunActive(run)} title="按下方任务已保存的类目、月份与样本设置创建新任务；保留当前报告和原任务" onClick={()=>void recollect()}>重新拉取</button> 沿用下方任务已存条件新建任务，保留原报告。</>}</p></div>
+        <details className="market-research-boundaries"><summary>分析月份与样本设置</summary><div className="market-research-fields"><label>完整月份<input required type="month" min="2000-01" max={maxMonth} value={month} onChange={e=>setMonth(e.target.value)}/></label>{selection&&<label>起始月份<input required type="month" min="2000-01" max={month} value={selection.fromMonth} onChange={e=>onSelectionChange?.({fromMonth:e.target.value})}/></label>}</div><div className="market-research-fields"><label>主题样本数量<input required type="number" min={1} max={20} value={members} onChange={e=>setMembers(Number(e.target.value))}/></label><label>商品池数量<input required type="number" min={members} max={100} value={pool} onChange={e=>setPool(Number(e.target.value))}/></label></div><p>样本按供应商返回顺序选择，尚未验证 BSR 排名；来源不足时保留实际数量。月份用于研究范围与选样参考；Customers Say 是采集时返回的主题，不代表该月历史评论主题。</p></details>
       </fieldset></form>
       {error&&<p className="market-research-error" role="alert">{error}</p>}
     </section>
@@ -93,6 +107,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
         {run.history.length>0&&<label className="market-theme-version">报告版本 <select aria-label="报告版本" value={reportChoice} onChange={e=>setReportChoice(e.target.value)}><option value="latest">最新可用报告</option>{run.history.map((e,i)=><option key={e.attemptId} value={e.attemptId}>{e.current?'当前':'历史'} · {e.report.dataCutoffAt} · {i+1}</option>)}</select></label>}
       </>}
       <details className="market-research-boundaries"><summary>恢复已有主题任务</summary><form className="market-theme-actions" onSubmit={restore}><label>任务 UUID <input value={restoreId} onChange={e=>setRestoreId(e.target.value)} required disabled={busy}/></label><button type="submit" className="ghost-btn" disabled={busy}>读取任务</button></form><p>已打开的任务保存在当前地址中，刷新只读取状态和报告。</p></details>
+      {priorRuns.length>0&&<p>重新拉取前的任务：{priorRuns.map(id=><a key={id} href={`?themeRun=${id}&themeView=themes`}>{id} </a>)}</p>}
     </details></section>
   </div>;
 }

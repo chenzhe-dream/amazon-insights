@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeSorftimeShapePool } from '../../services/market-shape-sorftime-pool';
 import { MarketInputRecordSchema, type MarketInputSnapshot, type MarketJsonValue, type MarketAnalysisScope } from '../../../shared/market-analysis-contracts';
 import { MARKET_SOURCE_HANDLER_VERSION, MarketSourceIdentityValueSchemas, type MarketSourceEvidence } from '../../../shared/market-source-contracts';
 import { MarketCustomerThemeMappingInputSchema } from '../../../shared/market-semantic-contracts';
@@ -38,9 +39,17 @@ export function selectMarketThemeMembers(options: { snapshot: MarketInputSnapsho
   if (s.kind !== 'products' || s.ruleVersion !== 'source-normalization/v1') throw new TypeError('Selection requires an anchor product collection');
   const refs = new Set<string>(), indices = new Set<number>(), months = new Set<string>();
   const checkedSources = new Map<string, MarketSourceEvidence>();
+  const sorftimeRows = new Map<string, ReturnType<typeof normalizeSorftimeShapePool>>();
   const rows = s.records.map(record => {
     const data = obj(record.data), product = obj(data.product), ref = z.string().parse(data.sourceRef);
     const source = checkedSources.get(ref) ?? evidence(s.scope, ref, options.sources); checkedSources.set(ref, source);
+    if (data.collection === 'sorftime-shape-pool') {
+      if(source.provider!=='sorftime'||source.operation!=='category_report')throw new TypeError('Invalid Sorftime selection source');
+      const parsed=sorftimeRows.get(ref)??normalizeSorftimeShapePool(source.payload,'category_report');sorftimeRows.set(ref,parsed);
+      const index=z.number().int().nonnegative().parse(product.sourceIndex),expected=parsed.products.find(p=>p.sourceIndex===index);
+      if(!expected||indices.has(index)||Date.parse(source.fetchedAt)>Date.parse(s.collectedAt))throw new TypeError('Invalid Sorftime source partition');
+      same(expected,product);same(expected.asin,record.id);refs.add(ref);indices.add(index);return {record,index};
+    }
     if (data.collection !== 'product-month' || source.provider !== 'sellerSprite' || source.operation !== 'market_product_concentration') throw new TypeError('Invalid product collection');
     const index = z.number().int().min(0).parse(product.sourceIndex), rawRows = obj(source.payload).data;
     if (!Array.isArray(rawRows) || indices.has(index)) throw new TypeError('Invalid source row partition');
@@ -55,7 +64,7 @@ export function selectMarketThemeMembers(options: { snapshot: MarketInputSnapsho
     ruleVersion: `${MARKET_THEME_SELECTION_VERSION}:${basisHash}`, collectedAt: s.collectedAt, expectedRecordIds: selectedAsins, records: chosen.map(r => r.record) });
   return freeze({ snapshot, manifest: { selectionVersion: MARKET_THEME_SELECTION_VERSION, basisHash, selectionInputSnapshotId: snapshot.snapshotId,
     sourceInputSnapshotId: s.snapshotId, requestedCount: count, selectedAsins, omittedAsins: rows.slice(count).map(r => r.record.id),
-    sourceRefs: [...refs], anchorMonth: [...months][0] ?? null, selectionBasis: 'provider-row-order', bsrTopVerified: false as const,
+    sourceRefs: [...refs], anchorMonth: [...months][0] ?? null, ...(sorftimeRows.size?{categoryName:[...sorftimeRows.values()][0].categoryName}:{}), selectionBasis: 'provider-row-order', bsrTopVerified: false as const,
     observedProductCount: rows.length, sourceMissingAsins: [...s.coverage.missingRecordIds], requestedCountMet: selectedAsins.length === count } });
 }
 

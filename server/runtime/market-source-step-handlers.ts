@@ -1,3 +1,4 @@
+import {inspectMarketThemeContinuation,MARKET_THEME_RULES_FLOW_V3} from '../domain/market-research/customer-theme-flow';
 import {collectMarketShapeProductImage} from '../services/market-shape-product-image';
 import {collectSorftimeShapePoolPage} from '../services/market-shape-sorftime-pool';
 import {collectShapeCategory} from '../services/market-shape-category-collector';
@@ -106,7 +107,9 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
   const sorftimePool:MarketStepHandler=async({claim,signal})=>{
     const input=z.object({poolSize:z.number().int().min(1).max(300),page:z.number().int().min(1).max(20).optional(),categoryName:z.string().max(500).optional(),referenceAttemptId:z.string().uuid().optional()}).strict().parse(claim.step.input),scope=await scopeFor(claim,signal);
     const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
-    if(!view||view.run.moduleKind!=='shape-price'||object(view.run.params).flow!=='market-shape-price-flow/rules-v4'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('Pool outside Sorftime frontier');
+    if(!view)invalid('Pool run unavailable');
+    const theme=view.run.moduleKind==='customer-themes'&&object(view.run.params).flow===MARKET_THEME_RULES_FLOW_V3;
+    if(!(theme ? input.page===undefined && inspectMarketThemeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey) : view.run.moduleKind==='shape-price'&&object(view.run.params).flow==='market-shape-price-flow/rules-v4'&&inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey)))invalid('Pool outside Sorftime frontier');
     const result=await collectSorftimeShapePoolPage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
     return collected(scope,'products',result.products.map(p=>p.asin),result.products.map(product=>({id:product.asin,data:{collection:'sorftime-shape-pool',product}})),result.status,result.evidence,{productCount:result.products.length,productAsins:result.products.map(p=>p.asin),receivedCount:result.receivedCount,categoryName:result.categoryName});
@@ -114,7 +117,9 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
   const productHistory: MarketStepHandler = async ({claim,signal}) => {
     const input=themesInput.parse(claim.step.input),scope=await scopeFor(claim,signal);
     const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
-    if(!view||view.run.moduleKind!=='shape-price'||!inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey))invalid('History is outside the current shape frontier');
+    if(!view)invalid('Image/history run unavailable');
+    const themeImage=view.run.moduleKind==='customer-themes'&&object(view.run.params).flow===MARKET_THEME_RULES_FLOW_V3&&claim.step.kind==='collect-product-image';
+    if(!(themeImage ? inspectMarketThemeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey) : view.run.moduleKind==='shape-price'&&inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey)))invalid('History is outside the current frontier');
     const pool=await selected(claim,input.selectionInputSnapshotId,scope);
     if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection))&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
     if(claim.step.kind==='collect-product-image'){
@@ -175,7 +180,7 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
   };
   const themes: MarketStepHandler = async ({ claim, signal }) => {
     const input = themesInput.parse(claim.step.input), scope = await scopeFor(claim, signal), selection = await selected(claim, input.selectionInputSnapshotId, scope);
-    if (selection.kind !== 'products' || !selection.records.some(r => r.id === input.asin && object(r.data).collection === 'product-month' && object(object(r.data).product).asin === input.asin)) invalid('ASIN is outside the saved source pool');
+    if (selection.kind !== 'products' || !selection.records.some(r => r.id === input.asin && ['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection)) && object(object(r.data).product).asin === input.asin)) invalid('ASIN is outside the saved source pool');
     signal.throwIfAborted();
     const result = await collectMarketCustomerThemes({ asin: input.asin, scope, jobId: claim.moduleRunId, connector: deps.connectors.sorftime, signal });
     if (result.result.status === 'failed' || !result.evidence) {

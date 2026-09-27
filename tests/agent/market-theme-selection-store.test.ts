@@ -19,24 +19,30 @@ import { loadThemeSelectionFacts, restoreThemeSelectionFacts } from '../../serve
 import { deriveThemeSelection } from '../../server/domain/market-research/customer-theme-selection';
 import { canonicalJsonSha256 as digest } from '../../server/runtime/model-request-accounting';
 import type { RemoteMcpConnector } from '../../server/connectors/connector-contract';
+import { marketThemeFlowInitialSteps } from '../../server/domain/market-research/customer-theme-flow';
+import { MARKET_SOURCE_HANDLER_VERSION } from '../../shared/market-source-contracts';
+import { MARKET_THEME_MAPPING_RULE_VERSION } from '../../server/domain/market-research/customer-theme-mapping-rules';
 
 test('immutable selection revisions isolate actors, replay commands and never create paid work',{timeout:90000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
  const f=await createMarketSemanticFixture(pg.pool);await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>({configurationVersion:'fixture/v1',promptVersion:'fixture/v1'})});
  const started=await service.startThemes(f.actor,f.scope.researchId,{memberCount:2,poolSize:2},randomUUID());let calls=0;
- const connector=(id:'sellerSprite'|'sorftime'):RemoteMcpConnector=>({id,probe:async()=>{throw new Error('unused');},execute:async r=>{calls++;return {data:r.operation==='market_product_concentration'?{code:'OK',data:[1,2].map(n=>({asin:`B00000000${n}`,title:`Lamp ${n}`,ranking:n+10}))}:{data:{customer_say:'Frozen overall summary',details:[{keyword:'Assembly',content:'Simple assembly',mention:10,positive:8,negative:6,update_time:'2026-08-01'}]}},source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};}});
+ const connector=(id:'sellerSprite'|'sorftime'):RemoteMcpConnector=>({id,probe:async()=>{throw new Error('unused');},execute:async r=>{calls++;return {data:r.operation==='category_report'?{data:{top100_products:[1,2].map(n=>({asin:`B00000000${n}`,title:`Lamp ${n}`,category_rank:`Category: Floor Lamps, Rank: ${n+10}`,main_image:`https://m.media-amazon.com/images/I/lamp-${n}.jpg`}))}}:r.operation==='market_product_concentration'?{code:'OK',data:[1,2].map(n=>({asin:`B00000000${n}`,title:`Lamp ${n}`,ranking:n+10}))}:{data:{customer_say:'Frozen overall summary',details:[{keyword:'Assembly',content:'Simple assembly',mention:10,positive:8,negative:6,update_time:'2026-08-01'}]}},source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};}});
  const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector('sellerSprite'),sorftime:connector('sorftime')}}),'prepare-members':createMarketSourceProjectionStep(f.context),'prepare-model-batches':async()=>({kind:'settlement',value:{outcome:{status:'failed',error:{code:'internal',retryable:false}}}}),rules:createMarketThemeRulesStep(f.context),report:createMarketThemeReportStep(f.context)}});t.after(()=>worker.stop());
  for(let i=0;i<20;i++)if(!await worker.tick())break;
  const saved=await service.findRun(f.actor,started.run.id),base=saved.run.currentReport!;assert.ok(base,JSON.stringify(saved));const before=JSON.stringify(saved),sourceCalls=calls;
  assert.equal(base.report.reportVersion,'market-theme-report/v3');
  assert.equal(base.report.semanticStatus,'skipped');
  const ruleView=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:started.run.id}))!;
- assert.equal(ruleView.run.versions.planner,'market-theme-flow/rules-v2');
+ assert.equal(ruleView.run.versions.planner,'market-theme-flow/rules-v3');
  assert.equal(ruleView.run.versions.model,null);
  assert.ok(ruleView.steps.every(s=>!['prepare-model-batches','model-batch'].includes(s.kind)));
  const store=new MarketThemeSelectionStore(f.context),identity={actor:f.actor,moduleRunId:started.run.id,attemptId:base.attemptId};
  const initial=await store.read(identity);assert.ok(initial);assert.equal(initial.samples[0].title.value,'Lamp 1');assert.equal(initial.samples[0].sourceRank.value,11);assert.equal(initial.samples[0].customerSay.value,'Frozen overall summary',JSON.stringify({samples:initial.samples,baseline:initial.baseline,steps:(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:started.run.id}))?.attempts}));
+ assert.equal(initial.samples[0].imageUrl.value,'https://m.media-amazon.com/images/I/lamp-1.jpg');
+ assert.equal(initial.baseline.groups.length,1);assert.equal(initial.baseline.groups[0].memberCount,2);assert.equal(initial.baseline.groups[0].labelOrigin,'local-rule');
+ assert.deepEqual(initial.baseline.sentimentGroupCounts,{positive:1,negative:0});
  const counts=async()=> (await pg.pool.query('SELECT (SELECT count(*) FROM market_analysis_steps) steps,(SELECT count(*) FROM market_agent_runs) models,(SELECT count(*) FROM market_analysis_inputs) inputs')).rows[0];const countBefore=await counts();
  const command={...identity,idempotencyKey:randomUUID(),request:{baseReportHash:base.report.reportHash,expectedParentRevisionId:null,excludedAsins:['B000000002']}};
  const first=await store.save(command);assert.equal(first.created,true);assert.equal(first.view.revision!.result.totals!.mention,10);
@@ -67,7 +73,15 @@ test('immutable selection revisions isolate actors, replay commands and never cr
   assert.equal(calls,sourceCalls);assert.deepEqual(await counts(),countBefore);assert.equal(JSON.stringify(await service.findRun(f.actor,started.run.id)),before);
  });
  await t.test('previous rules-only selection revisions remain readable with their frozen v1 status',async()=>{
+  // Build an actual old rules-v2 report: a v1 selection revision cannot belong to a new rules-v3 report.
+  const catalog={task:'market-customer-theme-mapping' as const,mappingVersion:'theme-groups/unreviewed-v1',groupCatalog:[]};
+  const requestRun={actor:f.actor,scope:f.scope,moduleKind:'customer-themes' as const,params:{flow:'market-theme-flow/rules-v2',memberCount:2,poolSize:2,newProductMonths:6,catalog},versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_THEME_MAPPING_RULE_VERSION,mapping:catalog.mappingVersion,planner:'market-theme-flow/rules-v2',model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey:randomUUID()};
+  const legacy=await f.stores.steps.createModuleRun({...requestRun,initialSteps:marketThemeFlowInitialSteps(requestRun)});
+  for(let i=0;i<20;i++)if(!await worker.tick())break;
+  const base=(await service.findRun(f.actor,legacy.run.id)).run.currentReport!;assert.ok(base);assert.equal(base.report.versions.planner,'market-theme-flow/rules-v2');
+  const identity={actor:f.actor,moduleRunId:legacy.run.id,attemptId:base.attemptId};
   const previous=await store.read(identity);assert.ok(previous);
+  assert.equal(previous.baseline.groups.length,2);assert.deepEqual(previous.baseline.sentimentGroupCounts,{positive:2,negative:2});
   const facts=await loadThemeSelectionFacts(f.context,identity);assert.ok(facts);
   const restored=restoreThemeSelectionFacts(facts).restored;
   const request={baseReportHash:base.report.reportHash,expectedParentRevisionId:previous.latestRevisionId,excludedAsins:['B000000002'],note:''};

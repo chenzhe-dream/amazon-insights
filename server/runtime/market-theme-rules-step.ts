@@ -11,7 +11,7 @@ const json = (v: unknown) => MarketInputRecordSchema.shape.data.parse(v);
 export function createMarketThemeRulesStep(context: PostgresQueryContext): MarketStepHandler {
   return async ({ claim, signal }) => {
     const {input,view,poolInput,pool,receipt,original,batches,auditRefs}=await loadMarketThemeRuleInputs(context,claim,signal);
-    const result = calculateMarketThemeMappingRules({ poolInput, batches, topN: input.topN }); signal.throwIfAborted();
+    const result = calculateMarketThemeMappingRules({ poolInput, batches, topN: input.topN, originalRules: view.run.versions.planner === 'market-theme-flow/rules-v3' }); signal.throwIfAborted();
     const { aggregation: { groups: rows, perAsin, mappings, ...aggregation }, groups: labels, decisions, batches: results, ...summary } = result;
     const chunks = (name: string, values: readonly unknown[], size: number) => Array.from({ length: Math.ceil(values.length / size) }, (_, i) => ({
       id: `${name}:${i}`, scope: view.run.scope, data: json({ kind: name, items: values.slice(i * size, (i + 1) * size) }) }));

@@ -11,7 +11,8 @@ export const MARKET_THEME_FLOW_VERSION = 'market-theme-flow/v1';
 export const MARKET_THEME_RECONCILED_FLOW_VERSION = 'market-theme-flow/v2';
 export const MARKET_THEME_RULES_FLOW_VERSION = 'market-theme-flow/rules-v1';
 export const MARKET_THEME_RULES_FLOW_V2 = 'market-theme-flow/rules-v2';
-export const MarketThemeFlowParamsSchema = z.object({ flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2]), memberCount: z.number().int().min(1).max(20),
+export const MARKET_THEME_RULES_FLOW_V3 = 'market-theme-flow/rules-v3';
+export const MarketThemeFlowParamsSchema = z.object({ flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2,MARKET_THEME_RULES_FLOW_V3]), memberCount: z.number().int().min(1).max(20),
   poolSize: z.number().int().min(1).max(100), newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
   catalog: MarketThemePoolCatalogSchema, topN: z.number().int().min(0).max(2000).optional() }).strict().refine(p => p.poolSize >= p.memberCount);
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -24,15 +25,16 @@ type Request = Pick<CreateMarketModuleRunInput, 'scope' | 'moduleKind' | 'params
 
 function params(request: Request) {
   const p = MarketThemeFlowParamsSchema.parse(request.params);
-  const rulesOnly = p.flow === MARKET_THEME_RULES_FLOW_VERSION || p.flow === MARKET_THEME_RULES_FLOW_V2;
+  const rulesOnly = p.flow === MARKET_THEME_RULES_FLOW_VERSION || p.flow === MARKET_THEME_RULES_FLOW_V2 || p.flow === MARKET_THEME_RULES_FLOW_V3;
   if (request.moduleKind !== 'customer-themes' || request.versions.source !== MARKET_SOURCE_HANDLER_VERSION || request.versions.planner !== p.flow ||
     request.versions.rule !== MARKET_THEME_MAPPING_RULE_VERSION || request.versions.mapping !== p.catalog.mappingVersion ||
     (rulesOnly ? request.versions.model !== null || request.versions.configuration !== null || request.versions.prompt !== null : request.versions.model !== 'market.semantic.text.v1' || !request.versions.configuration || !request.versions.prompt)) throw new TypeError('Theme flow versions differ');
   return p;
 }
-export function isMarketThemeFlow(request: { params: unknown }) { return [MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2].includes(String(obj(request.params).flow)); }
+export function isMarketThemeFlow(request: { params: unknown }) { return [MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2,MARKET_THEME_RULES_FLOW_V3].includes(String(obj(request.params).flow)); }
 export function marketThemeFlowInitialSteps(request: Request): MarketStepDefinition[] {
   const p = params(request);
+  if (p.flow === MARKET_THEME_RULES_FLOW_V3) return [{stepKey:'theme-flow/anchor',kind:'collect-shape-pool',subject:{flow:p.flow},input:{poolSize:p.poolSize},inputRefs:[]}];
   return [{ stepKey: 'theme-flow/anchor', kind: 'collect-product-month', subject: { flow: p.flow }, input: { month: request.scope.toMonth,
     poolSize: p.poolSize, newProductMonths: p.newProductMonths }, inputRefs: [] }];
 }
@@ -70,23 +72,28 @@ export function inspectMarketThemeContinuation(view: MarketModuleRunView, now: s
   };
   if (!selectedAsins.length) return report('empty-selection', selectedAttempt, selectionInputSnapshotId);
   const sources = selectedAsins.map(asin => one(view.steps.filter(s => s.kind === 'collect-customer-themes' && obj(s.input).asin === asin && obj(s.input).selectionInputSnapshotId === selectionInputSnapshotId)));
-  sources.forEach(s => current.add(s.stepKey)); if (sources.some(s => !terminal(s))) return result();
-  const sourceAttempts = sources.map(attempt), sourceBasis = { selectionAttemptId: selectedAttempt.id, sourceAttempts: sourceAttempts.map(a => ({ id: a.id, status: a.status })) };
+  sources.forEach(s => current.add(s.stepKey));
+  const images = p.flow === MARKET_THEME_RULES_FLOW_V3 ? view.steps.filter(s=>s.kind==='collect-product-image' && obj(s.input).selectionInputSnapshotId===selectionInputSnapshotId) : [];
+  images.forEach(s=>current.add(s.stepKey)); if(sources.some(s=>!terminal(s))||images.some(s=>!terminal(s)))return result();
+  const imageAttempts=images.map(attempt);
+  const sourceAttempts = sources.map(attempt), sourceBasis = { selectionAttemptId: selectedAttempt.id, sourceAttempts: sourceAttempts.map(a => ({ id: a.id, status: a.status })), ...(p.flow===MARKET_THEME_RULES_FLOW_V3?{imageAttempts:imageAttempts.map(a=>({id:a.id,status:a.status}))}:{}) };
   const poolKey = key('pool', sourceBasis), poolStep = findKey(poolKey);
   current.add(poolKey);
   if (!poolStep) {
     const observations = sourceAttempts.filter(a => a.status !== 'failed').map(a => ({ inputSnapshotId: inputId.parse(obj(a.output).inputSnapshotId), sourceRef: sourceId.parse(obj(a.output).sourceRef) }));
     return result([{ stepKey: poolKey, kind: 'prepare-members', subject: { flow: p.flow, frontierHash: digest(sourceBasis) }, input: {
       phase: 'assemble-theme-pool', selectionInputSnapshotId, selectedAsins, catalog: p.catalog, dataCutoffAt: now,
+      ...(p.flow===MARKET_THEME_RULES_FLOW_V3?{imageAttemptIds:imageAttempts.map(a=>a.id)}:{}),
       selectionRevision: `theme-selection:${digest(selectionInputSnapshotId)}`, observations, failedAttemptIds: sourceAttempts.filter(a => a.status === 'failed').map(a => a.id),
     }, inputRefs: [{ kind: 'input', id: selectionInputSnapshotId }, { kind: 'step-output', id: selectedAttempt.id },
+      ...imageAttempts.map(a=>({kind:'step-output' as const,id:a.id})),
       ...observations.flatMap(o => [{ kind: 'input' as const, id: o.inputSnapshotId }, { kind: 'source' as const, id: o.sourceRef }])] }]);
   }
   if (!success(poolStep)) return result();
   const poolAttempt = attempt(poolStep), pool = obj(poolAttempt.output), semanticInputSnapshotId = inputId.parse(pool.semanticInputSnapshotId);
   let preparationAttemptId: string | null = null, preparationReceiptId: string | null = null;
   let modelSteps: MarketExecutionStep[] = [];
-  if (pool.semanticStatus !== 'no-input' && p.flow !== MARKET_THEME_RULES_FLOW_VERSION && p.flow !== MARKET_THEME_RULES_FLOW_V2) {
+  if (pool.semanticStatus !== 'no-input' && p.flow !== MARKET_THEME_RULES_FLOW_VERSION && p.flow !== MARKET_THEME_RULES_FLOW_V2 && p.flow !== MARKET_THEME_RULES_FLOW_V3) {
     const preparation = one(view.steps.filter(s => s.kind === 'prepare-model-batches' && obj(s.input).inputSnapshotId === semanticInputSnapshotId));
     current.add(preparation.stepKey); if (!terminal(preparation)) return result();
     const prepared = attempt(preparation); preparationAttemptId = prepared.id;

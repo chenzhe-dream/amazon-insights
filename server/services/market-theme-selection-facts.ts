@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {readThemeSavedImages} from './market-theme-saved-images';
 import { MarketThemeReportEntrySchema } from '../../shared/market-module-contracts';
 import { MarketInputSnapshotInputSchema } from '../../shared/market-analysis-contracts';
 import { MarketThemeSampleMetadataSchema } from '../../shared/market-theme-selection-contracts';
@@ -39,17 +40,20 @@ export async function loadThemeSelectionFacts(context:PostgresQueryContext,input
  const selection=await store.findInput({actor:input.actor,studyId:view.run.scope.researchId,id:z.string().parse(manifest.selectionInputSnapshotId)});if(!selection)throw new MarketExecutionConflictError();
  same(selection.snapshot.scope,entry.report.scope);same(manifest.selectedAsins,entry.report.selectedAsins);
  const bindings=z.array(z.object({asin:z.string(),inputSnapshotId:z.string().nullable(),sourceRef:z.string().nullable()}).passthrough()).parse(manifest.bindings);
+ const images=await readThemeSavedImages({view,actor:input.actor,store,selectionId:selection.snapshot.snapshotId,cutoff:entry.report.dataCutoffAt,attemptIds:obj(summary.selection).imageAttemptIds});
  const samples=[];
  for(const asin of entry.report.selectedAsins){
   const record=selection.snapshot.records.find(r=>r.id===asin);if(!record)throw new MarketExecutionConflictError();const data=obj(record.data),p=obj(data.product),ref=z.string().parse(data.sourceRef);
   const source=await store.findSource({actor:input.actor,studyId:view.run.scope.researchId,id:ref});if(!source)throw new MarketExecutionConflictError();same(source.evidence.scope,entry.report.scope);
-  if(source.evidence.provider!=='sellerSprite'||source.evidence.operation!=='market_product_concentration')throw new MarketExecutionConflictError();
-  same(source.evidence.requestIdentity.marketplace,entry.report.scope.marketplace);if(Date.parse(source.evidence.fetchedAt)>Date.parse(entry.report.dataCutoffAt))throw new MarketExecutionConflictError();same(source.evidence.requestIdentity.month,data.month);same(data.month,entry.report.scope.toMonth);
+  const sorftime=view.run.versions.planner==='market-theme-flow/rules-v3';
+  if(sorftime?(source.evidence.provider!=='sorftime'||source.evidence.operation!=='category_report'):(source.evidence.provider!=='sellerSprite'||source.evidence.operation!=='market_product_concentration'))throw new MarketExecutionConflictError();
+  same(source.evidence.requestIdentity.marketplace,entry.report.scope.marketplace);if(Date.parse(source.evidence.fetchedAt)>Date.parse(entry.report.dataCutoffAt))throw new MarketExecutionConflictError();
+  if(sorftime)same(source.evidence.requestIdentity.nodeId,entry.report.scope.nodeIdPath.split(':').at(-1));else{same(source.evidence.requestIdentity.month,data.month);same(data.month,entry.report.scope.toMonth);}
   const binding=bindings.find(b=>b.asin===asin);let summarySource:Parameters<typeof projectThemeSample>[0]['summarySource'];
   if(binding?.sourceRef&&binding.inputSnapshotId){const observed=await store.findSource({actor:input.actor,studyId:view.run.scope.researchId,id:binding.sourceRef});const inputSnapshot=await store.findInput({actor:input.actor,studyId:view.run.scope.researchId,id:binding.inputSnapshotId});
    if(!observed||!inputSnapshot)throw new MarketExecutionConflictError();same(observed.evidence.scope,entry.report.scope);same(inputSnapshot.snapshot.scope,entry.report.scope);same(observed.evidence.requestIdentity.asin,asin);same(observed.evidence.requestIdentity.marketplace,entry.report.scope.marketplace);if(observed.evidence.provider!=='sorftime'||observed.evidence.operation!=='product_customers_say'||inputSnapshot.snapshot.kind!=='customer-themes')throw new MarketExecutionConflictError();if(Date.parse(observed.evidence.fetchedAt)>Date.parse(entry.report.dataCutoffAt))throw new MarketExecutionConflictError();same(obj(inputSnapshot.snapshot.records.find(r=>r.id===asin)?.data).sourceRef,binding.sourceRef);
    summarySource={ref:binding.sourceRef,snapshotId:binding.inputSnapshotId,payload:observed.evidence.payload};}
-  samples.push(projectThemeSample({asin,sourceIndex:z.number().int().nonnegative().parse(p.sourceIndex),product:p,productSource:{ref,snapshotId:selection.snapshot.snapshotId,payload:source.evidence.payload},summarySource}));
+  samples.push(projectThemeSample({asin,sourceIndex:z.number().int().nonnegative().parse(p.sourceIndex),product:p,productSource:{ref,snapshotId:selection.snapshot.snapshotId,payload:source.evidence.payload},summarySource,...(sorftime?{provider:'sorftime' as const,imageSource:images.get(asin)?.source,imageMissingReason:images.get(asin)?.missingReason}:{})}));
  }
  const facts=ThemeSelectionFactsSchema.parse({base,snapshot:factory(snapshot),priorEvaluations:priorEvaluations.map(factory),samples});restoreThemeSelectionFacts(facts);return facts;
 }

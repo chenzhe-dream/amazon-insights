@@ -6,6 +6,7 @@ import { MarketThemeDetailResponseSchema, MarketThemeTextPreviewSchema } from '.
 import { readThemeDetails } from './lib/market-theme-browser';
 import { MarketThemeEvidence } from './market-theme-evidence';
 import { MarketThemeInsightPanel } from './market-theme-insight-panel';
+import {isOriginalThemeFlow} from '../shared/market-theme-original-rules';
 import { themeSavedReportStatus } from './lib/market-theme-rule-status';
 
 type Entry=z.infer<typeof MarketThemeReportEntrySchema>;
@@ -55,13 +56,13 @@ export function MarketThemeReport({entry}:{entry:Entry}) {
   const r=entry.report,c=r.counts,semanticSkipped=r.semanticStatus==='skipped',displayStatus=themeSavedReportStatus(r);
   return <div aria-label="已保存主题报告" style={{minWidth:0,display:'grid',gap:20}}><MarketThemeInsightPanel key={`${entry.attemptId}-${r.reportHash}`} entry={entry}/><section className="card market-research-result market-insights-workflow"><details><summary>报告统计口径与完整证据</summary>
     <div className="market-research-result-heading"><h3>{entry.current?'当前报告':'历史报告'}</h3><span>{displayStatus==='complete'?semanticSkipped?'规则数据已完整':'分析完整':displayStatus==='partial'?'部分结果':'暂无数据'}</span></div>
-    <p>{r.scope.marketplace} · 类目 {r.scope.nodeIdPath} · {r.scope.fromMonth} 至 {r.scope.toMonth}</p>
-    <p className="market-research-note">数据截止：{r.dataCutoffAt} · 请求 {c.requestedCount} 个商品，实际选中 {c.selectedCount} 个。样本按供应商返回顺序选择，尚未验证 BSR 排名。</p>
-    {semanticSkipped&&<p className="market-research-note">本任务语义归组未启用；下方按 Customers Say 原主题展示规则统计。</p>}
+    <p>{r.scope.marketplace} · 类目 {r.categoryName??r.scope.nodeIdPath} · {r.scope.fromMonth} 至 {r.scope.toMonth}</p>
+    <p className="market-research-note">数据截止：{r.dataCutoffAt} · 请求 {c.requestedCount} 个商品，实际选中 {c.selectedCount} 个。样本按供应商返回顺序选择，尚未验证 BSR 排名。月份用于研究范围与选样参考；Customers Say 为采集时返回的主题，不代表该月历史评论主题。</p>
+    {semanticSkipped&&<p className="market-research-note">{isOriginalThemeFlow(r.versions.planner)?'本任务使用原主题名称去首尾空格并忽略大小写的同名归并；未调用模型。':'本任务语义归组未启用；下方按 Customers Say 原主题展示规则统计。'}</p>}
     <dl className="market-research-metrics"><div><dt>取得主题的商品</dt><dd>{c.successfulCount}/{c.selectedCount}</dd></div>{semanticSkipped?<><div><dt>原主题条目</dt><dd>{c.expectedMemberCount}</dd></div><div><dt>语义归组</dt><dd>未启用</dd></div></>:<><div><dt>已校验的模型成员</dt><dd>{c.validatedMemberCount}/{c.expectedMemberCount}</dd></div><div><dt>已归组的主题</dt><dd>{c.mappedMemberCount}/{c.expectedMemberCount}</dd></div></>}</dl>
     {r.reasons.length>0&&<div className="market-research-notice"><h4>结果仍有缺口</h4><ul>{r.reasons.map(reason=><li key={reason}>{reasons[reason]}</li>)}</ul></div>}
     <p className="market-research-note">Customers Say 主题提及份额：按主题提及次数计算，不能替代评论样本发生率。未取得评论 ID，无法去重为独立评论；正负向计数不假定互斥。</p>
     <ThemePages key={entry.attemptId} entry={entry}/>
-    <details className="market-research-boundaries"><summary>报告身份与版本</summary><p>报告：{entry.attemptId}</p><p>规则：{r.versions.rule}<br/>模型配置：{r.versions.configuration??'无'}<br/>映射：{r.versions.mapping}</p><p>摘要：{r.reportHash}</p></details>
+    <details className="market-research-boundaries"><summary>报告身份与版本</summary><p>报告：{entry.attemptId}</p><p>类目节点：{r.scope.nodeIdPath}</p><p>规则：{r.versions.rule}<br/>模型配置：{r.versions.configuration??'无'}<br/>映射：{r.versions.mapping}</p><p>摘要：{r.reportHash}</p></details>
   </details></section></div>;
 }

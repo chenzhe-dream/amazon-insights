@@ -12,10 +12,10 @@ export const MarketThemeTextPreviewSchema = z.object({ text: z.string().max(2000
 export const MarketThemeDecisionSchema = z.object({ sourceThemeId: identity, status: z.enum(['mapped', 'unknown', 'unavailable']), groupId: identity.nullable(),
   reason: z.string().max(240).nullable(), batchId: identity.nullable() }).strict();
 export const MarketThemeLabelSchema = z.object({ groupId: identity, labelZh: z.string().min(1).max(60), definition: z.string().min(1).max(240),
-  origin: z.enum(['catalog', 'batch-proposal']), batchId: identity.nullable(), proposalId: identity.nullable() }).strict();
+  origin: z.enum(['catalog', 'batch-proposal', 'local-rule']), batchId: identity.nullable(), proposalId: identity.nullable() }).strict();
 export const MarketThemeDetailItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('group'), index: count, groupId: identity.nullable(), mappingStatus: z.enum(['mapped', 'unmapped']), labelZh: z.string().max(60).nullable(),
-    definition: z.string().max(240).nullable(), labelOrigin: z.enum(['catalog', 'batch-proposal']).nullable(), sourceLabel: MarketThemeTextPreviewSchema.nullable(), memberCount: count,
+    definition: z.string().max(240).nullable(), labelOrigin: z.enum(['catalog', 'batch-proposal', 'local-rule']).nullable(), sourceLabel: MarketThemeTextPreviewSchema.nullable(), memberCount: count,
     totals: MarketThemeTotalsSchema, topicShare: MarketThemeShareSchema }).strict(),
   z.object({ kind: z.literal('member'), sourceThemeId: identity, asin, sourceRecordId: identity, sourceUpdatedAt: z.string().max(240).nullable(),
     keyword: MarketThemeTextPreviewSchema, content: MarketThemeTextPreviewSchema, mention: count, positive: count, negative: count,

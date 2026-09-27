@@ -22,13 +22,13 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/), version = z.string().min(1).max
 export const MarketThemeReportSchema = z.object({ reportVersion: z.enum(['market-theme-report/v1','market-theme-report/v2','market-theme-report/v3']), moduleRunId: MarketModuleIdSchema,
   scope: MarketAnalysisScopeSchema, versions: z.object({ source: version, rule: version, mapping: version, planner: version, model: version.nullable(), prompt: version.nullable(), configuration: version.nullable() }).strict(),
   basis: z.enum(['rules', 'empty-selection','reconciliation-evaluation']), basisAttemptId: MarketModuleIdSchema, inputSnapshotId: z.string().regex(/^market-input:[a-f0-9]{64}$/), resultHash: hash.nullable(),
-  dataCutoffAt: z.string().datetime(), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20), selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false),
+  dataCutoffAt: z.string().datetime(),categoryName:z.string().max(500).nullable().optional(), selectedAsins: z.array(z.string().regex(/^[A-Z0-9]{10}$/)).max(20), selectionBasis: z.literal('provider-row-order'), bsrTopVerified: z.literal(false),
   metricKind: z.literal('customers_say_topic_share'), reviewDeduplication: z.literal('unavailable'), status: z.enum(['complete', 'partial', 'no-data']),
   dataReady: z.boolean(), semanticsReady: z.boolean(), counts: MarketThemeReadinessCountsSchema,
   reasons: z.array(z.enum(['selection-shortfall', 'no-theme-data', 'empty-asins', 'source-results-missing', 'model-results-missing', 'unknown-themes', 'reconciliation-required'])).max(7), reportHash: hash,
   ruleStatus: z.enum(['complete','partial','unavailable']).optional(), semanticStatus: z.enum(['skipped','pending','partial','complete','unavailable']).optional() }).strict()
   .refine(v=>(v.basis==='reconciliation-evaluation')===(v.reportVersion==='market-theme-report/v2')&&
-    (v.versions.planner==='market-theme-flow/rules-v2')===(v.reportVersion==='market-theme-report/v3'),'Theme report version differs from its basis');
+    (['market-theme-flow/rules-v2','market-theme-flow/rules-v3'].includes(v.versions.planner))===(v.reportVersion==='market-theme-report/v3'),'Theme report version differs from its basis');
 export const MarketThemeReportEntrySchema = z.object({ attemptId: MarketModuleIdSchema, current: z.boolean(), report: MarketThemeReportSchema }).strict();
 export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema, kind: z.enum(['collect-product-month', 'collect-product-history', 'collect-product-amount-history','collect-product-image', 'collect-shape-pool', 'collect-shape-category', 'collect-overview-month', 'collect-keyword-page', 'collect-keyword-trend', 'collect-keyword-aba', 'collect-customer-themes',
   'prepare-members', 'prepare-keyword-pool', 'prepare-model-batches', 'reconcile', 'model-batch', 'rules', 'report']), status: z.enum(['queued', 'running', 'succeeded', 'empty', 'failed', 'cancelled']),

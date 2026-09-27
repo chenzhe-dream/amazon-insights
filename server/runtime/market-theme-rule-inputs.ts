@@ -116,7 +116,7 @@ async function readInputs(context:PostgresQueryContext,view:MarketModuleRunView,
       auditRefs.push({ agentRunId: audit.id, attemptId: id, bindingId: binding.id, executionFingerprint: audit.executionFingerprint });
     }
     if(initialRulesAttempt){
-      const initial=calculateMarketThemeMappingRules({poolInput,batches,topN:input.topN});
+      const initial=calculateMarketThemeMappingRules({poolInput,batches,topN:input.topN,originalRules:view.run.versions.planner==='market-theme-flow/rules-v3'});
       const saved=await load(z.string().parse(obj(initialRulesAttempt.output).inputSnapshotId));
       const summary=obj(saved.records.find(r=>r.id==='summary')?.data);
       if(obj(initialRulesAttempt.output).resultHash!==initial.resultHash || summary.resultHash!==initial.resultHash ||

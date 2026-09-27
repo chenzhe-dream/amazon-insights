@@ -4,10 +4,11 @@ import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accou
 import { assembleMarketThemePool, MarketThemePoolCatalogSchema } from './customer-theme-source-pool';
 import { aggregateCustomerThemes, type CustomerThemeMapping, type CustomerThemesAsinInput } from './customer-themes';
 import { validateMarketCustomerThemeMapping } from './semantic-validation';
+import { localizeThemeLabel } from '../../../shared/market-theme-original-rules';
 
 export const MARKET_THEME_MAPPING_RULE_VERSION = 'market-theme-mapping-rules/v1';
 type Batch = { input: unknown; output: unknown; binding: MarketSemanticValidationBinding };
-type Group = { groupId: string; labelZh: string; definition: string; origin: 'catalog' | 'batch-proposal'; batchId: string | null; proposalId: string | null };
+type Group = { groupId: string; labelZh: string; definition: string; origin: 'catalog' | 'batch-proposal' | 'local-rule'; batchId: string | null; proposalId: string | null };
 type Decision = { sourceThemeId: string; status: 'mapped' | 'unknown' | 'unavailable'; groupId: string | null; reason: string | null; batchId: string | null };
 const same = (a: unknown, b: unknown) => { if (digest(a) !== digest(b)) throw new TypeError('Theme mapping rule lineage differs'); };
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
@@ -18,7 +19,7 @@ function freeze<T>(v: T): T { if (v && typeof v === 'object' && !Object.isFrozen
  * Proposals are deliberately batch-scoped until a separate reconciliation accepts
  * cross-batch relationships; identical Chinese labels are not proof of equivalence. */
 export function calculateMarketThemeMappingRules(options: {
-  poolInput: Parameters<typeof assembleMarketThemePool>[0]; batches: readonly Batch[]; topN?: number;
+  poolInput: Parameters<typeof assembleMarketThemePool>[0]; batches: readonly Batch[]; topN?: number; originalRules?: boolean;
 }) {
   // Rebuild T1/T4-backed inputs rather than trusting caller-provided totals or IDs.
   const pool = assembleMarketThemePool(options.poolInput), catalog = MarketThemePoolCatalogSchema.parse(options.poolInput.catalog);
@@ -27,6 +28,22 @@ export function calculateMarketThemeMappingRules(options: {
   const sourceCatalog = Object.fromEntries(snapshot.records.map(r => [r.id, MarketSemanticRecordSchema.parse((r.data as { semantic?: unknown }).semantic)]));
   const groups = new Map<string, Group>(), mappings: CustomerThemeMapping[] = [], decisions: Decision[] = [];
   const audit: { batchId: string; batchKey: string; inputDigest: string; outputDigest: string; output: ReturnType<typeof validateMarketCustomerThemeMapping> }[] = [];
+  if (options.originalRules) {
+    if (options.batches.length) throw new TypeError('Original theme rules cannot include model batches');
+    for (const record of pool.rawSnapshot.records) {
+      const result = (record.data as { result: CustomerThemesAsinInput }).result;
+      if (result.status !== 'success') continue;
+      for (const theme of result.themes) {
+        const keyword = theme.keyword.trim().toLowerCase();
+        const groupId = `theme-local:${digest({ version: 'keyword-trim-lower/v1', keyword })}`;
+        if (!groups.has(groupId)) groups.set(groupId, { groupId, labelZh: localizeThemeLabel(theme.keyword.trim()).slice(0, 60),
+          definition: '按来源 keyword 去首尾空格并转小写后精确同名归并；未作语义归并。', origin: 'local-rule', batchId: null, proposalId: null });
+        mappings.push({ sourceThemeId: theme.sourceThemeId, groupId });
+        decisions.push({ sourceThemeId: theme.sourceThemeId, status: 'mapped', groupId, reason: null, batchId: null });
+        seen.add(theme.sourceThemeId);
+      }
+    }
+  }
   let selectionRevision: string | null = null;
   for (const batch of options.batches) {
     const input = MarketCustomerThemeMappingInputSchema.parse(batch.input);

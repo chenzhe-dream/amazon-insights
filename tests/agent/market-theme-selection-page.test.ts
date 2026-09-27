@@ -35,7 +35,7 @@ test('sample UI persists exclusions, restores all, reads history and ignores a l
   }
   if(url.pathname.endsWith('/details'))return route.fulfill({json:themeDetails(url)});return route.fulfill({status:404,json:{}});
  });
- await page.goto(origin);await page.getByText('Lamp 1',{exact:true}).waitFor();assert.equal(writes.length,0);await page.getByRole('button',{name:'移除',exact:true}).first().click();await page.getByText('样本 ASIN（1）',{exact:true}).waitFor();
+ await page.goto(origin);await page.getByText('Lamp 1',{exact:true}).waitFor();assert.equal(writes.length,0);let acceptRemoval=false;const confirmations:string[]=[];page.on('dialog',async dialog=>{confirmations.push(dialog.message());if(acceptRemoval)await dialog.accept();else await dialog.dismiss();});await page.getByRole('button',{name:'移除',exact:true}).first().click();assert.equal(writes.length,0);assert.match(confirmations[0],/B0THEME001/);acceptRemoval=true;await page.getByRole('button',{name:'移除',exact:true}).first().click();await page.getByText('样本 ASIN（1）',{exact:true}).waitFor();
  await page.getByRole('button',{name:'移除',exact:true}).click();await page.getByText('样本 ASIN（0）',{exact:true}).waitFor();
  await page.getByRole('button',{name:'恢复全部移出链接（2）',exact:true}).click();await page.getByText('样本 ASIN（2）',{exact:true}).waitFor();assert.equal(writes.length,3);
  await page.getByLabel('样本版本',{exact:true}).selectOption(`market-theme-selection-revision:${'1'.repeat(64)}`);await page.getByText('样本 ASIN（1）',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'移除',exact:true}).isDisabled(),true);assert.equal(writes.length,3);
