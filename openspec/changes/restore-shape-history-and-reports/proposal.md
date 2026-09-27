@@ -15,3 +15,6 @@
 
 ## Impact
 形态流程版本、来源 worker、数据库步骤枚举、读取合同、商品表、隔离数据库及浏览器回归。第一批不更改人工版本统计、总览和其他模块；不启用模型。
+
+## 2026-09-27 approved recovery
+The approved Chinese plan is docs/superpowers/plans/2026-09-27-shape-original-recovery-review.md. Restore original editing continuity, scoped same-query reuse, section controls, and observed-value reporting while preserving current task storage. Earlier complete-calendar constraints apply only to legacy flows. Cross-capacity ASIN reuse and changing targets during collection are explicitly deferred.

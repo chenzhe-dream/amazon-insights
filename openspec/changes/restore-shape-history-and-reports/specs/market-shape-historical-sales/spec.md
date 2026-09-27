@@ -51,3 +51,30 @@ New rules-v4 runs SHALL use Sorftime category_report and reference product_searc
 #### Scenario: Legacy runs remain frozen
 - **WHEN** a rules-v3 task is reopened after upgrade
 - **THEN** its supplier, rules and source snapshots do not change and no new collection is scheduled
+
+### Requirement: Covered calculations and immutable legacy reports
+New reports SHALL show known period totals with calculable-product coverage and explicitly scoped known-volume shares; missing values SHALL NOT become observed zero. Shape price-band denominators SHALL use the full shape identity. Legacy revisions SHALL retain their calculation version.
+#### Scenario: Partially returned history
+- **WHEN** one product has 100 units and another lacks history
+- **THEN** the group shows known units 100 with coverage 1/2, and any share is labeled as within known units
+#### Scenario: Unrelated annual gap
+- **WHEN** six-month evidence is complete but an annual value is missing
+- **THEN** conclusions requiring only six-month evidence remain eligible and annual-dependent claims explain their gap
+
+### Requirement: Persistent manual drafts
+The system SHALL autosave actor-scoped category drafts independently of immutable report snapshots, preserve matching ASIN edits across run/capacity changes, and protect conflicting or unsynced edits.
+#### Scenario: Reload or resize
+- **WHEN** a user changes labels or exclusions and reloads or changes pool size
+- **THEN** matching ASIN edits are restored without collection caused by draft persistence and no other actor can read the draft
+
+### Requirement: Reusable query and recoverable progress
+The system SHALL reuse an authorized equivalent active task or compatible seven-day report unless explicit refresh is requested. Concurrent equivalent submissions SHALL NOT duplicate collection. Status reads SHALL retry transient errors without collecting again.
+#### Scenario: Repeated same query
+- **WHEN** the same authorized query is submitted twice
+- **THEN** the existing compatible run is returned and no extra provider calls are scheduled
+
+### Requirement: Restore reference section controls
+The system SHALL restore shape suggestions, applicable fixed taxonomies, batch clearing, independent shape and brand section filters, original sort metrics and the 2025 monthly-per-link column. Task details SHALL default to collapsed and report notes SHALL remain optional.
+#### Scenario: Local section filtering
+- **WHEN** a user filters one shape section
+- **THEN** that section statistics and conclusions use the same filtered scope without changing global inclusion or other sections
