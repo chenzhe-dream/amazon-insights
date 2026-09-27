@@ -23,6 +23,10 @@ export type SorftimeCategoryDashboardProduct = {
   monthlySalesVolume: number | null;
   monthlySalesAmount: number | null;
   sales: SorftimeProductSalesSummary;
+  salesHistory?: {
+    status: 'queued' | 'running' | 'ready' | 'partial' | 'empty' | 'failed' | 'cancelled';
+    errorCode: string | null;
+  };
   monthlyTrend: SorftimeProductMonthlyTrend;
   price: number | null;
   categoryRank: string;

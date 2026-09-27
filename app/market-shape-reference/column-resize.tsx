@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export const TOP_SALES_COLUMNS = [
   ["include", 52], ["bulk", 45], ["rank", 50], ["product", 240], ["brand", 90],
-  ["shape", 110], ["launch", 85], ["margin", 80], ["entry", 110], ["price", 80],
+  ["shape", 160], ["launch", 85], ["margin", 80], ["entry", 110], ["price", 80],
   ["band", 95], ["sales30", 105], ["amount30", 115], ["trend", 145],
   ["last3", 90], ["last6", 90], ["y2025", 90], ["y2024", 90],
   ["rating", 55], ["reviews", 75], ["delivery", 70], ["seller", 105], ["action", 70],
@@ -12,7 +12,7 @@ export const TOP_SALES_COLUMNS = [
 export type TopSalesColumnId = (typeof TOP_SALES_COLUMNS)[number][0];
 
 const WIDTHS_KEY = 'market-shape-reference-column-widths/v1';
-const clampWidth = (width: number) => Math.min(560, Math.max(40, Math.round(width)));
+const clampWidth = (width: number, id: TopSalesColumnId) => Math.min(560, Math.max(id === "shape" ? 140 : 40, Math.round(width)));
 /** Column sizes are browser display preferences, independent of report data. */
 export function useReferenceColumnWidths() {
   const [widths, setWidths] = useState<Record<TopSalesColumnId, number>>(
@@ -24,14 +24,14 @@ export function useReferenceColumnWidths() {
     const frame=requestAnimationFrame(()=>{try{
       const stored:unknown=JSON.parse(localStorage.getItem(WIDTHS_KEY)??'null');
       if(stored&&typeof stored==='object'&&!Array.isArray(stored)){
-        const next={...widthsRef.current,...Object.fromEntries(TOP_SALES_COLUMNS.flatMap(([id])=>{const value=(stored as Record<string,unknown>)[id];return typeof value==='number'&&Number.isFinite(value)?[[id,clampWidth(value)]]:[]}))};
+        const next={...widthsRef.current,...Object.fromEntries(TOP_SALES_COLUMNS.flatMap(([id])=>{const value=(stored as Record<string,unknown>)[id];return typeof value==='number'&&Number.isFinite(value)?[[id,clampWidth(value,id)]]:[]}))};
         widthsRef.current=next;setWidths(next);
       }
     }catch{/* Restricted or invalid storage keeps defaults. */}});
     return()=>cancelAnimationFrame(frame);
   },[]);
   const setWidth = (id: TopSalesColumnId, width: number) => {
-    const next={...widthsRef.current,[id]:clampWidth(width)};
+    const next={...widthsRef.current,[id]:clampWidth(width,id)};
     widthsRef.current=next;setWidths(next);
     try{localStorage.setItem(WIDTHS_KEY,JSON.stringify(next));}catch{/* Resizing works without storage. */}
   };
