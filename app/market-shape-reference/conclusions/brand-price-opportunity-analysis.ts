@@ -20,8 +20,8 @@ export type BrandPriceOpportunityInput = {
   sales: {
     last3Months: number;
     last6Months: number;
-    y2024: number;
-    y2025: number;
+    y2024: number | null;
+    y2025: number | null;
   };
 };
 
@@ -784,8 +784,8 @@ export function buildBrandPriceOpportunityInputsFromProducts(
     sales: {
       last3Months: product.sales.last3Months ?? 0,
       last6Months: product.sales.last6Months ?? 0,
-      y2024: product.sales.y2024 ?? 0,
-      y2025: product.sales.y2025 ?? 0,
+      y2024: product.sales.y2024 ?? null,
+      y2025: product.sales.y2025 ?? null,
     },
   }));
 }

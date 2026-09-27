@@ -37,3 +37,8 @@
 类目看板使用原布局，显示原版统计与两组历史图。商品池仍是 SellerSprite 冻结样本，不因类目报告的 top100_products 改动。类目与固定样本、近30天与研究月份、销量份额与销售额份额分别说明。后五区展示和最终规则结论继续保持独立任务。
 
 实施顺序：先 collector 测试 → 合同/归一化 → 流程版本/步骤持久化 → 校验读取 → 图表映射 → 隔离数据库故障重试/旧版兼容 → 浏览器/构建 → 发布前基线核对与真实任务。
+
+## Approved fourth batch: original recovery
+The 2026-09-27 approved plan supersedes earlier conflicting display assumptions. New calculation versions expose known sums and coverage, label shares within known observations, and keep immutable legacy report calculation versions. Conclusions validate their actual input periods rather than a global four-period gate. Shape and price band are separate identity fields. Date parsing is shared and suspicious source dates retain provenance.
+Drafts persist separately from report revisions and are scoped by actor, organization/project, marketplace and canonical category. Autosave and source reads never trigger collection or model calls; optimistic draft versions preserve conflicting edits. Same-query collection reuses an authorized active run or a compatible report within seven days; explicit refresh creates a new collection. Scope and parameter identity include source version, periods and pool size. No cross-capacity source reuse in this batch.
+Restore per-section filters, shape suggestions and taxonomy controls, missing columns and sorting. Keep seven existing report sections and original thresholds. Status failures back off without erasing drafts, disclose last update, and keep step diagnostics collapsed. Isolated tests, browser screenshots, typecheck/build and a release baseline audit precede deployment; unrelated unpublished modules remain excluded.

@@ -1,12 +1,13 @@
 import type {SorftimeCategoryDashboardProduct} from './types';
-import {hasReferencePeriodDateConflict,referencePeriodContribution,type ReferencePeriod} from './rules';
+import {hasReferencePeriodDateConflict,parseReferenceListingDate,referencePeriodContribution,type ReferencePeriod} from './rules';
 
 const errors:Record<string,string>={timeout:'等待上游超时',authentication:'来源认证失败',governance:'额度或调用策略限制','upstream-temporary':'上游暂不可用','upstream-permanent':'上游拒绝请求','invalid-data':'数据校验未通过','scope-mismatch':'来源范围不匹配',interrupted:'请求中断',internal:'处理失败'};
 
 /** Explain missing values from persisted request state; never infer a failed connection from null. */
-export function referenceSalesGapReason(product:SorftimeCategoryDashboardProduct,period:ReferencePeriod):string|null {
-  if(hasReferencePeriodDateConflict(product,period))return '上市日期与历史销量冲突';
-  if(referencePeriodContribution(product,period)!==null)return null;
+export function referenceSalesGapReason(product:SorftimeCategoryDashboardProduct,period:ReferencePeriod,calculationVersion?:string):string|null {
+  if(hasReferencePeriodDateConflict(product,period,calculationVersion))return '上市日期与历史销量冲突';
+  if(referencePeriodContribution(product,period,calculationVersion)!==null)return null;
+  if((period==='y2024'||period==='y2025')&&parseReferenceListingDate(product.onlineDate).status==='uncertain')return '上市日期待核实，无法确认该年度是否适用；原始日期已保留';
   const history=product.salesHistory;
   if(!history)return '缺少历史销量，原因尚未确认';
   if(history.status==='queued')return '历史销量排队中';

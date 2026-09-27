@@ -1,5 +1,5 @@
 import type { SorftimeCategoryDashboardReport as SavedReport } from "../types";
-import { referencePeriodContribution,hasReferencePeriodDateConflict } from '../rules';
+import { referencePeriodContribution,hasReferencePeriodDateConflict,parseReferenceListingDate,resolveReferenceProductShape } from '../rules';
 import {
   buildListingYearAnalysis,
   buildShapePriceBandAnalysis,
@@ -51,29 +51,39 @@ export function buildReferenceConclusions(
 ): ReferenceConclusions {
   const selected = selectedAsins ? new Set(selectedAsins) : null;
   const sourceProducts=report.products.filter(product => selected === null || selected.has(product.asin));
-  const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period)));
+  const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period,report.calculationVersion)));
   const products = sourceProducts.map(product=>({...product,sales:{...product.sales,
-    y2024:referencePeriodContribution(product,'y2024'),y2025:referencePeriodContribution(product,'y2025'),
+    y2024:referencePeriodContribution(product,'y2024',report.calculationVersion),y2025:referencePeriodContribution(product,'y2025',report.calculationVersion),
   }}));
   if (!products.length) return unavailable("所选范围没有 Sorftime 商品链接");
 
   // Each original analyzer is called only after its own required sales periods pass validation.
   const scoped = { ...report, products, topLinkCount: products.length } as OriginalReport;
   const sampleScope = `${scoped.marketplace} · ${scoped.categoryName} · TOP${scoped.topLinkCount}`;
-  const shape = (asin: string) => assignments[asin]?.trim() || products.find(product => product.asin === asin)?.productShape?.trim() || "—";
+  const shape = (asin: string) => {
+    const product = products.find(item => item.asin === asin);
+    return report.calculationVersion==='shape-reference/1'?assignments[asin]?.trim()||product?.productShape?.trim()||'—':product ? resolveReferenceProductShape(product, assignments) : '—';
+  };
   const sixMonthGap = missingSales(products, ["last6Months"]);
+  const recentGap = missingSales(products, ["last3Months", "last6Months"]);
+  const uncertainDate = report.calculationVersion === 'shape-reference/1' ? null : products.find(product => parseReferenceListingDate(product.onlineDate).status === 'uncertain');
+  const listingDateGap = uncertainDate ? `${uncertainDate.asin} 上市日期待核实，当前结论数据不足` : null;
   const fullGap = conflicting?`${conflicting.asin} 年度销量与上市日期冲突，当前结论数据不足`:missingSales(products, PERIODS);
-  const listingYear = sixMonthGap ? insufficient(sixMonthGap) : ready(analyzeListingAgeSalesShare(buildListingAgeSalesShareInputsFromProducts(scoped.products, "last6Months"), {
+  const listingYear = sixMonthGap || listingDateGap ? insufficient(sixMonthGap ?? listingDateGap!) : ready(analyzeListingAgeSalesShare(buildListingAgeSalesShareInputsFromProducts(scoped.products, "last6Months"), {
     analysisDate: report.fetchedAt, salesPeriod: "last6Months", sampleScope,
     categoryName: report.categoryName, marketplace: report.marketplace,
   }));
   const margin = sixMonthGap ? insufficient(sixMonthGap) : ready(buildTopSalesMarginEntryConclusion(scoped.products, { getProductShape: shape }));
+  const brandPrice = recentGap ? insufficient(recentGap) : ready(analyzeBrandPriceOpportunity(buildBrandPriceOpportunityInputsFromProducts(scoped.products, {
+    getShape: shape,
+  }), { analysisDate: report.fetchedAt, sampleScope, categoryName: report.categoryName, marketplace: report.marketplace }));
   if (fullGap) return {
     listingYear, margin,
     listingYearRows: insufficient(fullGap), shapeSales: insufficient(fullGap), shapePrice: insufficient(fullGap),
-    brandPrice: insufficient(fullGap), synthesis: insufficient(fullGap),
+    brandPrice: report.calculationVersion === 'shape-reference/1' ? insufficient(fullGap) : brandPrice,
+    synthesis: insufficient(fullGap),
   };
-  const listingYearRows = ready(buildListingYearAnalysis(scoped.products.map(product => ({
+  const listingYearRows = listingDateGap ? insufficient(listingDateGap) : ready(buildListingYearAnalysis(scoped.products.map(product => ({
     listingYear: formatOnlineDateYear(product.onlineDate),
     onlineDate: product.onlineDate,
     sales: product.sales,
@@ -91,9 +101,6 @@ export function buildReferenceConclusions(
     rows: shapeRows, shapeAggregates, sampleScope,
     structuralPeriod: "2024 / 2025 / 近6个月 / 近3个月",
   }));
-  const brandPrice = ready(analyzeBrandPriceOpportunity(buildBrandPriceOpportunityInputsFromProducts(scoped.products, {
-    getShape: shape,
-  }), { analysisDate: report.fetchedAt, sampleScope, categoryName: report.categoryName, marketplace: report.marketplace }));
-  const synthesis = ready(buildMarketStructureSynthesis(scoped, { getProductShape: shape }));
+  const synthesis = listingDateGap ? insufficient(listingDateGap) : ready(buildMarketStructureSynthesis(scoped, { getProductShape: shape }));
   return { listingYear, listingYearRows, margin, shapeSales, shapePrice, brandPrice, synthesis };
 }

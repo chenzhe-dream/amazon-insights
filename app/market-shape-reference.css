@@ -82,3 +82,12 @@
 .market-shape-reference-view .shape-history-coverage p { margin: 8px 0; }
 .market-shape-reference-view .shape-history-coverage summary { cursor: pointer; }
 .market-shape-reference-view .shape-history-coverage li { overflow-wrap: anywhere; }
+
+.market-shape-reference-view .shape-catalog { margin: 12px 0; padding: 10px 12px; border: 1px solid #dbe3ef; border-radius: 8px; }
+.market-shape-reference-view .shape-catalog summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.market-shape-reference-view .shape-catalog input,
+.market-shape-reference-view .shape-catalog select,
+.market-shape-reference-view .market-theme-actions select { min-height: 36px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #24354b; max-width: 100%; }
+.market-shape-reference-view .shape-price-table td small { font-size: 11px; color: #687b94; padding-top: 3px; }
+.market-shape-reference-view .top-sales-table-filters { flex: 1 1 100%; min-width: 0; max-width: 100%; }
+.market-shape-reference-view .top-sales-table-filters label { max-width: 100%; }

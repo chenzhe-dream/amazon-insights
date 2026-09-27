@@ -76,7 +76,7 @@ test('each market module keeps its own category through navigation and refresh',
   await nav.getByRole('button', { name: '商品形态及价格带' }).click();
   await page.getByRole('button', { name: '筛选市场', exact: true }).click();
   await page.getByRole('alert').waitFor();
-  assert.equal(writes.at(-1)?.body.nodeIdPath, '222222');
+  assert.equal((writes.at(-1)?.body.scope as {nodeIdPath:string})?.nodeIdPath, '222222');
   await nav.getByRole('button', { name: '类目关键词洞察' }).click();
   await page.getByLabel('产品核心名').fill('floor lamp');
   await page.getByLabel('类目说明').fill('落地灯');

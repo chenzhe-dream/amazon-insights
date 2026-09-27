@@ -79,5 +79,37 @@ test("amount history stays visible when volume history is unavailable", () => {
   amountOnly.products[0].monthlyTrend.volume = [];
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={amountOnly} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
   assert.ok(html.includes('2026-08：销量 未知；销售额 4,000'));
-  assert.ok(html.includes('2026-08　未知 / 4,000'));
+  assert.ok(html.includes('销量 未知'));assert.ok(html.includes('销售额 4,000'));
+});
+
+test('single-month history displays values without pretending to be a trend',()=>{
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(html,/仅1个月数据，暂无法判断趋势/);
+ assert.doesNotMatch(html,/class="shape-ref-trend-pair"/);
+ assert.match(html,/2026-08/);assert.match(html,/4,000/);
+ const multiple=structuredClone(report);multiple.products[0].monthlyTrend.volume.unshift({month:'2026-07',value:100});
+ const multiHtml=renderToStaticMarkup(<MarketShapeReferenceView report={multiple} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(multiHtml,/class="shape-ref-trend-pair"/);
+});
+
+test('original business tables show metrics and keep coverage in tooltips or collapsed details',()=>{
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ const tables=html.match(/<table[^>]*shape-price-table[\s\S]*?<\/table>/g)??[];
+ assert.equal(tables.length,4);
+ for(const table of tables)assert.doesNotMatch(table.replace(/<[^>]*>/g,''),/可计算/);
+ assert.match(html,/<details class="shape-history-coverage"/);
+});
+
+test('known aggregate coverage, original editing tools and missing year average column are visible',()=>{
+ const value=structuredClone(report);value.calculationVersion='shape-known-coverage/2';
+ value.products.push({...structuredClone(value.products[0]),asin:'B000000002',sales:{last3Months:null,last6Months:null,y2024:null,y2025:null,monthsAvailable:0}});
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{B000000001:'灯 · 层架',B000000002:'灯'}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(html,/已知销量内占比/);assert.match(html,/可计算 1\/2/);assert.match(html,/批量清除形态/);assert.match(html,/管理形态名称/);assert.match(html,/形态价格带局部筛选/);
+ assert.equal((html.match(/2025年单链月均/g)??[]).length,4);
+});
+
+test('fixed scooter names keep an old label visible without allowing new arbitrary labels',()=>{
+ const value=structuredClone(report);value.categoryName='Kick Scooters';
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{B000000001:'旧分类'}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ assert.match(html,/<select[^>]*aria-label="B000000001 人工形态"/);assert.match(html,/三轮滑板车/);assert.match(html,/旧标签待确认：旧分类/);
 });

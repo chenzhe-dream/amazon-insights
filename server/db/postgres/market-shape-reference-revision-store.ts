@@ -49,7 +49,7 @@ export class PostgresMarketShapeReferenceRevisionStore{
   const productHistory=await readMarketShapeHistory(common);
   const productAmountHistory=await readMarketShapeAmountHistory(common);
   const categoryDashboard=await readShapeCategoryDashboard({view,actor,current,snapshots:this.snapshots});
-  const data=MarketShapeReferenceRevisionDataSchema.parse({scope:view.run.scope,pool:pool.publicPool,productImages:await readMarketShapeImages(common),productHistory,productAmountHistory,categoryDashboard});
+  const data=MarketShapeReferenceRevisionDataSchema.parse({calculationVersion:'shape-known-coverage/2',scope:view.run.scope,pool:pool.publicPool,productImages:await readMarketShapeImages(common),productHistory,productAmountHistory,categoryDashboard});
   const attempts=view.steps.filter(s=>current.has(s.stepKey)&&['succeeded','empty'].includes(s.status)).map(s=>view.attempts.find(a=>a.id===s.latestAttemptId)).filter((a):a is NonNullable<typeof a>=>!!a);
   const binding=bindingSchema.parse({
    sourceRefs:[...new Set(attempts.map(a=>obj(a.output).sourceRef).filter((v):v is string=>typeof v==='string'))].sort(),
@@ -88,7 +88,7 @@ export class PostgresMarketShapeReferenceRevisionStore{
    const latest=(await this.context.query<Row>('SELECT * FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 1',[actor.organizationId,moduleRunId])).rows[0];
    if((latest?.revision_id??null)!==request.expectedParentRevisionId)invalid();
    const {data,binding}=await this.capture(actor,view),available=new Set(data.pool.products.map(p=>p.asin));
-   if(request.selectedAsins.some(asin=>!available.has(asin)))invalid();
+   if(request.selectedAsins.some(asin=>!available.has(asin))||request.assignments.some(item=>!available.has(item.asin)))invalid();
    const createdAt=new Date().toISOString(),ordinal=(latest?.ordinal??0)+1;
    const body={parentRevisionId:request.expectedParentRevisionId,ordinal,createdAt,authorId:actor.userId,selectedAsins:request.selectedAsins,assignments:request.assignments,note:request.note,data};
    const revision=MarketShapeReferenceRevisionSchema.parse({revisionId:`market-shape-revision:${digest(body)}`,...body});
