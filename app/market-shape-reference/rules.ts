@@ -32,6 +32,7 @@ export type ReferenceShapeAnalysis = {
   shapes: ReferenceGroupRow[];
   shapePriceBands: ReferenceGroupRow[];
   brandPriceBands: ReferenceGroupRow[];
+  brands: ReferenceGroupRow[];
   synthesis: {
     linkCount: number;
     totalSales: ReferencePeriodValues;
@@ -259,6 +260,7 @@ export function buildReferenceShapeAnalysis(
       }
       return a.brand!.localeCompare(b.brand!, "zh-CN") || priceBandSortKey(a.priceBand!) - priceBandSortKey(b.priceBand!);
     });
+  const brands = groupRows(products, product => product.brand?.trim() || '—', totals, divisor, undefined, calculationVersion);
   const marginCounts: ReferenceMarginCounts = {
     "优先进入": 0, "建议进入": 0, "谨慎进入": 0, "不建议进入": 0, "—": 0,
   };
@@ -271,6 +273,7 @@ export function buildReferenceShapeAnalysis(
     shapes,
     shapePriceBands,
     brandPriceBands,
+    brands,
     synthesis: {
       linkCount: products.length,
       totalSales: totals,

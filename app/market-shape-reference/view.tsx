@@ -13,7 +13,9 @@ import { ResizeHeader, TOP_SALES_COLUMNS, useReferenceColumnWidths, type TopSale
 import {ReferenceHistoryCoverage} from './history-coverage';
 import {referenceSalesGapReason} from './history-status';
 import {ShapeCatalog,fixedShapeLabels} from './shape-catalog';
-import {SectionFilter,sortSectionRows,type SectionSort} from './section-filter';
+import {SectionFilter,SectionSortButton,sortSectionRows,type SectionSort} from './section-filter';
+import {sortGroupedPriceBands,type SectionSortMetric} from './sorting';
+import {ProductTrend} from './product-trend';
 import { marketSites } from "../../shared/market-sites";
 
 export type { SorftimeCategoryDashboardProduct, SorftimeCategoryDashboardReport } from "./types";
@@ -45,32 +47,6 @@ const year = resolveListingYear;
 const shape = (assignments: Record<string, string>, p: SorftimeCategoryDashboardProduct) => Object.hasOwn(assignments,p.asin)?assignments[p.asin].trim()||"未分类":p.productShape?.trim()||"未分类";
 const periodValue = (p: SorftimeCategoryDashboardProduct, key: Period) => known(p.sales[key]);
 
-function Trend({ product }: { product: SorftimeCategoryDashboardProduct }) {
-  const volume = product.monthlyTrend.volume;
-  const amount = product.monthlyTrend.amount;
-  const months = [...new Set([...volume, ...amount].map(point => point.month))].sort();
-  const max = Math.max(1, ...volume.map(p => known(p.value) ?? 0));
-  const maxAmount = Math.max(1, ...amount.map(p => known(p.value) ?? 0));
-  if (months.length === 1) {
-    const month = months[0], units = volume.find(p => p.month === month)?.value, revenue = amount.find(p => p.month === month)?.value;
-    return <div className="shape-ref-trend shape-ref-trend-single" aria-label={`${product.asin} 月度销量与销售额趋势`} title={`${month}：销量 ${n(units)}；销售额 ${n(revenue, 2)}`}>
-      <small>{month}</small><div>销量 {n(units)}</div><div>销售额 {n(revenue, 2)}</div>
-      <small style={{display:'block',whiteSpace:'normal'}}>仅1个月数据，暂无法判断趋势</small>
-    </div>;
-  }
-  return <div className="shape-ref-trend" aria-label={`${product.asin} 月度销量与销售额趋势`}>
-    {months.length ? <div className="shape-ref-trend-bars">{months.map(month => {
-      const units = volume.find(p => p.month === month)?.value;
-      const revenue = amount.find(p => p.month === month)?.value;
-      return <div key={month} className="shape-ref-trend-pair" title={`${month}：销量 ${n(units)}；销售额 ${n(revenue, 2)}`}>
-        {known(units) === null ? null : <span style={{ height: `${Math.max(2, units! / max * 42)}px`, background: "#2f80ed" }} />}
-        {known(revenue) === null ? null : <span style={{ height: `${Math.max(2, revenue! / maxAmount * 42)}px`, background: "#7a67d8" }} />}
-      </div>;
-    })}</div> : "未知"}
-    <small>蓝：销量　紫：金额</small>
-    <div className="shape-ref-trend-values">{months.slice(-3).map(month => <small key={month}>{month}　{n(volume.find(p => p.month === month)?.value)} / {n(amount.find(p => p.month === month)?.value, 2)}</small>)}</div>
-  </div>;
-}
 
 function MetricBars({ rows }: { rows: { label: string; value: number | null }[] }) {
   const max = Math.max(1, ...rows.map(row => row.value ?? 0));
@@ -81,7 +57,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const catalogId=useId();
   const [localLabels,setLocalLabels]=useState<string[]>([]);
   const [localShape,setLocalShape]=useState<TopSalesMultiSelectFilterState>(null),[localBandShape,setLocalBandShape]=useState<TopSalesMultiSelectFilterState>(null),[localBrand,setLocalBrand]=useState<TopSalesMultiSelectFilterState>(null);
-  const [shapeSort,setShapeSort]=useState<SectionSort>('source'),[bandSort,setBandSort]=useState<SectionSort>('source'),[brandSort,setBrandSort]=useState<SectionSort>('source');
+  const [shapeSort,setShapeSort]=useState<SectionSort>(null),[bandSort,setBandSort]=useState<SectionSort>(null),[brandSort,setBrandSort]=useState<SectionSort>(null);
   const [brand, setBrand] = useState<TopSalesMultiSelectFilterState>(null);
   const [listingYear, setListingYear] = useState<TopSalesMultiSelectFilterState>(null);
   const [priceBand, setPriceBand] = useState<TopSalesMultiSelectFilterState>(null);
@@ -111,7 +87,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     (!marginFilter?.length || marginFilter.includes(marginLabel(p.grossProfitMargin))) &&
     (!query || `${p.asin} ${p.title}`.toLowerCase().includes(query.toLowerCase()))
   ).sort((a, b) => {
-    if (sort === "rank") return a.rank - b.rank;
+    if (sort === "rank") return (a.rank - b.rank) * (descending ? 1 : -1);
     const av = sort === "sales30" ? known(a.monthlySalesVolume) : periodValue(a, sort);
     const bv = sort === "sales30" ? known(b.monthlySalesVolume) : periodValue(b, sort);
     if (av === null) return 1;
@@ -123,7 +99,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const shapeIds=localIds(localShape,p=>shape(assignments,p)),bandIds=localIds(localBandShape,p=>shape(assignments,p)),brandIds=localIds(localBrand,p=>p.brand||'未知');
   const shapeAnalysis=buildReferenceShapeAnalysis(report,assignments,shapeIds),bandAnalysis=buildReferenceShapeAnalysis(report,assignments,bandIds),brandAnalysis=buildReferenceShapeAnalysis(report,assignments,brandIds);
   const shapeConclusion=buildReferenceConclusions(report,assignments,shapeIds).shapeSales,bandConclusion=buildReferenceConclusions(report,assignments,bandIds).shapePrice,brandConclusion=buildReferenceConclusions(report,assignments,brandIds).brandPrice;
-  const yearly=analysis.listingYears,byShape=sortSectionRows(shapeAnalysis.shapes,shapeSort),shapeBands=sortSectionRows(bandAnalysis.shapePriceBands,bandSort),brandBands=sortSectionRows(brandAnalysis.brandPriceBands,brandSort);
+  const yearly=analysis.listingYears,byShape=sortSectionRows(shapeAnalysis.shapes,shapeSort),shapeBands=sortGroupedPriceBands(bandAnalysis.shapePriceBands,bandAnalysis.shapes,bandSort,'shape'),brandBands=sortGroupedPriceBands(brandAnalysis.brandPriceBands,brandAnalysis.brands,brandSort,'brand');
   const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId);
   const labelOptions=[...new Set([...fixedLabels,...catalogLabels,...localLabels,...Object.values(assignments).map(v=>v.trim())])].filter(v=>v&&v!=='未分类');
   const setLabels=(labels:string[])=>{setLocalLabels(labels);onCatalogLabels?.(labels)};
@@ -181,7 +157,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
           <td><input type="checkbox" aria-label={`批量选择 ${p.asin}`} checked={bulkSelected.includes(p.asin)} disabled={disabled} onChange={e => setBulkSelected(e.target.checked ? [...bulkSelected, p.asin] : bulkSelected.filter(asin => asin !== p.asin))} /></td><td>{p.rank}</td>
           <td><div className="traffic-conclusion-product top-sales-product-cell">{p.imageUrl ? <img src={p.imageUrl} alt="" width={48} height={48} /> : null}<div>{amazonDomain ? <a href={`https://www.${amazonDomain}/dp/${p.asin}`} target="_blank" rel="noreferrer">{p.asin} ↗</a> : <strong>{p.asin}</strong>}<small>{p.title}</small></div></div></td>
           <td>{p.brand || "未知"}</td><td>{fixedLabels.length?<select className="shape-annotation-input" aria-label={`${p.asin} 人工形态`} value={assignments[p.asin]??''} disabled={disabled} onChange={e=>onAssignment(p.asin,e.target.value)}><option value="">未分类</option>{fixedLabels.map(label=><option key={label}>{label}</option>)}{assignments[p.asin]?.trim()&&!fixedLabels.includes(assignments[p.asin].trim())&&<option disabled value={assignments[p.asin]}>旧标签待确认：{assignments[p.asin]}</option>}</select>:<input className="shape-annotation-input" placeholder="输入形态" list={catalogId} maxLength={60} onFocus={()=>setEditingAsin(p.asin)} onBlur={()=>setEditingAsin(null)} aria-label={`${p.asin} 人工形态`} value={assignments[p.asin] ?? ""} disabled={disabled} onChange={e => onAssignment(p.asin, e.target.value)} />}{fixedLabels.length>0&&assignments[p.asin]?.trim()&&!fixedLabels.includes(assignments[p.asin].trim())&&<small>旧标签待确认，请选择固定形态</small>}</td>
-          <td><span title={p.onlineDate??undefined}>{parseReferenceListingDate(p.onlineDate).status==='uncertain'?'日期待核实':parseReferenceListingDate(p.onlineDate).status==='known'?`${parseReferenceListingDate(p.onlineDate).year}-${String(parseReferenceListingDate(p.onlineDate).month).padStart(2,'0')}`:'未知'}</span></td><td>{p.grossProfitMargin == null ? "未知" : `${n(p.grossProfitMargin, 1)}%`}</td><td>{marginLabel(p.grossProfitMargin)}</td><td>{n(p.price, 2)}</td><td>{band(p)}</td><td>{n(p.monthlySalesVolume)}</td><td>{n(p.monthlySalesAmount, 2)}</td><td><Trend product={p} /></td>
+          <td><span title={p.onlineDate??undefined}>{parseReferenceListingDate(p.onlineDate).status==='uncertain'?'日期待核实':parseReferenceListingDate(p.onlineDate).status==='known'?`${parseReferenceListingDate(p.onlineDate).year}-${String(parseReferenceListingDate(p.onlineDate).month).padStart(2,'0')}`:'未知'}</span></td><td>{p.grossProfitMargin == null ? "未知" : `${n(p.grossProfitMargin, 1)}%`}</td><td>{marginLabel(p.grossProfitMargin)}</td><td>{n(p.price, 2)}</td><td>{band(p)}</td><td>{n(p.monthlySalesVolume)}</td><td>{n(p.monthlySalesAmount, 2)}</td><td><ProductTrend product={p} currency={`${marketSites.find(site=>site.code===report.marketplace)?.currency??''} `} /></td>
           {periods.map(period => <td key={period.key} title={referenceSalesGapReason(p,period.key,report.calculationVersion)??undefined}>{hasReferencePeriodDateConflict(p,period.key,report.calculationVersion)?'日期冲突':isReferencePeriodBeforeLaunch(p,period.key,report.calculationVersion)?'不适用':n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
         </tr>)}
       </tbody></LaunchTable>
@@ -197,18 +173,18 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
       <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
-      <AggregateTable key={shapeSort} legacy={report.calculationVersion==='shape-reference/1'} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
+      <AggregateTable sort={shapeSort} onSort={setShapeSort} legacy={report.calculationVersion==='shape-reference/1'} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
       <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
-      <ShapePriceBandTable shapes={bandAnalysis.shapes} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
+      <ShapePriceBandTable sort={bandSort} onSort={setBandSort} shapes={sortSectionRows(bandAnalysis.shapes,bandSort)} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
       {bandConclusion.status === "ready" ? <ReferenceShapePriceConclusion result={bandConclusion.result} embedded /> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
       <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
-      <AggregateTable key={brandSort} legacy={report.calculationVersion==='shape-reference/1'} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
+      <AggregateTable sort={brandSort} onSort={setBrandSort} legacy={report.calculationVersion==='shape-reference/1'} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">{conclusions.synthesis.status === "ready" ? "规则结论已生成" : "综合结论待补数据"}</span>}>
@@ -222,19 +198,21 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   </div>;
 }
 
-function AggregateTable({ rows, total, yearBasis = false,legacy=false }: { legacy?:boolean; rows: ReferenceGroupRow[]; total: Record<Period, number | null>; yearBasis?: boolean }) {
-  const [sortKey, setSortKey] = useState<Period | null>(null);
-  const [desc, setDesc] = useState(true);
-  const sorted = [...rows].sort((a, b) => sortKey === null ? 0 : a.sales[sortKey] === null ? 1 : b.sales[sortKey] === null ? -1 : (a.sales[sortKey]! - b.sales[sortKey]!) * (desc ? -1 : 1));
-  const toggle = (key: Period) => { setDesc(sortKey === key ? !desc : true); setSortKey(key); };
-  return <LaunchTable stickyHeader className="shape-price-table"><thead><tr><th>分组</th>{periods.map(p => <th key={p.key}><button type="button" onClick={() => toggle(p.key)}>{p.label}销量 / 已知销量内占比</button></th>)}<th>链接数</th><th>近6个月单链月均</th><th>2025年单链月均</th></tr></thead><tbody>
+function AggregateTable({ rows, total, yearBasis = false,legacy=false,sort,onSort }: { legacy?:boolean; rows: ReferenceGroupRow[]; total: Record<Period, number | null>; yearBasis?: boolean;sort?:SectionSort;onSort?:(sort:SectionSort)=>void }) {
+  const [localSort,setLocalSort]=useState<SectionSort>(null);
+  const currentSort=onSort?sort??null:localSort;
+  const sorted = onSort ? rows : localSort ? sortSectionRows(rows,localSort) : rows;
+  const update=onSort??setLocalSort;
+  const header=(metric:SectionSortMetric,label:string)=><SectionSortButton metric={metric} sort={currentSort} onSort={update}>{label}</SectionSortButton>;
+  return <LaunchTable stickyHeader className="shape-price-table"><thead><tr><th>{header('label','分组')}</th>{periods.map(p => <th key={p.key}>{header(p.key,`${p.label}销量`)} / {header(`${p.key}SharePct`,'已知销量内占比')}</th>)}<th>{header('linkCount','链接数')}</th><th>{header('avgLast6MonthsMonthlyPerLink','近6个月单链月均')}</th><th>{header('avgY2025MonthlyPerLink','2025年单链月均')}</th></tr></thead><tbody>
     {sorted.map(row => <tr key={JSON.stringify([row.shape,row.brand,row.priceBand,row.label])}><th>{row.label}</th>{periods.map(period => <td key={period.key}>{yearBasis && (period.key === "y2024" || period.key === "y2025") && Number(row.label) > Number(period.key.slice(1)) ? "不适用" : <><RowSales row={row} period={period.key}/> / {row.sharePct[period.key]===null?"不可计算":`${n(row.sharePct[period.key],2)}%`}</>}</td>)}<td>{row.linkCount}</td><td>{n(row.avgLast6MonthsMonthlyPerLink, 1)}</td><td>{yearBasis&&Number(row.label)>2025?"不适用":n(row.avgY2025MonthlyPerLink, 1)}</td></tr>)}
     <tr className="shape-price-total-row"><th>合计</th>{periods.map(period => <td key={period.key}>{n(total[period.key])} / {total[period.key] === null || total[period.key]===0 ? "不可计算" : "100%"}</td>)}<td>{rows.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>{total.last6Months === null || !rows.length ? "未知" : n(total.last6Months / rows.reduce((sum, row) => sum + (legacy?row.linkCount:row.coverage.last6Months.known), 0) / 6, 1)}</td><td>—</td></tr>
   </tbody></LaunchTable>;
 }
 
-function ShapePriceBandTable({ shapes, bands, total }: { shapes: ReferenceGroupRow[]; bands: ReferenceGroupRow[]; total: Record<Period, number | null> }) {
-  return <LaunchTable stickyHeader className="shape-price-table shape-price-band-table"><thead><tr><th>商品形态 / 价格带</th>{periods.map(p => <th key={p.key}>{p.label}销量 / 形态内已知销量占比</th>)}<th>链接数</th><th>近6个月单链月均</th><th>2025年单链月均</th></tr></thead><tbody>
+function ShapePriceBandTable({ shapes, bands, total,sort,onSort }: { shapes: ReferenceGroupRow[]; bands: ReferenceGroupRow[]; total: Record<Period, number | null>;sort:SectionSort;onSort:(sort:SectionSort)=>void }) {
+  const header=(metric:SectionSortMetric,label:string)=><SectionSortButton metric={metric} sort={sort} onSort={onSort}>{label}</SectionSortButton>;
+  return <LaunchTable stickyHeader className="shape-price-table shape-price-band-table"><thead><tr><th>{header('label','商品形态 / 价格带')}</th>{periods.map(p => <th key={p.key}>{header(p.key,`${p.label}销量`)} / {header(`${p.key}SharePct`,'形态内已知销量占比')}</th>)}<th>{header('linkCount','链接数')}</th><th>{header('avgLast6MonthsMonthlyPerLink','近6个月单链月均')}</th><th>{header('avgY2025MonthlyPerLink','2025年单链月均')}</th></tr></thead><tbody>
     {shapes.map(shapeRow => <FragmentRows key={shapeRow.label} shape={shapeRow} bands={bands.filter(row => row.shape===shapeRow.label)} />)}
     <tr className="shape-price-total-row"><th>全部形态</th>{periods.map(p => <td key={p.key}>{n(total[p.key])}</td>)}<td>{shapes.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>—</td><td>—</td></tr>
   </tbody></LaunchTable>;

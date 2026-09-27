@@ -105,7 +105,7 @@ test('known aggregate coverage, original editing tools and missing year average 
  value.products.push({...structuredClone(value.products[0]),asin:'B000000002',sales:{last3Months:null,last6Months:null,y2024:null,y2025:null,monthsAvailable:0}});
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{B000000001:'灯 · 层架',B000000002:'灯'}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);
  assert.match(html,/已知销量内占比/);assert.match(html,/可计算 1\/2/);assert.match(html,/批量清除形态/);assert.match(html,/管理形态名称/);assert.match(html,/形态价格带局部筛选/);
- assert.equal((html.match(/2025年单链月均/g)??[]).length,4);
+ assert.equal((html.match(/aria-label="2025年单链月均排序"/g)??[]).length,4);
 });
 
 test('fixed scooter names keep an old label visible without allowing new arbitrary labels',()=>{

@@ -1,4 +1,5 @@
 import {MarketShapeQueryRequestSchema} from './market-shape-query-contracts';
+import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from './market-shape-category-name-contracts';
 import {MarketShapeDraftResponseSchema,MarketShapeDraftSaveRequestSchema} from './market-shape-draft-contracts';
 import {MarketShapeReferenceRevisionRequestSchema,MarketShapeReferenceRevisionResponseSchema} from './market-shape-reference-revision-contracts';
 import {MarketShapeExplanationRunResponseSchema} from './market-shape-explanation-public-contracts';
@@ -1730,6 +1731,7 @@ export const v1Contracts = [
   {method:'POST',path:'/v1/market-analysis/runs/:id/keywords/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordRevisionRequestSchema,response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketKeywordRevisionIdSchema}).strict(),response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/shape-price/query',request:MarketShapeQueryRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/shape-price/resolve-category',request:ShapeCategoryNameRequestSchema,response:ShapeCategoryNameResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/studies/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeStartRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/shape-price/draft',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketShapeDraftResponseSchema,error:ApiErrorResponseSchema},

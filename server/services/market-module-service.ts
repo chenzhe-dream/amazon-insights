@@ -40,6 +40,8 @@ import {PostgresMarketKeywordRevisionStore} from '../db/postgres/market-keyword-
 import {MarketKeywordRevisionIdSchema} from '../../shared/market-keyword-revision-contracts';
 import {canonicalJsonSha256} from '../runtime/model-request-accounting';
 import { MarketNodePathResolutionError, type MarketNodePathResolutionInput } from './market-node-path-resolver';
+import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from '../../shared/market-shape-category-name-contracts';
+import {ShapeCategoryNameError} from './market-shape-category-name';
 
 export class MarketModuleServiceError extends Error {
   constructor(readonly statusCode: 400 | 403 | 404 | 503, message: string) { super(message); }
@@ -51,11 +53,20 @@ const unavailable = () => new MarketModuleServiceError(404, '未找到该组织�
 export class MarketModuleService {
   private readonly snapshots: PostgresMarketAnalysisSnapshotStore;
   private readonly steps: PostgresMarketModuleExecutionStore;
-  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string> }) {
+  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string>; resolveShapeCategoryName?: (input:{marketplace:string;name:string;organizationId:string;jobId:string})=>Promise<string> }) {
     this.snapshots = new PostgresMarketAnalysisSnapshotStore(deps.context); this.steps = new PostgresMarketModuleExecutionStore(deps.context);
   }
   private now() { return (this.deps.now?.() ?? new Date()).toISOString(); }
   private model() { const identity = this.deps.modelIdentity(); if (!identity) throw new MarketModuleServiceError(503, '市场分析模型服务暂不可用，已保存的报告仍可查看'); return identity; }
+  async resolveShapeCategory(actor:MarketExecutionActor,body:unknown){
+    const input=ShapeCategoryNameRequestSchema.parse(body);
+    if(!this.deps.resolveShapeCategoryName)throw new MarketModuleServiceError(503,'Sorftime 类目查询暂不可用');
+    try{return ShapeCategoryNameResponseSchema.parse({nodeId:await this.deps.resolveShapeCategoryName({...input,organizationId:actor.organizationId,jobId:crypto.randomUUID()})});}
+    catch(error){
+      if(error instanceof ShapeCategoryNameError)throw new MarketModuleServiceError(error.reason==='invalid-response'?503:400,error.reason==='empty'?'Sorftime 未找到完全匹配的类目英文名，请输入节点 ID 或核对英文名':error.reason==='ambiguous'?'类目英文名对应多个节点，请输入准确节点 ID':'Sorftime 类目查询响应无效，请稍后重试');
+      throw new MarketModuleServiceError(503,'Sorftime 类目查询暂不可用，请稍后重试');
+    }
+  }
   private async replayModuleStart(actor:MarketExecutionActor,studyId:string,idempotencyKey:string,moduleKind:'shape-price'|'keywords'|'customer-themes',params:unknown){
     const previous=await this.steps.findCreatedModuleRunByCommand({actor,idempotencyKey});if(!previous)return null;
     const publicParams={...obj(previous.params)};delete publicParams.flow;
