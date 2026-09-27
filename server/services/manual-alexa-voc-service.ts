@@ -403,7 +403,7 @@ export class ManualAlexaVocService {
       });
       if (committed) {
         await this.#publishCumulativeVocSnapshotAndWake(repository, {
-        positioningMode: this.#positioningMode,
+          positioningMode: this.#positioningMode,
           actorId: input.principal.userId,
           actorOrganizationId: input.principal.organizationId,
           projectId: trustedProject.id,

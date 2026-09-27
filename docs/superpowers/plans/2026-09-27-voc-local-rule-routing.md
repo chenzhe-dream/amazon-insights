@@ -32,3 +32,13 @@ npx tsx --test tests/agent/voc-local-rules.test.tsx tests/agent/local-rule-repor
 npm run typecheck
 npm run build
 ```
+
+## Verification before release
+
+- Regression initially reproduced the bug: omitted/local mode created positioning jobs (`true !== false`); explicit model behavior passed. After the gate all 6 publication cases passed.
+- 61 normalization/import/publication/local-report tests passed; 104 SQLite/PostgreSQL recovery and queue-safety tests passed. PostgreSQL used disposable Docker test containers, not formal tables.
+- Latest formal release advanced to `15dd3404` during this work. Merged it into the candidate (`975d2bb1`), preserving the other window's export/readiness changes. Re-ran 21 local-rule/browser/export tests, typecheck and production build successfully.
+- Total distinct regression cases: 186. Existing worker test fixture was corrected to give queued jobs their database `startedAt: null`, without changing worker behavior.
+- Actual normal member login opened the affected four-ASIN project's definition and positioning pages. Stable local readiness was confirmed after workspace loading; no model/run/import POSTs, browser errors, or incident data changes. Counts remained 9 job attempts, 9 agent audit rows, 9 snapshots, 0 model reports. Temporary test members were disabled and sessions revoked.
+- The absence of a model report remains historical fact; this fix does not retry or rewrite that failed task. Local rules can use the saved four normalized inputs. No shared timeout configuration changed.
+- Browser fixture verifies waiting/normalization/ready transitions and retained report frame; actual project screenshots are in ignored `test-results/voc-local-routing/`. Release verification will be appended after the managed publish.
