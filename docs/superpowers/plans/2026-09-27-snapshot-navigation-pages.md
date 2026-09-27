@@ -142,11 +142,11 @@ assert.throws(() => resolveSnapshotSelection({
 
 **Consumes:** ResolvedSnapshotSelection、现有冻结来源与共享展示组件。**Produces:** 十个可独立捕获的页面，每个页面一份明确的业务根区域。
 
-- [ ] 编写十页标题、主要表格及缺失状态的失败用例；参数总览合并可选变体，其他页面按映射复用现有展示。
-- [ ] 拆出 VOC 三页、关键词两页，不重算分析规则、不追加历史结果、不增加网络 reader。多个子页共享的来源每次准备只读取一份。
-- [ ] 验证只选一个 VOC/关键词子页面时，不出现其他子页面独有的文本、表格或隐藏载荷。检查页面内所有业务明细仍可原生展开。
-- [ ] 在捕获阶段为非首页页面验证 SVG/canvas 几何及完整月份，装配导航后才隐藏非当前页；校验图片、颜色、字段和规则说明不丢失。
-- [ ] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-snapshot-navigation-pages.test.tsx tests/agent/project-page-snapshot-voc.test.tsx tests/agent/project-page-snapshot-keywords.test.tsx tests/agent/project-page-snapshot-variants.test.tsx`，通过后提交。
+- [x] 编写十页标题、主要表格及缺失状态的失败用例；参数总览合并可选变体，其他页面按映射复用现有展示。
+- [x] 拆出 VOC 三页、关键词两页，不重算分析规则、不追加历史结果、不增加网络 reader。多个子页共享的来源每次准备只读取一份。
+- [x] 验证只选一个 VOC/关键词子页面时，不出现其他子页面独有的文本、表格或隐藏载荷。检查页面内所有业务明细仍可原生展开。
+- [x] 在捕获阶段为非首页页面验证 SVG/canvas 几何及完整月份，装配导航后才隐藏非当前页；校验图片、颜色、字段和规则说明不丢失。
+- [x] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-snapshot-navigation-pages.test.tsx tests/agent/project-page-snapshot-voc.test.tsx tests/agent/project-page-snapshot-keywords.test.tsx tests/agent/project-page-snapshot-variants.test.tsx`，通过后提交。
 
 ### Task 4：悬浮窗页面级勾选与取消边界
 
