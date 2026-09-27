@@ -14,7 +14,7 @@ export const MarketShapeReferenceRevisionRequestSchema=z.object({
  note:z.string().max(500).default(''),
 }).strict().superRefine((v,ctx)=>{
  const selected=new Set(v.selectedAsins);
- if(selected.size!==v.selectedAsins.length||new Set(v.assignments.map(a=>a.asin)).size!==v.assignments.length||v.assignments.some(a=>!selected.has(a.asin)))ctx.addIssue({code:'custom',message:'Manual assignments differ from selected products'});
+ if(selected.size!==v.selectedAsins.length||new Set(v.assignments.map(a=>a.asin)).size!==v.assignments.length)ctx.addIssue({code:'custom',message:'Duplicate manual product assignment'});
 });
 export const MarketShapeReferenceRevisionDataSchema=z.object({
  calculationVersion:z.literal('shape-known-coverage/2').optional(),

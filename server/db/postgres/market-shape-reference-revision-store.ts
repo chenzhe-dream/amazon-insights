@@ -88,7 +88,7 @@ export class PostgresMarketShapeReferenceRevisionStore{
    const latest=(await this.context.query<Row>('SELECT * FROM market_shape_reference_revisions WHERE organization_id=$1 AND run_id=$2 ORDER BY ordinal DESC LIMIT 1',[actor.organizationId,moduleRunId])).rows[0];
    if((latest?.revision_id??null)!==request.expectedParentRevisionId)invalid();
    const {data,binding}=await this.capture(actor,view),available=new Set(data.pool.products.map(p=>p.asin));
-   if(request.selectedAsins.some(asin=>!available.has(asin)))invalid();
+   if(request.selectedAsins.some(asin=>!available.has(asin))||request.assignments.some(item=>!available.has(item.asin)))invalid();
    const createdAt=new Date().toISOString(),ordinal=(latest?.ordinal??0)+1;
    const body={parentRevisionId:request.expectedParentRevisionId,ordinal,createdAt,authorId:actor.userId,selectedAsins:request.selectedAsins,assignments:request.assignments,note:request.note,data};
    const revision=MarketShapeReferenceRevisionSchema.parse({revisionId:`market-shape-revision:${digest(body)}`,...body});

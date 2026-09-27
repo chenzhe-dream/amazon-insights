@@ -35,6 +35,8 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
   app.post('/v1/market-analysis/studies/:id/shape-price',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.startShapes(actor,id(req),req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
   app.get('/v1/market-analysis/runs/:id/shape-explanation',async req=>execute(req,(s,actor)=>s.findShapeExplanation(actor,id(req))));
   app.get('/v1/market-analysis/runs/:id/shape-price',async req=>execute(req,(s,actor)=>s.findShapes(actor,id(req))));
+  app.get('/v1/market-analysis/runs/:id/shape-price/draft',async req=>execute(req,(s,actor)=>s.findShapeDraft(actor,id(req))));
+  app.put('/v1/market-analysis/runs/:id/shape-price/draft',async req=>execute(req,(s,actor)=>s.saveShapeDraft(actor,id(req),req.body,req.headers['idempotency-key'])));
   app.post('/v1/market-analysis/runs/:id/shape-price/revisions',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.saveShapeRevision(actor,id(req),req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
   app.get('/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId',async req=>execute(req,(s,actor)=>{const p=z.object({id:MarketModuleIdSchema,revisionId:MarketShapeRevisionIdSchema}).strict().parse(req.params);return s.shapeRevision(actor,p.id,p.revisionId);}));
   app.post('/v1/market-analysis/studies/:id/overview',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.startOverview(actor,id(req),req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));

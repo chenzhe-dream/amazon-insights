@@ -1,4 +1,5 @@
 import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
+import {PostgresMarketShapeDraftStore} from '../db/postgres/market-shape-draft-store';
 import {queryShapeRun} from './market-shape-query-service';
 import {MarketShapeExplanationRunResponseSchema} from '../../shared/market-shape-explanation-public-contracts';
 import {isMarketShapeExplanationFlow} from '../domain/market-research/shape-explanation-flow';
@@ -196,6 +197,12 @@ export class MarketModuleService {
   }
   async findShapes(actor:MarketExecutionActor,id:string){
     id=MarketModuleIdSchema.parse(id);const result=await readMarketShapeRun(this.deps.context,actor,id);if(!result)throw unavailable();return result;
+  }
+  async findShapeDraft(actor:MarketExecutionActor,id:string){
+    return new PostgresMarketShapeDraftStore(this.deps.context).find({actor,moduleRunId:MarketModuleIdSchema.parse(id)});
+  }
+  async saveShapeDraft(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
+    return new PostgresMarketShapeDraftStore(this.deps.context).save({actor,moduleRunId:MarketModuleIdSchema.parse(id),request:body,idempotencyKey:MarketModuleIdSchema.parse(key)});
   }
   async saveShapeRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);const view=await this.steps.findModuleRun({actor,moduleRunId:id});if(!view||!isMarketShapeFlow(view.run))throw unavailable();

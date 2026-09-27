@@ -12,6 +12,12 @@ import {PostgresMarketShapeReferenceRevisionStore} from '../../server/db/postgre
 import {ConnectorError,type RemoteMcpConnector} from '../../server/connectors/connector-contract';
 import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
 import {toShapeReferenceReport} from '../../app/lib/market-shape-reference-adapter';
+import {MarketShapeReferenceRevisionRequestSchema} from '../../shared/market-shape-reference-revision-contracts';
+
+test('snapshot request may preserve labels on excluded pool products',()=>{
+ const parsed=MarketShapeReferenceRevisionRequestSchema.parse({expectedParentRevisionId:null,selectedAsins:['B000000001'],assignments:[{asin:'B000000001',label:'Floor'},{asin:'B000000002',label:'Saved while excluded'}],note:''});
+ assert.equal(parsed.assignments[1].label,'Saved while excluded');
+});
 
 test('v4 manual revisions freeze source data across newer attempts and enforce actor, parent, and idempotency',{timeout:120000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
