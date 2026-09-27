@@ -166,12 +166,12 @@ assert.throws(() => resolveSnapshotSelection({
 
 **Consumes:** 全部前述任务。**Produces:** 单文件导航、内容完整及安全边界的最终证据。
 
-- [ ] 八种来源全部准备，核验十页在直接打开文件和预览 iframe 中都可逐一访问；第一次打开与默认首页一致。
-- [ ] 对比预览的原始 HTML 与实际下载字节；预览切换页签后再次下载仍同串且来源未重读。新开文件默认首个已选页。
-- [ ] 测试只选一页、部分子页、无数据项目；已选缺失页有说明，未选页不能通过文本搜索/隐藏 DOM 找到独有正文。
-- [ ] 使用已有儿童漂移车、灯具、滑板车保存输入只读回放；对照参数/变体、图册、VOC 三页、关键词两页、定义、清单和流量，检查完整行数及图表。记录体积、首屏高度和准备耗时，不以减少业务内容换取数字改善。
-- [ ] 桌面 1440×1000 与窄屏 390×844，逐页截图；导航不压正文，父子可键盘到达，非当前页不撑高整个报告。打印模式保留所有所选页面的正文。
-- [ ] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-export-download-ui.test.tsx tests/agent/project-snapshot-navigation-file.test.tsx tests/agent/project-page-snapshot.test.tsx`，重跑既有 20 项来源边界测试；检查普通在线导航和共享组件未受影响。通过后提交。
+- [x] 八种来源全部准备，核验十页在直接打开文件和预览 iframe 中都可逐一访问；第一次打开与默认首页一致。
+- [x] 对比预览的原始 HTML 与实际下载字节；预览切换页签后再次下载仍同串且来源未重读。新开文件默认首个已选页。
+- [x] 测试只选一页、部分子页、无数据项目；已选缺失页有说明，未选页不能通过文本搜索/隐藏 DOM 找到独有正文。
+- [x] 使用已有儿童漂移车、灯具、滑板车保存输入只读回放；对照参数/变体、图册、VOC 三页、关键词两页、定义、清单和流量，检查完整行数及图表。记录体积、首屏高度和准备耗时，不以减少业务内容换取数字改善。
+- [x] 桌面 1440×1000 与窄屏 390×844，逐页截图；导航不压正文，父子可键盘到达，非当前页不撑高整个报告。打印模式保留所有所选页面的正文。
+- [x] 运行 `node --import tsx --test --test-concurrency=1 tests/agent/project-export-download-ui.test.tsx tests/agent/project-snapshot-navigation-file.test.tsx tests/agent/project-page-snapshot.test.tsx`，重跑既有 20 项来源边界测试；检查普通在线导航和共享组件未受影响。通过后提交。
 
 来源边界命令：`node --conditions=react-server --import tsx --test tests/agent/project-export-html.test.ts tests/agent/project-export-variants.test.ts tests/agent/project-page-snapshot-sources.test.ts tests/agent/project-page-snapshot-traffic-source.test.ts`。预期全部通过；React 展示测试不带 react-server 条件，避免错误加载服务端专用 React 入口。
 
