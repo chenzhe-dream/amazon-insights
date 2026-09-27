@@ -562,6 +562,7 @@ function createDefaultManualAlexaVocService(
   if (!repository || !("manualAlexaVoc" in repository)) return null;
   try {
     return new ManualAlexaVocService({
+      positioningMode: "local-rules",
       repository: repository as RuntimeAgentRepository & ManualAlexaVocRepositoryCapability,
       cipher: createManualAlexaVocCipher(env),
       normalizationInputCipher: createAlexaVocNormalizationInputCipher(env),

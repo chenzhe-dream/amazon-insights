@@ -112,7 +112,7 @@ after(async () => {
 });
 
 for (const adapter of ["sqlite", "postgres"] as const) {
-  for (const scenario of [
+  for (const [scenario, positioningMode] of ([
     "deadline-isolation",
     "positioning-running",
     "positioning-staggered",
@@ -135,8 +135,12 @@ for (const adapter of ["sqlite", "postgres"] as const) {
     "new-input-pending-publication",
     "cancelled-audit",
     "publication-then-cancelled-audit",
-  ] as const) {
-    test(`${adapter}: ${scenario.includes("cancelled") ? "audit-seeded" : "natural"} two-ASIN ${scenario} recovery`, async (t) => {
+  ] as const).flatMap(scenario => [
+    [scenario, "model"] as const,
+    ...(["publication", "already-committed", "deadline-isolation"].includes(scenario)
+      ? [[scenario, "local-rules"] as const] : []),
+  ])) {
+    test(`${adapter}/${positioningMode}: ${scenario.includes("cancelled") ? "audit-seeded" : "natural"} two-ASIN ${scenario} recovery`, async (t) => {
       const expired = scenario === "expired" || scenario === "pending-at-limit";
       const permanentSibling = scenario === "permanent-sibling-final-attempt";
       const transientRetry =
@@ -159,6 +163,10 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       // is not part of this normalization fixture.
       const repository = concreteRepository as RuntimeAgentRepository;
       t.after(async () => {
+        if (positioningMode === "local-rules") {
+          const stages = await repository.listRunStages(runId);
+          assert.equal(stages.some(stage => stage.stage === "voc-positioning"), false, "normalization and replay must not start model positioning");
+        }
         await concreteRepository.close();
         rmSync(directory, { recursive: true, force: true });
       });
@@ -277,6 +285,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         assert.equal(await repository.expireVocQueue({ runId, checkedAt: now, timeoutMs: 300000 }), 1);
         const calls: string[] = [];
         const runtime = await createAlexaVocNormalizationRuntime({
+          positioningMode,
           repository, config, normalizationInputCipher: cipher,
           provider: { async generateStructured<T>(request: { input: unknown }) {
             calls.push((request.input as { asin: string }).asin);
@@ -559,6 +568,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
       };
       const createRuntime = () =>
         createAlexaVocNormalizationRuntime({
+          positioningMode,
           repository: wrap(repository),
           config: {
             ...config,

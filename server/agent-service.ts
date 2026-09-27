@@ -549,6 +549,7 @@ export async function createAgentService(
               : resolution.config.providerName);
           try {
             normalizationRuntime = await createAlexaVocNormalizationRuntime({
+              positioningMode: "local-rules",
               queueTimeoutMs,
               repository,
               config: resolution.config,
