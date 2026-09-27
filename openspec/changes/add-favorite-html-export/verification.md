@@ -271,3 +271,11 @@
 - 当前正式真实接口只读回放融蜡灯成功，10 页、5931613 字节、预览与下载一致，未触发模型或采集。1870×960 视觉复核：继续滚动 500px 前后导航 top 均为 16；390px 窄屏无整页横向溢出，原宽表使用自身横向滚动。截图制作时外网图片拦截，仅验证布局，不将图片可用性计为通过。
 - 本地成品预览 test-results/export-navigation-preview.html；截图 export-navigation-optimized.png、export-navigation-scrolled.png、export-navigation-mobile.png；日志 export-nav-pinned-green.log、export-nav-preview-check.log、export-nav-build.log。均为忽略产物，未提交真实项目数据。
 - 没有修改正式目录，没有发布。既有已下载 HTML 是固定快照；后续发布后重新导出才会包含本轮样式，旧文件不会自动变化。
+
+### 2026-09-27 导航固定与 UI 优化正式发布
+
+- 用户明确要求发布。重新核对正式基线为 f440f75b82724c8ed3982c5857d19551c5c88c1d，保留另一窗口已发布的 VOC 本地规则路由更新；独立导出分支合并基线无冲突，正式目录只快进到 20f73f56752afd8c621dd3c4e4567a85ee352eb8。相对正式基线，server/shared/scripts/package 无新增差异。
+- 发布前任务数 0；备份 C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/pinned-nav-release-20260927-071330，1242 个业务文件、71 个旧 artifact 文件、配置与发布指针已验证；数据库 dump 21465741 字节，完整解码通过，SHA256 ed04bdd778ebe297cc611cc1e0fcd61533b1ef1ed3b29613d3d817efd2e436ee。
+- 合并后 8 项导航回归、类型检查、OpenSpec strict 通过。受管发布完成构建与切换，artifact bab1fbe07fee25a5896eb7057668a64901a9335ea38a15980e4126388102ec9b。Web/Agent/LAN 健康且源码身份一致；1012 个源码文件除换行符外完全一致，实际下发的 8 个资源哈希与构建一致，业务文件、指针、配置与备份一致。
+- 使用已登录浏览器直测正式环境三轮滑板车1、融蜡灯：预览 iframe 和独立无脚本 HTML 下滚 700px 后导航仍在视口顶端 0–24px 区间；10 页、收起选择、实际下载字节一致、独立文件切页无 API、窄屏确认按钮均通过。页面错误与接口 4xx/5xx 为 0；既有失败/等待输入状态仍如实呈现。
+- 证据：test-results/pinned-nav-formal-release.log、pinned-nav-release-assets.json、pinned-nav-release-online/result.json 与对应截图/HTML，仅存在忽略目录。未重跑采集/模型、未推送远程 Git、未合入 main；正式目录原三项未跟踪候选保留。历史下载文件保持不变，需要重新导出才能使用新导航。
