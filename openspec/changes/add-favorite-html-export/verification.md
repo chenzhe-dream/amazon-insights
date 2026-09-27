@@ -1,5 +1,16 @@
 # 收藏项目 HTML 导出验收记录
 
+## 导航式快照正式发布（2026-09-27，用户追加授权）
+
+- 用户在本地验收完成后明确要求“发布一下我稍后进行测试”。正式基线为 e43c85c19d582018d4b39ec42708a66244587e59；先将该基线合入独立导出分支，保留已发布的市场形态编辑/历史说明修复。另一窗口 shape-original-recovery-20260927 中尚未发布的修改未合入。
+- 正式目录快进至 385163679eff78a827b4b0c08ebb3dc581568fed；相对此前正式版本，生产代码差异仅在 app/project-export。集成后来源边界 22/22、导出及原市场浏览器回归 42/42、类型检查通过。
+- 发布前备份目录：C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/navigation-release-20260927-042128。配置、受管状态、业务发布指针、1209 个业务文件及旧 Web artifact 的71个文件已保存并逐文件校验。可重建图片缓存未重复备份。PostgreSQL custom dump 为21255859字节，完整解码通过（未执行恢复），SHA256为8a9a939726af100091f8ed4a75f777085628883a5e8d816f9baaace9640bcbb1。
+- 使用既有 manage-formal-stack.ps1 -PublishCode 完成构建、活动任务复查和受管服务切换；发布日志已输出正式系统启动完成及目标版本。发布前后活动分析数为0，未取消业务任务。
+- 激活 artifact：db8b1fc9cac4eb92750053a8ef9890936b613a7a4fca95aba9c34524651bef9f；正式 sourceHash：7125faff866e87dc2fcd4f092663f9b31062d969d55809b3489498d322014a72。Web31900、Agent31901和192.168.1.109局域网健康检查均成功，codeSource一致。
+- 999个构建输入文件与候选一致，其中66个只有CRLF/LF差异。8个页面实际引用的JS/CSS均HTTP200且与激活artifact逐字节一致；线上JS已验证包含snapshot-navigation及VOC/关键词子页定义。
+- 发布后1209个业务文件哈希、dataCurrent、streams和formal-stack.env与备份一致。原正式目录3个未跟踪图片候选目录保留。未推送远程Git、未合入main。
+- 线上登录后的实际业务交互留给用户验收；本轮确认了真实上线身份与实际网页资源，并完成本地真实组件/受控接口交互回归，不将健康检查冒充登录验收。
+- 发布与验证证据位于本工作区忽略目录test-results/navigation-formal-release.log、navigation-release-assets.json、navigation-release-source.log、navigation-release-browser.log、navigation-release-typecheck.log。真实业务数据和私有备份未提交Git。
 ## 正式发布（2026-09-27，用户追加授权）
 
 - 正式基线 `949d848217c8fa61d51013169340aa3d30fe3193`；保留其他窗口已经发布的市场模块更新。合并到快照独立分支后，正式代码快进至 `f4646fd6f65f61643f7194a3cbf41a3e5329a30e`。相对原正式版本，server/shared/市场组件无新增变化；另一个窗口尚未发布的候选未合入。
