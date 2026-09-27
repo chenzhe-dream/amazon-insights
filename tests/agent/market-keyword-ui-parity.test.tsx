@@ -22,6 +22,15 @@ test('keyword query preserves site chips and core-name entry with supported mark
  assert.doesNotMatch(html,/<button[^>]*disabled=""[^>]*>英国站<\/button>/);
 });
 
+test('empty keyword reports keep every report area without claiming zero demand or completed classification',()=>{
+ const facts=keywordPageRun().run.facts!;facts.members=[];
+ for(const emptyReason of ['关键词采集失败：来源或模型数据校验未通过。','关键词仍在采集中。','来源本次未返回关键词。']){
+  const html=renderToStaticMarkup(<MarketKeywordFactsReport facts={facts} semanticSkipped emptyReason={emptyReason}/>);
+  for(const label of ['分析未生成','五维综合结论','W1 产品','W2 人群','W3 场景','W4 功能属性','W5 需求变化','需求簇合成',emptyReason])assert.ok(html.includes(label),label);
+  assert.ok(!html.includes('已识别 0 个需求簇'));assert.ok(!html.includes('月搜索量合计 0'));assert.ok(!html.includes('规则自动分类'));
+ }
+});
+
 test('independent keyword category is visible before optional collection settings', () => {
  const html=renderToStaticMarkup(<MarketKeywordSection selection={{nodeIdPath:'',fromMonth:'2026-07',toMonth:'2026-08'}} onSelectionChange={()=>{}} maxMonth="2026-08"/>);
  const query=html.slice(0,html.indexOf('market-insights-query-options'));

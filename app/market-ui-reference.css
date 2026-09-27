@@ -3304,3 +3304,12 @@
 .market-ui-reference .brand-price-limitations ul{margin:4px 0 0;padding-left:16px}
 .market-ui-reference .brand-price-opportunity-card .market-structure-dimension-list li{font-size:12px;line-height:1.65}
 @media(min-width:1100px){.market-ui-reference .brand-price-opportunity-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Keep the keyword action separate from the input prefix. */
+.market-ui-reference .st-product-keyword-query .keyword-query-help{margin:8px 0 0 100px;color:#655780;font-size:13px;line-height:1.6}
+.market-ui-reference .st-product-keyword-query .keyword-query-submit-row{display:flex;align-items:center;gap:16px;margin-top:20px;padding-top:16px;border-top:1px solid #e6ddf5}
+.market-ui-reference .st-product-keyword-query .keyword-query-submit{min-width:176px;min-height:44px;padding:10px 24px;border:1px solid #6d28d9;border-radius:8px;background:#6d28d9;color:#fff;font-size:15px;font-weight:700;box-shadow:0 3px 8px #6d28d926;cursor:pointer}
+.market-ui-reference .st-product-keyword-query .keyword-query-submit:hover{background:#5b21b6}
+.market-ui-reference .st-product-keyword-query .keyword-query-submit:focus-visible{outline:3px solid #a78bfa;outline-offset:3px}
+.market-ui-reference .st-product-keyword-query fieldset:disabled .keyword-query-submit{opacity:.65;cursor:wait}
+.market-ui-reference .st-product-keyword-query .keyword-query-submit-row>span{font-size:13px;color:#64748b}
