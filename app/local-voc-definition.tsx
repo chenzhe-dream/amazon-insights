@@ -12,6 +12,7 @@ import type { LaunchProductInput, ProductLaunchRuntimeSources } from "./product-
 import { saveLocalRuleReport, readLocalRuleReports } from "./lib/local-rule-report-browser";
 import type { LocalRuleReport } from "../shared/local-rule-report";
 import { AnalysisRuleExplanation } from "./analysis-rule-explanation";
+import { vocNormalizationFailureMessage } from "./lib/voc-normalization-message";
 
 export function selectLocalVocSources(products: LaunchProductInput[], sources: ProductLaunchRuntimeSources, reviewFallback: boolean): ProductLaunchRuntimeSources {
   const manualVocByAsin = Object.fromEntries(products.map(p => [p.asin, sources.manualVocByAsin[p.asin]]));
@@ -67,11 +68,10 @@ export function LocalVocDefinition({products, sources, enabled, initialSelectedA
       try {
         const status = await readAlexaVocNormalizationStatuses({projectId,runId:baseSyncRunId,asins:selected,signal:controller.signal});
         const blocked: string[] = [];
-        let error: string | null = null;
+        const error = vocNormalizationFailureMessage(status.records);
         for (const record of status.records) {
           if (record.status !== "success") {
             blocked.push(record.asin);
-            if (record.status === "failure") error = "VOC 格式规范化失败，请回到手工输入处检查或重试。";
           } else if (!delivered.has(`${record.asin}:${record.fingerprint}:${record.revision}`)) {
             const result = await pollAlexaVocNormalizationOnce({projectId,runId:baseSyncRunId,asin:record.asin,fingerprint:record.fingerprint,signal:controller.signal});
             if (result.phase === "done" && !controller.signal.aborted) {

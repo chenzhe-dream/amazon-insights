@@ -181,3 +181,12 @@ The downloaded artifact SHALL remain one HTML file with embedded styles and comp
 - **WHEN** all permitted pages are selected
 - **THEN** all ten pages remain in the one file but only one is visible during normal reading
 - **AND** print styling hides navigation and exposes all selected page bodies without adding unselected content or claiming reduced file size
+
+#### Scenario: Failed or pending VOC normalization
+- **WHEN** the original definition page is waiting for the current project's VOC normalization or persistence
+- **THEN** the snapshot SHALL preserve that waiting/failure state and safe Chinese reason instead of rendering a completed definition; it SHALL validate ASIN scope and saved revision through read-only existing endpoints, and SHALL NOT retry model work or fabricate missing catalog data
+- **AND** failure to read the status SHALL block preparation, while a known terminal failure may be exported as an explicit state
+
+#### Scenario: Preview workspace scrolling
+- **WHEN** the export modal is opened on a desktop or narrow viewport
+- **THEN** header and confirmation actions remain reachable, the outer body SHALL NOT add a second vertical report scrollbar, and the user MAY collapse page selection without changing the prepared HTML or chosen pages

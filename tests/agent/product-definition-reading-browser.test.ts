@@ -57,6 +57,8 @@ test('concise conclusions and complete qualifications coexist with keyboard expa
     assert.ok((await part.innerText()).includes('Perfect addition'));
     await part.getByRole('button',{name:'收起 ▴',exact:true}).first().click();
   }
+  assert.equal(await section(7).locator('tbody tr').count(),2);
+  assert.match(await section(7).innerText(),/另一个候选的独立依据/);
   assert.equal(await section(7).locator('tbody td').last().locator('.definition-inline-copy').count(),0);
   await mkdir('.superpowers/sdd/product-definition-reading',{recursive:true});
   await table.locator('.launch-table-wrap').evaluate(node=>{node.scrollTop=0;});

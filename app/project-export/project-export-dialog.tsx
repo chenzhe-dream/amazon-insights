@@ -18,6 +18,8 @@ export function ProjectExportDialog({ project, visibleModules, identity, onClose
 }) {
   const titleId = useId();
   const unavailableId = useId();
+  const selectionId = useId();
+  const [showSelection, setShowSelection] = useState(true);
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const groups = visibleSnapshotNavigation(visibleModules);
@@ -40,17 +42,21 @@ export function ProjectExportDialog({ project, visibleModules, identity, onClose
         aria-describedby={unavailableId} className={styles.dialog}>
         <header className={styles.header}>
           <div><h2 id={titleId}>导出预览</h2><p>{project.name} · {project.marketplace} · {project.asins.length} 个 ASIN</p></div>
-          <button ref={closeRef} type="button" aria-label="关闭导出预览" className={styles.close} onClick={onClose}>×</button>
+          <div className={styles.headerActions}>
+            <button type="button" className={styles.secondary} aria-expanded={showSelection} aria-controls={selectionId}
+              onClick={() => setShowSelection(value => !value)}>{showSelection ? '收起页面选择' : '展开页面选择'}</button>
+            <button ref={closeRef} type="button" aria-label="关闭导出预览" className={styles.close} onClick={onClose}>×</button>
+          </div>
         </header>
-        <div className={styles.body}>
+        <div className={styles.body} data-export-dialog-body>
           <p id={unavailableId} className={styles.notice}>{!identity ? "报告数据与导出服务尚未接入，暂不能生成 HTML。"
             : prepared.preparing ? "正在准备所选页面的已有内容…" : "HTML 快照保留本次预览内容，图片使用在线地址。"}</p>
           {(prepared.result?.kind === "error" || prepared.confirmation?.kind === "error") ? <div role="alert" className={styles.notice}>
             <p>{prepared.result?.kind === "error" ? prepared.result.message : prepared.confirmation?.message}</p>
             <button type="button" className={styles.secondary} onClick={prepared.retry}>重试读取</button>
           </div> : null}
-          <div className={styles.columns}>
-            <div className={styles.modules} aria-label="勾选导出页面">
+          <div className={styles.columns} data-selection-visible={showSelection}>
+            <div id={selectionId} className={styles.modules} aria-label="勾选导出页面" hidden={!showSelection}>
               <h3>勾选导出页面</h3>
               {groups.map(group => {
                 const selectedCount = group.pages.filter(page => pageIds.includes(page.id)).length;
