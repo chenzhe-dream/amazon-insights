@@ -6,10 +6,11 @@ import { localAgentFetch, localAgentErrorMessage } from "../lib/local-agent-brow
 import { readWebSession } from "../lib/web-auth-session";
 import type { CurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
 import { connectedExportModules, visibleExportSections, type ExportSectionId } from "./module-catalog";
+import type { SnapshotSelection } from "./snapshot-navigation-catalog";
 
 export type ExportIdentity = Readonly<{ sessionIdentity: string; organizationId: string }>;
 export type ExportRequest = ExportIdentity & Readonly<{
-  libraryProjectId: string; moduleIds: readonly ExportSectionId[]; signal: AbortSignal;
+  libraryProjectId: string; moduleIds: readonly ExportSectionId[]; selection?: SnapshotSelection; signal: AbortSignal;
 }>;
 export type PreparedProjectExport = Readonly<{
   sourceProjectId: string;

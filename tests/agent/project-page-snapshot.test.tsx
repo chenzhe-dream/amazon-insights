@@ -34,7 +34,7 @@ test('original matrix and downloaded snapshot retain the same business cells and
     const rows=[...mount.querySelectorAll('tbody tr')];
     const cells=rows.filter(row=>['当前售价','产品规格'].includes(row.querySelector('th')!.textContent!.split('Features')[0]));
     const original=cells.map(row=>[row.textContent,getComputedStyle(row.querySelector('td')!).fontSize,getComputedStyle(row.querySelector('td')!).borderBottomColor,getComputedStyle(row.querySelector('td')!).fontFamily]);
-    const html=await renderPageSnapshot({project:{id:'test',name:'灯具',marketplace:'US',asins:['B012345678']},sourceProjectId:'test',capturedAt:'2026-09-26T08:00:00Z',sourceLabel:'已保存报告',moduleIds:['competitor-overview'],overview:props},new AbortController().signal);
+    const html=await renderPageSnapshot({project:{id:'test',name:'灯具',marketplace:'US',asins:['B012345678']},sourceProjectId:'test',capturedAt:'2026-09-26T08:00:00Z',sourceLabel:'已保存报告',selection:{pageIds:['overview'],moduleIds:['competitor-overview'],includeVariants:false},moduleIds:['competitor-overview'],overview:props},new AbortController().signal);
     root.unmount();mount.remove();return {original,html};
   });
   assert.deepEqual(api,[]);
@@ -150,7 +150,7 @@ test('cancelled preparation leaves no hidden host', async t => {
     const {renderPageSnapshot}=await import(/* @vite-ignore */ '/app/project-export/'+'page-snapshot-host.tsx');
     const style=document.createElement('style');style.textContent='.card{color:rgb(20,30,40)}';document.head.append(style);
     const controller=new AbortController();controller.abort(new Error('用户已取消'));
-    let message='';try{await renderPageSnapshot({project:{id:'x',name:'x',marketplace:'US',asins:[]},sourceProjectId:'x',capturedAt:new Date().toISOString(),sourceLabel:'已有数据',moduleIds:['competitor-overview'],overview:null},controller.signal);}catch(e){message=String(e);}
+    let message='';try{await renderPageSnapshot({project:{id:'x',name:'x',marketplace:'US',asins:[]},sourceProjectId:'x',capturedAt:new Date().toISOString(),sourceLabel:'已有数据',selection:{pageIds:['overview'],moduleIds:['competitor-overview'],includeVariants:false},moduleIds:['competitor-overview'],overview:null},controller.signal);}catch(e){message=String(e);}
     return {message,hosts:document.querySelectorAll('[aria-hidden="true"]').length};
   });
   assert.match(result.message,/用户已取消/);assert.equal(result.hosts,0);

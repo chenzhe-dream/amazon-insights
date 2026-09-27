@@ -2,22 +2,21 @@ import {KeywordDemandSection} from "../keyword-demand-section";
 import type {KeywordsSnapshotSources} from "./read-page-snapshot-keywords";
 
 /** The published page's two keyword areas, with native disclosures for the static snapshot. */
-export function PageSnapshotKeywords(props: KeywordsSnapshotSources) {
+export function PageSnapshotKeywords({page, ...props}: KeywordsSnapshotSources & {page: "keyword-analysis" | "keyword-insight"}) {
   return <div className="page-content compare-page snapshot-keywords">
-    <details className="snapshot-keywords-tab" open>
-      <summary className="card section-head"><h2>竞品关键词分析</h2></summary>
+    {page === "keyword-analysis" ? <>
+      <div className="card section-head"><h2>竞品关键词分析</h2></div>
       <div className="snapshot-keywords-tab-content" style={{marginTop:16}}>
         <KeywordDemandSection products={props.products} mode="analysis" sources={props.sources}
           analysisScope={props.analysisScope} snapshotMeta={props.sourceMeta}/>
       </div>
-    </details>
-    <details className="snapshot-keywords-tab">
-      <summary className="card section-head"><h2>关键词洞察</h2></summary>
+    </> : <>
+      <div className="card section-head"><h2>关键词洞察</h2></div>
       <div className="snapshot-keywords-tab-content" style={{marginTop:16}}>
         <KeywordDemandSection products={props.products} mode="insight" sources={props.sources}
           analysisScope={props.analysisScope} snapshotMeta={props.sourceMeta}/>
       </div>
-    </details>
+    </>}
     <details className="snapshot-keywords-sources">
       <summary>已发布关键词来源</summary>
       <ul>{props.sourceRows.map(row => <li key={row.asin}>
