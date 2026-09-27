@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright';
 
 test('each market module keeps its own category through navigation and refresh', { timeout: 90_000 }, async t => {
-  const server = await createServer({ configFile: false, define: { 'process.env': '{}' }, plugins: [react()], server: { host: '127.0.0.1', port: 0, hmr: false } });
+  const server = await createServer({ configFile: false, define: { 'process.env': '{}' }, plugins: [react()], server: { host: '127.0.0.1', port: 0, hmr: false, forwardConsole: false } });
   await server.listen();
   const browser = await chromium.launch({ headless: true });
   t.after(async () => { await browser.close(); await server.close(); });
@@ -97,7 +97,7 @@ test('each market module keeps its own category through navigation and refresh',
 });
 
 test('controlled sidebar navigation also keeps overview and shape inputs separate', { timeout: 60_000 }, async t => {
-  const server = await createServer({ configFile: false, define: { 'process.env': '{}' }, plugins: [react()], server: { host: '127.0.0.1', port: 0, hmr: false } });
+  const server = await createServer({ configFile: false, define: { 'process.env': '{}' }, plugins: [react()], server: { host: '127.0.0.1', port: 0, hmr: false, forwardConsole: false } });
   await server.listen();
   const browser = await chromium.launch({ headless: true });
   t.after(async () => { await browser.close(); await server.close(); });

@@ -1,3 +1,4 @@
+@import "react-datepicker/dist/react-datepicker.css";
 /* Shape-only adaptations of the supplied query, dashboard and report layout. */
 .market-shape-reference { display: grid; gap: 20px; min-width: 0; }
 .market-shape-reference > * { min-width: 0; }
@@ -120,3 +121,21 @@
 .shape-ref-trend-popover p { margin: 8px 0 0; font-size: 9px; color: #9aa6b4; }
 .market-shape-reference-view .shape-section-sort { display: inline; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .market-shape-reference-view .shape-section-sort:focus-visible { outline: 2px solid #2f80ed; outline-offset: 2px; }
+
+/* Month selection is handled by react-datepicker, scoped to this query UI. */
+.market-shape-reference .shape-month-field { display: inline-flex; align-items: center; gap: 6px; }
+.market-shape-reference .shape-month-field input { width: 112px; height: 34px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; color: #233653; padding: 6px 10px; }
+.market-shape-reference .shape-month-field input:focus { outline: 2px solid #9c7bff; outline-offset: 1px; }
+.shape-month-popper { z-index: 50; }
+.shape-month-calendar.react-datepicker { width: 268px; max-width: calc(100vw - 24px); border: 1px solid #d7deed; border-radius: 10px; font-family: inherit; box-shadow: 0 8px 24px #26365a26; overflow: hidden; }
+.shape-month-calendar .react-datepicker__month-container { float: none; width: 100%; }
+.shape-month-calendar .react-datepicker__header { background: #f6f2ff; border-color: #e5ddfa; padding: 10px; }
+.shape-month-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.shape-month-header button { width: 30px; height: 30px; border: 1px solid #e5ddfa; background: white; border-radius: 6px; font-size: 20px; cursor: pointer; }
+.shape-month-header button:disabled { opacity: .35; cursor: default; }
+.shape-month-header select { height: 32px; padding: 4px 12px; border: 1px solid #d7cafa; border-radius: 6px; background: white; color: #44316d; font: inherit; font-size: 14px; }
+.shape-month-calendar .react-datepicker__month { margin: 10px; }
+.shape-month-calendar .react-datepicker__month-text { width: 72px; padding: 10px 0; margin: 3px; border-radius: 6px; font-size: 13px; }
+.shape-month-calendar .react-datepicker__month-text--selected,
+.shape-month-calendar .react-datepicker__month-text--keyboard-selected { background: #7852da; color: white; }
+.shape-month-calendar .react-datepicker__month-text--disabled { color: #b9c0cc; }

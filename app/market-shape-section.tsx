@@ -1,6 +1,7 @@
 'use client';
 import {shapePollingDelay} from './lib/market-shape-polling';
 import {MarketShapeReferencePanel} from './market-shape-reference-panel';
+import {MarketShapeMonthPicker} from './market-shape-month-picker';
 import {MarketShapeCategoryDashboard} from './market-shape-category-dashboard';
 
 import { browserRequestId } from "./lib/browser-request-id";
@@ -195,7 +196,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
   <form onSubmit={e => void start(e)}>
    <div className="ss-market-query-row"><span className="ss-market-query-label">选择站点</span><MarketSiteSelector value={selection.marketplace??'US'} onChange={marketplace=>onSelectionChange({marketplace,nodeIdPath:''})} disabled={queryLocked}/></div>
    <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={queryLocked}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!/^\d+(?::\d+)*$/.test(selection.nodeIdPath.trim())} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID 或英文名，例如 Floor Lamps" required disabled={queryLocked}/></div></div>
-    <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><label>起始月 <input type="month" value={selection.fromMonth} max={selection.toMonth} onChange={e=>onSelectionChange({fromMonth:e.target.value})} required disabled={queryLocked}/></label><label>结束月 <input type="month" value={selection.toMonth} max={maxMonth} onChange={e=>onSelectionChange({toMonth:e.target.value})} required disabled={queryLocked}/></label></div>
+    <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><MarketShapeMonthPicker label="起始月" value={selection.fromMonth} max={selection.toMonth} onChange={fromMonth=>onSelectionChange({fromMonth})} disabled={queryLocked}/><MarketShapeMonthPicker label="结束月" value={selection.toMonth} max={maxMonth} onChange={toMonth=>onSelectionChange({toMonth})} disabled={queryLocked}/></div>
     <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={300} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={queryLocked}/></label></details>
     <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={queryLocked}>{busy?'提交中…':queryLocked?'正在采集':'筛选市场'}</button><button className="ghost-btn" type="button" disabled={queryLocked||!selection.nodeIdPath} onClick={()=>void start(undefined,poolSize,selection,true)}>重新采集</button><button className="ss-market-reset-btn" type="button" disabled={queryLocked} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);}}>重置条件</button></div>
    </div></form>
