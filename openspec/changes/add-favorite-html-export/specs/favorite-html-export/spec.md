@@ -136,3 +136,48 @@ The system SHALL download one UTF-8 HTML file directly from the browser, contain
 #### Scenario: Download confirmation
 - **WHEN** the user confirms an eligible prepared report
 - **THEN** the browser initiates a file download using the preview HTML and does not require a server-side export job or stored file
+
+### Requirement: Hierarchical snapshot navigation
+The system SHALL provide six top-level export navigation entries matching the application business hierarchy: competitor overview, VOC, keyword research, product definition, launch checklist and competitor traffic. They SHALL expose ten selectable content pages: overview, images, voc-summary, voc-insight, voc-positioning, keyword-analysis, keyword-insight, definition, checklist and traffic. Market research, favorites and administration, including their navigation children, SHALL NOT be exported. The original visual palette, icons, labels and hierarchy SHALL be retained without mounting application routes.
+
+#### Scenario: VOC and keyword child pages
+- **WHEN** a user opens VOC or keyword research in the exported file
+- **THEN** the navigation exposes all selected original child pages individually and displays exactly one current page
+- **AND** original outer disclosure wrappers that simulated tabs MAY become page boundaries, while in-page evidence, rules, full text and complete records remain available
+
+#### Scenario: Overview variants
+- **WHEN** overview is selected with its includeVariants content option enabled
+- **THEN** existing variant and order content remains within the overview page at its original position, without adding an invented navigation page
+- **AND** disabling that option excludes its reader and body; when overview is absent the option has no effect
+
+#### Scenario: Selected page with no data
+- **WHEN** a permitted selected child page has no available result
+- **THEN** it remains a navigable page showing an explicit missing state instead of disappearing or generating analysis
+
+### Requirement: Page selection is distinct from reading navigation
+The modal SHALL support parent and child page selection, including partial parent state, and SHALL show only permitted entries. A navigation group without selected children SHALL be absent from the prepared file. Preparing and confirming a snapshot SHALL include exact page selection and includeVariants in its identity, in addition to the existing session and project scope. Shared source dependencies SHALL NOT cause an unselected page body or payload to be serialized.
+
+#### Scenario: Switch between pages sharing a reader
+- **WHEN** export selection changes from voc-summary to voc-insight while both depend on the voc reader
+- **THEN** old preparation and confirmation results become invalid, and only the newly selected page body is prepared
+
+#### Scenario: Browse an already prepared page
+- **WHEN** the recipient switches the visible page or expands its evidence
+- **THEN** only local display state changes, with no source reads, model calls, new analysis or selection changes
+- **AND** download still uses the original prepared HTML, opening at the first selected page in canonical navigation order
+
+### Requirement: Script-free multipage presentation
+The downloaded artifact SHALL remain one HTML file with embedded styles and complete selected business content. Its controlled navigation SHALL work through native HTML and CSS while script-src and connect-src remain none and the preview retains an empty iframe sandbox. Only trusted navigation controls constructed after body sanitization MAY remain interactive; imported controls, event handlers and application scripts SHALL remain blocked.
+
+#### Scenario: Noninitial page charts
+- **WHEN** a selected page is not the first visible page
+- **THEN** capture SHALL still render its charts with measurable geometry before final navigation hides it, and switching to it SHALL reveal readable charts and all existing detail rows
+
+#### Scenario: Desktop and narrow screen
+- **WHEN** the file is opened at desktop or narrow viewport widths
+- **THEN** the selected page is readable with scoped navigation, keyboard-reachable controls and working table scrolling; child menus SHALL NOT require hover
+
+#### Scenario: Full file and print
+- **WHEN** all permitted pages are selected
+- **THEN** all ten pages remain in the one file but only one is visible during normal reading
+- **AND** print styling hides navigation and exposes all selected page bodies without adding unselected content or claiming reduced file size
