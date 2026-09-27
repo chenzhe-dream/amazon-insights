@@ -1,6 +1,6 @@
 # HTML 快照一级导航与子页面实施计划
 
-> **For agentic workers:** 使用 executing-plans 按任务执行；每项先验证再提交。当前状态：待用户审核，禁止开始实现。当前授权仅限计划文件；实施批准不自动包含正式发布。
+> **For agentic workers:** 用户 2026-09-27 已确认父子勾选含义并批准执行。使用 executing-plans / subagent-driven-development 按任务执行，每项先验证再提交；本次实施不包含正式发布。
 
 **Goal:** 在一个 HTML 文件内还原原系统的六个一级导航和十个内容页面，按子页面切换阅读，预览和下载一致。
 
@@ -107,10 +107,10 @@ function renderSnapshotNavigation(pages: readonly SnapshotPageMarkup[]): string;
 
 **Consumes:** 真实十页映射、原 ExportSectionId 和 ModuleKey。**Produces:** SnapshotSelection、ResolvedSnapshotSelection、resolveSnapshotSelection 及唯一目录。
 
-- [ ] 写失败用例：一级入口六个、叶子十个；没有 market/projects/admin；overview 默认映射 overview+variants，两种关键词页面共用一个 keywords 来源。
-- [ ] 写边界用例：只选 voc-insight 时页列表不含 summary/positioning；未知或不可见页面拒绝；去重排序；没有 overview 时 includeVariants=false；空选项不制造默认内容。
-- [ ] 运行 `node --import tsx --test tests/agent/project-snapshot-navigation-catalog.test.ts`，先观察新契约缺失失败，再实现上述纯函数并通过。
-- [ ] 核对源码实际菜单标签/顺序的对照断言，防止漏页；提交目录和测试。
+- [x] 写失败用例：一级入口六个、叶子十个；没有 market/projects/admin；overview 默认映射 overview+variants，两种关键词页面共用一个 keywords 来源。
+- [x] 写边界用例：只选 voc-insight 时页列表不含 summary/positioning；未知或不可见页面拒绝；去重排序；没有 overview 时 includeVariants=false；空选项不制造默认内容。
+- [x] 运行 `node --import tsx --test tests/agent/project-snapshot-navigation-catalog.test.ts`，先观察新契约缺失失败，再实现上述纯函数并通过。
+- [x] 核对源码实际菜单标签/顺序的对照断言，防止漏页；提交目录和测试。
 
 核心断言（测试中导入 Task 1 的 resolveSnapshotSelection 与 node:assert/strict）：
 
