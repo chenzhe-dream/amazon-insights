@@ -371,8 +371,8 @@ export function LocalProductDefinitionSection({ products, sources, savedAnalysis
                 </tr>
               </thead>
               <tbody>
-                {report.priorityRows.map(row => (
-                  <tr key={`${row.priority}-${row.direction}`}>
+            {report.priorityRows.map((row, index) => (
+              <tr key={`${row.priority}-${row.direction}-${index}`}>
                     <th>
                       <PriorityChip priority={row.priority} />
                     </th>

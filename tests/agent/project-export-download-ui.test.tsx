@@ -134,3 +134,24 @@ test("all ten pages prepare and download together; deselected pages are absent f
   const file=await downloaded;const path=resolve("test-results","all-modules-snapshot.html");await file.saveAs(path);
   assert.deepEqual(await readFile(path),Buffer.from(reduced,"utf8"));assert.deepEqual(state.writes,[]);
 });
+
+test("preview uses available viewport without outer scrolling and page selection can be collapsed",async t=>{
+  const {page}=await fixture(t);
+  await page.setViewportSize({width:1440,height:900});
+  const d=page.getByRole('dialog',{name:'导出预览'});
+  const iframe=d.locator('iframe');await iframe.waitFor();
+  const box=await d.boundingBox();assert.ok(box&&box.width>1350,'wide report workspace');
+  const body=d.locator('[data-export-dialog-body]');
+  assert.equal(await body.evaluate(e=>getComputedStyle(e).overflowY),'hidden');
+  const before=(await iframe.boundingBox())!.width;
+  await d.getByRole('button',{name:'收起页面选择'}).click();
+  assert.ok((await iframe.boundingBox())!.width>before+180);
+  assert.equal(await d.locator('[aria-label="勾选导出页面"]').isVisible(),false);
+  await d.getByRole('button',{name:'展开页面选择'}).click();
+  assert.equal(await d.getByRole('checkbox',{name:'竞品概览',exact:true}).isChecked(),true);
+  await page.setViewportSize({width:390,height:844});
+  const small=await d.boundingBox();assert.ok(small&&small.width<=390&&small.height<=844);
+  await d.getByRole('button',{name:'收起页面选择'}).click();
+  assert.ok((await iframe.boundingBox())!.height>400);
+  assert.equal(await d.getByRole('button',{name:'确认并开始导出'}).isVisible(),true);
+});

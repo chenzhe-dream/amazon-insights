@@ -25,6 +25,7 @@ report.featureLayers.notInV1=[{item:'缺乏来源支持的新增功能暂不进�
 report.featureLayers.p0Avoid=[{item:'禁止将关键词年龄直接作为商品适龄',evidence:'以商品说明、使用条件和可靠测试为准'}];
 report.keywordGroups=[{type:'场景词',keywords:'living room decor; candle warmer lamp; office decor; '.repeat(10),productLink:'围绕已有装饰场景验证使用体验；不能单凭搜索词认定浴室适用',listingAngle:'描述已有使用场景；不要承诺未经验证的配置',skuHint:'适用条件待核对'}];
 report.priorityRows=[{priority:'P1',direction:'装饰体验',evidence:original,businessImpact:'改善体验',action:'产品：优化底座；包装：调整内衬；运营：核对图文；质检：复测稳定性；验收：记录实测结果',acceptance:'验收条件必须明确；核对实测结果后确认；记录稳定性和温升；没有实测数据时不得标记通过。'}];
+report.priorityRows.push({...report.priorityRows[0],evidence:'另一个候选的独立依据',action:'单独验证第二个候选',acceptance:'保留独立验收条件'});
 report.risks=['搜索人群不等于商品适龄；使用边界需核对商品说明，不能跨产品借用结论。','浴室环境适用性待验证；禁止在证据不足时扩展为防水功能。'];
 report.nextValidations=['先核对输入及来源；再对当前商品验证结构；按候选自己的依据确认功能。','补充验收条件；记录测试方法与结果；核对后再决定开发范围。'];
 createRoot(document.getElementById('root')!).render(<div style={{padding:24,maxWidth:1540,margin:'auto'}}><p>本地测试样例 · 非真实分析结论</p><LocalProductDefinitionSection products={[]} sources={sources} savedReport={report}/></div>);

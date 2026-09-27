@@ -115,3 +115,39 @@ test("no published version stays pending; wrong site, duplicate product and mism
   await assert.rejects(readPageSnapshotDefinition(duplicate,reader().read),/来源重复/);
   await assert.rejects(readPageSnapshotDefinition(context(),reader([{...manual,asin:"B000000099"}]).read),/来源范围/);
 });
+
+test("definition snapshot preserves failed normalization instead of presenting a completed result", async () => {
+  const ctx={...context(),currentRunId:"run"};
+  const calls:string[]=[];
+  const data=await readPageSnapshotDefinition(ctx,async path=>{
+    calls.push(path);
+    if(path.startsWith('/api/alexa-voc/pending?'))return Response.json({records:[{asin,fingerprint:'a'.repeat(64),status:'failure',revision:null,error:'timeout'}]});
+    return reader().read(path);
+  });
+  const html=render(data);
+  assert.match(html,/VOC 格式规范化失败/);
+  assert.match(html,/请求超时/);
+  assert.match(html,/B000000001/);
+  assert.match(html,/当前等待输入/);
+  assert.doesNotMatch(html,/4\. 最终产品定义表/);
+  assert.ok(calls.some(path=>path.includes('runId=run')));
+  assert.ok(data.analysisInputs,'saved inputs remain available, only result presentation is gated');
+});
+
+test("pending, unapplied revision, changed state, cross-ASIN status and transport failures are distinguished", async () => {
+  const withState=(records:unknown[])=>async(path:string)=>path.startsWith('/api/alexa-voc/pending?')?Response.json({records}):reader().read(path);
+  for(const record of [
+    {asin,fingerprint:'a'.repeat(64),status:'pending',revision:null,error:null},
+    {asin,fingerprint:'a'.repeat(64),status:'success',revision:'3',error:null},
+  ]){
+    const data=await readPageSnapshotDefinition({...context(),currentRunId:'run'},withState([record]));
+    assert.match(render(data),/规范化或保存完成/);
+    assert.doesNotMatch(render(data),/4\. 最终产品定义表/);
+  }
+  const ready=await readPageSnapshotDefinition({...context(),currentRunId:'run'},withState([{asin,fingerprint:'a'.repeat(64),status:'success',revision:'2',error:null}]));
+  assert.match(render(ready),/4\. 最终产品定义表/);
+  await assert.rejects(readPageSnapshotDefinition({...context(),currentRunId:'run'},withState([{asin:'B000000099',fingerprint:'a'.repeat(64),status:'failure',revision:null,error:'timeout'}])),/来源范围/);
+  await assert.rejects(readPageSnapshotDefinition({...context(),currentRunId:'run'},async path=>path.startsWith('/api/alexa-voc/pending?')?new Response('',{status:503}):reader().read(path)),/状态.*读取失败/);
+  let n=0;
+  await assert.rejects(readPageSnapshotDefinition({...context(),currentRunId:'run'},async path=>path.startsWith('/api/alexa-voc/pending?')?Response.json({records:[{asin,fingerprint:'a'.repeat(64),status:++n===1?'pending':'success',revision:n===1?null:'2',error:null}]}):reader().read(path)),/读取期间变化/);
+});

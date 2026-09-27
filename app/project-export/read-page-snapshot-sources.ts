@@ -119,7 +119,7 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   const voc = request.moduleIds.includes("voc") ? await readPageSnapshotVoc(context,read,snapshotProducts(context)) : undefined;
   const keywords = request.moduleIds.includes("keywords") ? readPageSnapshotKeywords(context,snapshotProducts(context)) : undefined;
   const definition = request.moduleIds.includes("definition") ? await readPageSnapshotDefinition(context,read) : undefined;
-  const checklist = request.moduleIds.includes("checklist") ? definition ?? await readPageSnapshotDefinition(context,read) : undefined;
+  const checklist = request.moduleIds.includes("checklist") ? definition ?? await readPageSnapshotDefinition(context,read,false) : undefined;
   const traffic = request.moduleIds.includes("traffic") ? await readPageSnapshotTraffic(context,read,snapshotProducts(context)) : undefined;
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
