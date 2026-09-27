@@ -144,11 +144,11 @@ test("export is favorite-gated and opens a scoped modal without starting analysi
   await dialog.getByText("报告数据与导出服务尚未接入，暂不能生成 HTML。", { exact: true }).waitFor();
   assert.equal(await dialog.getByRole("button", { name: "确认并开始导出" }).isDisabled(), true);
   assert.equal(await page.evaluate(() => document.body.style.overflow), "hidden");
-  assert.equal(await dialog.getByRole("checkbox").count(), 8);
-  await dialog.getByRole("checkbox", { name: "VOC 分析", exact: true }).uncheck();
-  assert.equal(await dialog.getByRole("heading", { name: "VOC 分析", exact: true }).count(), 0);
-  for (const checkbox of await dialog.getByRole("checkbox").all()) await checkbox.uncheck();
-  await dialog.getByText("请至少勾选一个模块。", { exact: true }).waitFor();
+  assert.equal(await dialog.getByRole("checkbox").count(), 14);
+  await dialog.getByRole("checkbox", { name: "VOC", exact: true }).uncheck();
+  assert.equal(await dialog.getByRole("heading", { name: "竞品 VOC 洞察", exact: true }).count(), 0);
+  for (const checkbox of await dialog.locator("input[data-export-page]").all()) await checkbox.uncheck();
+  await dialog.getByText("请至少勾选一个页面。", { exact: true }).waitFor();
   await dialog.getByRole("checkbox", { name: "竞品参数总览", exact: true }).check();
   const close = dialog.getByRole("button", { name: "关闭导出预览" });
   await close.focus();
@@ -177,8 +177,8 @@ test("export scope respects module visibility and remains usable in a narrow vie
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "导出预览", exact: true });
   await dialog.waitFor();
-  assert.equal(await dialog.getByRole("checkbox").count(), 3);
-  assert.equal(await dialog.getByRole("checkbox", { name: "VOC 分析", exact: true }).count(), 0);
+  assert.equal(await dialog.getByRole("checkbox").count(), 4);
+  assert.equal(await dialog.getByRole("checkbox", { name: "VOC", exact: true }).count(), 0);
   await page.setViewportSize({ width: 390, height: 680 });
   const bounds = await dialog.boundingBox();
   assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390 && bounds.y >= 0 && bounds.y + bounds.height <= 680);
@@ -188,7 +188,7 @@ test("export scope respects module visibility and remains usable in a narrow vie
   assert.deepEqual(state.writes, []);
   await page.goto(page.url().replace("modules=overview", "modules="));
   await page.getByRole("button", { name: "导出", exact: true }).click();
-  await dialog.getByText("当前没有可选择的导出模块。", { exact: true }).waitFor();
+  await dialog.getByText("当前没有可选择的导出页面。", { exact: true }).waitFor();
   assert.equal(await dialog.getByRole("checkbox").count(), 0);
   assert.equal(await dialog.getByRole("button", { name: "确认并开始导出" }).isDisabled(), true);
 });
