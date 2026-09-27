@@ -61,7 +61,7 @@ test("download is the exact preview even after online edits; recipient needs no 
   const downloadPromise=page.waitForEvent("download");await confirm.click();const download=await downloadPromise;
   assert.match(download.suggestedFilename(),/^历史灯具项目_US_快照_\d{8}-\d{6}\.html$/);
   const path=resolve("test-results",download.suggestedFilename());await download.saveAs(path);
-  assert.equal(await readFile(path,"utf8"),html);
+  assert.deepEqual(await readFile(path),Buffer.from(html,"utf8"));
   assert.ok(!state.calls.slice(before).some(path=>path.endsWith("current-display-version")));
   assert.deepEqual(state.writes,[]);
   const context=await browser.newContext();t.after(()=>context.close());const recipient=await context.newPage();
@@ -85,7 +85,7 @@ test("an unpublished project exports explicit empty states without borrowed exam
   assert.doesNotMatch(html,/UPSTREAM_EMPTY|catalog\.sellerSprite|<script|\$0\.00/);
   const downloaded=page.waitForEvent('download');await page.getByRole('button',{name:'确认并开始导出'}).click();
   const file=await downloaded,path=resolve('test-results','empty-project-snapshot.html');await file.saveAs(path);
-  assert.equal(await readFile(path,'utf8'),html);assert.deepEqual(state.writes,[]);
+  assert.deepEqual(await readFile(path),Buffer.from(html,"utf8"));assert.deepEqual(state.writes,[]);
   await page.screenshot({path:'test-results/favorite-export-empty-preview.png',fullPage:true});
 });
 test("failed reads retry without analysis, and changed eligibility blocks confirmation",async t=>{
@@ -124,7 +124,7 @@ test("all ten pages prepare and download together; deselected pages are absent f
   const completeDownload=page.waitForEvent("download");
   await page.getByRole("button",{name:"确认并开始导出"}).click();
   const complete=await completeDownload,completePath=resolve("test-results","all-eight-modules-snapshot.html");
-  await complete.saveAs(completePath);assert.equal(await readFile(completePath,"utf8"),html);
+  await complete.saveAs(completePath);assert.deepEqual(await readFile(completePath),Buffer.from(html,"utf8"));
   await page.getByRole("checkbox",{name:"VOC",exact:true}).uncheck();
   await page.waitForFunction(()=>document.querySelector('iframe[title="HTML 快照预览"]')?.getAttribute("srcdoc")?.includes('data-snapshot-page="voc-summary"')===false);
   const reduced=await iframe.getAttribute("srcdoc");assert.ok(reduced);
@@ -132,5 +132,5 @@ test("all ten pages prepare and download together; deselected pages are absent f
   for (const id of ["voc-summary","voc-insight","voc-positioning"]) assert.ok(!reduced.includes(`data-snapshot-page="${id}"`));
   const downloaded=page.waitForEvent("download");await page.getByRole("button",{name:"确认并开始导出"}).click();
   const file=await downloaded;const path=resolve("test-results","all-modules-snapshot.html");await file.saveAs(path);
-  assert.equal(await readFile(path,"utf8"),reduced);assert.deepEqual(state.writes,[]);
+  assert.deepEqual(await readFile(path),Buffer.from(reduced,"utf8"));assert.deepEqual(state.writes,[]);
 });

@@ -13,6 +13,17 @@ import {
 
 const pages = ["overview", "images", "voc-summary", "voc-insight", "voc-positioning",
   "keyword-analysis", "keyword-insight", "definition", "checklist", "traffic"] as const;
+// These are page-body passages produced by the populated fixture, including sibling
+// pages that share the VOC or keyword source with a selected page.
+const unselectedBodySentinels = {
+  overview: "父体订单量份额与12个月趋势",
+  "voc-summary": "七个相同维度同屏对齐，直接比较顾客关注与购买决策差异",
+  "voc-positioning": "将买家喜爱、差评问题与未满足需求三表合并",
+  "keyword-analysis": "当前项目没有可展示的已发布关键词分析。",
+  definition: "基于已保存的输入，使用本地规则将",
+  checklist: "完整十项清单",
+  traffic: "同屏比较流量结构、月趋势，并输出推广能力结论",
+} as const;
 const modules = "overview,voc,keywords,definition,checklist,traffic";
 let server: ViteDevServer, browser: Browser, origin: string;
 
@@ -91,6 +102,14 @@ test("complete ten-page preview and downloaded file navigate without scripts; br
   const frame = iframe.contentFrame();
   assert.equal(await frame.locator('.snapshot-radio').count(), 10);
   assert.equal(await frame.locator('[data-snapshot-page="overview"]').isVisible(), true);
+  const fullBodies = await frame.locator(".snapshot-page").evaluateAll(elements =>
+    Object.fromEntries(elements.map(element => [element.getAttribute("data-snapshot-page"), element.textContent])));
+  for (const [id, sentinel] of Object.entries(unselectedBodySentinels)) {
+    assert.ok(fullBodies[id]?.includes(sentinel), `${id} fixture body must contain its sentinel`);
+    for (const other of pages.filter(pageId => pageId !== id)) {
+      assert.equal(fullBodies[other]?.includes(sentinel), false, `${id} sentinel must be exclusive to its own body`);
+    }
+  }
   for (const [index, id] of pages.entries()) {
     if (index) {
       await frame.locator(`#snapshot-page-${pages[index - 1]}`).focus();
@@ -109,7 +128,7 @@ test("complete ten-page preview and downloaded file navigate without scripts; br
   const download = await downloadPromise;
   const path = resolve("test-results/navigation-full-ten-pages.html");
   await download.saveAs(path);
-  assert.equal(await readFile(path, "utf8"), html);
+  assert.deepEqual(await readFile(path), Buffer.from(html, "utf8"));
   assert.deepEqual(state.writes, []);
 
   const recipient = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1440, height: 1000 } });
@@ -146,17 +165,26 @@ test("single and partial choices contain only selected page bodies, with a first
     ["images", "voc-insight", "keyword-insight"]);
   assert.equal(await iframe.contentFrame().locator(".snapshot-radio:checked").getAttribute("id"), "snapshot-page-images");
   assert.doesNotMatch(partial.split("</head>")[1], /data-snapshot-page="overview"|data-snapshot-page="keyword-analysis"|竞品参数总览|竞品关键词分析/);
+  const previewHtml = await iframe.contentFrame().locator("html").evaluate(element => element.outerHTML);
+  for (const [id, sentinel] of Object.entries(unselectedBodySentinels)) {
+    assert.equal(partial.includes(sentinel), false, `${id} body leaked into serialized partial HTML`);
+    assert.equal(previewHtml.includes(sentinel), false, `${id} body leaked into preview DOM`);
+  }
   const downloadPromise = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "确认并开始导出" }).click();
   const download = await downloadPromise;
   const path = resolve("test-results/navigation-partial-three-pages.html");
   await download.saveAs(path);
-  assert.equal(await readFile(path, "utf8"), partial);
+  assert.deepEqual(await readFile(path), Buffer.from(partial, "utf8"));
   const recipient = await browser.newPage({ javaScriptEnabled: false }); t.after(() => recipient.close());
   await recipient.route("https://m.media-amazon.com/**", route => route.abort());
   await recipient.goto(pathToFileURL(path).href);
   assert.equal(await recipient.locator(".snapshot-radio:checked").getAttribute("id"), "snapshot-page-images");
   assert.equal(await recipient.locator(".snapshot-page:visible").getAttribute("data-snapshot-page"), "images");
+  const recipientHtml = await recipient.locator("html").evaluate(element => element.outerHTML);
+  for (const [id, sentinel] of Object.entries(unselectedBodySentinels)) {
+    assert.equal(recipientHtml.includes(sentinel), false, `${id} body leaked into recipient DOM`);
+  }
 });
 
 test("selected but missing pages keep their own explanation and navigation", async t => {
