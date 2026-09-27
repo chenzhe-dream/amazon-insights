@@ -79,7 +79,7 @@ test("an unpublished project exports explicit empty states without borrowed exam
   const {page,state}=await fixture(t,"overview,voc,keywords,definition,checklist,traffic",true);
   const frame=page.locator('iframe[title="HTML 快照预览"]');await frame.waitFor();
   const html=await frame.getAttribute('srcdoc');assert.ok(html);
-  assert.equal((html.match(/data-snapshot-module=/g)??[]).length,8);
+  assert.equal((html.match(/<section class="snapshot-page" data-snapshot-page=/g)??[]).length,10);
   assert.match(html,/暂无已发布的竞品结果/);
   assert.match(html,/暂无已有分析输入/);
   assert.doesNotMatch(html,/UPSTREAM_EMPTY|catalog\.sellerSprite|<script|\$0\.00/);
@@ -92,9 +92,9 @@ test("failed reads retry without analysis, and changed eligibility blocks confir
   const {page,state}=await fixture(t);
   await page.locator('iframe[title="HTML 快照预览"]').waitFor();
   const checkbox=page.getByRole("checkbox",{name:"竞品参数总览",exact:true});
-  await page.getByRole("checkbox",{name:"变体 / 订单",exact:true}).uncheck();
-  await page.getByRole("checkbox",{name:"主副图分析",exact:true}).uncheck();
-  await checkbox.uncheck();await page.getByText("请至少勾选一个模块。",{exact:true}).waitFor();
+  await page.getByRole("checkbox",{name:"包含变体 / 订单",exact:true}).uncheck();
+  await page.getByRole("checkbox",{name:"主辅图",exact:true}).uncheck();
+  await checkbox.uncheck();await page.getByText("请至少勾选一个页面。",{exact:true}).waitFor();
   state.fail=true;state.delay=700;await checkbox.check();
   assert.equal(await page.locator('iframe[title="HTML 快照预览"]').count(),0);
   assert.equal(await page.getByRole("button",{name:"确认并开始导出"}).isDisabled(),true);
@@ -109,12 +109,14 @@ test("failed reads retry without analysis, and changed eligibility blocks confir
   assert.deepEqual(state.writes,[]);
 });
 
-test("all eight modules prepare and download together; deselected module is absent from the HTML",async t=>{
+test("all ten pages prepare and download together; deselected pages are absent from the HTML",async t=>{
   const {page,state}=await fixture(t,"overview,voc,keywords,definition,checklist,traffic");
   const iframe=page.locator('iframe[title="HTML 快照预览"]');
   await iframe.waitFor();
-  assert.equal(await page.getByRole("checkbox",{checked:true}).count(),8);
+  assert.equal(await page.locator('input[data-export-page]:checked').count(),10);
   const html=await iframe.getAttribute("srcdoc");assert.ok(html);
+  for(const id of ["overview","images","voc-summary","voc-insight","voc-positioning","keyword-analysis","keyword-insight","definition","checklist","traffic"])
+    assert.ok(html.includes(`data-snapshot-page="${id}"`),id);
   for(const id of ["competitor-overview","variants-orders","listing-images","voc","keywords","definition","checklist","traffic"])
     assert.ok(html.includes(`data-snapshot-module="${id}"`),id);
   assert.doesNotMatch(html, /UPSTREAM_EMPTY|catalog\.sellerSprite|<script|data-internal-secret/);
@@ -123,10 +125,11 @@ test("all eight modules prepare and download together; deselected module is abse
   await page.getByRole("button",{name:"确认并开始导出"}).click();
   const complete=await completeDownload,completePath=resolve("test-results","all-eight-modules-snapshot.html");
   await complete.saveAs(completePath);assert.equal(await readFile(completePath,"utf8"),html);
-  await page.getByRole("checkbox",{name:"VOC 分析",exact:true}).uncheck();
-  await page.waitForFunction(()=>document.querySelector('iframe[title="HTML 快照预览"]')?.getAttribute("srcdoc")?.includes('data-snapshot-module="voc"')===false);
+  await page.getByRole("checkbox",{name:"VOC",exact:true}).uncheck();
+  await page.waitForFunction(()=>document.querySelector('iframe[title="HTML 快照预览"]')?.getAttribute("srcdoc")?.includes('data-snapshot-page="voc-summary"')===false);
   const reduced=await iframe.getAttribute("srcdoc");assert.ok(reduced);
   assert.doesNotMatch(reduced,/data-snapshot-module="voc"/);
+  for (const id of ["voc-summary","voc-insight","voc-positioning"]) assert.ok(!reduced.includes(`data-snapshot-page="${id}"`));
   const downloaded=page.waitForEvent("download");await page.getByRole("button",{name:"确认并开始导出"}).click();
   const file=await downloaded;const path=resolve("test-results","all-modules-snapshot.html");await file.saveAs(path);
   assert.equal(await readFile(path,"utf8"),reduced);assert.deepEqual(state.writes,[]);
