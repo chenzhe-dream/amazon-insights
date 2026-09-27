@@ -252,3 +252,13 @@
 - 同名行修复后重跑真实融蜡灯，通过且无重复 key 警告。该次回放拦截应用图片代理请求，避免测试代理超时；不将图片网络可用性计入该次结论。更早正式在线图片验收记录保留在 test-results/online-export-20260927/report.md。
 - 业务数据、下载 HTML、截图及回放脚本只保存在忽略的 test-results/export-fix-live 及相关日志；未提交身份信息或业务输入。历史目录缺失与失败任务本身未重跑。
 - 正式服务最后核验版本为 5dfdb2313efb20ffbac14e2326f2c122148430f6，本次仅在 codex/favorite-html-export-ui 修改；没有写入其他窗口工作区，没有合入或发布。
+
+### 2026-09-27 导出验收修复正式发布（用户明确授权）
+
+- 正式基线重新核对为 9795871c62d25fdb4ca4696d1285ed81289c26a6，先合入独立修复分支再快进正式目录，完整保留另一窗口已发布的市场形态更新；未引入对方未发布修改。相对基线 server/shared/scripts/package 无变化。
+- 正式版本：15dd3404daf2814b4819e8833d9764adc45092a0；artifact b05c24ae8b322418182fefe5b2aaf6f4281f8f90fe5f6362cd96a58124675b6a。manage-formal-stack.ps1 -PublishCode 已报告完成，Web、Agent、局域网三方版本与源码指纹一致；实际下发的 8 个 JS/CSS 资源与构建产物哈希一致，包含本次修复。
+- 发布前备份：C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/backups/export-fix-release-20260927-062413。1242 个业务文件、71 个旧 artifact 文件、配置和业务指针保存并校验；PostgreSQL custom dump 21464426 字节，完整解码校验通过，SHA256 0c7debf8a677f8c7da3fec2712ca9ccc4099b2cb82675f46a8807e784f597877。任务数为 0，未取消分析任务。
+- 发布前 13 项核心回归通过；合并后 22 项回归和类型检查通过，正式构建成功。发布后业务文件、dataCurrent/streams 和配置哈希与备份一致；正式目录原三项未跟踪图片候选目录保留。
+- 使用用户已登录浏览器直接访问正式环境，三轮滑板车1与融蜡灯均完成真实导出：10 页内容、收起选择后增宽、桌面无外层正文滚动、390px 窄屏确认按钮可见、实际下载与预览字节一致；无 JavaScript 的独立 HTML 可切至新品定义且无应用 API 请求。前者如实保留失败/等待输入，后者保留最终定义表，监测页面错误及接口 4xx/5xx 为 0。
+- 下载文件分别为 2991488 / 6340447 字节；正式构建 CSS 与本地回放不同，按正式预览和实际文件自身做字节比较，不跨环境比较文件大小。未重新采集或重跑模型。
+- 证据存于本工作区忽略目录 test-results/export-fix-release-assets.json、export-fix-release-online/result.json、export-fix-formal-release.log 及对应截图/HTML；真实业务内容未提交。没有推送远程 Git、没有合入 main。
