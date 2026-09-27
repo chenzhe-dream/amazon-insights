@@ -50,3 +50,40 @@ test('explicit recollection uses saved scope, fresh keys, retains report and rea
  await page.goto(origin);await page.getByRole('button',{name:'英国站',exact:true}).click();await page.getByLabel('类目路径',{exact:true}).fill('Floor Lamps');await page.getByRole('button',{name:'拉取见解',exact:true}).click();await page.waitForURL(url=>!!url.searchParams.get('themeRun'));
  assert.deepEqual(resolutions,[{marketplace:'UK',name:'Floor Lamps'}]);assert.equal(writes[6].body.marketplace,'UK');assert.equal(writes[6].body.nodeIdPath,'1063294');assert.equal(writes[6].body.currency,'GBP');assert.deepEqual(errors,[]);
 });
+
+
+test('restoring a saved theme task restores all query fields once and leaves later edits intact', {timeout:120000},async t=>{
+ const server=await createServer({configFile:false,cacheDir:'test-results/theme-restore-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});
+ await server.listen();const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});
+ const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();page.setDefaultTimeout(8000);
+ const first=themeRuleRun().run;first.params={...first.params,memberCount:3,poolSize:25};first.scope={...first.scope,marketplace:'UK',currency:'GBP',fromMonth:'2026-06',toMonth:'2026-07'};
+ const second:typeof first={...first,id:'60000000-0000-4000-8000-000000000099',scope:{...first.scope,marketplace:'DE',currency:'EUR',nodeIdPath:'12345',fromMonth:'2026-04',toMonth:'2026-05'},params:{...first.params,memberCount:5,poolSize:50}};
+ const runs=new Map([[first.id,first],[second.id,second]]);let reads=0,writes=0;
+ await page.route('**/*',async route=>{
+  const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();
+  if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml(url.pathname,'<html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-theme-refresh-browser-harness.tsx"></script></body></html>')});
+  if(!url.pathname.startsWith('/api/'))return route.continue();
+  if(req.method()!=='GET')writes++;
+  const run=runs.get(url.pathname.split('/').at(-1)!);if(run){reads++;return route.fulfill({json:{run}});}
+  return route.fulfill({status:404,json:{}});
+ });
+ for(const controlled of [false,true]){
+  await page.goto(`${origin}/?themeRun=${first.id}${controlled?'&controlled=1':''}`);
+  await page.getByText('分析月份与样本设置',{exact:true}).click();
+  await page.waitForFunction(()=>Array.from(document.querySelectorAll('input[type=number]')).some(i=>(i as HTMLInputElement).value==='3'));
+  assert.equal(await page.getByLabel('主题样本数量',{exact:true}).inputValue(),'3');assert.equal(await page.getByLabel('商品池数量',{exact:true}).inputValue(),'25');
+  assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),first.scope.nodeIdPath);assert.equal(await page.getByLabel('完整月份',{exact:true}).inputValue(),'2026-07');
+  assert.equal(await page.getByRole('button',{name:'英国站',exact:true}).getAttribute('aria-pressed'),'true');
+  if(controlled)assert.equal(await page.getByLabel('起始月份',{exact:true}).inputValue(),'2026-06');
+  await page.getByLabel('主题样本数量',{exact:true}).fill('7');await page.getByLabel('商品池数量',{exact:true}).fill('70');await page.getByLabel('类目路径',{exact:true}).fill('999');
+  await page.getByText('任务进度、重试与历史报告',{exact:true}).click();const before=reads;
+  const response=page.waitForResponse(r=>r.url().endsWith('/runs/'+first.id));await page.getByRole('button',{name:'刷新状态',exact:true}).click();await response;await page.waitForTimeout(100);
+  assert.ok(reads>before);assert.equal(await page.getByLabel('主题样本数量',{exact:true}).inputValue(),'7');assert.equal(await page.getByLabel('商品池数量',{exact:true}).inputValue(),'70');assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),'999');
+  await page.getByText('恢复已有主题任务',{exact:true}).click();await page.getByLabel('任务 UUID',{exact:true}).fill(second.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();
+  await page.waitForFunction(()=>Array.from(document.querySelectorAll('input[type=number]')).some(i=>(i as HTMLInputElement).value==='5'));
+  assert.equal(await page.getByLabel('商品池数量',{exact:true}).inputValue(),'50');assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),'12345');assert.equal(await page.getByLabel('完整月份',{exact:true}).inputValue(),'2026-05');
+  assert.equal(await page.getByRole('button',{name:'德国站',exact:true}).getAttribute('aria-pressed'),'true');
+  if(controlled)assert.equal(await page.getByLabel('起始月份',{exact:true}).inputValue(),'2026-04');
+ }
+ assert.equal(writes,0);
+});

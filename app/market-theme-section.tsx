@@ -5,6 +5,7 @@ import {marketSiteCurrency,type MarketSite} from "../shared/market-sites";
 import React, { useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema, type MarketThemeRunResponse } from '../shared/market-module-contracts';
 import { cancelThemeRun, createThemeStudy, readThemeRun, retryThemeSteps, startThemeRun } from './lib/market-theme-browser';
+import {themeSourceErrorText} from './lib/market-theme-source-error';
 import {marketThemeSourceIssueText} from '../shared/market-theme-source-issue';
 import { MarketThemeReport } from './market-theme-report';
 import { themeSavedReportStatus } from './lib/market-theme-rule-status';
@@ -14,9 +15,9 @@ import {resolveShapeNodeInput} from './lib/market-shape-browser';
 type Run=MarketThemeRunResponse['run'];
 const labels:Record<Run['steps'][number]['kind'],string>={'collect-product-image':'取得商品图片','collect-shape-pool':'取得Sorftime商品池','collect-product-amount-history':'取得商品历史金额','collect-product-month':'取得类目商品池','collect-shape-category':'类目历史与指标', 'collect-product-history':'取得商品历史','collect-overview-month':'取得类目月度总览','collect-keyword-page':'取得关键词','collect-keyword-aba':'取得逐词 ABA 份额','collect-keyword-trend':'取得趋势','collect-customer-themes':'取得商品主题','prepare-members':'固定样本与汇总主题','prepare-keyword-pool':'汇总关键词','prepare-model-batches':'准备模型输入',reconcile:'确认跨批分类','model-batch':'模型分析主题',rules:'核算主题指标',report:'保存报告'};
 const statuses={queued:'排队中',running:'执行中',succeeded:'已完成',empty:'结果为空',failed:'失败',cancelled:'已取消'};
-const errors:Record<string,string>={ 'unsupported-marketplace':'此站点暂无该补充数据', 'upstream-temporary':'上游暂时不可用',timeout:'处理超时',interrupted:'执行中断',authentication:'来源认证失败',governance:'调用受到额度或治理限制','invalid-data':'返回数据未通过校验','scope-mismatch':'返回范围不匹配',cancelled:'已取消',internal:'内部处理失败'};
+
 export function MarketThemeStepStatus({step:s}:{step:Run['steps'][number]}) {
- return <span>{labels[s.kind]}{s.asin?` · ${s.asin}`:''}：{statuses[s.status]}{s.errorCode?`（${errors[s.errorCode]}）`:''}{s.status==='failed'&&s.sourceIssue&&<><br/><small>{marketThemeSourceIssueText(s.sourceIssue)}</small></>}</span>;
+ return <span>{labels[s.kind]}{s.asin?` · ${s.asin}`:''}：{statuses[s.status]}{s.errorCode?`（${themeSourceErrorText(s.errorCode)}）`:''}{s.status==='failed'&&s.sourceIssue&&<><br/><small>{marketThemeSourceIssueText(s.sourceIssue)}</small></>}</span>;
 }
 export function themeRunActive(run:Run) {return run.status!=='cancelled'&&run.steps.some(s=>s.current&&(s.status==='queued'||s.status==='running'));}
 export function themeRunLabel(run:Run) {
@@ -43,16 +44,25 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const startCommand=useRef<{signature:string;studyKey:string;runKey:string}|null>(null);
   const refreshCommand=useRef<{runId:string;studyKey:string;runKey:string}|null>(null);
   const command=useRef<{signature:string;key:string}|null>(null);
+  const restoredQueryRun=useRef<string|null>(null);
+  function restoreQuery(next:Run){
+    if(restoredQueryRun.current===next.id)return;
+    restoredQueryRun.current=next.id;
+    const {marketplace,nodeIdPath,fromMonth,toMonth}=next.scope;
+    setLocalSite(marketplace);setLocalNode(nodeIdPath);setLocalMonth(toMonth);
+    setMembers(next.params.memberCount);setPool(next.params.poolSize);
+    selectionRef.current.onSelectionChange?.({marketplace,nodeIdPath,fromMonth,toMonth});
+  }
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=themeRunFromUrl();if(restored){setRunId(restored);setRestoreId(restored);}return()=>{abort.abort();owner.current=null;};},[]);
   useEffect(()=>{
     if(!runId)return;const abort=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
     async function poll(){const version=revision.current;try{const result=await readThemeRun(runId!,abort.signal);if(abort.signal.aborted)return;
       if(version!==revision.current||writing.current){timer=setTimeout(()=>void poll(),3000);return;}
-      setRun(result);setReadError(null);if(selectionRef.current.selection&&!selectionRef.current.selection.nodeIdPath)selectionRef.current.onSelectionChange?.({marketplace:result.scope.marketplace,nodeIdPath:result.scope.nodeIdPath,fromMonth:result.scope.fromMonth,toMonth:result.scope.toMonth});if(themeRunActive(result))timer=setTimeout(()=>void poll(),3000);
+      setRun(result);setReadError(null);restoreQuery(result);if(themeRunActive(result))timer=setTimeout(()=>void poll(),3000);
     }catch(e){if(!abort.signal.aborted){setReadError(e instanceof Error?e.message:'读取状态失败');}}}
     void poll();return()=>{abort.abort();if(timer)clearTimeout(timer);};
   },[runId,reload]);
-  function adopt(next:Run){setRun(next);setRunId(next.id);setRestoreId(next.id);setReportChoice('latest');setReadError(null);rememberRun(next.id);}
+  function adopt(next:Run){restoreQuery(next);setRun(next);setRunId(next.id);setRestoreId(next.id);setReportChoice('latest');setReadError(null);rememberRun(next.id);}
   async function mutate(work:(signal:AbortSignal)=>Promise<void>){const current=owner.current;if(!current||current.signal.aborted||writing.current)return;
     writing.current=true;revision.current++;setBusy(true);setError(null);
     try{await work(current.signal);}catch(e){if(!current.signal.aborted)setError(e instanceof Error?e.message:'提交失败');}
@@ -74,7 +84,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     });
   }
   function restore(event:FormEvent){event.preventDefault();const parsed=MarketModuleIdSchema.safeParse(restoreId.trim());if(!parsed.success){setError('请输入有效的任务 UUID。');return;}
-    setError(null);setReadError(null);setRun(null);setRetainedReport(null);setRunId(parsed.data);setReportChoice('latest');rememberRun(parsed.data);setReload(n=>n+1);}
+    restoredQueryRun.current=null;setError(null);setReadError(null);setRun(null);setRetainedReport(null);setRunId(parsed.data);setReportChoice('latest');rememberRun(parsed.data);setReload(n=>n+1);}
   async function action(kind:'retry'|'cancel',step?:Run['steps'][number]){if(!run)return;const id=run.id;
     const steps=step?.latestAttemptId?[{stepId:step.id,failedAttemptId:step.latestAttemptId}]:[];
     const signature=JSON.stringify({id,kind,steps});if(command.current?.signature!==signature)command.current={signature,key:browserRequestId()};const key=command.current.key;

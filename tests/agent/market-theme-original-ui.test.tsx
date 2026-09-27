@@ -44,3 +44,12 @@ test('saved category name identifies the report while the node path remains avai
  const html=renderToStaticMarkup(<MarketThemeReport entry={entry}/>);
  assert.match(html,/Floor Lamps/);assert.match(html,/228013:495224:3736561:1063294/);
 });
+
+
+test('sample failures distinguish invalid source data from connection failures in Chinese',()=>{
+ const asin=themeDetails(new URL('https://test.invalid/details?section=asins')).page.items.find(i=>i.kind==='asin')!;
+ for(const [reason,expected] of [['invalid-data','返回数据未通过校验'],['timeout','处理超时'],['upstream-temporary','上游暂时不可用']]){
+  const html=renderToStaticMarkup(<MarketThemeSampleTable asins={[{...asin,status:'failed',reason}]} marketplace="US"/>);
+  assert.ok(html.includes(expected));assert.ok(!html.includes(reason));
+ }
+});
