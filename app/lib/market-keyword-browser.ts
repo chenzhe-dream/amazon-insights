@@ -45,7 +45,10 @@ export async function createKeywordStudy(scope:z.input<typeof MarketStudyRequest
  const {study}=await request('studies',MarketStudyResponseSchema,post(expected,id,signal));
  if(study.id!==id||study.scope.researchId!==id)throw new Error('研究身份不一致，未加载该结果。');
  const {organizationId,researchId,...actual}=study.scope;void organizationId;void researchId;
- if(!same(expected,actual))throw new Error('研究范围不一致，未加载该结果。');return study;
+ // A bare node is expanded by the server; only the same leaf may gain ancestors.
+ const resolvedNodeMatches=!expected.nodeIdPath.includes(':')&&actual.nodeIdPath.split(':').at(-1)===expected.nodeIdPath;
+ const comparable=resolvedNodeMatches?{...actual,nodeIdPath:expected.nodeIdPath}:actual;
+ if(!same(expected,comparable))throw new Error('研究范围不一致，未加载该结果。');return study;
 }
 export async function startKeywordRun(studyId:string,body:unknown,key:string,signal?:AbortSignal){
  const study=MarketModuleIdSchema.parse(studyId),params=MarketKeywordStartRequestSchema.parse(body);

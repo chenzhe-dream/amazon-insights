@@ -117,3 +117,14 @@ test('W5 and PVS presentation distinguishes comparison months, zero baselines an
  for(const value of ['较3个月前','2026-05','2026-08','基期为零','PVS','待验证','缺少分项','经验排序','不代表成功概率','币种未确认','人工灯具组','250','100.0%'])assert.ok(html.includes(value),value);
  assert.ok(!html.includes('NaN'));assert.ok(!html.includes('Infinity'));assert.equal(digest(revision.ruleReport),before);
 });
+
+test('leaf category may resolve to a full path, but foreign leaves and other scope changes are rejected',async()=>{
+ const {scope}=keywordPageRun().run;const {organizationId,researchId,...base}=scope;void organizationId;
+ const expected={...base,nodeIdPath:'1063294'},resolved={...scope,nodeIdPath:'228013:495224:3736561:1063294'};
+ await withFetch(()=>Response.json({study:{id:researchId,scope:resolved,createdAt:'2026-09-27T00:00:00.000Z'}}),async()=>{
+  assert.equal((await createKeywordStudy(expected,researchId)).scope.nodeIdPath,resolved.nodeIdPath);
+  await assert.rejects(createKeywordStudy({...expected,nodeIdPath:'999'},researchId),/范围/);
+  await assert.rejects(createKeywordStudy({...expected,nodeIdPath:'1:1063294'},researchId),/范围/);
+  await assert.rejects(createKeywordStudy({...expected,fromMonth:'2025-01'},researchId),/范围/);
+ });
+});
