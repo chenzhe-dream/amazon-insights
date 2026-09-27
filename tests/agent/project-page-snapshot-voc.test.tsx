@@ -47,12 +47,12 @@ function reader(records: ManualAlexaVocRecord[] = [manual]) {
 test("VOC snapshot retains original matrix, percentages, stars, insight tables and native rules", async () => {
   const {read,calls} = reader();
   const data = await readPageSnapshotVoc(context(),read,products);
-  const html = renderToStaticMarkup(<PageSnapshotVoc {...data}/>);
+  const html = (["voc-summary", "voc-insight", "voc-positioning"] as const)
+    .map(page => renderToStaticMarkup(<PageSnapshotVoc {...data} page={page}/>)).join("");
   for (const text of ["VOC 核心主题", "VOC 七维综合分析", "智能评论分析", "原品牌", "孩子可以轻松转向", "评论样本：25", "36%", "amazon-star-rating-fill", "买家喜爱优先级表", "差评问题优先级表", "未满足需求机会表", "产品定位方向表", "为什么这样判断"]) assert.ok(html.includes(text),text);
   assert.match(html, /<details/);
-  assert.equal((html.match(/<details class="snapshot-voc-tab" open="">/g) ?? []).length,1);
-  assert.equal((html.match(/<details class="snapshot-voc-tab">/g) ?? []).length,2);
-  for (const title of ["竞品 VOC 汇总","竞品 VOC 洞察","VOC 产品定位"]) assert.ok(html.includes(`<h2>${title}</h2>`));
+  for (const title of ["竞品 VOC 汇总","竞品 VOC 洞察","产品定义结论"]) assert.ok(html.includes(`<h2>${title}</h2>`));
+  assert.doesNotMatch(renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-summary"/>), /买家喜爱优先级表|产品定位方向表/);
   assert.doesNotMatch(html, /<button|<script|历史已保存|VOC 分析来源绑定|exportFields|sessionOrgEpoch/);
   assert.equal(calls.length,2);
   const frozen = JSON.stringify(data);
@@ -69,23 +69,24 @@ test("reviews remain candidate-only for launch analysis and summary still displa
   const inputs = buildCurrentPageAnalysisInputs(context(),[]);
   assert.ok(inputs);
   assert.equal(hasProductLaunchAnalysis(inputs.products,inputs.sources),false);
-  const html = renderToStaticMarkup(<PageSnapshotVoc {...data}/>);
-  assert.match(html,/易于操控/); assert.match(html,/暂无可用于当前 VOC 立项结论的已保存数据/);
-  assert.doesNotMatch(html,/自动生成|请先在/);
-  assert.doesNotMatch(html,/买家喜爱优先级表/);
+  const summary = renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-summary"/>);
+  const insight = renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-insight"/>);
+  assert.match(summary,/易于操控/); assert.match(insight,/暂无可用于当前 VOC 立项结论的已保存数据/);
+  assert.doesNotMatch(insight,/自动生成|请先在/);
+  assert.doesNotMatch(summary,/买家喜爱优先级表/);
 });
 
 test("opaque backend fields never add visible or hidden body content but business rows do", async () => {
   const ctx = context();
   const base = await readPageSnapshotVoc(ctx,reader().read,products);
-  const beforeHtml = renderToStaticMarkup(<PageSnapshotVoc {...base}/>);
+  const beforeHtml = renderToStaticMarkup(<PageSnapshotVoc {...base} page="voc-summary"/>);
   const record = (ctx.version!.stageOutputs.reviews as unknown as {data:{analysisByAsin:Record<string,Record<string,unknown>>}}).data.analysisByAsin[asin];
   record.internalDecisions = Array.from({length:1000},()=>({source:"OPAQUE_SENTINEL",raw:{hidden:"secret"}}));
   const after = await readPageSnapshotVoc(ctx,reader().read,products);
-  assert.equal(renderToStaticMarkup(<PageSnapshotVoc {...after}/>),beforeHtml);
+  assert.equal(renderToStaticMarkup(<PageSnapshotVoc {...after} page="voc-summary"/>),beforeHtml);
   assert.doesNotMatch(JSON.stringify(after.reviewRecords),/OPAQUE_SENTINEL/);
   const added = structuredClone(manual); added.normalizedRecord.attention.push("业务新增关注项");
-  assert.match(renderToStaticMarkup(<PageSnapshotVoc {...await readPageSnapshotVoc(ctx,reader([added]).read,products)}/>),/业务新增关注项/);
+  assert.match(renderToStaticMarkup(<PageSnapshotVoc {...await readPageSnapshotVoc(ctx,reader([added]).read,products)} page="voc-summary"/>),/业务新增关注项/);
 });
 
 test("missing version preserves manual matrix without inventing current analysis", async () => {
@@ -93,8 +94,9 @@ test("missing version preserves manual matrix without inventing current analysis
   const data = await readPageSnapshotVoc(ctx,reader().read,products);
   assert.equal(data.analysisInputs,null);
   assert.equal(buildCurrentPageAnalysisInputs(ctx,[manual]),null);
-  const html = renderToStaticMarkup(<PageSnapshotVoc {...data}/>);
-  assert.match(html,/孩子可以轻松转向/); assert.match(html,/暂无已发布基础报告/);
+  const html = renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-summary"/>);
+  assert.match(html,/孩子可以轻松转向/);
+  assert.match(renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-insight"/>),/暂无已发布基础报告/);
   assert.doesNotMatch(html,/买家喜爱优先级表/);
 });
 
@@ -133,7 +135,7 @@ test("non-US snapshot skips manual API and keeps explicit saved review sources",
   const jp = {...ctx,marketplace:"JP",version:{...ctx.version!,marketplace:"JP",stageOutputs:{}}} as ExportModuleContext;
   const data=await readPageSnapshotVoc(jp,async()=>{throw new Error("unexpected manual GET");},products);
   assert.equal(data.market,"JP"); assert.equal(data.analysisInputs,null);
-  const html=renderToStaticMarkup(<PageSnapshotVoc {...data}/>);
+  const html=renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-summary"/>);
   assert.match(html,/Manual Alexa VOC 当前仅支持美国站/);
   assert.doesNotMatch(html,/暂无数据0|OPAQUE_SENTINEL/);
 });
@@ -144,7 +146,7 @@ test("repeated review labels retain each distinct original business record", asy
       {label:"产品质量",sharePct:30,reason:"第一条",metricKind:"review_sample_incidence",numerator:3,denominator:10},
       {label:"产品质量",sharePct:50,reason:"第二条",metricKind:"review_sample_incidence",numerator:5,denominator:10},
     ]}]}),reader([]).read,products);
-  const html=renderToStaticMarkup(<PageSnapshotVoc {...data}/>);
+  const html=renderToStaticMarkup(<PageSnapshotVoc {...data} page="voc-summary"/>);
   assert.match(html,/【产品质量】约 30\.0% 评论样本提及/);
   assert.match(html,/【产品质量】约 50\.0% 评论样本提及/);
   assert.equal((html.match(/class="ss-review-theme-row"/g) ?? []).length,2);

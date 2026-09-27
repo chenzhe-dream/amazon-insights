@@ -6,12 +6,12 @@ import {sorftimeReviewAnalysisMeta as reviewDataMeta} from "../sorftime-review-a
 import type {VocSnapshotSources} from "./read-page-snapshot-voc";
 
 /** Original business views with frozen explicit inputs; never mounts the application page. */
-export function PageSnapshotVoc(props: VocSnapshotSources) {
+export function PageSnapshotVoc({page, ...props}: VocSnapshotSources & {page: "voc-summary" | "voc-insight" | "voc-positioning"}) {
   const records = Object.fromEntries(props.manualRecords.map(record => [record.asin,record]));
   const manualVocByAsin = Object.fromEntries(props.manualRecords.map(record => [record.asin,record.normalizedRecord]));
   return <div className="page-content compare-page">
-    <details className="snapshot-voc-tab" open>
-    <summary className="card section-head"><h2>竞品 VOC 汇总</h2></summary>
+    {page === "voc-summary" && <>
+    <div className="card section-head"><h2>竞品 VOC 汇总</h2></div>
     <div className="compare-page snapshot-voc-tab-content" style={{display:"flex",flexDirection:"column",gap:16,marginTop:16}}>
     <VocOverviewIntroduction products={props.products}/>
     <ManualVocMatrixSection products={props.products} market={props.market} effectiveVocByAsin={records}
@@ -24,20 +24,18 @@ export function PageSnapshotVoc(props: VocSnapshotSources) {
       products={props.products} market={props.market}/>
     <VocSevenDimensionInsightSection products={props.products} manualVocByAsin={manualVocByAsin} reviewAnalysisData={props.reviewRecords}/>
     </div>
-    </details>
-    {props.analysisInputs ? <>
-      <details className="snapshot-voc-tab">
-      <summary className="card section-head"><h2>竞品 VOC 洞察</h2></summary>
+    </>}
+    {page === "voc-insight" && (props.analysisInputs ? <>
+      <div className="card section-head"><h2>竞品 VOC 洞察</h2></div>
       <div className="compare-page snapshot-voc-tab-content" style={{display:"flex",flexDirection:"column",gap:16,marginTop:16}}>
       <ProductLaunchRecommendationSection products={props.analysisInputs.products} sources={props.analysisInputs.sources}/>
       </div>
-      </details>
-      <details className="snapshot-voc-tab">
-      <summary className="card section-head"><h2>VOC 产品定位</h2></summary>
+    </> : <section className="card launch-block"><h2>竞品 VOC 洞察</h2><div className="pending-box">暂无已发布基础报告，当前没有可展示的 VOC 洞察。</div></section>)}
+    {page === "voc-positioning" && (props.analysisInputs ? <>
+      <div className="card section-head"><h2>产品定义结论</h2></div>
       <div className="compare-page snapshot-voc-tab-content" style={{display:"flex",flexDirection:"column",gap:16,marginTop:16}}>
       <VocPositioningSection products={props.analysisInputs.products} sources={props.analysisInputs.sources}/>
       </div>
-      </details>
-    </> : <section className="card launch-block"><div className="pending-box">暂无已发布基础报告，当前没有可展示的 VOC 洞察与产品定义结论。</div></section>}
+    </> : <section className="card launch-block"><h2>产品定义结论</h2><div className="pending-box">暂无已发布基础报告，当前没有可展示的产品定义结论。</div></section>)}
   </div>;
 }

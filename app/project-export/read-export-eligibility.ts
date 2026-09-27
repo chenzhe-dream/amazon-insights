@@ -6,16 +6,18 @@ import { localAgentFetch, localAgentErrorMessage } from "../lib/local-agent-brow
 import { readWebSession } from "../lib/web-auth-session";
 import type { CurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
 import { connectedExportModules, visibleExportSections, type ExportSectionId } from "./module-catalog";
+import { resolveSnapshotSelection, type ResolvedSnapshotSelection, type SnapshotSelection } from "./snapshot-navigation-catalog";
 
 export type ExportIdentity = Readonly<{ sessionIdentity: string; organizationId: string }>;
 export type ExportRequest = ExportIdentity & Readonly<{
-  libraryProjectId: string; moduleIds: readonly ExportSectionId[]; signal: AbortSignal;
+  libraryProjectId: string; moduleIds: readonly ExportSectionId[]; selection?: SnapshotSelection; signal: AbortSignal;
 }>;
 export type PreparedProjectExport = Readonly<{
   sourceProjectId: string;
   project: { id: string; name: string; marketplace: string; asins: readonly string[] };
   capturedAt: string;
   sourceLabel: string;
+  selection?: ResolvedSnapshotSelection;
 }>;
 export type ExportFetcher = (path: string, init?: RequestInit) => Promise<Response>;
 export const exportFetcher: ExportFetcher = (path, init) => path.startsWith("/api/")
@@ -45,6 +47,11 @@ export async function verifyExportSession(request: ExportRequest, fetcher: Expor
       || identity.user.organizationId !== request.organizationId) throw new Error("登录会话已变化，请重新打开导出");
   const allowed = visibleExportSections(identity.visibleModules).map(item => item.id);
   if (request.moduleIds.some(id => !allowed.includes(id))) throw new Error("所选模块的查看权限已变化");
+  if (request.selection) {
+    const resolved = resolveSnapshotSelection(request.selection, identity.visibleModules);
+    if (request.moduleIds.length !== resolved.moduleIds.length
+        || request.moduleIds.some(id => !resolved.moduleIds.includes(id))) throw new Error("快照页面与来源模块选择不匹配");
+  }
 }
 export async function readExportEligibility(request: ExportRequest, fetcher: ExportFetcher) {
   if (!request.moduleIds.length) throw new Error("请至少选择一个模块");
@@ -65,7 +72,12 @@ export async function readExportEligibility(request: ExportRequest, fetcher: Exp
   }
   return { project, source, sourceProjectId };
 }
-export async function verifyExportEligibility(request: ExportRequest, prepared: Pick<PreparedProjectExport, "sourceProjectId" | "project">, fetcher: ExportFetcher = exportFetcher) {
+export async function verifyExportEligibility(request: ExportRequest, prepared: Pick<PreparedProjectExport, "sourceProjectId" | "project" | "selection">, fetcher: ExportFetcher = exportFetcher) {
+  if (request.selection) {
+    const expected = resolveSnapshotSelection(request.selection, undefined);
+    if (!prepared.selection || JSON.stringify(prepared.selection) !== JSON.stringify(expected))
+      throw new Error("已准备的快照页面选择已变化，请重新准备");
+  }
   const read = scopedFetcher(request, fetcher);
   const current = await readExportEligibility(request, read);
   if (current.sourceProjectId !== prepared.sourceProjectId || current.project.id !== prepared.project.id

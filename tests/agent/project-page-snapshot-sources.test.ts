@@ -41,6 +41,26 @@ test("export follows explicit source binding and freezes results with GET only",
   await verifyExportEligibility(request, content, fetcher);
   assert.ok(!state.calls.slice(count).some(path => path.endsWith("/current-display-version")), "download verification must not refresh body");
 });
+test("explicit page choice is frozen before reads and variant-off skips its source", async () => {
+  const {request, fetcher, state} = fixture();
+  const chosen = {pageIds:["overview"] as ("overview" | "images")[], includeVariants:false};
+  const selected = {...request, selection:chosen};
+  const mutateAfterStart = async (path:string, init?:RequestInit) => {
+    chosen.pageIds[0] = "images"; chosen.includeVariants = true;
+    return fetcher(path, init);
+  };
+  const content = await readPageSnapshotSources(selected, mutateAfterStart);
+  assert.deepEqual(content.selection, {pageIds:["overview"],moduleIds:["competitor-overview"],includeVariants:false});
+  assert.equal(content.variants,undefined);
+  assert.ok(!state.calls.some(path => path.includes("exportStrict=1")));
+});
+
+test("page/source mismatch and variants-only legacy request fail before reads", async () => {
+  const {request, fetcher, state} = fixture();
+  await assert.rejects(readPageSnapshotSources({...request,selection:{pageIds:["images"],includeVariants:false}},fetcher),/不匹配/);
+  await assert.rejects(readPageSnapshotSources({...request,moduleIds:["variants-orders"]},fetcher),/变体/);
+  assert.deepEqual(state.calls,[]);
+});
 test("cross-project scope and read failures cannot become missing data", async () => {
   const { state, request, fetcher } = fixture();
   state.version.projectId = "99999999-9999-4999-8999-999999999999";

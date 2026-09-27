@@ -1,4 +1,6 @@
 import { safeOnlineUrl } from "./safe-export-url";
+import { renderSnapshotNavigation } from "./snapshot-navigation-shell";
+import type { SnapshotPageId } from "./snapshot-navigation-catalog";
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
@@ -14,8 +16,27 @@ function safeCss(css: string): string {
     }).replace(/<\/style/gi, "<\\/style");
 }
 
-export function serializePageSnapshot(input: { root: HTMLElement; cssText: string; title: string; capturedAt: string }): string {
+export function serializePageSnapshot(input: { root: HTMLElement; cssText: string; title: string; capturedAt: string; pageIds?: readonly SnapshotPageId[] }): string {
+  // Only explicit direct children are page boundaries. Nested business source markers are never pages.
+  const requested = input.pageIds && new Set<string>(input.pageIds);
+  const originalsByPage = new Map<string, HTMLElement>();
+  if (requested) {
+    if (!requested.size || requested.size !== input.pageIds!.length) throw new Error("无效或重复的快照页面边界");
+    for (const child of input.root.children) {
+      if (!(child instanceof HTMLElement) || !child.hasAttribute("data-snapshot-page")) continue;
+      const id = child.getAttribute("data-snapshot-page")!;
+      if (!['SECTION', 'DIV'].includes(child.tagName)) throw new Error(`无效的快照页面边界: ${id}`);
+      if (!requested.has(id) || originalsByPage.has(id)) throw new Error(`快照页面边界不匹配: ${id}`);
+      originalsByPage.set(id, child);
+    }
+    if (originalsByPage.size !== requested.size) throw new Error("快照页面边界缺失");
+  }
   const clone = input.root.cloneNode(true) as HTMLElement;
+  const pageCopies = new Map<string, HTMLElement>();
+  if (requested) for (const [id, original] of originalsByPage) {
+    const index = Array.prototype.indexOf.call(input.root.children, original) as number;
+    pageCopies.set(id, clone.children[index] as HTMLElement);
+  }
   const originals = [input.root, ...input.root.querySelectorAll("*")];
   const copies = [clone, ...clone.querySelectorAll("*")];
   for (let index = 0; index < originals.length; index++) {
@@ -57,5 +78,14 @@ export function serializePageSnapshot(input: { root: HTMLElement; cssText: strin
     if (node instanceof HTMLAnchorElement) { node.rel = "noopener noreferrer"; node.target = "_blank"; node.setAttribute("referrerpolicy", "no-referrer"); }
   }
   const css = safeCss(input.cssText);
+  if (requested) {
+    for (const [id, copy] of pageCopies) {
+      if (copy.parentElement !== clone) throw new Error(`快照页面边界在净化后缺失: ${id}`);
+    }
+    const pageElements = new Set(pageCopies.values());
+    const header = [...clone.children].filter(child => !pageElements.has(child as HTMLElement)).map(child => child.outerHTML).join("");
+    const shell = renderSnapshotNavigation(input.pageIds!.map(id => ({ id, html: pageCopies.get(id)!.outerHTML })));
+    clone.innerHTML = header + shell;
+  }
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; img-src https: data:; style-src 'unsafe-inline'; font-src https: data:; base-uri 'none'; form-action 'none'; object-src 'none'"><meta name="referrer" content="no-referrer"><meta name="snapshot-captured-at" content="${escapeHtml(input.capturedAt)}"><title>${escapeHtml(input.title)} · 项目快照</title><style>${css}</style></head><body>${clone.outerHTML}</body></html>`;
 }

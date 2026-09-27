@@ -12,9 +12,11 @@ import {readPageSnapshotVoc, type VocSnapshotSources} from "./read-page-snapshot
 import {readPageSnapshotKeywords, type KeywordsSnapshotSources} from "./read-page-snapshot-keywords";
 import {readPageSnapshotDefinition, type DefinitionSnapshotSources} from "./read-page-snapshot-definition";
 import {readPageSnapshotTraffic, type TrafficSnapshotSources} from "./read-page-snapshot-traffic";
+import {resolveSnapshotSelection, snapshotNavigationGroups, type ResolvedSnapshotSelection, type SnapshotPageId, type SnapshotSelection} from "./snapshot-navigation-catalog";
 
 export const pageSnapshotModules: readonly ExportSectionId[] = connectedExportModules;
 export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourceProjectId" | "capturedAt" | "sourceLabel"> & {
+  selection: ResolvedSnapshotSelection;
   moduleIds: ExportSectionId[];
   overview: CompetitorOverviewSnapshotProps | null;
   variants?: VariantsSnapshotSources;
@@ -25,6 +27,22 @@ export type PageSnapshotSources = Pick<PreparedProjectExport, "project" | "sourc
   checklist?: DefinitionSnapshotSources;
   traffic?: TrafficSnapshotSources;
 };
+
+/** Capture caller-owned arrays synchronously, before any source read can mutate them. */
+export function resolvePageSnapshotRequest(request: ExportRequest): {request: ExportRequest; selection: ResolvedSnapshotSelection} {
+  const moduleIds = [...request.moduleIds];
+  if (moduleIds.some(id => !pageSnapshotModules.includes(id))) throw new Error("所选模块尚未接入原页面快照");
+  const chosen: SnapshotSelection = request.selection
+    ? {pageIds: [...request.selection.pageIds], includeVariants: request.selection.includeVariants}
+    : {pageIds: snapshotNavigationGroups.flatMap<{id:SnapshotPageId;sourceId:ExportSectionId}>(group => group.pages)
+      .filter(page => moduleIds.includes(page.sourceId)).map(page => page.id), includeVariants: moduleIds.includes("variants-orders")};
+  if (!request.selection && chosen.includeVariants && !chosen.pageIds.includes("overview"))
+    throw new Error("变体 / 订单必须随竞品参数总览选择");
+  const selection = resolveSnapshotSelection(chosen, undefined);
+  if (moduleIds.length !== selection.moduleIds.length || moduleIds.some(id => !selection.moduleIds.includes(id)))
+    throw new Error("快照页面与来源模块选择不匹配");
+  return {request: {...request, moduleIds: [...selection.moduleIds], selection: chosen}, selection};
+}
 
 export function stageData(context: ExportModuleContext, stage: keyof NonNullable<ExportModuleContext["version"]>["stageOutputs"]): Record<string, unknown> {
   const output = context.version?.stageOutputs[stage];
@@ -59,7 +77,8 @@ export function snapshotProducts(context: ExportModuleContext): Product[] {
 }
 
 export async function readPageSnapshotSources(request: ExportRequest, fetcher: ExportFetcher = exportFetcher): Promise<PageSnapshotSources> {
-  if (request.moduleIds.some(id => !pageSnapshotModules.includes(id))) throw new Error("所选模块尚未接入原页面快照");
+  const frozen = resolvePageSnapshotRequest(request);
+  request = frozen.request;
   const read = scopedFetcher(request, fetcher);
   const {project, source, sourceProjectId} = await readExportEligibility(request, read);
   const version = await readCurrentProjectDisplayVersion({
@@ -105,7 +124,7 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   await verifyExportSession(request, read); request.signal.throwIfAborted();
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
-    sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds],
+    sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds], selection:frozen.selection,
     sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
     overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}), ...(voc ? {voc} : {}), ...(keywords ? {keywords} : {}), ...(definition ? {definition} : {}),
     ...(checklist ? {checklist} : {}),
