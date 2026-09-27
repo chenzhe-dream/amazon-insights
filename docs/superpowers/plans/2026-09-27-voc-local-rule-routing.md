@@ -16,12 +16,12 @@
 
 ## Tasks
 
-- [ ] Add a regression in `tests/agent/alexa-voc-local-rule-publication.test.ts`: publish a valid snapshot with omitted/local mode and assert zero downstream job access; explicit model mode still enqueues. Run it and observe the existing unwanted wake.
-- [ ] In `server/runtime/alexa-voc-normalization-runtime.ts`, carry `positioningMode` from runtime options into both commit and replay publication. Use `snapshot.created && input.positioningMode === "model"` as the wake condition. Snapshot creation remains unconditional.
-- [ ] In `server/services/manual-alexa-voc-service.ts`, pass the server-owned mode through both direct/reused import publication paths. Explicitly configure local rules in `server/app.ts` and `server/agent-service.ts`.
-- [ ] Extend import tests and SQLite/PostgreSQL recovery scenarios to verify local mode preserves results and replay while never creating positioning stages. Keep the existing model recovery tests in explicit model mode.
-- [ ] Run normalization/import/publication/local-report and queue-safety regressions, typecheck and production build. Verify the actual project entry and waiting/ready/history UI before release.
-- [ ] Review formal checkout/active jobs, commit the isolated changes, then publish through `manage-formal-stack.ps1 -PublishCode` only if idle. Keep a rollback reference. Verify online health, actual entry and no accidental model enqueue. Record any verification limits.
+- [x] Add a regression in `tests/agent/alexa-voc-local-rule-publication.test.ts`: publish a valid snapshot with omitted/local mode and assert zero downstream job access; explicit model mode still enqueues. Run it and observe the existing unwanted wake.
+- [x] In `server/runtime/alexa-voc-normalization-runtime.ts`, carry `positioningMode` from runtime options into both commit and replay publication. Use `snapshot.created && input.positioningMode === "model"` as the wake condition. Snapshot creation remains unconditional.
+- [x] In `server/services/manual-alexa-voc-service.ts`, pass the server-owned mode through both direct/reused import publication paths. Explicitly configure local rules in `server/app.ts` and `server/agent-service.ts`.
+- [x] Extend import tests and SQLite/PostgreSQL recovery scenarios to verify local mode preserves results and replay while never creating positioning stages. Keep the existing model recovery tests in explicit model mode.
+- [x] Run normalization/import/publication/local-report and queue-safety regressions, typecheck and production build. Verify the actual project entry and waiting/ready/history UI before release.
+- [x] Review formal checkout/active jobs, commit the isolated changes, then publish through `manage-formal-stack.ps1 -PublishCode` only if idle. Keep a rollback reference. Verify online health, actual entry and no accidental model enqueue. Record any verification limits.
 
 ## Commands
 
@@ -42,3 +42,12 @@ npm run build
 - Actual normal member login opened the affected four-ASIN project's definition and positioning pages. Stable local readiness was confirmed after workspace loading; no model/run/import POSTs, browser errors, or incident data changes. Counts remained 9 job attempts, 9 agent audit rows, 9 snapshots, 0 model reports. Temporary test members were disabled and sessions revoked.
 - The absence of a model report remains historical fact; this fix does not retry or rewrite that failed task. Local rules can use the saved four normalized inputs. No shared timeout configuration changed.
 - Browser fixture verifies waiting/normalization/ready transitions and retained report frame; actual project screenshots are in ignored `test-results/voc-local-routing/`. Release verification will be appended after the managed publish.
+
+
+## Published and verified
+
+- Managed formal publish succeeded at `f440f75b82724c8ed3982c5857d19551c5c88c1d`; Web 31900 / Agent 31901 healthy.
+- Artifact: `275b29f97913af33050296e1bd4f630f33311506ff4b7f31047d6e048b2eed1c`; source hash: `49b4598504aa1fe59faef7018609e6f9b4979ea4f6146db109e1405f6c3584cc`.
+- Rollback reference: `codex/rollback-before-voc-local-routing-20260927-1440` -> `15dd3404daf2814b4819e8833d9764adc45092a0` (includes the latest export work).
+- After publication, normal member login opened the affected project directly without URL task parameters. All 4 inputs and keyword coverage 4/4 were visible, definition stayed ready after loading, and the positioning table rendered. Screenshots inspected; no browser errors or analysis POSTs. Job/audit/snapshot/report counts stayed 9/9/9/0.
+- Formal verification was read-only for project data. The no-wake behavior of new imports, successful normalization and recovery was verified in isolated tests; user VOC was not reimported, regenerated or overwritten online. Test users were disabled and sessions revoked.
