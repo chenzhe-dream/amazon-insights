@@ -27,7 +27,7 @@
 
 ## 执行证据
 
-本地数值及来源汇总：test-results/shape-final-gap-audit.json、test-results/shape-final-source-audit.json（未提交真实商品详情和凭据）。浏览器排序证据：test-results/shape-final-sorting/；趋势证据：test-results/shape-product-trend/。正式发布及线上验证结果在完成后追加。
+本地数值及来源汇总：test-results/shape-final-gap-audit.json、test-results/shape-final-source-audit.json（未提交真实商品详情和凭据）。浏览器排序证据：test-results/shape-final-sorting/；趋势证据：test-results/shape-product-trend/。正式发布及线上验证结果见下文。
 
 ## 本地回归结果
 
@@ -36,3 +36,13 @@
 - 独立代码审阅发现键盘进入浮层和单月客单价缺口，已修复并加入真实键盘导航回归。最后审阅无未解决的重要问题。
 
 - `npm run typecheck` 通过；已检查排序桌面截图、趋势桌面及390px长历史截图。
+
+## 正式发布与真实页面验收（2026-09-27）
+
+- 发布前发现另一个窗口已经发布收藏导出导航及侧栏布局更新（20f73f56），版本守卫在切换前终止旧基线发布。合并后无冲突，相关导航及形态视图13项验证全部通过。
+- 通过既有 manage-formal-stack.ps1 -PublishCode 发布 4c206be2370817e214859cb3a0ed90eca3705f15；线上健康返回相同 sourceCommit，artifactId 为 9a558985c3ebac503f03e43aed1a2804a12ac5c92649835a3c57080e69da1fab。
+- 回滚分支 codex/rollback-before-shape-final-parity-20260927 指向 20f73f56752afd8c621dd3c4e4567a85ee352eb8，保留另一个窗口更新。
+- 使用临时成员账户正常登录正式入口，读取真实已保存140件报告。验证人工形态输入焦点及控件高度不跳动、自动草稿刷新恢复、品牌完整分组升降序、多月详情含客单价、单月数值及说明、覆盖说明默认折叠、390px浮层不出界。已查看桌面、窄屏及分组排序截图。
+- 真实 Sorftime 查询 Electric Blade Grinders 成功解析为14092831。Floor Lamps 实际返回1063294与5486436011两个同名节点，接口按设计提示使用准确节点；未恢复原版任取第一项的行为。原验收脚本错误假设该名称唯一，核查原始响应后修正验收断言，未改服务逻辑。
+- 页面错误0；原报告采集尝试数431、模型任务数0，验收前后不变，没有重新采集商品。临时账户已停用并撤销会话；用户原有草稿未修改。
+- 线上证据位于 test-results/shape-final-online/result.json 及同目录截图（忽略提交）。此次验证不代表所有类目或真实300件采集已通过；第二模块仍待用户最终验收，第三模块尚未启动。
