@@ -68,7 +68,7 @@ export function MarketOverviewResult({ report, onOpenReport }: { report: MarketO
   </section>;
 }
 
-function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:MarketResearchScope;setScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>;fromMonth:string;setFromMonth:(month:string)=>void}) {
+function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAuditDetails=false}:{scope:MarketResearchScope;setScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>;fromMonth:string;setFromMonth:(month:string)=>void;showAuditDetails?:boolean}) {
   const overviewController=useRef<MarketOverviewController|null>(null);
   const [jobs, setJobs] = useState<MarketResearchJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -155,7 +155,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:
     <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
     <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${selected.scope.month} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，统计以完整自然月为准。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
       {selected?.report?<MarketOverviewResult report={selected.report} onOpenReport={()=>{const nodeIdPath=selected.report?.nodeIdPath??selected.scope.nodeQuery;if(nodeIdPath!==selected.scope.nodeQuery)setScope(current=>({...current,nodeQuery:nodeIdPath}));overviewController.current?.openReport({...selected.scope,nodeQuery:nodeIdPath});}}/>:<div className="pending-box" role="status"><strong>{submitting||selected?.status==='queued'||selected?.status==='running'?'正在从卖家精灵拉取':selected?.status==='failed'?'卖家精灵暂无可用结果':'等待指定类目节点'}</strong><span>{selected?.error?.message??'已有数据和历史版本会保留；没有来源的指标不会填零。'}</span></div>}
-    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
+    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} showAuditDetails={showAuditDetails} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
     </LaunchSection>
     <details className="card market-reference-history"><summary>采集历史与状态</summary><div className="market-research-body"><aside className="card market-research-history"><div className="section-head"><h3>采集历史</h3><button className="ghost-btn" type="button" disabled={submitting} onClick={() => void refresh()}>刷新</button></div>
       <p className="market-research-note">最近 30 次，可刷新页面恢复结果。</p>
@@ -170,7 +170,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth}:{scope:
 
 type MarketNavigationProps = { view?: MarketView; onViewChange?: (view: MarketView) => void };
 
-function MarketResearchModules({ view: controlledView, onViewChange }: MarketNavigationProps) {
+function MarketResearchModules({ view: controlledView, onViewChange, showAuditDetails=false }: MarketNavigationProps & {showAuditDetails?:boolean}) {
   const [restoreVersion,setRestoreVersion]=useState(0),[favoriteRequest,setFavoriteRequest]=useState(0);
   const [keywordInput,setKeywordInput]=useState<KeywordFavoriteInput|undefined>(),[restoredKeywordInput,setRestoredKeywordInput]=useState<KeywordFavoriteInput|undefined>();
   const [localView,setView]=useState<MarketView>('overview');
@@ -239,8 +239,8 @@ function MarketResearchModules({ view: controlledView, onViewChange }: MarketNav
   }
   return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
     <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
-    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
+    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
 }
-export function MarketResearchSection({ sessionIdentity, ...navigation }: { sessionIdentity: string } & MarketNavigationProps) {
-  return <MarketResearchModules key={sessionIdentity} {...navigation} />;
+export function MarketResearchSection({ sessionIdentity, showAuditDetails=false, ...navigation }: { sessionIdentity: string; showAuditDetails?:boolean } & MarketNavigationProps) {
+  return <MarketResearchModules key={sessionIdentity} showAuditDetails={showAuditDetails} {...navigation} />;
 }

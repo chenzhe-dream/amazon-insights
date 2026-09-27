@@ -28,6 +28,32 @@ test('saved report keeps all fifteen original chapters in original order with vi
  assert.match(html,/50%/);assert.doesNotMatch(html,/99\.9%/);
  assert.match(html,/数据源未回显完整范围/);
 });
+
+test('admin and member see the same business report, with audit panels only for admin',()=>{
+ const detail=overviewDistributionDetails();
+ const render=(showAuditDetails?:boolean)=>renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}} showAuditDetails={showAuditDetails}/>);
+ const member=render(false),admin=render(true);
+ assert.equal(render(),member,'missing role flag defaults to the member view');
+ for(const html of [member,admin]){
+  assert.deepEqual([...html.matchAll(/data-report-section="([^"]+)"/g)].map(match=>match[1]),overviewPresentationSections.map(section=>section.id));
+  assert.match(html,/市场分析报告/);
+  assert.match(html,/样本月销量/);
+ }
+ for(const label of ['已保存指标与原始来源','分析维度覆盖与缺口','本报告的分析规则','报告版本与来源身份']){
+  assert.ok(admin.includes(label),`admin should see ${label}`);
+  assert.ok(!member.includes(label),`member should not see ${label}`);
+ }
+});
+
+test('role-specific audit visibility preserves report loading and failure recovery',()=>{
+ const detail=overviewDistributionDetails();
+ for(const showAuditDetails of [false,true])for(const error of [null,'读取暂时失败']){
+  const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={null} error={error} onRetry={()=>{}} showAuditDetails={showAuditDetails}/>);
+  assert.match(html,/已保存总览报告/);
+  assert.match(html,error?/读取暂时失败|重新读取报告/:/正在读取此版本报告/);
+  assert.equal(html.includes('报告版本与来源身份'),showAuditDetails);
+ }
+});
 test('presentation selection preserves source entry identity and deterministic month order',()=>{
  const detail=overviewDistributionDetails(),entry=detail.numbers.distributions![0];
  const earlier={...entry,month:'2026-07'};const input=[entry,earlier];
@@ -88,6 +114,25 @@ test('rule-only report shows saved sample facts and unconverted concentration ra
  assert.match(sales,/42/);assert.match(sales,/单月样本|只有一个月/);
  assert.match(concentration,/0\.3583/);assert.match(concentration,/单位未确认/);
  assert.doesNotMatch(concentration,/35\.83%/);
+});
+
+test('rules-only report omits model-empty block while historical model attempts retain it',()=>{
+ const detail=overviewDistributionDetails();
+ const report=detail.entry.report;
+ report.semanticStatus='skipped';
+ report.ruleStatus='partial';
+ report.versions.model=null;
+ report.modelResults=[];
+ const render=()=>renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}}/>);
+ const rulesOnly=render();
+ assert.match(rulesOnly,/市场分析报告/);
+ assert.match(rulesOnly,/样本月销量/);
+ assert.doesNotMatch(rulesOnly,/基于证据的分段分析|此版本尚无成功的模型解释/);
+ report.semanticStatus='unavailable';
+ report.versions.model='market.semantic.text.v1';
+ const historical=render();
+ assert.match(historical,/基于证据的分段分析/);
+ assert.match(historical,/此版本尚无成功的模型解释/);
 });
 
 test('product concentration uses its own returned-product denominator and preserves source limits',()=>{

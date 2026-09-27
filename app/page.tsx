@@ -2090,7 +2090,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         : "当前项目暂无可读取的分析报告。首次分析可正常启动；若此前已完成分析，请联系管理员恢复报告。"}</p> : null}
 
 
-      {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} view={activeMarketView} onViewChange={view => router.push(marketViewHref(view, window.location.search), { scroll: false })} /></div>}
+      {activeTab === "market-overview" && !authSession.logoutPending && <div className="page-content"><MarketResearchSection sessionIdentity={runtimeSessionKey} showAuditDetails={authSession.user.role === "admin"} view={activeMarketView} onViewChange={view => router.push(marketViewHref(view, window.location.search), { scroll: false })} /></div>}
 
       {activeTab === "overview" && <div className="page-content compare-page">
         <section className="card asin-builder">

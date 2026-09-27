@@ -5,7 +5,7 @@ import {chromium} from 'playwright';
 import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
 import {overviewRun,overviewRunId,overviewEntry,overviewDistributionDetails,overviewScope} from './helpers/market-overview-page-fixture';
-test('overview page restores fixed reports, shares selection and isolates late history responses',{timeout:60000},async t=>{
+test('overview page restores fixed reports, keeps module selection independent and isolates late history responses',{timeout:60000},async t=>{
   const server=await createServer({configFile:false,cacheDir:'test-results/overview-page-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
   const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});const origin=server.resolvedUrls!.local[0].replace(/\/$/,'');
   const page=await browser.newPage({viewport:{width:1400,height:1000}});page.setDefaultTimeout(7000);let slow=false,release:(()=>void)|undefined,allowStarts=false,failRunOnce=true,failReads=false;let current=overviewRun(false);const studies=new Map<string,Record<string,unknown>>();
@@ -35,7 +35,7 @@ test('overview page restores fixed reports, shares selection and isolates late h
   await mkdir('test-results/market-overview-page',{recursive:true});await price.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-overview-page/distribution-desktop.png'});
   await page.setViewportSize({width:390,height:844});await price.scrollIntoViewIfNeeded();assert.ok(await price.evaluate(el=>el.scrollWidth>el.clientWidth));await page.screenshot({path:'test-results/market-overview-page/distribution-mobile.png'});await page.setViewportSize({width:1400,height:1000});
   assert.equal(await page.getByLabel('类目节点或路径').inputValue(),overviewScope.nodeIdPath);
-  await page.getByRole('button',{name:'类目买家评论见解',exact:true}).click();assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),overviewScope.nodeIdPath);assert.equal(writes.length,0);
+  await page.getByRole('button',{name:'类目买家评论见解',exact:true}).click();assert.equal(await page.getByLabel('类目路径',{exact:true}).inputValue(),'');assert.equal(writes.length,0);
   await page.getByRole('button',{name:'市场总览',exact:true}).click();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();
   await page.getByText('分析设置与任务管理',{exact:true}).click();
   slow=true;await page.getByLabel('总览报告版本').selectOption(overviewEntry(true).attemptId);await requested;await page.getByLabel('总览报告版本').selectOption('latest');slow=false;release?.();
