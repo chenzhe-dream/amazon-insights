@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as downloader from "../../app/project-export/download-export-html";
+import {formatSnapshotTime} from '../../app/project-export/format-snapshot-time';
+
+test('snapshot timestamps cross midnight in Beijing and keep missing timestamps unknown', () => {
+  assert.equal(formatSnapshotTime('2026-12-31T16:02:03Z'),'2027-01-01 00:02:03（北京时间）');
+  assert.equal(formatSnapshotTime('2027-01-01T00:02:03+08:00'),formatSnapshotTime('2026-12-31T16:02:03Z'));
+  for (const value of [undefined,null,'','not-a-date']) assert.equal(formatSnapshotTime(value),'未记录');
+});
 
 test("filenames use Beijing time, preserve Unicode and remain safe and bounded on Windows", () => {
   assert.ok(downloader, "HTML download module must be implemented");

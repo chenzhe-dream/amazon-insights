@@ -279,3 +279,12 @@
 - 合并后 8 项导航回归、类型检查、OpenSpec strict 通过。受管发布完成构建与切换，artifact bab1fbe07fee25a5896eb7057668a64901a9335ea38a15980e4126388102ec9b。Web/Agent/LAN 健康且源码身份一致；1012 个源码文件除换行符外完全一致，实际下发的 8 个资源哈希与构建一致，业务文件、指针、配置与备份一致。
 - 使用已登录浏览器直测正式环境三轮滑板车1、融蜡灯：预览 iframe 和独立无脚本 HTML 下滚 700px 后导航仍在视口顶端 0–24px 区间；10 页、收起选择、实际下载字节一致、独立文件切页无 API、窄屏确认按钮均通过。页面错误与接口 4xx/5xx 为 0；既有失败/等待输入状态仍如实呈现。
 - 证据：test-results/pinned-nav-formal-release.log、pinned-nav-release-assets.json、pinned-nav-release-online/result.json 与对应截图/HTML，仅存在忽略目录。未重跑采集/模型、未推送远程 Git、未合入 main；正式目录原三项未跟踪候选保留。历史下载文件保持不变，需要重新导出才能使用新导航。
+
+### 2026-09-27 阅读、连续选择与时间优化（本地完成，未发布）
+
+- 仅导出前端：1100px 以内可折叠顶部目录，表格正文 12px、流量数字 11px。实际回放发现推荐来源说明与条形图横排挤压，补充失败回归后将快照内指标单元格改为纵排，保留完整说明。
+- 连续选择停止 350ms 后开始准备，选择改变立即失效旧 HTML；请求开始后计 60 秒超时。冻结时钟验证三次连续选择只新增一次报告读取，延迟期间关闭不会开始读取；取消、权限撤销、切项目、A→B→A 和下载前核验仍通过。
+- 统一北京时间，明确快照生成时间和基础报告完成时间，另注明各模块以页内时间为准。覆盖跨年和缺失/无效时间。
+- 最终五个测试文件合计 37 项通过：sources、lifecycle、navigation-file、navigation-shell、export-html。类型检查、修改文件定向 ESLint、构建、OpenSpec strict、diff check 均通过。
+- 正式融蜡灯只读输入在本地修改版回放成功，5932554 字节，实际下载与预览完全一致，未启动采集或模型。1600px、1024px、390px 视觉复核；1024px 收起目录后正文宽 976px，390px 无整页横向溢出。图片网络请求在回放中拦截，未将外网图片可用性计入本次验收。
+- 证据保留在忽略目录：export-readability-final-tests.log、export-readability-final-build.log、export-readability-final-typecheck.log、export-readability-live-final.log、export-readability-visual.json、export-readability-preview.html 及 desktop/medium/mobile 截图。没有提交真实业务数据；未修改正式目录、打印/Esc、后端或另一窗口代码，未发布。

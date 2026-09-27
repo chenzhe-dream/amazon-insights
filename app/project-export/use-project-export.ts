@@ -35,17 +35,20 @@ export function useProjectExport(projectId: string, selection: SnapshotSelection
     verification.current?.abort();
     if (!sessionIdentity || !organizationId || modules === "[]") return;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("读取超时，请重试")), 60_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let active = true;
     const request: ExportRequest = { libraryProjectId: projectId, moduleIds: JSON.parse(modules),
       selection: {pageIds: JSON.parse(pages), includeVariants},
       sessionIdentity, organizationId, signal: controller.signal };
-    void preparePageSnapshot(request).then(({content,html}) => {
-      if (active) setReceipt({ key, kind: "ready", content, html });
-    }).catch(error => {
-      if (active) setReceipt({ key, kind: "error", message: error instanceof Error ? error.message : "报告读取失败，请重试" });
-    }).finally(() => clearTimeout(timer));
-    return () => { active=false;clearTimeout(timer);controller.abort();verification.current?.abort(); };
+    const scheduled = setTimeout(() => {
+      timer = setTimeout(() => controller.abort(new Error("读取超时，请重试")), 60_000);
+      void preparePageSnapshot(request).then(({content,html}) => {
+        if (active) setReceipt({ key, kind: "ready", content, html });
+      }).catch(error => {
+        if (active) setReceipt({ key, kind: "error", message: error instanceof Error ? error.message : "报告读取失败，请重试" });
+      }).finally(() => clearTimeout(timer));
+    }, 350);
+    return () => { active=false;clearTimeout(scheduled);clearTimeout(timer);controller.abort();verification.current?.abort(); };
   }, [key, projectId, modules, pages, includeVariants, sessionIdentity, organizationId]);
 
   const result = receipt?.key === key ? receipt : null;

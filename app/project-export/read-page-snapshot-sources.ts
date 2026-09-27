@@ -1,4 +1,5 @@
 import { MarketSiteSchema } from "../../shared/market-sites";
+import {formatSnapshotTime} from './format-snapshot-time';
 import { readCurrentProjectDisplayVersion } from "../lib/project-display-version-browser";
 import type { CompetitorOverviewSnapshotProps, Product } from "../project-report-views/competitor-overview";
 import { exportFetcher, scopedFetcher, readExportEligibility, readExportSellingTranslations, verifyExportSession,
@@ -125,7 +126,7 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
   return structuredClone({
     project: {id:project.id, name:project.name, marketplace:project.marketplace, asins:project.asins},
     sourceProjectId, capturedAt: context.capturedAt, moduleIds:[...request.moduleIds], selection:frozen.selection,
-    sourceLabel: version ? `已有报告 · 数据完成 ${version.sourceCompletedAt}` : "暂无已发布基础报告",
+    sourceLabel: version ? `基础报告完成时间：${formatSnapshotTime(version.sourceCompletedAt)}` : "暂无已发布基础报告",
     overview, ...(variants ? {variants} : {}), ...(images ? {images} : {}), ...(voc ? {voc} : {}), ...(keywords ? {keywords} : {}), ...(definition ? {definition} : {}),
     ...(checklist ? {checklist} : {}),
     ...(traffic ? {traffic} : {}),

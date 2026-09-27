@@ -15,6 +15,7 @@ import {PageSnapshotDefinition} from "./page-snapshot-definition";
 import {PageSnapshotChecklist} from "./page-snapshot-checklist";
 import {PageSnapshotTraffic} from "./page-snapshot-traffic";
 import type {SnapshotPageId} from "./snapshot-navigation-catalog";
+import {formatSnapshotTime} from './format-snapshot-time';
 
 function SnapshotPage({id, content}: {id: SnapshotPageId; content: PageSnapshotSources}) {
   switch (id) {
@@ -47,7 +48,7 @@ function SnapshotPage({id, content}: {id: SnapshotPageId; content: PageSnapshotS
 
 export function PageSnapshotView({content}: {content: PageSnapshotSources}) {
   return <SnapshotPresentationProvider><div className="page-snapshot">
-    <header className="card"><h1>{content.project.name}</h1><p>{content.project.marketplace} · {content.project.asins.length} 个 ASIN · 快照时间 {new Date(content.capturedAt).toLocaleString("zh-CN", {timeZone:"Asia/Shanghai"})}（北京时间）</p><p>{content.sourceLabel}</p></header>
+    <header className="card"><h1>{content.project.name}</h1><p>{content.project.marketplace} · {content.project.asins.length} 个 ASIN · 快照生成时间：{formatSnapshotTime(content.capturedAt)}</p><p>{content.sourceLabel}</p><p>各模块的数据时间以页内标注为准。</p></header>
     {content.selection.pageIds.map(id => <SnapshotPage key={id} id={id} content={content}/>)}
   </div></SnapshotPresentationProvider>;
 }
