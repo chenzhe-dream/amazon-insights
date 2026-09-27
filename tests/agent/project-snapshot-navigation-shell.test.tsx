@@ -49,8 +49,11 @@ test('first selected page is visible and a native label switches the only visibl
   assert.equal(await page.locator('[data-snapshot-page="images"]').isVisible(), true);
   assert.equal(await page.locator('[data-snapshot-page="overview"]').isVisible(), false);
   assert.equal(await page.locator('label[for="snapshot-page-images"]').getAttribute('aria-current'), null);
-  assert.match(await page.locator('label[for="snapshot-page-images"]').evaluate(e => getComputedStyle(e).boxShadow), /rgb|rgba/);
-  assert.match(await page.locator('.snapshot-nav-group summary').first().evaluate(e => getComputedStyle(e).boxShadow), /rgb|rgba/);
+  const selectedLeafBorder = await page.locator('label[for="snapshot-page-images"]').evaluate(e => getComputedStyle(e).borderLeftColor);
+  const unselectedLeafBorder = await page.locator('label[for="snapshot-page-overview"]').evaluate(e => getComputedStyle(e).borderLeftColor);
+  assert.notEqual(selectedLeafBorder, unselectedLeafBorder);
+  assert.equal(selectedLeafBorder, 'rgb(232, 145, 45)');
+  assert.equal(await page.locator('[data-snapshot-group="overview-group"] > summary').evaluate(e => getComputedStyle(e).borderLeftColor), 'rgb(26, 168, 161)');
 });
 
 test('radio keyboard navigation, narrow menu, file URL and sandbox iframe work without scripts', async t => {
@@ -65,6 +68,17 @@ test('radio keyboard navigation, narrow menu, file URL and sandbox iframe work w
   await page.screenshot({path: resolve('test-results/snapshot-navigation-desktop.png'), fullPage:true});
   await page.setViewportSize({width:390,height:800});
   assert.equal(await page.locator('.snapshot-mobile-menu').isVisible(), true);
+  await page.locator('.snapshot-mobile-menu > summary').click();
+  assert.equal(await page.locator('label[for="snapshot-page-images"]').isVisible(), false);
+  await page.locator('#snapshot-page-images').focus();
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.locator('#snapshot-page-overview').isChecked(), true);
+  assert.equal(await page.locator('.snapshot-mobile-menu > summary').evaluate(e => getComputedStyle(e).outlineStyle), 'solid');
+  await page.setViewportSize({width:1360,height:900});
+  assert.equal(await page.locator('.snapshot-mobile-menu > summary').isVisible(), true);
+  await page.locator('.snapshot-mobile-menu > summary').click();
+  assert.equal(await page.locator('label[for="snapshot-page-overview"]').isVisible(), true);
+  await page.setViewportSize({width:390,height:800});
   await page.locator('.snapshot-mobile-menu > summary').click();
   assert.equal(await page.locator('label[for="snapshot-page-images"]').isVisible(), false);
   await page.locator('.snapshot-mobile-menu > summary').click();
@@ -117,7 +131,7 @@ test('a closed long second-level menu still shows parent keyboard focus and open
       {id:'voc-positioning',html:'<h2>定义结论</h2>'},
     ]);
   });
-  const page = await browser.newPage({javaScriptEnabled:false,viewport:{width:390,height:800}}); t.after(() => page.close());
+  const page = await browser.newPage({javaScriptEnabled:false,viewport:{width:390,height:240}}); t.after(() => page.close());
   await page.setContent(html);
   assert.equal(await page.locator('[data-snapshot-group="voc-group"]').getAttribute('open'),null);
   await page.locator('#snapshot-page-overview').focus();
@@ -128,7 +142,14 @@ test('a closed long second-level menu still shows parent keyboard focus and open
   await page.locator('[data-snapshot-group="voc-group"] > summary').click();
   assert.equal(await page.locator('label[for="snapshot-page-voc-positioning"]').isVisible(),true);
   assert.equal(await page.locator('label[for="snapshot-page-voc-insight"] .snapshot-nav-icon').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(122, 103, 216)');
+  const navList = page.locator('.snapshot-nav-list');
+  assert.equal(await navList.evaluate(e => e.scrollHeight > e.clientHeight), true);
   await page.locator('label[for="snapshot-page-voc-positioning"]').click();
+  assert.equal(await navList.evaluate(e => e.scrollTop > 0), true);
   assert.equal(await page.locator('[data-snapshot-page="voc-positioning"]').isVisible(),true);
   assert.equal(await page.locator('[data-snapshot-page="voc-summary"]').isVisible(),false);
+  assert.notEqual(await page.locator('[data-snapshot-group="voc-group"] > summary').evaluate(e => getComputedStyle(e).borderLeftColor),
+    await page.locator('[data-snapshot-group="overview-group"] > summary').evaluate(e => getComputedStyle(e).borderLeftColor));
+  assert.notEqual(await page.locator('label[for="snapshot-page-voc-positioning"]').evaluate(e => getComputedStyle(e).borderLeftColor),
+    await page.locator('label[for="snapshot-page-voc-summary"]').evaluate(e => getComputedStyle(e).borderLeftColor));
 });
