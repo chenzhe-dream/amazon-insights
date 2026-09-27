@@ -96,6 +96,7 @@ import { ManualAlexaVocRetentionService } from "./services/manual-alexa-voc-rete
 import { ProjectDisplayRetentionService } from "./services/project-display-retention-service";
 import { ImageRemarkCandidateRetentionService } from "./services/image-remark-candidate-retention-service";
 import { resolveMarketNodePath } from './services/market-node-path-resolver';
+import {resolveShapeCategoryName} from './services/market-shape-category-name';
 
 type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -436,6 +437,7 @@ export async function createAgentService(
     const app = buildAgentApp({
       marketResearchService,
       marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
+          resolveShapeCategoryName: input => resolveShapeCategoryName({ ...input, connector: connectors.sorftime }),
         resolveNodePath: input => resolveMarketNodePath({ ...input, connector: connectors.sellerSprite }),
         modelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.configurationVersion, promptVersion: marketModelRuntime.promptVersion } : null,
         overviewSynthesisModelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.overviewSynthesisConfigurationVersion, promptVersion: marketModelRuntime.overviewSynthesisPromptVersion } : null,

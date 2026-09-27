@@ -132,7 +132,7 @@ type AdminProxyTiming={event:'admin-proxy-timing';requestId:string;route:string;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 export function agentRequestTimeoutMs(contractPath: string, override?: number) {
-  return override ?? (ADMIN_READ_WRITE_ROUTES.has(contractPath) || SHAPE_REPORT_PATHS.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
+  return override ?? (contractPath === '/v1/market-analysis/shape-price/resolve-category' ? 65_000 : ADMIN_READ_WRITE_ROUTES.has(contractPath) || SHAPE_REPORT_PATHS.has(contractPath) ? 60_000 : contractPath === '/v1/runs/:runId/traffic-details/refresh' ? 55_000 : DEFAULT_TIMEOUT_MS);
 }
 const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 // Overview responses include evidence-backed rule baselines and saved versions.

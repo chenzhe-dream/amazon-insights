@@ -3,7 +3,7 @@ import test from 'node:test';
 import {chromium} from 'playwright';
 import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
-import {shapePageRun,shapeRunId} from './helpers/market-shape-page-fixture';
+import {shapePageRun,shapeRevision,shapeRunId} from './helpers/market-shape-page-fixture';
 test('query entry uses reuse API and polling recovers, stops after five failures and stops on denied access',{timeout:60000},async t=>{
  const server=await createServer({configFile:false,cacheDir:'test-results/shape-query-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
  const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});
@@ -25,4 +25,28 @@ test('query entry uses reuse API and polling recovers, stops after five failures
  for(const delay of [4000,8000,16000,30000]){await page.clock.fastForward(delay);await page.waitForTimeout(50);}
  await page.getByText(/自动重试已停止/).waitFor();assert.equal(reads-before,4);await page.clock.fastForward(120000);assert.equal(reads-before,4);
  mode=403;await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();await page.waitForTimeout(50);const denied=reads;await page.clock.fastForward(120000);assert.equal(reads,denied);assert.equal(commands.length,3);
+});
+
+test('English category resolves before shape query; failed lookups retain the report and numeric input bypasses lookup',{timeout:60000},async t=>{
+ const server=await createServer({configFile:false,cacheDir:'test-results/shape-category-name-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});
+ const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage(),lookups:string[]=[],queries:string[]=[];
+ let current=shapePageRun();current.run.status='succeeded';current.run.latestRevision=shapeRevision();current.run.history=[{revisionId:current.run.latestRevision.revisionId,ordinal:1,createdAt:current.run.latestRevision.createdAt}];
+ await page.route('**/*',async route=>{const request=route.request(),url=new URL(request.url());if(url.origin!==origin)return route.abort();
+  if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-shape-browser-harness.tsx"></script></body></html>`)});
+  if(!url.pathname.startsWith('/api/'))return route.continue();
+  if(url.pathname.endsWith('/shape-price/resolve-category')){const body=request.postDataJSON();lookups.push(body.name);assert.equal(body.marketplace,'US');
+   if(body.name==='Unknown')return route.fulfill({status:400,json:{error:'Sorftime 未找到完全匹配的类目英文名'}});
+   if(body.name==='Ambiguous')return route.fulfill({status:400,json:{error:'类目英文名对应多个节点'}});
+   return route.fulfill({json:{nodeId:'13280971'}});
+  }
+  if(url.pathname.endsWith('/shape-price/query')){const body=request.postDataJSON();queries.push(body.scope.nodeIdPath);if(body.scope.nodeIdPath!=='1:2:3'){current=shapePageRun();current.run.status='succeeded';current.run.scope={...current.run.scope,...body.scope};current.run.latestRevision=null;current.run.history=[];}current.run.params=body.params;return route.fulfill({json:current});}
+  if(url.pathname.endsWith(`/runs/${shapeRunId}/shape-price`))return route.fulfill({json:current});
+  return route.fulfill({status:404,json:{error:'unexpected route'}});
+ });
+ await page.goto(origin);const field=page.getByLabel('类目节点',{exact:true}),search=page.getByRole('button',{name:'筛选市场',exact:true});
+ await search.click();await page.getByRole('region',{name:'形态价格带版本报告'}).waitFor();assert.deepEqual(queries,['1:2:3']);assert.deepEqual(lookups,[]);
+ for(const [name,message] of [['Unknown','未找到完全匹配'],['Ambiguous','对应多个节点']] as const){await field.fill(name);await search.click();await page.getByRole('alert').filter({hasText:message}).waitFor();assert.equal(await field.inputValue(),name);assert.equal(await page.getByRole('region',{name:'形态价格带版本报告'}).count(),1);assert.deepEqual(queries,['1:2:3']);}
+ await field.fill('Floor Lamps');await search.click();await page.waitForFunction(()=>document.querySelector('input[aria-label="类目节点"]')?.getAttribute('value')==='13280971');assert.deepEqual(lookups,['Unknown','Ambiguous','Floor Lamps']);assert.deepEqual(queries,['1:2:3','13280971']);
+ await field.fill(' 13280971 ');await search.click();await page.waitForTimeout(100);assert.deepEqual(lookups,['Unknown','Ambiguous','Floor Lamps']);assert.deepEqual(queries,['1:2:3','13280971','13280971']);assert.equal(await field.inputValue(),'13280971');
 });

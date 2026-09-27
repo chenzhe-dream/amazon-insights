@@ -1,5 +1,6 @@
 import {MarketShapeReferenceRevisionResponseSchema,MarketShapeReferenceRevisionRequestSchema} from '../../shared/market-shape-reference-revision-contracts';
 import {MarketShapeQueryRequestSchema} from '../../shared/market-shape-query-contracts';
+import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from '../../shared/market-shape-category-name-contracts';
 import { z } from 'zod';
 import { MarketModuleIdSchema } from '../../shared/market-module-contracts';
 import { MarketShapeStartRequestSchema, MarketShapeRevisionRequestSchema } from '../../shared/market-shape-price-contracts';
@@ -19,6 +20,14 @@ async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit 
     return parsed.data;
 }
 const post = (body: unknown, key: string, signal?: AbortSignal): RequestInit => ({ method: 'POST', headers: { 'idempotency-key': MarketModuleIdSchema.parse(key) }, signal, body: JSON.stringify(body) });
+export async function resolveShapeNodeInput(marketplace:string,input:string,signal?:AbortSignal){
+ const value=input.trim();
+ if(/^\d+(?::\d+)*$/.test(value))return value;
+ const name=value.split(/[>›:：]/).at(-1)?.trim()??'';
+ const body=ShapeCategoryNameRequestSchema.parse({marketplace,name});
+ const result=await request('shape-price/resolve-category',ShapeCategoryNameResponseSchema,{method:'POST',signal,body:JSON.stringify(body)});
+ return result.nodeId;
+}
 export async function queryShapeRun(body:unknown,key:string,signal?:AbortSignal){
     const input=MarketShapeQueryRequestSchema.parse(body),{run}=await request('shape-price/query',MarketShapeRunResponseSchema,post(input,key,signal));
     const scope=input.scope,actual=run.scope;

@@ -91,3 +91,32 @@
 .market-shape-reference-view .shape-price-table td small { font-size: 11px; color: #687b94; padding-top: 3px; }
 .market-shape-reference-view .top-sales-table-filters { flex: 1 1 100%; min-width: 0; max-width: 100%; }
 .market-shape-reference-view .top-sales-table-filters label { max-width: 100%; }
+
+/* The month detail is portaled so the scrolling table cannot clip it. */
+.shape-ref-trend { min-width: 120px; }
+.shape-ref-trend-bars { display: flex; align-items: end; gap: 2px; height: 46px; }
+.shape-ref-trend-pair { display: flex; align-items: end; flex: 1; gap: 1px; height: 46px; }
+.shape-ref-trend-pair span { display: block; flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; }
+.shape-ref-trend-values { display: grid; gap: 2px; font-size: 10px; }
+.shape-ref-trend-values small { display: block; white-space: nowrap; }
+.shape-ref-trend-trigger { display: block; width: 100%; min-width: 120px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.shape-ref-trend-trigger:focus-visible { outline: 2px solid #2f80ed; outline-offset: 2px; }
+.shape-ref-trend-popover { box-sizing: border-box; overflow: auto; padding: 14px 16px 12px; border: 1px solid #dfe6ee; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(36,53,74,.18); color: #24354a; white-space: normal; }
+.shape-ref-trend-popover-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.shape-ref-trend-popover-head b { border-left: 3px solid #2f80ed; padding-left: 7px; }
+.shape-ref-trend-popover-head button { border: 0; background: transparent; color: #66758a; font-size: 22px; line-height: 1; cursor: pointer; }
+.shape-ref-trend-legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 6px; font-size: 10px; color: #66758a; }
+.shape-ref-trend-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.shape-ref-trend-legend i { width: 9px; height: 9px; border-radius: 2px; }
+.shape-ref-trend-chart { position: relative; }
+.shape-ref-trend-chart svg { display: block; width: 100%; height: auto; }
+.shape-ref-trend-axis { font-size: 9px; fill: #8291a5; }
+.shape-ref-trend-tooltip { position: absolute; top: 12px; transform: translateX(-50%); min-width: 145px; padding: 8px 10px; border: 1px solid #dfe6ee; border-radius: 6px; background: #fff; box-shadow: 0 4px 14px rgba(36,53,74,.12); z-index: 1; pointer-events: none; font-size: 11px; }
+.shape-ref-trend-tooltip b { display: block; padding-bottom: 4px; margin-bottom: 3px; border-bottom: 1px solid #edf1f5; }
+.shape-ref-trend-tooltip div { display: flex; justify-content: space-between; gap: 12px; padding-top: 3px; }
+.shape-ref-trend-month-axis { display: grid; gap: 3px; border-top: 1px solid #edf1f5; padding-top: 5px; font-size: 8px; color: #8c98a7; }
+.shape-ref-trend-month-axis span { min-width: 0; overflow: hidden; text-align: center; white-space: nowrap; }
+.shape-ref-trend-aov-axis { fill: #16a085; }
+.shape-ref-trend-popover p { margin: 8px 0 0; font-size: 9px; color: #9aa6b4; }
+.market-shape-reference-view .shape-section-sort { display: inline; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.market-shape-reference-view .shape-section-sort:focus-visible { outline: 2px solid #2f80ed; outline-offset: 2px; }

@@ -10,7 +10,7 @@ import {assertMarketProductQueryWindow} from '../shared/market-product-source-po
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema } from '../shared/market-module-contracts';
 import type { MarketShapeRun, MarketShapePublicRevision } from '../shared/market-shape-public-contracts';
-import { queryShapeRun, readShapeRun, saveShapeRevisionAnalysis, readShapeRevision, retryShapeSteps, cancelShapeRun } from './lib/market-shape-browser';
+import { queryShapeRun, readShapeRun, saveShapeRevisionAnalysis, readShapeRevision, retryShapeSteps, cancelShapeRun, resolveShapeNodeInput } from './lib/market-shape-browser';
 import type { MarketShapeExplanationPresentation } from '../shared/market-shape-explanation-presentation';
 import { MarketShapeReport } from './market-shape-report';
 import {MarketShapeProductTable} from './market-shape-product-table';
@@ -112,7 +112,10 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         setError(null);
         try {
             assertMarketProductQueryWindow(requestedSelection,new Date());
-            const scope = { nodeIdPath:requestedSelection.nodeIdPath,fromMonth:requestedSelection.fromMonth,toMonth:requestedSelection.toMonth,marketplace: requestedSelection.marketplace??'US', currency: marketSiteCurrency(requestedSelection.marketplace??'US') }, params = { poolSize: requestedPoolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-after-collection/v1', allowedLabels: [] } }, hash = JSON.stringify({ scope, params,forceRefresh });
+            const nodeIdPath=await resolveShapeNodeInput(requestedSelection.marketplace??'US',requestedSelection.nodeIdPath,signal);
+            signal.throwIfAborted();
+            if(nodeIdPath!==requestedSelection.nodeIdPath)onSelectionChange({nodeIdPath});
+            const scope = { nodeIdPath,fromMonth:requestedSelection.fromMonth,toMonth:requestedSelection.toMonth,marketplace: requestedSelection.marketplace??'US', currency: marketSiteCurrency(requestedSelection.marketplace??'US') }, params = { poolSize: requestedPoolSize, newProductMonths: 6, catalog: { task: 'market-product-shape-suggestion', taxonomyVersion: 'manual-after-collection/v1', allowedLabels: [] } }, hash = JSON.stringify({ scope, params,forceRefresh });
             const command = pendingStart.current?.hash === hash ? pendingStart.current : { hash, studyKey: browserRequestId(), runKey: browserRequestId() };
             pendingStart.current = command;
             const next = await queryShapeRun({scope,params,forceRefresh},command.runKey,signal);
@@ -191,7 +194,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     return <div className="market-shape-workspace market-shape-reference" style={{gridTemplateColumns:"minmax(0, 1fr)"}}><section className="card ss-market-query ss-market-query--lilac market-shape-controls">
   <form onSubmit={e => void start(e)}>
    <div className="ss-market-query-row"><span className="ss-market-query-label">选择站点</span><MarketSiteSelector value={selection.marketplace??'US'} onChange={marketplace=>onSelectionChange({marketplace,nodeIdPath:''})} disabled={queryLocked}/></div>
-   <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={queryLocked}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!selection.nodeIdPath} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID，例如 13280971" required disabled={queryLocked}/></div></div>
+   <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={queryLocked}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!/^\d+(?::\d+)*$/.test(selection.nodeIdPath.trim())} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID 或英文名，例如 Floor Lamps" required disabled={queryLocked}/></div></div>
     <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><label>起始月 <input type="month" value={selection.fromMonth} max={selection.toMonth} onChange={e=>onSelectionChange({fromMonth:e.target.value})} required disabled={queryLocked}/></label><label>结束月 <input type="month" value={selection.toMonth} max={maxMonth} onChange={e=>onSelectionChange({toMonth:e.target.value})} required disabled={queryLocked}/></label></div>
     <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={300} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={queryLocked}/></label></details>
     <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={queryLocked}>{busy?'提交中…':queryLocked?'正在采集':'筛选市场'}</button><button className="ghost-btn" type="button" disabled={queryLocked||!selection.nodeIdPath} onClick={()=>void start(undefined,poolSize,selection,true)}>重新采集</button><button className="ss-market-reset-btn" type="button" disabled={queryLocked} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);}}>重置条件</button></div>
