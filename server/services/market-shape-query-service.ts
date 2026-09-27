@@ -47,4 +47,3 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
   return result;
  });
 }
-

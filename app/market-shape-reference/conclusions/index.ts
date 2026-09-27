@@ -51,9 +51,9 @@ export function buildReferenceConclusions(
 ): ReferenceConclusions {
   const selected = selectedAsins ? new Set(selectedAsins) : null;
   const sourceProducts=report.products.filter(product => selected === null || selected.has(product.asin));
-  const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period)));
+  const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period,report.calculationVersion)));
   const products = sourceProducts.map(product=>({...product,sales:{...product.sales,
-    y2024:referencePeriodContribution(product,'y2024'),y2025:referencePeriodContribution(product,'y2025'),
+    y2024:referencePeriodContribution(product,'y2024',report.calculationVersion),y2025:referencePeriodContribution(product,'y2025',report.calculationVersion),
   }}));
   if (!products.length) return unavailable("所选范围没有 Sorftime 商品链接");
 
@@ -62,7 +62,7 @@ export function buildReferenceConclusions(
   const sampleScope = `${scoped.marketplace} · ${scoped.categoryName} · TOP${scoped.topLinkCount}`;
   const shape = (asin: string) => {
     const product = products.find(item => item.asin === asin);
-    return product ? resolveReferenceProductShape(product, assignments) : '—';
+    return report.calculationVersion==='shape-reference/1'?assignments[asin]?.trim()||product?.productShape?.trim()||'—':product ? resolveReferenceProductShape(product, assignments) : '—';
   };
   const sixMonthGap = missingSales(products, ["last6Months"]);
   const recentGap = missingSales(products, ["last3Months", "last6Months"]);

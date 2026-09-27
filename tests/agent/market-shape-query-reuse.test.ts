@@ -33,3 +33,15 @@ test('equivalent concurrent shape queries reuse a run and explicit refresh is id
  const afterCancelled=await service.queryShapes(f.actor,body,randomUUID());assert.notEqual(afterCancelled.run.id,afterEmpty.run.id);
  const count=await pg.pool.query("SELECT count(*)::int AS n FROM market_analysis_module_runs WHERE request_json->>'moduleKind'='shape-price'");assert.equal(count.rows[0].n,6);
 });
+
+test('completed usable cache expires after seven days without changing explicit history reads',{timeout:120000},async t=>{
+ const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);const f=await createMarketSemanticFixture(pg.pool);
+ const {organizationId,researchId,...scope}=f.scope;const params={poolSize:100,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion:'manual-after-collection/v1',allowedLabels:[]}};const body={scope,params};
+ const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});const first=await service.queryShapes(f.actor,body,randomUUID());
+ await pg.pool.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1",[first.run.id]);
+ // Stub only the source projection; cache lookup, persisted status, identity, TTL and receipts use PostgreSQL.
+ const withSource=(base:MarketModuleService)=>{const read=base.findShapes.bind(base);base.findShapes=async(actor,id)=>{const result=await read(actor,id);if(result.run.id===first.run.id)result.run.source={referenceAttemptId:randomUUID(),historyAttemptIds:[],referenceSnapshotId:'fixture',fetchedAt:new Date().toISOString(),selectionBasis:'provider-row-order',bsrTopVerified:false,products:[{asin:'B000000001',title:'fixture',brand:null,price:20,units:10}]};return result;};return base;};
+ withSource(service);assert.equal((await service.queryShapes(f.actor,body,randomUUID())).run.id,first.run.id);
+ const late=withSource(new MarketModuleService({context:f.context,modelIdentity:()=>null,now:()=>new Date(Date.now()+8*86400000)}));
+ assert.notEqual((await late.queryShapes(f.actor,body,randomUUID())).run.id,first.run.id);assert.equal((await late.findShapes(f.actor,first.run.id)).run.id,first.run.id);
+});

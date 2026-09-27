@@ -26,7 +26,17 @@ test('manual shape editing retains focus under an active shape filter and suppor
  await page.getByRole('button',{name:'筛选商品形态',exact:true}).click();await page.getByRole('button',{name:'显示全部',exact:true}).click();await page.getByRole('button',{name:'筛选商品形态',exact:true}).click();
  await page.getByLabel('批量选择 B000000001',{exact:true}).check();await page.getByLabel('批量选择 B000000002',{exact:true}).check();await page.getByLabel('批量形态',{exact:true}).fill('弧形灯');await page.getByRole('button',{name:'批量设为此形态',exact:true}).click();
  assert.equal(await input.inputValue(),'弧形灯');assert.equal(await page.getByLabel('B000000002 人工形态',{exact:true}).inputValue(),'弧形灯');
+ // Original distinct actions: clearing shape leaves the batch selection in place.
+ await page.getByLabel('批量选择 B000000001',{exact:true}).check();await page.getByRole('button',{name:'批量清除形态',exact:true}).click();assert.equal(await input.inputValue(),'');assert.ok(await page.getByLabel('批量选择 B000000001',{exact:true}).isChecked());
+ await input.fill('层架 · 灯');await page.keyboard.press('Tab');
+ const shapeSection=page.locator('section').filter({has:page.getByRole('heading',{name:'商品形态 · 销量占比分析',exact:true})});
+ await shapeSection.getByRole('button',{name:'形态销量局部筛选',exact:true}).click();await page.getByRole('checkbox',{name:'层架 · 灯',exact:true}).click();
+ assert.equal(await page.getByLabel('选择 B000000001',{exact:true}).isChecked(),true);assert.equal(await page.getByLabel('选择 B000000002',{exact:true}).isChecked(),true);
+ assert.equal(await shapeSection.locator('tbody tr:not(.shape-price-total-row)').count(),1);
+ await page.getByText('管理形态名称',{exact:true}).click();await page.getByLabel('管理形态',{exact:true}).selectOption('弧形灯');await page.getByRole('button',{name:'删除形态',exact:true}).click();await page.getByText(/将把 1 件商品恢复为未分类/).waitFor();await page.getByRole('button',{name:'确认删除形态',exact:true}).click();assert.equal(await page.getByLabel('B000000002 人工形态',{exact:true}).inputValue(),'');
  const rect=await input.boundingBox();assert.ok(rect&&rect.height>=32&&rect.width>=110,JSON.stringify(rect));
- await page.locator('.top-sales-table').screenshot({path:out+'/annotation-desktop.png'});
+ await page.getByLabel('搜索商品',{exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:out+'/annotation-desktop.png'});
+ await page.setViewportSize({width:390,height:844});await input.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/annotation-mobile.png'});await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('button',{name:'测试只读版本',exact:true}).click();assert.ok(await input.isDisabled());assert.ok(await page.getByLabel('批量形态',{exact:true}).isDisabled());assert.ok(await page.getByLabel('批量选择可见商品',{exact:true}).isDisabled());assert.deepEqual(errors,[]);
 });

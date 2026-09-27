@@ -174,3 +174,8 @@ test("complete input matches the preserved original reference analyzers", async 
   assert.deepEqual(actual.brandPrice.result, expectedBrand);
   assert.deepEqual(actual.synthesis.result, synthesis.buildMarketStructureSynthesis(report, { getProductShape: (asin: string) => ({ A: "Desk", B: "Floor" })[asin as "A" | "B"] }));
 });
+
+test('legacy annual date interpretation keeps a saved missing-year conclusion unavailable',()=>{
+ const source=structuredClone(report);source.calculationVersion='shape-reference/1';source.products=source.products.slice(0,1);source.products[0].onlineDate='2026/01/01';source.products[0].sales.y2024=null;source.products[0].sales.y2025=null;
+ const result=buildReferenceConclusions(source,{});assert.equal(result.synthesis.status,'insufficient');assert.equal(result.brandPrice.status,'insufficient');
+});

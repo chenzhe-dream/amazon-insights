@@ -165,3 +165,10 @@ test("explicitly cleared manual shape remains unclassified", () => {
   assert.equal(result.shapes.some(row => row.label === '未分类'), true);
   assert.equal(result.shapes.some(row => row.label === 'Previously classified'), false);
 });
+
+test('legacy revision preserves original slash-date and explicit empty label semantics',()=>{
+ const source=report();source.calculationVersion='shape-reference/1';source.products=source.products.slice(0,1);
+ source.products[0].onlineDate='2026/01/01';source.products[0].sales.y2025=null;source.products[0].productShape='保存时形态';
+ const legacy=buildReferenceShapeAnalysis(source,{A1:''});assert.equal(legacy.synthesis.totalSales.y2025,null);assert.equal(legacy.shapes[0].label,'保存时形态');
+ source.calculationVersion='shape-known-coverage/2';const current=buildReferenceShapeAnalysis(source,{A1:''});assert.equal(current.synthesis.totalSales.y2025,0);assert.equal(current.shapes[0].label,'未分类');
+});
