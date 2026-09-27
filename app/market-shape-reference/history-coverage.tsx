@@ -3,9 +3,9 @@ import {referenceSalesGapReason} from './history-status';
 import {getReferencePeriodCoverage,REFERENCE_PERIODS} from './rules';
 
 const labels={last3Months:'近3个月',last6Months:'近6个月',y2025:'2025年',y2024:'2024年'};
-export function ReferenceHistoryCoverage({products}:{products:SorftimeCategoryDashboardProduct[]}) {
-  const coverage=getReferencePeriodCoverage(products);
-  const periods=REFERENCE_PERIODS.map(period=>({period,gaps:products.flatMap(p=>{const reason=referenceSalesGapReason(p,period);return reason?[{asin:p.asin,reason}]:[];})}));
+export function ReferenceHistoryCoverage({products,calculationVersion}:{products:SorftimeCategoryDashboardProduct[];calculationVersion?:string}) {
+  const coverage=getReferencePeriodCoverage(products,calculationVersion);
+  const periods=REFERENCE_PERIODS.map(period=>({period,gaps:products.flatMap(p=>{const reason=referenceSalesGapReason(p,period,calculationVersion);return reason?[{asin:p.asin,reason}]:[];})}));
   const returned=(count:number)=>{
     const pointCounts=products.map(product=>Math.min(count,product.monthlyTrend.volume.length));
     const months=products.flatMap(product=>product.monthlyTrend.volume.slice(-count).map(point=>point.month)).sort();

@@ -1,0 +1,18 @@
+{
+  "formalBaseline": "e43c85c19d582018d4b39ec42708a66244587e59",
+  "referenceRoot": "C:\\Users\\EDY\\.codex\\project-notes\\amazon-insights\\ui-parity-20260914\\reference\\app",
+  "referenceFiles": {
+    "sellersprite-market-structure-section.tsx": "95354fb7fbb6b256dee2ac093066977a54dfd7712abf254a5eaeb93e65914946",
+    "lib/product-shape.ts": "5675f3c1142b424eac1cd03d1976810cecbbc72bd3ff36dbb6f4a1e5f6dc0714",
+    "lib/shape-price-analysis.ts": "56fec3043f88355285815867a4308f7289fa062535c60e05de3e01d2b2f5718e",
+    "lib/sorftime-category-dashboard.ts": "bc58cd2c9fdd79f9d350946c8900e11ef9de3b2c123e4f9bc8dfb0deac71b165"
+  },
+  "baselineFiles": {
+    "app/market-shape-section.tsx": "5766a79506023e172aa7b7ce0811a29a0933e46bb9739351b2d86cba99720831",
+    "app/market-shape-reference-panel.tsx": "e4e190dc870c33874370be1154d0362eba092cb4dfb66b5ba90362069670c431",
+    "app/market-shape-reference/view.tsx": "42dba83d26a2aaab4174e60277909ad68c0775679038a124632eb88d46a43fcc",
+    "app/market-shape-reference/rules.ts": "d69d3435782e00b510094e76190774e8ed729db2420ee0c910feb57f2e18ecf0",
+    "app/market-shape-reference/conclusions/index.ts": "194d8ac6c81647ffbb8cb0175985a1d5615a542909f2b86de049d0d811ae61cf",
+    "app/lib/market-shape-reference-adapter.ts": "77f5d015df5d2c3253ddfcf1127e383fd9071423b53e7ca1e74212153bff034b"
+  }
+}

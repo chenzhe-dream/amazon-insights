@@ -140,6 +140,7 @@ const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 // report budget, keeping the default and explicit caller limits unchanged.
 const OVERVIEW_MAX_RESPONSE_BYTES = 8 * DEFAULT_MAX_RESPONSE_BYTES;
 const SHAPE_REPORT_ROUTES = new Set([
+ 'POST /v1/market-analysis/shape-price/query',
  'POST /v1/market-analysis/studies/:id/shape-price',
  'GET /v1/market-analysis/runs/:id/shape-price',
  'POST /v1/market-analysis/runs/:id/shape-price/revisions',

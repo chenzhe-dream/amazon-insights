@@ -5,7 +5,7 @@ import {proxyAgentRequest} from '../../app/api/agent/[...path]/route';
 import {shapeSorftimePageRun,shapeSorftimePageRevision} from './helpers/market-shape-sorftime-page-fixture';
 const env={AGENT_SERVICE_INTERNAL_URL:'http://agent.test',AGENT_SERVICE_PROXY_TOKEN:'test-token'},mib=1048576;
 test('shape snapshot reads and saves have bounded report timeout without changing unrelated routes or overrides',()=>{
- for(const path of ['/v1/market-analysis/studies/:id/shape-price','/v1/market-analysis/runs/:id/shape-price','/v1/market-analysis/runs/:id/shape-price/revisions','/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId']){
+ for(const path of ['/v1/market-analysis/shape-price/query','/v1/market-analysis/studies/:id/shape-price','/v1/market-analysis/runs/:id/shape-price','/v1/market-analysis/runs/:id/shape-price/revisions','/v1/market-analysis/runs/:id/shape-price/revisions/:revisionId']){
   assert.equal(agentRequestTimeoutMs(path),60000);assert.equal(agentRequestTimeoutMs(path,1234),1234);
  }
  assert.equal(agentRequestTimeoutMs('/v1/capabilities'),10000);
@@ -18,3 +18,7 @@ test('300 products with 120 persisted volume/amount months pass bounded producti
  assert.equal((await proxy(runPath,data,undefined,64)).status,502);
  assert.equal((await proxy(runPath,{data:'x'.repeat(9*mib)})).status,502);
 });
+
+ test('shape reusable query goes through the public proxy with a large saved result',async()=>{
+ const payload=shapeSorftimePageRun(300,120),{organizationId,researchId,...scope}=payload.run.scope;const response=await proxy('v1/market-analysis/shape-price/query',payload,{scope,params:payload.run.params,forceRefresh:false});assert.equal(response.status,200,await response.clone().text());assert.deepEqual(await response.json(),payload);
+ });

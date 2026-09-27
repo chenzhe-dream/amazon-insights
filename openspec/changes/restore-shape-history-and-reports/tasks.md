@@ -23,8 +23,10 @@
 
 ## 5. Approved original recovery (2026-09-27)
 - [x] 5.0 Read approved plan, isolate formal baseline, reconcile OpenSpec and run baseline rule tests (16 passing).
-- [ ] 5.1 Correct structured group identities and shared date handling; introduce versioned known aggregates and dependency-specific conclusions; preserve legacy reports.
-- [ ] 5.2 Persist scoped autosaved drafts with conflict protection and resize/reload continuity; separate restore actions and snapshot coverage.
-- [ ] 5.3 Restore authorized same-query reuse and explicit refresh; enforce concurrent submission deduplication, polling recovery and collapsed clear progress.
-- [ ] 5.4 Restore original shape suggestions/taxonomies, batch clear, independent section filters/sorting and missing monthly-per-link column.
+- [x] 5.1 Correct structured group identities and shared date handling; introduce versioned known aggregates and dependency-specific conclusions; preserve legacy reports.
+- [x] 5.2 Persist scoped autosaved drafts with conflict protection and resize/reload continuity; separate restore actions and snapshot coverage.
+- [x] 5.3 Restore authorized same-query reuse and explicit refresh; enforce concurrent submission deduplication, polling recovery and collapsed clear progress.
+- [x] 5.4 Restore original shape suggestions/taxonomies, batch clear, independent section filters/sorting and missing monthly-per-link column.
 - [ ] 5.5 Run isolated database and browser regressions, real saved-data replay, performance measurement, typecheck/build and independent review; prepare scoped release evidence.
+
+5.5 本地逻辑、隔离数据库、组件浏览器、真实140件回放、性能、构建和审查已通过；完整构建服务31919启动被自动审批拒绝（仅返回blocked by policy），实际登录项目入口仍待验收，因此保持未勾选。31918仅为真实保存数据的组件回放，不是正式发布。详见 `docs/plans/2026-09-27-shape-recovery-validation.md`。跨容量增量采集和采集中调整目标继续后置。

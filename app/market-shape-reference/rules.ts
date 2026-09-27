@@ -67,10 +67,10 @@ export function sumObserved(values: readonly (number | null | undefined)[]): num
   return observed.length ? observed.reduce((sum, value) => sum + value, 0) : null;
 }
 
-export function getReferencePeriodCoverage(products: readonly SorftimeCategoryDashboardProduct[]): ReferencePeriodCoverage {
+export function getReferencePeriodCoverage(products: readonly SorftimeCategoryDashboardProduct[], calculationVersion?:string): ReferencePeriodCoverage {
   return Object.fromEntries(REFERENCE_PERIODS.map(period => {
-    const notApplicable = products.filter(product => isReferencePeriodBeforeLaunch(product, period) && !hasReferencePeriodDateConflict(product, period)).length;
-    const knownCount = products.filter(product => !isReferencePeriodBeforeLaunch(product, period) && referencePeriodContribution(product, period) !== null).length;
+    const notApplicable = products.filter(product => isReferencePeriodBeforeLaunch(product, period, calculationVersion) && !hasReferencePeriodDateConflict(product, period, calculationVersion)).length;
+    const knownCount = products.filter(product => !isReferencePeriodBeforeLaunch(product, period, calculationVersion) && referencePeriodContribution(product, period, calculationVersion) !== null).length;
     return [period, { known: knownCount, total: products.length, missing: products.length - knownCount - notApplicable, notApplicable }];
   })) as ReferencePeriodCoverage;
 }
@@ -189,7 +189,7 @@ function groupRows(
   return [...groups.values()].map(members => {
     const label = getLabel(members[0]).trim() || '—';
     const sales = getReferencePeriodTotals(members, calculationVersion);
-    const coverage = getReferencePeriodCoverage(members);
+    const coverage = getReferencePeriodCoverage(members,calculationVersion);
     const denominator = denominatorForGroup?.(members) ?? totals;
     const sharePct = Object.fromEntries(REFERENCE_PERIODS.map(period => [
       period, percentage(sales[period], denominator[period]),
@@ -226,7 +226,7 @@ export function buildReferenceShapeAnalysis(
   const selected = selectedAsins ? new Set(selectedAsins) : null;
   const products = report.products.filter(product => selected === null || selected.has(product.asin));
   const totals = getReferencePeriodTotals(products, calculationVersion);
-  const coverage = getReferencePeriodCoverage(products);
+  const coverage = getReferencePeriodCoverage(products,calculationVersion);
   const divisor = resolveY2025MonthDivisor(report.fetchedAt);
   const shape = (product: SorftimeCategoryDashboardProduct) => calculationVersion==='shape-reference/1'
     ? assignments[product.asin]?.trim()||product.productShape?.trim()||'—' : resolveReferenceProductShape(product, assignments);

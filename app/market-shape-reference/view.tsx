@@ -175,7 +175,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
           <td><div className="traffic-conclusion-product top-sales-product-cell">{p.imageUrl ? <img src={p.imageUrl} alt="" width={48} height={48} /> : null}<div>{amazonDomain ? <a href={`https://www.${amazonDomain}/dp/${p.asin}`} target="_blank" rel="noreferrer">{p.asin} ↗</a> : <strong>{p.asin}</strong>}<small>{p.title}</small></div></div></td>
           <td>{p.brand || "未知"}</td><td>{fixedLabels.length?<select className="shape-annotation-input" aria-label={`${p.asin} 人工形态`} value={assignments[p.asin]??''} disabled={disabled} onChange={e=>onAssignment(p.asin,e.target.value)}><option value="">未分类</option>{fixedLabels.map(label=><option key={label}>{label}</option>)}{assignments[p.asin]?.trim()&&!fixedLabels.includes(assignments[p.asin].trim())&&<option disabled value={assignments[p.asin]}>旧标签待确认：{assignments[p.asin]}</option>}</select>:<input className="shape-annotation-input" placeholder="输入形态" list={catalogId} maxLength={60} onFocus={()=>setEditingAsin(p.asin)} onBlur={()=>setEditingAsin(null)} aria-label={`${p.asin} 人工形态`} value={assignments[p.asin] ?? ""} disabled={disabled} onChange={e => onAssignment(p.asin, e.target.value)} />}{fixedLabels.length>0&&assignments[p.asin]?.trim()&&!fixedLabels.includes(assignments[p.asin].trim())&&<small>旧标签待确认，请选择固定形态</small>}</td>
           <td><span title={p.onlineDate??undefined}>{parseReferenceListingDate(p.onlineDate).status==='uncertain'?'日期待核实':parseReferenceListingDate(p.onlineDate).status==='known'?`${parseReferenceListingDate(p.onlineDate).year}-${String(parseReferenceListingDate(p.onlineDate).month).padStart(2,'0')}`:'未知'}</span></td><td>{p.grossProfitMargin == null ? "未知" : `${n(p.grossProfitMargin, 1)}%`}</td><td>{marginLabel(p.grossProfitMargin)}</td><td>{n(p.price, 2)}</td><td>{band(p)}</td><td>{n(p.monthlySalesVolume)}</td><td>{n(p.monthlySalesAmount, 2)}</td><td><Trend product={p} /></td>
-          {periods.map(period => <td key={period.key} title={referenceSalesGapReason(p,period.key)??undefined}>{hasReferencePeriodDateConflict(p,period.key)?'日期冲突':isReferencePeriodBeforeLaunch(p,period.key)?'不适用':n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
+          {periods.map(period => <td key={period.key} title={referenceSalesGapReason(p,period.key,report.calculationVersion)??undefined}>{hasReferencePeriodDateConflict(p,period.key,report.calculationVersion)?'日期冲突':isReferencePeriodBeforeLaunch(p,period.key,report.calculationVersion)?'不适用':n(periodValue(p, period.key))}</td>)}<td>{n(p.starRating, 1)}</td><td>{n(p.reviewCount)}</td><td>{p.deliveryType || "未知"}</td><td>{p.seller || "未知"}</td><td><button type="button" className="ghost-btn danger" disabled={disabled} onClick={() => onSelected(selected.has(p.asin) ? selectedAsins.filter(a => a !== p.asin) : [...selectedAsins, p.asin])}>{selected.has(p.asin) ? "移除" : "恢复"}</button></td>
         </tr>)}
       </tbody></LaunchTable>
       <p className="market-research-note">毛利准入：≥70% 优先进入；≥60% 建议进入；≥50% 谨慎进入；低于50% 不建议进入。未知保持未知。</p>
@@ -184,24 +184,24 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     </LaunchSection>
 
     <LaunchSection title="上架年份 · 销量结构分析" description="按已选商品的真实历史销量汇总；缺失历史不补零" badge={<span className="source-badge">{yearly.length} 年份组</span>}>
-      <ReferenceHistoryCoverage products={active} />
+      <ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={active} />
       <AggregateTable legacy={report.calculationVersion==='shape-reference/1'} rows={yearly} total={analysis.synthesis.totalSales} yearBasis />
       {conclusions.listingYear.status === "ready" ? <ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
-      <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage products={shapeAnalysis.products}/>
-      <AggregateTable legacy={report.calculationVersion==='shape-reference/1'} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
+      <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
+      <AggregateTable key={shapeSort} legacy={report.calculationVersion==='shape-reference/1'} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
-      <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage products={bandAnalysis.products}/>
+      <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
       <ShapePriceBandTable shapes={bandAnalysis.shapes} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
       {bandConclusion.status === "ready" ? <ReferenceShapePriceConclusion result={bandConclusion.result} embedded /> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
-      <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage products={brandAnalysis.products}/>
-      <AggregateTable legacy={report.calculationVersion==='shape-reference/1'} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
+      <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
+      <AggregateTable key={brandSort} legacy={report.calculationVersion==='shape-reference/1'} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">{conclusions.synthesis.status === "ready" ? "规则结论已生成" : "综合结论待补数据"}</span>}>

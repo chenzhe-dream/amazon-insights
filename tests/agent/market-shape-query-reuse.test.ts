@@ -18,6 +18,9 @@ test('equivalent concurrent shape queries reuse a run and explicit refresh is id
  const key=randomUUID(),fresh=await service.queryShapes(f.actor,{...body,forceRefresh:true},key);
  assert.notEqual(fresh.run.id,a.run.id);
  assert.equal((await service.queryShapes(f.actor,{...body,forceRefresh:true},key)).run.id,fresh.run.id);
+ const future=new MarketModuleService({context:f.context,modelIdentity:()=>null,now:()=>new Date('2030-01-01T00:00:00Z')});
+ assert.equal((await future.queryShapes(f.actor,{...body,forceRefresh:true},key)).run.id,fresh.run.id,'accepted command replays after its original collection window expires');
+ await assert.rejects(future.queryShapes(f.actor,body,randomUUID()),/最近24个完整月份/);
  await assert.rejects(service.queryShapes(f.actor,{...body,params:{...params,poolSize:150},forceRefresh:true},key));
  await assert.rejects(service.queryShapes({...f.actor,userId:randomUUID()},body,randomUUID()));
  // A target size change is a different query, not an incrementally merged task.
@@ -42,6 +45,7 @@ test('completed usable cache expires after seven days without changing explicit 
  // Stub only the source projection; cache lookup, persisted status, identity, TTL and receipts use PostgreSQL.
  const withSource=(base:MarketModuleService)=>{const read=base.findShapes.bind(base);base.findShapes=async(actor,id)=>{const result=await read(actor,id);if(result.run.id===first.run.id)result.run.source={referenceAttemptId:randomUUID(),historyAttemptIds:[],referenceSnapshotId:'fixture',fetchedAt:new Date().toISOString(),selectionBasis:'provider-row-order',bsrTopVerified:false,products:[{asin:'B000000001',title:'fixture',brand:null,price:20,units:10}]};return result;};return base;};
  withSource(service);assert.equal((await service.queryShapes(f.actor,body,randomUUID())).run.id,first.run.id);
+ const latestEmpty=await service.queryShapes(f.actor,{...body,forceRefresh:true},randomUUID());await pg.pool.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1",[latestEmpty.run.id]);assert.equal((await service.queryShapes(f.actor,body,randomUUID())).run.id,first.run.id,'new empty result must not hide an older usable cache');
  const late=withSource(new MarketModuleService({context:f.context,modelIdentity:()=>null,now:()=>new Date(Date.now()+8*86400000)}));
  assert.notEqual((await late.queryShapes(f.actor,body,randomUUID())).run.id,first.run.id);assert.equal((await late.findShapes(f.actor,first.run.id)).run.id,first.run.id);
 });

@@ -11,7 +11,6 @@ import type {MarketModuleService} from './market-module-service';
 /** One durable command receipt and a scoped advisory lock protect retries and simultaneous clicks. */
 export async function queryShapeRun(service:MarketModuleService,context:PostgresQueryContext,actor:MarketExecutionActor,body:unknown,key:unknown,now:string){
  const input=MarketShapeQueryRequestSchema.parse(body),command=MarketModuleIdSchema.parse(key);
- assertMarketProductQueryWindow(input.scope,new Date(now));
  const requestHash=canonicalJsonSha256(input);
  const leaf=input.scope.nodeIdPath.split(':').at(-1)!;
  const identity=canonicalJsonSha256({actor,scope:{...input.scope,nodeIdPath:leaf},params:input.params,flow:MARKET_SHAPE_SORFTIME_FLOW_VERSION,source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_SHAPE_REFERENCE_RULE_VERSION});
@@ -25,8 +24,9 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
    if(receipt.rows[0].request_hash!==requestHash)throw new MarketExecutionConflictError();
    return {created:false,...await service.findShapes(actor,receipt.rows[0].run_id)};
   }
+  assertMarketProductQueryWindow(input.scope,new Date(now));
   await context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`shape-query:${identity}`]);
-  const found=input.forceRefresh?null:(await context.query<{id:string}>(`SELECT r.id FROM market_analysis_module_runs r
+  const candidates=input.forceRefresh?[]:(await context.query<{id:string}>(`SELECT r.id FROM market_analysis_module_runs r
    WHERE r.organization_id=$1 AND r.created_by=$2 AND r.request_json->>'moduleKind'='shape-price'
     AND r.request_json->'scope'->>'marketplace'=$3 AND r.request_json->'scope'->>'currency'=$4
     AND regexp_replace(r.request_json->'scope'->>'nodeIdPath','^.*:','')=$5
@@ -35,11 +35,14 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
     AND ((r.request_json->'params')-'flow')=$9::jsonb AND r.request_json->'params'->>'flow'=$10
     AND r.request_json->'versions'->>'source'=$11 AND r.request_json->'versions'->>'rule'=$12
     AND (r.status IN ('queued','running') OR (r.status='succeeded' AND r.created_at >= $13::timestamptz-interval '7 days'))
-   ORDER BY (r.status IN ('queued','running')) DESC,r.created_at DESC,r.id DESC LIMIT 1`,
-   [actor.organizationId,actor.userId,input.scope.marketplace,input.scope.currency,leaf,input.scope.nodeIdPath.includes(':')?input.scope.nodeIdPath:null,input.scope.fromMonth,input.scope.toMonth,JSON.stringify(input.params),MARKET_SHAPE_SORFTIME_FLOW_VERSION,MARKET_SOURCE_HANDLER_VERSION,MARKET_SHAPE_REFERENCE_RULE_VERSION,now])).rows[0];
-  const cached=found?await service.findShapes(actor,found.id):null;
-  const usable=cached && (cached.run.status!=='succeeded'||!!cached.run.source?.products.length);
-  const result=usable?{created:false,...cached}:await (async()=>{
+   ORDER BY (r.status IN ('queued','running')) DESC,r.created_at DESC,r.id DESC`,
+   [actor.organizationId,actor.userId,input.scope.marketplace,input.scope.currency,leaf,input.scope.nodeIdPath.includes(':')?input.scope.nodeIdPath:null,input.scope.fromMonth,input.scope.toMonth,JSON.stringify(input.params),MARKET_SHAPE_SORFTIME_FLOW_VERSION,MARKET_SOURCE_HANDLER_VERSION,MARKET_SHAPE_REFERENCE_RULE_VERSION,now])).rows;
+  let cached:Awaited<ReturnType<MarketModuleService['findShapes']>>|null=null;
+  for(const candidate of candidates){
+   const result=await service.findShapes(actor,candidate.id);
+   if(['queued','running'].includes(result.run.status)||(result.run.status==='succeeded'&&result.run.source?.products.length)){cached=result;break;}
+  }
+  const result=cached?{created:false,...cached}:await (async()=>{
    const {study}=await service.createStudy(actor,input.scope,command);
    return service.startShapes(actor,study.id,input.params,command);
   })();
