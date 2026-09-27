@@ -32,6 +32,7 @@ test("export follows explicit source binding and freezes results with GET only",
   assert.equal(content.project.id, state.project.id);
   assert.equal(content.sourceProjectId, state.project.sourceProjectId);
   assert.equal(content.moduleIds[0], "competitor-overview");
+  assert.equal(content.sourceLabel, "基础报告完成时间：2026-09-23 13:00:00（北京时间）");
   const frozen = JSON.stringify(content);
   state.version.catalog[0].title = "线上后来修改";
   assert.equal(JSON.stringify(content), frozen);

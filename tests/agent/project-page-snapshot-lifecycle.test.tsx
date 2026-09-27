@@ -53,6 +53,31 @@ async function fixture(t: test.TestContext, voc = false) {
   return {page,state};
 }
 const frame=(page:Page)=>page.locator('iframe[title="HTML 快照预览"]');
+
+test('closing during the selection delay never starts the scheduled read',async t=>{
+  const {page,state}=await fixture(t);await readyHtml(page);const before=state.versionReads;
+  await page.clock.install();await page.clock.pauseAt(new Date());
+  await page.getByRole('checkbox',{name:'包含变体 / 订单',exact:true}).uncheck();
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.clock.runFor(1000);
+  assert.equal(state.versionReads,before);assert.equal(await page.getByRole('dialog').count(),0);
+});
+
+test("rapid selection changes wait for the final choice without reviving earlier HTML",async t=>{
+  const {page,state}=await fixture(t);await readyHtml(page);
+  const before=state.versionReads;
+  await page.clock.install();await page.clock.pauseAt(new Date());
+  const variants=page.getByRole('checkbox',{name:'包含变体 / 订单',exact:true});
+  await variants.uncheck();await page.clock.runFor(100);
+  await variants.check();await page.clock.runFor(100);
+  await variants.uncheck();await page.clock.runFor(100);
+  await unavailable(page);
+  assert.equal(state.versionReads,before,'intermediate selections must not read a report');
+  state.price=92.75;await page.clock.resume();
+  const html=await readyHtml(page);
+  assert.equal(state.versionReads,before+1);
+  assert.match(html,/92\.75/);assert.equal(state.writes.length,0);
+});
 async function readyHtml(page:Page) {
   await frame(page).waitFor();
   await page.getByRole("button",{name:"确认并开始导出"}).waitFor({state:"visible"});

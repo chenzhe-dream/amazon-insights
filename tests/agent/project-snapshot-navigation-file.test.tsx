@@ -6,6 +6,7 @@ import { after, before, test } from "node:test";
 import react from "@vitejs/plugin-react";
 import { chromium, type Browser, type Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+import { snapshotNavigationStyles } from "../../app/project-export/snapshot-navigation-styles";
 import {
   exportProjectFixture, exportRuntimeFixture, exportSessionFixture,
   exportSourceProjectFixture, exportTranslationFixture, exportVersionFixture,
@@ -36,6 +37,20 @@ before(async () => {
   browser = await chromium.launch({ headless: true });
 });
 after(async () => { await browser?.close(); await server?.close(); });
+
+test("traffic source note stays below the complete bar list at medium width", async t => {
+  const page = await browser.newPage({ viewport: { width: 1024, height: 900 } });
+  t.after(() => page.close());
+  const css = await readFile(resolve("app/comparison-layout.css"), "utf8");
+  await page.setContent(`<style>${css}${snapshotNavigationStyles}</style>
+    <section class="snapshot-page" style="display:block"><div class="traffic-metric-cell" style="width:300px">
+    <div class="traffic-dist-bars">${Array.from({ length: 6 }, () => '<div><span>Recommendation</span><i><b></b></i><strong>12,480</strong><em>95.6%</em></div>').join("")}</div>
+    <small>推荐来源仅展示已保存的前 6 项；来源可能设有 Top N 或占比门槛。</small></div></section>`);
+  const bars = (await page.locator(".traffic-dist-bars").boundingBox())!;
+  const note = (await page.locator(".traffic-metric-cell>small").boundingBox())!;
+  assert.ok(note.y >= bars.y + bars.height, "source note must not squeeze or overlap the bars");
+  assert.ok(note.width >= bars.width - 1);
+});
 
 async function openDialog(t: test.TestContext, missing = false) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -157,6 +172,15 @@ test("complete ten-page preview and downloaded file navigate without scripts; br
   await file.setViewportSize({width:1440,height:1000});
   await file.goto(pathToFileURL(path).href);
   await assertAllPagesNavigable(file);
+  assert.match(await file.locator('.page-snapshot>header').innerText(), /快照生成时间.*北京时间/);
+  assert.doesNotMatch(await file.locator('.page-snapshot>header').innerText(), /T\d{2}:\d{2}:\d{2}Z/);
+  assert.ok(await file.locator('[data-snapshot-page="overview"] td').first().evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 12));
+  await file.setViewportSize({width:1024,height:900});
+  assert.equal(await file.locator('.snapshot-mobile-menu>summary').isVisible(),true);
+  await file.locator('.snapshot-mobile-menu>summary').click();
+  assert.equal(await file.locator('.snapshot-nav-list').isVisible(),false);
+  assert.ok((await file.locator('.snapshot-body').boundingBox())!.width > 900);
+  assert.ok(await file.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   assert.deepEqual(requests, []);
   await file.emulateMedia({ media: "print" });
   assert.equal(await file.locator(".snapshot-page:visible").count(), 10);
