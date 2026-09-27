@@ -69,3 +69,16 @@
   left: auto !important;
  }
 }
+
+/* Manual annotation remains legible inside the horizontally scrolling product table. */
+.market-shape-reference-view .shape-annotation-input { min-height: 36px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #24354b; font-size: 13px; line-height: 20px; }
+.market-shape-reference-view .shape-annotation-input::placeholder { color: #7c8ba1; }
+.market-shape-reference-view .shape-annotation-input:focus { outline: 2px solid #a78bfa; outline-offset: -2px; border-color: #8b5cf6; }
+.market-shape-reference-view .shape-annotation-input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+.market-shape-reference-view .top-sales-shape-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.market-shape-reference-view .top-sales-shape-bulk-bar .shape-annotation-input { width: min(240px,100%); box-sizing: border-box; }
+.market-shape-reference-view .shape-history-coverage { margin-bottom: 12px; padding: 12px; border: 1px solid #dbe3ef; border-radius: 8px; background: #f8fafd; font-size: 12px; color: #52647d; }
+.market-shape-reference-view .shape-history-coverage-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; font-weight: 600; }
+.market-shape-reference-view .shape-history-coverage p { margin: 8px 0; }
+.market-shape-reference-view .shape-history-coverage summary { cursor: pointer; }
+.market-shape-reference-view .shape-history-coverage li { overflow-wrap: anywhere; }
