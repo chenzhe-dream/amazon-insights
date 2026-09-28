@@ -19,6 +19,7 @@ import {MarketKeywordSection} from './market-keyword-section';
 
 import {MarketOverviewQuery} from "./market-overview-query";
 import {LaunchSection} from "./launch-section";
+import {matchesOverviewBasicScope,type OverviewBasicContext} from './lib/market-overview-basic-scope';
 
 const statusLabels: Record<MarketResearchJob["status"], string> = {
   queued: "排队中", running: "采集中", succeeded: "采集完成", partial: "部分数据可用", failed: "采集失败",
@@ -73,6 +74,9 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
   const overviewController=useRef<MarketOverviewController|null>(null);
   const [jobs, setJobs] = useState<MarketResearchJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [reportContext,setReportContext]=useState<OverviewBasicContext>({status:'loading'});
+  const [basicOverride,setBasicOverride]=useState<{id:string;runId:string|null}|null>(null);
+  const contextRunId=reportContext.status==='ready'?reportContext.runId:null;
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +146,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
       revision.current += 1;
       setJobs(current => [job, ...current.filter(item => item.id !== job.id)].slice(0, 30));
       setSelectedId(job.id);
+      setBasicOverride({id:job.id,runId:contextRunId});
       if (creating) submission.current = null;
     } catch (cause) {
       if (owner !== controller.current || owner.signal.aborted) return;
@@ -151,16 +156,20 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
     }
   }
 
-  const selected = jobs.find(job => job.id === selectedId) ?? null;
+  const explicit=basicOverride?.runId===contextRunId?jobs.find(job=>job.id===basicOverride.id):undefined;
+  const selected=explicit??(reportContext.status==='ready'?jobs.find(job=>matchesOverviewBasicScope(job,reportContext.scope)):reportContext.status==='idle'?jobs.find(job=>job.id===selectedId):undefined)??null;
+  const mismatched=!!selected&&reportContext.status==='ready'&&!matchesOverviewBasicScope(selected,reportContext.scope);
   return <div className="market-research-page">
     <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
     <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${overviewMonthLabel(selected.scope.month)} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，支持最近30天或完整自然月。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
-      {selected?.report?<MarketOverviewResult report={selected.report} onOpenReport={()=>{const nodeIdPath=selected.report?.nodeIdPath??selected.scope.nodeQuery;if(nodeIdPath!==selected.scope.nodeQuery)setScope(current=>({...current,nodeQuery:nodeIdPath}));overviewController.current?.openReport({...selected.scope,nodeQuery:nodeIdPath});}}/>:<div className="pending-box" role="status"><strong>{submitting||selected?.status==='queued'||selected?.status==='running'?'正在从卖家精灵拉取':selected?.status==='failed'?'卖家精灵暂无可用结果':'等待指定类目节点'}</strong><span>{selected?.error?.message??'已有数据和历史版本会保留；没有来源的指标不会填零。'}</span></div>}
-    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} showAuditDetails={showAuditDetails} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
+      {mismatched&&<div className="market-research-notice" role="status"><strong>基础概览与下方总览报告范围不同</strong><p>你正在查看其他基础采集记录，下方历史报告保持原样。</p><button className="ghost-btn" type="button" onClick={()=>setBasicOverride(null)}>返回报告对应概览</button></div>}
+      {selected&&reportContext.status==='failed'&&<p className="market-research-notice">未能确认历史报告范围，当前仅展示手动选择的基础记录。</p>}
+      {selected?.report?<MarketOverviewResult report={selected.report} onOpenReport={()=>{const nodeIdPath=selected.report?.nodeIdPath??selected.scope.nodeQuery;setScope({...selected.scope,nodeQuery:nodeIdPath});overviewController.current?.openReport({...selected.scope,nodeQuery:nodeIdPath});}}/>:<div className="pending-box" role="status"><strong>{submitting||selected?.status==='queued'||selected?.status==='running'?'正在从卖家精灵拉取':selected?.status==='failed'?'卖家精灵暂无可用结果':reportContext.status==='loading'||loading?'正在匹配历史报告的基础概览':reportContext.status==='failed'?'未能确认历史报告范围':reportContext.status==='ready'?'最近30条采集历史中没有与该总览匹配的基础记录':'等待指定类目节点'}</strong><span>{selected?.error?.message??(reportContext.status!=='idle'?'下方总览报告和采集历史会保留；读取不会自动重新采集。':'已有数据和历史版本会保留；没有来源的指标不会填零。')}</span></div>}
+    <MarketOverviewSection controller={overviewController} onContextChange={setReportContext} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} showAuditDetails={showAuditDetails} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
     </LaunchSection>
     <details className="card market-reference-history"><summary>采集历史与状态</summary><div className="market-research-body"><aside className="card market-research-history"><div className="section-head"><h3>采集历史</h3><button className="ghost-btn" type="button" disabled={submitting} onClick={() => void refresh()}>刷新</button></div>
       <p className="market-research-note">最近 30 次，可刷新页面恢复结果。</p>
-      {loading ? <p role="status">正在读取…</p> : jobs.length === 0 ? <p>暂无采集记录。</p> : <ol>{jobs.map(job => <li key={job.id}><button type="button" aria-pressed={job.id === selectedId} onClick={() => setSelectedId(job.id)}><strong>{job.report?.categoryName || `类目 ${job.scope.nodeQuery}`}</strong><span>{overviewMonthLabel(job.scope.month)} · Top {job.scope.headTopN} · 新品 {job.scope.newProductMonths} 个月</span><span className={`market-research-status ${job.status}`}>{statusLabels[job.status]}</span><small>{displayTime(job.createdAt)}</small></button></li>)}</ol>}
+      {loading ? <p role="status">正在读取…</p> : jobs.length === 0 ? <p>暂无采集记录。</p> : <ol>{jobs.map(job => <li key={job.id}><button type="button" aria-pressed={job.id === selected?.id} onClick={() => {setSelectedId(job.id);setBasicOverride({id:job.id,runId:contextRunId});}}><strong>{job.report?.categoryName || `类目 ${job.scope.nodeQuery}`}</strong><span>{overviewMonthLabel(job.scope.month)} · Top {job.scope.headTopN} · 新品 {job.scope.newProductMonths} 个月</span><span className={`market-research-status ${job.status}`}>{statusLabels[job.status]}</span><small>{displayTime(job.createdAt)}</small></button></li>)}</ol>}
     </aside><section className="card market-research-detail" aria-live="polite">{selected ? <><div className="market-research-job-heading"><span className={`market-research-status ${selected.status}`}>{statusLabels[selected.status]}</span><span>已尝试 {selected.attempts} 次</span></div>
       {(selected.status === "queued" || selected.status === "running") && <p role="status">{selected.status === "queued" ? "任务正在排队，可稍后回来查看。" : "正在获取类目数据，状态会自动更新。"}</p>}
       {selected.error && <div className="market-research-notice"><p>{selected.error.message}</p>{canRetryMarketResearchJob(selected) && <button className="primary-btn" type="button" disabled={submitting} onClick={() => void mutate(signal => retryMarketResearchJob(selected.id, signal))}>重试采集</button>}</div>}

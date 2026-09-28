@@ -11,6 +11,7 @@ import {createOverviewStudy,startOverviewRun,readOverviewRun,retryOverviewSteps,
 import {MarketOverviewReport} from './market-overview-report';
 import {overviewSourceLabels} from './market-overview-distributions';
 import {overviewReportStartMonth} from './lib/market-overview-period';
+import type {OverviewBasicContext} from './lib/market-overview-basic-scope';
 type Run=MarketOverviewRunResponse['run'];
 const active=(run:Run)=>run.status!=='cancelled'&&run.steps.some(s=>s.current&&['queued','running'].includes(s.status));
 const labels:Partial<Record<Run['steps'][number]['kind'],string>>={'collect-overview-month':'采集月度来源',rules:'整理数字','prepare-members':'规划分析分段','prepare-model-batches':'准备分析输入','model-batch':'解释证据',report:'保存报告'};
@@ -20,7 +21,7 @@ function sameNode(path:string,query:string){return path===query||!query.includes
 function remember(id:string){const url=new URL(window.location.href);url.searchParams.set('overviewRun',id);url.searchParams.set('themeView','overview');window.history.replaceState(window.history.state,'',url);}
 function forget(){const url=new URL(window.location.href);url.searchParams.delete('overviewRun');window.history.replaceState(window.history.state,'',url);}
 export type MarketOverviewController = { openReport: (scope: MarketResearchScope) => void };
-export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScope,controller,onExpandedChange,categoryName,showAuditDetails=false}:{scope:MarketResearchScope;fromMonth:string;onFromMonth:(value:string)=>void;onRestoreScope:(run:Run)=>void;controller?:React.Ref<MarketOverviewController>;onExpandedChange?:(open:boolean)=>void;categoryName?:string|null;showAuditDetails?:boolean}){
+export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScope,controller,onExpandedChange,onContextChange,categoryName,showAuditDetails=false}:{scope:MarketResearchScope;fromMonth:string;onFromMonth:(value:string)=>void;onRestoreScope:(run:Run)=>void;controller?:React.Ref<MarketOverviewController>;onExpandedChange?:(open:boolean)=>void;onContextChange?:(context:OverviewBasicContext)=>void;categoryName?:string|null;showAuditDetails?:boolean}){
   const [expanded,setExpanded]=useState(false);
   const [runId,setRunId]=useState<string|null>(null),[run,setRun]=useState<Run|null>(null),[restoreId,setRestoreId]=useState(''),[choice,setChoice]=useState('latest'),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
   const [lookingUp,setLookingUp]=useState(false),[noSaved,setNoSaved]=useState(false);
@@ -29,6 +30,13 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   const startKeys=useRef<{signature:string;study:string;run:string}|null>(null),actionKey=useRef<{signature:string;key:string}|null>(null);
   useEffect(()=>{props.current={scope,onRestoreScope};},[scope,onRestoreScope]);
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('overviewRun'));if(restored.success)queueMicrotask(()=>{if(!abort.signal.aborted){setRunId(restored.data);setRestoreId(restored.data);setExpanded(true);}});return()=>{abort.abort();owner.current=null;};},[]);
+  useEffect(()=>{
+    if(!onContextChange)return;
+    if(lookingUp){onContextChange({status:'loading'});return;}
+    if(run){onContextChange({status:'ready',runId:run.id,scope:{marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,...run.params}});return;}
+    const restoring=!!runId||MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('overviewRun')).success;
+    onContextChange({status:readError?'failed':restoring?'loading':'idle'});
+  },[onContextChange,run,runId,readError,lookingUp]);
   function period(query:MarketResearchScope){const rolling=query.month==='last30',toMonth=rolling?latestCompleteOverviewMonth():query.month;return {toMonth,...(rolling?{overviewPeriod:'last30' as const}:{})};}
   function show(open:boolean){setExpanded(open);onExpandedChange?.(open);}
   useImperativeHandle(controller,()=>({openReport(requestScope){
