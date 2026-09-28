@@ -38,7 +38,7 @@ test('original sorting orders complete groups, preserves price bands and selecti
  for(const metric of ['label','last3Months','last3MonthsSharePct','last6Months','last6MonthsSharePct','y2025','y2025SharePct','y2024','y2024SharePct','linkCount','avgLast6MonthsMonthlyPerLink','avgY2025MonthlyPerLink']){
   await sales.getByLabel('形态销量排序',{exact:true}).selectOption(metric);await sales.getByLabel('形态销量切换排序方向').click();
  }
- for(const p of products)assert.ok(await page.getByLabel(`选择 ${p.asin}`,{exact:true}).isChecked());
+ assert.equal(await page.locator('table.top-sales-table').getByRole('button',{name:'移除',exact:true}).count(),products.length,'section filters preserve the selected sample');
  await shape.scrollIntoViewIfNeeded();await shape.screenshot({path:out+'/groups-desktop.png'});
  await page.setViewportSize({width:390,height:844});await shape.screenshot({path:out+'/groups-mobile.png'});assert.deepEqual(errors,[]);
 });

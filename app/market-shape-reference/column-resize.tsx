@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export const TOP_SALES_COLUMNS = [
-  ["include", 52], ["bulk", 45], ["rank", 50], ["product", 240], ["brand", 90],
+  ["bulk", 65], ["rank", 50], ["product", 240], ["brand", 90],
   ["shape", 160], ["launch", 85], ["margin", 80], ["entry", 110], ["price", 80],
   ["band", 95], ["sales30", 105], ["amount30", 115], ["trend", 145],
   ["last3", 90], ["last6", 90], ["y2025", 90], ["y2024", 90],
@@ -38,9 +38,9 @@ export function useReferenceColumnWidths() {
   return { widths, setWidth };
 }
 
-export function ResizeHeader({ id, width, onWidth, children }: { id: TopSalesColumnId; width: number; onWidth: (id: TopSalesColumnId, width: number) => void; children: ReactNode }) {
+export function ResizeHeader({ id, width, onWidth, children, stickyLeft }: { id: TopSalesColumnId; width: number; onWidth: (id: TopSalesColumnId, width: number) => void; children: ReactNode; stickyLeft?: number }) {
   const drag = useRef<{ x: number; width: number } | null>(null);
-  return <th data-column-id={id} style={{ width, minWidth: width, maxWidth: width, position: "relative" }}>
+  return <th data-column-id={id} className={stickyLeft == null ? undefined : 'shape-ref-frozen'} style={{ width, minWidth: width, maxWidth: width, position: "sticky", top: 0, left: stickyLeft, zIndex: stickyLeft == null ? 3 : 4 }}>
     {children}<span role="separator" aria-label={`调整${id}列宽`} aria-orientation="vertical" tabIndex={0}
       className="top-sales-column-resizer" style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 8, cursor: "col-resize", touchAction: "none" }}
       onPointerDown={event => { drag.current = { x: event.clientX, width }; event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); }}

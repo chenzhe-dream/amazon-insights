@@ -50,6 +50,16 @@ test('draft autosave survives reload and capacity change; offline edits and conf
   await page.getByText(/草稿：已保存/).waitFor();
   assert.ok(Math.abs((await controls.boundingBox())!.height-heightBefore)<1,'saved status must not move the report');
   assert.equal(serverDraft.items.find(item=>item.asin==='B000000002')?.label,'Tall');
+  const secondRow=page.locator('table.top-sales-table tbody tr').filter({has:second});
+  page.once('dialog',dialog=>dialog.accept());
+  await secondRow.getByRole('button',{name:'移除',exact:true}).click();
+  await page.getByText(/草稿：已保存/).waitFor();
+  assert.equal(serverDraft.items.find(item=>item.asin==='B000000002')?.included,false);
+  await page.reload();await second.waitFor();
+  assert.equal(await second.inputValue(),'Tall');
+  await secondRow.getByRole('button',{name:'恢复',exact:true}).click();
+  await page.getByText(/草稿：已保存/).waitFor();
+  assert.equal(serverDraft.items.find(item=>item.asin==='B000000002')?.included,true);
   await page.getByRole('button',{name:'缩容'}).click();await page.getByText(/目标上限1件/).waitFor();
   await page.getByRole('button',{name:'扩容'}).click();await second.waitFor();assert.equal(await second.inputValue(),'Tall');
   await page.reload();await second.waitFor();assert.equal(await second.inputValue(),'Tall');

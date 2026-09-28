@@ -16,6 +16,16 @@ const report: SorftimeCategoryDashboardReport = {
   productSalesTotals: { last3Months: 600, last6Months: 1100, y2024: 1800, y2025: 1900, monthsAvailable: 24 }, topLinkCount: 100,
 };
 
+test('product table exposes only batch checkboxes and retains excluded sample recovery', () => {
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{B000000001:'折叠款'}} selectedAsins={[]} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.doesNotMatch(html, /aria-label="选择 B000000001"/);
+  assert.match(html, /aria-label="批量选择 B000000001"/);
+  assert.match(html, /恢复/);
+  assert.match(html, /折叠款/);
+  assert.match(html, /shape-ref-trend-mini/);
+  assert.doesNotMatch(html, /shape-ref-trend-values/);
+});
+
 test("summary status distinguishes computed conclusions from missing evidence", () => {
   const render = (value: SorftimeCategoryDashboardReport) => renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
   const complete = render(report);
@@ -84,12 +94,20 @@ test("amount history stays visible when volume history is unavailable", () => {
 
 test('single-month history displays values without pretending to be a trend',()=>{
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
- assert.match(html,/仅1个月数据，暂无法判断趋势/);
+ assert.match(html,/单月数据，暂无法判断趋势/);
  assert.doesNotMatch(html,/class="shape-ref-trend-pair"/);
  assert.match(html,/2026-08/);assert.match(html,/4,000/);
  const multiple=structuredClone(report);multiple.products[0].monthlyTrend.volume.unshift({month:'2026-07',value:100});
  const multiHtml=renderToStaticMarkup(<MarketShapeReferenceView report={multiple} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
- assert.match(multiHtml,/class="shape-ref-trend-pair"/);
+ assert.match(multiHtml,/class="shape-ref-trend-mini"/);
+});
+
+test('observed zero keeps a visible preview mark while wholly missing data stays unknown',()=>{
+ const value=structuredClone(report);value.products[0].monthlyTrend={volume:[{month:'2026-08',value:0}],amount:[]};
+ const render=()=>renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ const zero=render();assert.match(zero,/2026-08：销量 0；销售额 未知/);assert.match(zero,/width="4" height="1"/);
+ value.products[0].monthlyTrend.volume[0].value=null;
+ const missing=render();assert.match(missing,/月度销量与销售额均缺失/);assert.doesNotMatch(missing,/class="shape-ref-trend-mini"/);
 });
 
 test('original business tables show metrics and keep coverage in tooltips or collapsed details',()=>{

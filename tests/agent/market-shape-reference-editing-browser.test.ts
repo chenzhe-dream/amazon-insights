@@ -16,6 +16,24 @@ test('manual shape editing retains focus under an active shape filter and suppor
  await page.route('**/*',async route=>{if(!route.request().url().startsWith(origin))return route.abort();if(route.request().isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<html><body><div id="root"></div><script type="module" src="/${out}/entry.jsx"></script></body></html>`)});return route.continue()});
  await page.goto(origin);
  const input=page.getByLabel('B000000001 人工形态',{exact:true});await input.waitFor();
+ const table=page.locator('table.top-sales-table'), row=table.locator('tbody tr').first();
+ assert.equal(await row.getByRole('checkbox').count(),1,'only the batch checkbox remains');
+ const productCell=row.locator('td').nth(2), before=await productCell.boundingBox();
+ await table.locator('..').evaluate(element=>{element.scrollLeft=900;});
+ const after=await productCell.boundingBox();assert.ok(before&&after&&Math.abs(before.x-after.x)<2,'product identity stays fixed while scrolling');
+ await page.getByRole('separator',{name:'调整bulk列宽',exact:true}).focus();await page.keyboard.press('ArrowRight');
+ const resized=await productCell.boundingBox(),header=await table.locator('th[data-column-id="product"]').boundingBox();
+ assert.ok(resized&&after&&Math.abs(resized.x-after.x-10)<2,'frozen offsets track column resizing');
+ assert.ok(resized&&header&&Math.abs(resized.x-header.x)<2,'frozen header and body stay aligned');
+ await input.fill('保留标注');
+ page.once('dialog',dialog=>dialog.dismiss());await row.getByRole('button',{name:'移除',exact:true}).click();
+ assert.equal(await row.getByRole('button',{name:'移除',exact:true}).count(),1);
+ page.once('dialog',dialog=>dialog.accept());await row.getByRole('button',{name:'移除',exact:true}).click();
+ assert.equal(await row.getByRole('button',{name:'恢复',exact:true}).count(),1);
+ assert.equal(await input.inputValue(),'保留标注');
+ await row.getByRole('button',{name:'恢复',exact:true}).click();
+ assert.equal(await input.inputValue(),'保留标注');
+ await table.locator('..').evaluate(element=>{element.scrollLeft=0;});
  // The unfiltered controlled input must actually accept text, not merely focus.
  await input.fill('层架式');assert.equal(await input.inputValue(),'层架式');await input.fill('');
  await page.getByRole('button',{name:'筛选商品形态',exact:true}).click();await page.getByRole('checkbox',{name:'未分类',exact:true}).click();
@@ -31,7 +49,7 @@ test('manual shape editing retains focus under an active shape filter and suppor
  await input.fill('层架 · 灯');await page.keyboard.press('Tab');
  const shapeSection=page.locator('section').filter({has:page.getByRole('heading',{name:'商品形态 · 销量占比分析',exact:true})});
  await shapeSection.getByRole('button',{name:'形态销量局部筛选',exact:true}).click();await page.getByRole('checkbox',{name:'层架 · 灯',exact:true}).click();
- assert.equal(await page.getByLabel('选择 B000000001',{exact:true}).isChecked(),true);assert.equal(await page.getByLabel('选择 B000000002',{exact:true}).isChecked(),true);
+ assert.equal(await table.getByRole('button',{name:'移除',exact:true}).count(),2,'local filtering and batch edits do not change the sample');
  assert.equal(await shapeSection.locator('tbody tr:not(.shape-price-total-row)').count(),1);
  await page.getByText('管理形态名称',{exact:true}).click();await page.getByLabel('管理形态',{exact:true}).selectOption('弧形灯');await page.getByRole('button',{name:'删除形态',exact:true}).click();await page.getByText(/将把 1 件商品恢复为未分类/).waitFor();await page.getByRole('button',{name:'确认删除形态',exact:true}).click();assert.equal(await page.getByLabel('B000000002 人工形态',{exact:true}).inputValue(),'');
  const rect=await input.boundingBox();assert.ok(rect&&rect.height>=32&&rect.width>=110,JSON.stringify(rect));
@@ -39,4 +57,10 @@ test('manual shape editing retains focus under an active shape filter and suppor
  await page.screenshot({path:out+'/annotation-desktop.png'});
  await page.setViewportSize({width:390,height:844});await input.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/annotation-mobile.png'});await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('button',{name:'测试只读版本',exact:true}).click();assert.ok(await input.isDisabled());assert.ok(await page.getByLabel('批量形态',{exact:true}).isDisabled());assert.ok(await page.getByLabel('批量选择可见商品',{exact:true}).isDisabled());assert.deepEqual(errors,[]);
+ await table.locator('thead th[data-column-id]').evaluateAll(elements=>{const widths=Object.fromEntries(elements.map(e=>{const id=e.getAttribute('data-column-id')!;return[id,id==='product'?240:id==='shape'?140:40];}));localStorage.setItem('market-shape-reference-column-widths/v1',JSON.stringify(widths));});
+ await page.setViewportSize({width:1000,height:900});await page.reload();await input.waitFor();
+ await page.waitForFunction(()=>document.querySelector<HTMLElement>('th[data-column-id="bulk"]')?.style.width==='40px');
+ await table.locator('..').evaluate(e=>{e.scrollLeft=200;});
+ const frozen=await row.locator('td.shape-ref-frozen').evaluateAll(elements=>elements.map(e=>({left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})));
+ assert.ok(Math.abs(frozen[0].right-frozen[1].left)<2&&Math.abs(frozen[1].right-frozen[2].left)<2,'narrow saved columns must not overlap after horizontal scrolling');
 });

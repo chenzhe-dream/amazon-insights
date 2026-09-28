@@ -25,7 +25,9 @@ test('product trend detail uses sparse report months and stays inspectable on de
   await page.route('**/*', async route => {if (!route.request().url().startsWith(origin)) return route.abort(); if (route.request().isNavigationRequest()) return route.fulfill({contentType: 'text/html', body: await server.transformIndexHtml('/', `<html><body><div id="root"></div><script type="module" src="/${out}/entry.jsx"></script></body></html>`)}); return route.continue();});
   await page.goto(origin);
   const trigger = page.getByRole('button', {name: /TRENDTEST 月度销量与销售额趋势/});
-  assert.match(await page.locator('.shape-ref-trend-single').innerText(), /客单价\s*\$20\.00[\s\S]*仅1个月数据，暂无法判断趋势/);
+  assert.equal(await page.locator('.shape-ref-trend-values').count(), 0);
+  assert.equal(await page.getByRole('button', {name: /SINGLE 月度销量/}).locator('[data-mini-month]').count(), 1);
+  assert.equal(await page.getByRole('button', {name: /LONG 月度销量/}).locator('[data-mini-month]').count(), 14);
   assert.equal(await page.locator('[title="暂无月度数据"]').innerText(), '未知');
   await page.keyboard.press('Tab');
   assert.equal(await trigger.evaluate(element => element === document.activeElement), true);
@@ -60,6 +62,16 @@ test('product trend detail uses sparse report months and stays inspectable on de
   await trigger.click(); assert.equal(await panel.count(), 0, 'a second trigger click closes a pinned detail');
   await trigger.click();
   await page.keyboard.press('Escape'); assert.equal(await panel.count(), 0);
+  const single = page.getByRole('button', {name: /SINGLE 月度销量/});
+  await single.click();
+  assert.match(await panel.innerText(), /仅1个月数据，暂无法判断趋势/);
+  await panel.getByRole('button', {name:'2026-08 月度数据'}).focus();
+  assert.match(await panel.locator('.shape-ref-trend-tooltip').innerText(), /客单价\s*\$20\.00/);
+  await page.keyboard.press('Escape');
+  await page.locator('#root > div').evaluate(element => { (element as HTMLElement).style.width='60px'; });
+  const small = await trigger.boundingBox(), svg = await trigger.locator('svg').boundingBox();
+  assert.ok(small && svg && svg.x + svg.width <= small.x + small.width + 1);
+  await page.locator('#root > div').evaluate(element => { (element as HTMLElement).style.width='220px'; });
   await page.setViewportSize({width: 390, height: 844}); await trigger.scrollIntoViewIfNeeded(); await trigger.click();
   const bounds = await panel.boundingBox(); assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390, JSON.stringify(bounds));
   await page.screenshot({path: `${out}/trend-mobile.png`});

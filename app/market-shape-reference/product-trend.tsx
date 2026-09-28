@@ -36,6 +36,24 @@ function monthNumber(month: string) {
   return match ? Number(match[1]) * 12 + Number(match[2]) : NaN;
 }
 
+/** Compact original-style preview; the dialog retains the complete history. */
+function MiniChart({points}: {points: Point[]}) {
+  const recent = points.slice(-14);
+  const max = (key: 'volume' | 'amount' | 'aov') => Math.max(1, ...recent.map(point => point[key] ?? 0));
+  const x = (index: number) => recent.length === 1 ? 54 : 5 + index * 98 / (recent.length - 1);
+  const y = (value: number, key: 'volume' | 'amount' | 'aov') => 31 - Math.max(0, value) / max(key) * 27;
+  return <svg className="shape-ref-trend-mini" viewBox="0 0 108 34" role="img" aria-label={recent.length === 1 ? '单月数据，暂无法判断趋势' : '最近月度销量、销售额与客单价'}>
+    {recent.map((point, index) => <g key={point.month} data-mini-month={point.month}>
+      <title>{`${point.month}：销量 ${number(point.volume)}；销售额 ${number(point.amount,2)}；客单价 ${number(point.aov,2)}`}</title>
+      {point.volume != null && <rect x={x(index)-2} y={Math.min(30,y(point.volume,'volume'))} width="4" height={Math.max(1,31-y(point.volume,'volume'))} fill={volumeColor}/>}
+    </g>)}
+    {(['amount','aov'] as const).map(key => <g key={key}>
+      {lineSegments(recent,key,x,value=>y(value,key)).map((segment,index)=><polyline key={index} points={segment} fill="none" stroke={key==='amount'?amountColor:aovColor} strokeWidth="1.3" strokeDasharray={key==='aov'?'3 2':undefined}/>)}
+      {recent.map((point,index)=>point[key]==null?null:<circle key={point.month} cx={x(index)} cy={y(point[key],key)} r="1.3" fill={key==='amount'?amountColor:aovColor}/>)}
+    </g>)}
+  </svg>;
+}
+
 function DetailChart({points, currency}: {points: Point[]; currency: string}) {
   const [active, setActive] = useState<number | null>(null);
   const [inspecting, setInspecting] = useState(false);
@@ -94,17 +112,11 @@ export function ProductTrend({product, currency = '$'}: {product: SorftimeCatego
   useEffect(() => {if (!open) return; const onKey = (event: KeyboardEvent) => {if (event.key === 'Escape') close(true);}; const onPointer = (event: PointerEvent) => {if (!anchor.current?.contains(event.target as Node) && !(event.target as Element).closest?.('.shape-ref-trend-popover')) close();}; document.addEventListener('keydown', onKey); document.addEventListener('pointerdown', onPointer); return () => {document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onPointer);};}, [open, close]);
   useEffect(() => () => cancelClose(), [cancelClose]);
   if (!points.length) return <span className="shape-ref-trend" title="暂无月度数据">未知</span>;
-  if (points.length === 1) {
-    const point = points[0];
-    return <div className="shape-ref-trend shape-ref-trend-single" aria-label={`${product.asin} 月度销量与销售额趋势`} title={`${point.month}：销量 ${number(point.volume)}；销售额 ${number(point.amount,2)}`}><small>{point.month}</small><div>销量 {number(point.volume)}</div><div>销售额 {number(point.amount,2)}</div><div>客单价 {point.aov == null ? '未知' : `${currency}${number(point.aov,2)}`}</div><small style={{display:'block',whiteSpace:'normal'}}>仅1个月数据，暂无法判断趋势</small></div>;
-  }
-  const maxVolume = Math.max(1, ...points.map(point => point.volume ?? 0)), maxAmount = Math.max(1, ...points.map(point => point.amount ?? 0));
+  if (points.every(point=>point.volume==null&&point.amount==null)) return <span className="shape-ref-trend" title="月度销量与销售额均缺失">未知</span>;
   return <>
     <button ref={anchor} type="button" className="shape-ref-trend shape-ref-trend-trigger" aria-label={`${product.asin} 月度销量与销售额趋势`} aria-haspopup="dialog" aria-expanded={open} onMouseEnter={show} onMouseLeave={scheduleClose} onFocus={() => {if (!suppressFocusOpen.current) show();}} onBlur={scheduleClose} onKeyDown={event => {if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {event.preventDefault(); cancelClose(); focusDialog.current = true; setOpen(true); setPinned(true); if (open && pinned) {focusDialog.current = false; dialogClose.current?.focus();}}}} onClick={event => {cancelClose(); if (event.detail === 0) {focusDialog.current = true; setOpen(true); setPinned(true); if (open && pinned) {focusDialog.current = false; dialogClose.current?.focus();}} else if (open && pinned) close(); else {setOpen(true); setPinned(true);}}}>
-      <div className="shape-ref-trend-bars">{points.map(point => <div key={point.month} className="shape-ref-trend-pair" title={`${point.month}：销量 ${number(point.volume)}；销售额 ${number(point.amount,2)}`}>{point.volume == null ? null : <span style={{height: `${Math.max(2, Math.max(0,point.volume)/maxVolume*42)}px`, background: volumeColor}}/>}{point.amount == null ? null : <span style={{height: `${Math.max(2, Math.max(0,point.amount)/maxAmount*42)}px`, background: amountColor}}/>}</div>)}</div>
-      <small>蓝：销量　紫：金额</small>
-      <div className="shape-ref-trend-values">{points.slice(-3).map(point => <small key={point.month}>{point.month}　{number(point.volume)} / {number(point.amount,2)}</small>)}</div>
+      <MiniChart points={points}/>
     </button>
-    {open && typeof document !== 'undefined' && createPortal(<div role="dialog" aria-label="月度趋势" className="shape-ref-trend-popover" style={style} onMouseEnter={show} onMouseLeave={scheduleClose} onFocusCapture={show} onBlurCapture={scheduleClose}><div className="shape-ref-trend-popover-head"><b>月度趋势</b><button ref={dialogClose} type="button" aria-label="关闭月度趋势" onClick={() => close(true)}>×</button></div><DetailChart points={points} currency={currency}/><p>报表月度数据 · 客单价 = 月销售额 / 月销量</p></div>, document.body)}
+    {open && typeof document !== 'undefined' && createPortal(<div role="dialog" aria-label="月度趋势" className="shape-ref-trend-popover" style={style} onMouseEnter={show} onMouseLeave={scheduleClose} onFocusCapture={show} onBlurCapture={scheduleClose}><div className="shape-ref-trend-popover-head"><b>月度趋势</b><button ref={dialogClose} type="button" aria-label="关闭月度趋势" onClick={() => close(true)}>×</button></div><DetailChart points={points} currency={currency}/>{points.length===1&&<p>仅1个月数据，暂无法判断趋势</p>}<p>报表月度数据 · 客单价 = 月销售额 / 月销量</p></div>, document.body)}
   </>;
 }
