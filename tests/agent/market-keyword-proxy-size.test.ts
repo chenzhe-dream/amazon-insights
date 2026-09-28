@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';import test from 'node:test';
+import {createAgentServiceClient} from '../../app/lib/agent-service-client';
+import {proxyAgentRequest} from '../../app/api/agent/[...path]/route';
+import {keywordPageRun} from './helpers/market-keyword-page-fixture';
+import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
+const mib=1048576,env={AGENT_SERVICE_INTERNAL_URL:'http://agent.test',AGENT_SERVICE_PROXY_TOKEN:'test-token'};
+function largeReport(){const result=keywordPageRun(),base=result.run.facts!.members[0];result.run.facts!.members=Array.from({length:100},(_,i)=>({...structuredClone(base),keywordId:`keyword:${i}`,keyword:`floor lamp ${i}`,trend:{...base.trend,historyMonths:Array.from({length:24},(_,j)=>{const month=new Date(Date.UTC(2024,8+j,1)).toISOString().slice(0,7),metric={value:1000+j,reason:null},growth={value:null,reason:'missing-baseline' as const,baselineMonth:'2023-09',baselineValue:null,formulaVersion:'calendar-month-growth/v1' as const};return{month,searchVolume:metric,searchRank:metric,recommendedBid:metric,yoyGrowth:growth,recentGrowth:growth};})}}));const {factsId,...basis}=result.run.facts!;result.run.facts!.factsId=`market-keyword-facts:${digest(basis)}`;const bytes=Buffer.byteLength(JSON.stringify(result));assert.ok(bytes>mib);assert.ok(bytes<8*mib);return result;}
+async function proxy(path:string,payload:unknown,body?:unknown,maxResponseBytes?:number){return proxyAgentRequest(new Request(`http://web.test/api/agent/${path}`,{method:body?'POST':'GET',...(body?{body:JSON.stringify(body),headers:{'content-type':'application/json','idempotency-key':'72000000-0000-4000-8000-000000000002'}}:{})}),{params:Promise.resolve({path:path.split('/')})},createAgentServiceClient({env,maxResponseBytes,fetchImplementation:async()=>Response.json(payload)}));}
+test('100-word historical report passes real status and idempotent start proxy contracts above 1 MiB',async()=>{
+ const payload=largeReport();for(const [path,body] of [[`v1/market-analysis/runs/${payload.run.id}/keywords`,undefined],[`v1/market-analysis/studies/${payload.run.scope.researchId}/keywords`,payload.run.params]] as const){const res=await proxy(path,payload,body);assert.equal(res.status,200,await res.clone().text());assert.deepEqual(await res.json(),payload);}
+});
+test('keyword report budget remains bounded and validates payloads without changing small routes',async()=>{
+ const path=`v1/market-analysis/runs/${keywordPageRun().run.id}/keywords`;
+ for(const [route,payload,limit,code] of [[path,{data:'x'.repeat(9*mib)},undefined,'AGENT_SERVICE_RESPONSE_TOO_LARGE'],[path,largeReport(),64,'AGENT_SERVICE_RESPONSE_TOO_LARGE'],['v1/capabilities',{data:'x'.repeat(mib+1)},undefined,'AGENT_SERVICE_RESPONSE_TOO_LARGE'],[path,{data:'x'.repeat(mib+1)},undefined,'AGENT_SERVICE_INVALID_RESPONSE']] as const){const res=await proxy(route,payload,undefined,limit);assert.equal(res.status,502);assert.equal((await res.json()).error.code,code);}
+});

@@ -139,6 +139,14 @@ const DEFAULT_MAX_RESPONSE_BYTES = 1_048_576;
 // A real single-month run exceeds 1 MiB; give only these contracts a bounded
 // report budget, keeping the default and explicit caller limits unchanged.
 const OVERVIEW_MAX_RESPONSE_BYTES = 8 * DEFAULT_MAX_RESPONSE_BYTES;
+// A 100-keyword report includes verified monthly history and rule evidence.
+// Apply the existing bounded report budget only to its result-bearing routes.
+const KEYWORD_REPORT_ROUTES = new Set([
+  'POST /v1/market-analysis/studies/:id/keywords',
+  'GET /v1/market-analysis/runs/:id/keywords',
+  'POST /v1/market-analysis/runs/:id/keywords/revisions',
+  'GET /v1/market-analysis/runs/:id/keywords/revisions/:revisionId',
+]);
 const SHAPE_REPORT_ROUTES = new Set([
  'POST /v1/market-analysis/shape-price/query',
  'POST /v1/market-analysis/studies/:id/shape-price',
@@ -395,7 +403,7 @@ export function createAgentServiceClient(
     }
 
     const maxResponseBytes = options.maxResponseBytes ?? (
-      (OVERVIEW_REPORT_ROUTES.has(`${request.method} ${contract.path}`)||SHAPE_REPORT_ROUTES.has(`${request.method} ${contract.path}`))
+      (OVERVIEW_REPORT_ROUTES.has(`${request.method} ${contract.path}`)||SHAPE_REPORT_ROUTES.has(`${request.method} ${contract.path}`)||KEYWORD_REPORT_ROUTES.has(`${request.method} ${contract.path}`))
         ? OVERVIEW_MAX_RESPONSE_BYTES : DEFAULT_MAX_RESPONSE_BYTES
     );
     const secrets = [config.internalUrl, config.proxyToken];
