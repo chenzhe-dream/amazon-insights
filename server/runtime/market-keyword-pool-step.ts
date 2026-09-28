@@ -67,7 +67,7 @@ export function createMarketKeywordPoolStep(context: PostgresQueryContext): Mark
     }
     const pool = assembleMarketKeywordPool({ ...input, scope: view.run.scope, pages, sources }); signal.throwIfAborted();
     const { rawSnapshot, semanticSnapshot, manifest } = pool;
-    const output = { ...manifest, ruleBaseline: keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rawSnapshot, clusterCount: input.catalog.clusterCatalog.length }) };
+    const output = { ...manifest, ruleBaselineEvidenceVersion: 'keyword-record/v2', ruleBaseline: keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rawSnapshot, clusterCount: input.catalog.clusterCatalog.length, evidenceMode: 'keyword-record/v2' }) };
     return { kind: 'settlement', value: { outcome: { status: rawSnapshot.records.length ? 'succeeded' : 'empty', output },
       inputs: [factory(rawSnapshot), factory(semanticSnapshot)], children: rawSnapshot.records.length ? [
         { stepKey: `pool-trends/${manifest.basisHash}`, kind: 'prepare-keyword-pool', subject: {},

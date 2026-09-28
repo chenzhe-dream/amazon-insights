@@ -18,6 +18,7 @@ export function buildKeywordRuleBaseline(input: {
   clusterCount: number;
   coveredClusterCount: number | null;
   revisionId: string | null;
+  evidenceMode?: 'keyword-record/v2';
 }) {
   const recordIds = input.sourceSnapshot.records.map(record => record.id);
   const volumeKnown = input.keywords.some(keyword => keyword.searchVolume !== null);
@@ -30,7 +31,7 @@ export function buildKeywordRuleBaseline(input: {
         denominator: null,
         status: keyword.searchVolume === null ? 'unavailable' as const : 'complete' as const,
         missingReason: keyword.searchVolume === null ? keyword.searchVolumeReason ?? 'missing-completed-month-volume' : null,
-        evidenceRecordIds: keyword.searchVolume === null ? [] : recordIds,
+        evidenceRecordIds: keyword.searchVolume === null ? [] : input.evidenceMode ? [keyword.keywordId] : recordIds,
       },
       {
         key: `${keyword.keywordId}:threeMonthGrowth`,
@@ -39,7 +40,7 @@ export function buildKeywordRuleBaseline(input: {
         denominator: null,
         status: keyword.threeMonthGrowth === null ? 'unavailable' as const : 'complete' as const,
         missingReason: keyword.threeMonthGrowth === null ? keyword.threeMonthReason ?? 'missing-baseline' : null,
-        evidenceRecordIds: keyword.threeMonthGrowth === null ? [] : recordIds,
+        evidenceRecordIds: keyword.threeMonthGrowth === null ? [] : input.evidenceMode ? [keyword.keywordId] : recordIds,
       },
     ]),
     {
@@ -93,6 +94,7 @@ export function keywordRuleBaselineFromPool(input: {
   snapshot: MarketInputSnapshot;
   clusterCount: number;
   revisionId?: string | null;
+  evidenceMode?: 'keyword-record/v2';
 }) {
   const keywords = input.snapshot.records.map(record => {
     const member = recordObject(recordObject(record.data).member);
@@ -117,5 +119,6 @@ export function keywordRuleBaselineFromPool(input: {
     clusterCount: input.clusterCount,
     coveredClusterCount: null,
     revisionId: input.revisionId ?? null,
+    evidenceMode: input.evidenceMode,
   });
 }

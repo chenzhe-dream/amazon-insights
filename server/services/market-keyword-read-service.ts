@@ -66,9 +66,10 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
       }
       const rebuilt = assembleMarketKeywordPool({ ...input, scope: view.run.scope, pages, sources });
       const savedPool = obj(poolAttempt.output);
-      const comparable = Object.hasOwn(savedPool, 'ruleBaseline') ? Object.fromEntries(Object.entries(savedPool).filter(([key]) => key !== 'ruleBaseline')) : savedPool;
+      if (savedPool.ruleBaselineEvidenceVersion !== undefined && savedPool.ruleBaselineEvidenceVersion !== 'keyword-record/v2') invalid();
+      const comparable = Object.hasOwn(savedPool, 'ruleBaseline') ? Object.fromEntries(Object.entries(savedPool).filter(([key]) => key !== 'ruleBaseline' && key !== 'ruleBaselineEvidenceVersion')) : savedPool;
       same(rebuilt.manifest, comparable);
-      if (Object.hasOwn(savedPool, 'ruleBaseline')) same(savedPool.ruleBaseline, keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rebuilt.rawSnapshot, clusterCount: input.catalog.clusterCatalog.length }));
+      if (Object.hasOwn(savedPool, 'ruleBaseline')) same(savedPool.ruleBaseline, keywordRuleBaselineFromPool({ scope: view.run.scope, snapshot: rebuilt.rawSnapshot, clusterCount: input.catalog.clusterCatalog.length, ...(savedPool.ruleBaselineEvidenceVersion === 'keyword-record/v2' ? { evidenceMode: 'keyword-record/v2' as const } : {}) }));
       const raw = await snapshots.findInput({ ...readScope, id: rebuilt.rawSnapshot.snapshotId });
       const semantic = await snapshots.findInput({ ...readScope, id: rebuilt.semanticSnapshot.snapshotId });
       if (!raw || !semantic) invalid();

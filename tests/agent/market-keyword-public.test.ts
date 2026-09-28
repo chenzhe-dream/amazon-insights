@@ -35,7 +35,7 @@ test('public keyword start and read bind source months and native audited batche
   const connector: RemoteMcpConnector = { id: 'sorftime', probe: async () => { throw new Error('Unused'); }, execute: async r => {
     calls++;
     if (r.operation === 'keyword_extends' && r.input.page === 2 && failSecond) throw new ConnectorError('sorftime', 'upstream-permanent', false);
-    const data = r.operation === 'keyword_extends' ? { data: r.input.keyword === 'empty' ? [] : [{ keyword: `synthetic lamp ${r.input.page}`, monthly_search_volume: 999, recommended_cpc_bid: '1.25', seasonality: '11月' }] }
+    const data = r.operation === 'keyword_extends' ? { data: r.input.keyword === 'hundred lamp' ? Array.from({length:20},(_,i)=>({keyword:`hundred lamp ${r.input.page}-${i}`,monthly_search_volume:100+i,seasonality:'11月'})) : r.input.keyword === 'empty' ? [] : [{ keyword: `synthetic lamp ${r.input.page}`, monthly_search_volume: 999, recommended_cpc_bid: '1.25', seasonality: '11月' }] }
       : { data: { keyword: r.input.keyword, search_volume_trend: missingHistory ? [] : ['2025-08 search volume 10', '2026-05 search volume 15', '2026-07 search volume 20', '2026-08 search volume 0'],
         search_rank_trend: [], recommended_bid_trend: ['2026-08 CPC recommended bid 2.5'] } };
     return { data, source: { connectorId: 'sorftime', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
@@ -96,6 +96,19 @@ test('public keyword start and read bind source months and native audited batche
     assert.equal(saved.params.plannedPages.length,5);assert.equal(saved.facts!.members.length,1);assert.equal(saved.facts!.pool.plannedPageCount,1);
     assert.equal(saved.steps.filter(s=>s.kind==='collect-keyword-page').length,1);assert.equal(calls-beforeCalls,2);
     assert.deepEqual((await service.findKeywords(actor,started.run.id)).run,saved);assert.equal(calls-beforeCalls,2);
+  });
+  await t.test('five full pages publish 100 keywords and finish trends within settlement limits',async()=>{
+    const previous=failSecond;failSecond=false;const beforeCalls=calls;
+    try{
+      const started=await service.startKeywords(actor,study.study.id,{...body,paginationMode:'until-short-page/v1',plannedPages:Array.from({length:5},(_,i)=>({seed:'hundred lamp',page:i+1})),maxMembers:100},randomUUID());
+      for(let i=0;i<140;i++){if(!await runtime.tick())break;assert.ok(i<139);}
+      const saved=(await service.findKeywords(actor,started.run.id)).run;
+      assert.equal(saved.facts?.members.length,100,JSON.stringify(saved.steps.filter(s=>s.status==='failed')));
+      assert.equal(saved.steps.filter(s=>s.kind==='collect-keyword-page'&&s.status==='succeeded').length,5);
+      assert.equal(saved.steps.filter(s=>s.kind==='collect-keyword-trend'&&s.status==='succeeded').length,100);
+      assert.equal(calls-beforeCalls,105);assert.equal(modelCalls,0);
+      assert.deepEqual((await service.findKeywords(actor,started.run.id)).run,saved);assert.equal(calls-beforeCalls,105);
+    }finally{failSecond=previous;}
   });
   // Seed historical semantic runs through the repository. New public commands stay rules-only.
   let seedLegacyModels = true;
