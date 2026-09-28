@@ -24,7 +24,7 @@ test('saved report keeps all fifteen original chapters in original order with vi
  assert.match(html,/美国站\(com\)Floor Lamps市场分析报告/);
  const sections=[...html.matchAll(/data-report-section="([^"]+)"/g)].map(m=>m[1]);
  assert.deepEqual(sections,overviewPresentationSections.map(s=>s.id));
- for(const text of ['行业需求及趋势','行业销售趋势','商品集中度','A+视频分布','商品需求趋势','价格分布','尚未提供关键词搜索量序列','42'])assert.ok(html.includes(text),text);
+ for(const text of ['行业需求及趋势','行业销售趋势','商品集中度','A+视频分布','商品需求趋势','价格分布','此历史报告尚未采集行业关键词趋势','查看此报告不会自动发起采集','42'])assert.ok(html.includes(text),text);
  assert.match(html,/50%/);assert.doesNotMatch(html,/99\.9%/);
  assert.match(html,/数据源未回显完整范围/);
 });
