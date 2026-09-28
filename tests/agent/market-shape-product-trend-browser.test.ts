@@ -65,6 +65,13 @@ test('product trend detail uses sparse report months and stays inspectable on de
   const single = page.getByRole('button', {name: /SINGLE 月度销量/});
   await single.click();
   assert.match(await panel.innerText(), /仅1个月数据，暂无法判断趋势/);
+  const geometry=await panel.locator('svg').evaluate(svg=>{
+    const grid=svg.querySelector('line')!,bar=svg.querySelector('[data-trend-series="volume"]')!,amount=svg.querySelector('[data-trend-series="amount"]')!,aov=svg.querySelector('[data-trend-series="aov"]')!;
+    return {plotCenter:(Number(grid.getAttribute('x1'))+Number(grid.getAttribute('x2')))/2,barCenter:Number(bar.getAttribute('x'))+Number(bar.getAttribute('width'))/2,amountRadius:Number(amount.getAttribute('r')),aovRadius:Number(aov.getAttribute('r'))};
+  });
+  assert.equal(geometry.barCenter,geometry.plotCenter,'single month belongs in the middle of the plot');
+  assert.ok(geometry.amountRadius>geometry.aovRadius+1,'coincident amount and AOV markers must both remain visible');
+  await page.screenshot({path:`${out}/single-month-centered-desktop.png`});
   await panel.getByRole('button', {name:'2026-08 月度数据'}).focus();
   assert.match(await panel.locator('.shape-ref-trend-tooltip').innerText(), /客单价\s*\$20\.00/);
   await page.keyboard.press('Escape');

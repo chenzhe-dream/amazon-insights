@@ -49,7 +49,7 @@ function MiniChart({points}: {points: Point[]}) {
     </g>)}
     {(['amount','aov'] as const).map(key => <g key={key}>
       {lineSegments(recent,key,x,value=>y(value,key)).map((segment,index)=><polyline key={index} points={segment} fill="none" stroke={key==='amount'?amountColor:aovColor} strokeWidth="1.3" strokeDasharray={key==='aov'?'3 2':undefined}/>)}
-      {recent.map((point,index)=>point[key]==null?null:<circle key={point.month} cx={x(index)} cy={y(point[key],key)} r="1.3" fill={key==='amount'?amountColor:aovColor}/>)}
+      {recent.map((point,index)=>point[key]==null?null:<circle key={point.month} cx={x(index)} cy={y(point[key],key)} r={recent.length===1&&key==='amount'?2.8:1.3} fill={key==='amount'?amountColor:aovColor}/>)}
     </g>)}
   </svg>;
 }
@@ -63,7 +63,7 @@ function DetailChart({points, currency}: {points: Point[]; currency: string}) {
   const maxAmount = Math.max(1, ...points.map(point => point.amount ?? 0));
   const aovValues = points.flatMap(point => point.aov == null ? [] : [point.aov]);
   const minAov = Math.min(0, ...aovValues), maxAov = Math.max(1, ...aovValues);
-  const x = (index: number) => left + index * plotWidth / Math.max(points.length - 1, 1);
+  const x = (index: number) => points.length === 1 ? left + plotWidth / 2 : left + index * plotWidth / (points.length - 1);
   const yVolume = (value: number) => top + plotHeight * (1 - Math.max(0, value) / maxVolume);
   const yAmount = (value: number) => top + plotHeight * (1 - Math.max(0, value) / maxAmount);
   const yAov = (value: number) => top + plotHeight * (1 - (value - minAov) / Math.max(0.01, maxAov - minAov));
@@ -79,15 +79,15 @@ function DetailChart({points, currency}: {points: Point[]; currency: string}) {
         {aovValues.length > 0 && [0,.5,1].map(ratio => <text key={`aov-tick-${ratio}`} x={width-3} y={top+plotHeight*(1-ratio)+3} textAnchor="end" className="shape-ref-trend-axis shape-ref-trend-aov-axis">{currency}{number(minAov+(maxAov-minAov)*ratio,0)}</text>)}
         {points.map((point, index) => point.volume == null ? null : <rect key={`volume-${point.month}`} data-trend-month={point.month} data-trend-series="volume" x={x(index)-barWidth/2} y={yVolume(point.volume)} width={barWidth} height={Math.max(1, height-bottom-yVolume(point.volume))} fill={volumeColor} opacity=".72" rx="1"/>)}
         {lineSegments(points, 'amount', x, yAmount).map((segment, index) => <polyline key={`amount-line-${index}`} points={segment} fill="none" stroke={amountColor} strokeWidth="2"/>)}
-        {points.map((point, index) => point.amount == null ? null : <circle key={`amount-${point.month}`} data-trend-month={point.month} data-trend-series="amount" cx={x(index)} cy={yAmount(point.amount)} r="3" fill="#fff" stroke={amountColor} strokeWidth="2"/>)}
+        {points.map((point, index) => point.amount == null ? null : <circle key={`amount-${point.month}`} data-trend-month={point.month} data-trend-series="amount" cx={x(index)} cy={yAmount(point.amount)} r={points.length===1?5.5:3} fill="#fff" stroke={amountColor} strokeWidth="2"/>)}
         {lineSegments(points, 'aov', x, yAov).map((segment, index) => <polyline key={`aov-line-${index}`} points={segment} fill="none" stroke={aovColor} strokeWidth="2" strokeDasharray="5 4"/>)}
         {points.map((point, index) => point.aov == null ? null : <circle key={`aov-${point.month}`} data-trend-month={point.month} data-trend-series="aov" cx={x(index)} cy={yAov(point.aov)} r="3" fill="#fff" stroke={aovColor} strokeWidth="2"/>)}
         {active != null && <line x1={x(active)} x2={x(active)} y1={top} y2={height-bottom} stroke="#aab8c8" strokeDasharray="4 4"/>}
-        {points.map((point, index) => <g key={`hit-${point.month}`} data-trend-month={point.month} role="button" tabIndex={0} aria-label={`${point.month} 月度数据`} onMouseEnter={() => {setInspecting(false); setActive(index);}} onMouseMove={() => {setInspecting(false); setActive(index);}} onPointerDown={() => {setActive(index); setInspecting(true);}} onClick={() => {setActive(index); setInspecting(true);}} onFocus={() => {setActive(index); setInspecting(true);}} onKeyDown={event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); setActive(index); setInspecting(true);}}}><rect x={x(index) - plotWidth/Math.max(points.length-1,1)/2} y={0} width={plotWidth/Math.max(points.length-1,1)} height={height-bottom} fill="transparent"/>{(index % monthStep === 0 || index === points.length-1) && <text x={x(index)} y={height-10} textAnchor="middle" className="shape-ref-trend-axis">{point.month.slice(5)}</text>}</g>)}
+        {points.map((point, index) => <g key={`hit-${point.month}`} data-trend-month={point.month} role="button" tabIndex={0} aria-label={`${point.month} 月度数据`} onMouseEnter={() => {setInspecting(false); setActive(index);}} onMouseMove={() => {setInspecting(false); setActive(index);}} onPointerDown={() => {setActive(index); setInspecting(true);}} onClick={() => {setActive(index); setInspecting(true);}} onFocus={() => {setActive(index); setInspecting(true);}} onKeyDown={event => {if (event.key === 'Enter' || event.key === ' ') {event.preventDefault(); setActive(index); setInspecting(true);}}}><rect x={x(index) - plotWidth/Math.max(points.length-1,1)/2} y={0} width={plotWidth/Math.max(points.length-1,1)} height={height-bottom} fill="transparent"/>{(index % monthStep === 0 || index === points.length-1) && <text x={x(index)} y={height-10} textAnchor="middle" className="shape-ref-trend-axis">{points.length===1?point.month:point.month.slice(5)}</text>}</g>)}
       </svg>
       {selected && <div className="shape-ref-trend-tooltip" style={{left: `${Math.min(76, Math.max(24, x(active!)/width*100))}%`}}><b>{selected.month}</b><div>月销量 <strong>{number(selected.volume)}</strong></div><div>月销售额 <strong>{selected.amount == null ? '未知' : `${currency}${number(selected.amount,2)}`}</strong></div><div>客单价 <strong>{selected.aov == null ? '未知' : `${currency}${number(selected.aov,2)}`}</strong></div></div>}
     </div>
-    <div className="shape-ref-trend-month-axis" style={{gridTemplateColumns: `repeat(${shownMonths.length}, minmax(0, 1fr))`}}>{shownMonths.map(point => <span key={point.month}>{points.length > 12 ? point.month.slice(2) : point.month}</span>)}</div>
+    {points.length>1&&<div className="shape-ref-trend-month-axis" style={{gridTemplateColumns: `repeat(${shownMonths.length}, minmax(0, 1fr))`}}>{shownMonths.map(point => <span key={point.month}>{points.length > 12 ? point.month.slice(2) : point.month}</span>)}</div>}
   </>;
 }
 
