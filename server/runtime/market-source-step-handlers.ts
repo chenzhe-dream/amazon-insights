@@ -1,3 +1,4 @@
+import {createOverviewIndustryDemandStep} from './market-overview-industry-demand-step';
 import {inspectMarketThemeContinuation,MARKET_THEME_RULES_FLOW_V3} from '../domain/market-research/customer-theme-flow';
 import {collectMarketShapeProductImage} from '../services/market-shape-product-image';
 import {collectSorftimeShapePoolPage} from '../services/market-shape-sorftime-pool';
@@ -198,7 +199,9 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope, 'customer-themes', [input.asin], [{ id: input.asin, data: { collection: 'customer-themes', result: result.result } }],
       result.result.status === 'empty' ? 'empty' : 'ready', result.evidence, { asin: input.asin, selectionInputSnapshotId: input.selectionInputSnapshotId, issues: result.issues });
   };
+  const demand=createOverviewIndustryDemandStep(deps.context,deps.connectors);
   const overview:MarketStepHandler=async({claim,signal})=>{
+    if(object(claim.step.input).phase==='overview-industry-demand')return demand({claim,signal});
     const input=z.union([MarketOverviewSourceStepInputSchema,MarketOverviewDistributionStepInputSchema]).parse(claim.step.input),scope=await scopeFor(claim,signal,'overview');
     const common={scope,jobId:claim.moduleRunId,connector:deps.connectors.sellerSprite,signal};
     const result=MarketOverviewSourceStepInputSchema.safeParse(input).success?await collectMarketOverviewSource({...MarketOverviewSourceStepInputSchema.parse(input),...common}):await collectMarketOverviewDistribution({...MarketOverviewDistributionStepInputSchema.parse(input),...common});
@@ -225,6 +228,7 @@ export function createMarketSourceStepHandlers(deps: Parameters<typeof buildMark
     const work = await buildMarketSourceStepHandlers({...deps, connectors})[kind as keyof typeof handlers](input);
     if (!admission) return work;
     input.signal.throwIfAborted();
+    if(object(input.claim.step.input).phase==='overview-industry-demand'&&work.kind==='settlement'&&work.value.outcome.status==='failed')return {kind:'settlement',value:{...work.value,outcome:{...work.value.outcome,error:{code:'local-admission',retryable:admission.reason==='rolling-window'||admission.reason==='concurrency',admission}}}};
     return {kind:'settlement',value:{outcome:{status:'failed',error:{code:'local-admission',
       retryable:admission.reason==='rolling-window'||admission.reason==='concurrency',admission},
       diagnostic:{handlerVersion:MARKET_SOURCE_HANDLER_VERSION,sourceCode:'local-admission'}}}};

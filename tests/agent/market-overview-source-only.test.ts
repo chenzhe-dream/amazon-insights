@@ -27,7 +27,7 @@ test('production source-only worker finishes complete overview numbers and repor
   const month=(request.input.request as {month:string}).month;
   const identity={marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,month};
   const basic={...identity,topProducts:10,products:10,totalUnits:100,totalRevenue:2000};
-  const data=request.operation==='market_research'?{items:[basic]}:request.operation==='market_research_statistics'?basic:[];
+  const data=request.operation==='market_research'?{items:[basic]}:request.operation==='market_research_statistics'?basic:request.operation==='market_product_demand_trend'?{items:[],asinCount:null}:[];
   return {data:{code:'OK',...identity,data},source:{connectorId:'sellerSprite',operation:request.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const base=loadVocPositioningRuntimeConfig({OPENAI_API_KEY:'synthetic-key',AGENT_VOC_MODEL: 'gpt-5.6',AGENT_VOC_ESTIMATED_INPUT_TOKENS:'12000',AGENT_VOC_MAX_OUTPUT_TOKENS:'4000',AGENT_VOC_TIMEOUT_MS:'60000',AGENT_VOC_INPUT_USD_PER_MILLION_TOKENS:'1',AGENT_VOC_OUTPUT_USD_PER_MILLION_TOKENS:'2',AGENT_VOC_CALL_MAX_TOKENS:'1000000',AGENT_VOC_CALL_MAX_COST_MICROS:'10000000',AGENT_VOC_RUN_MAX_TOKENS:'1000000',AGENT_VOC_RUN_MAX_COST_MICROS:'10000000',AGENT_VOC_DAILY_MAX_TOKENS:'1000000',AGENT_VOC_DAILY_MAX_COST_MICROS:'10000000',AGENT_VOC_WORKER_OWNER_ID:'synthetic-recovery-worker'});
@@ -59,11 +59,11 @@ test('production source-only worker finishes complete overview numbers and repor
    // including the final report enqueued only after all frozen windows settle.
    const reports=new MarketOverviewReportService(f.context),deadline=Date.now()+60000;
    let current=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport;
-   while(current?.report.phase!=='window-results'&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,250));current=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport;}
+   while(current?.report.phase!==(flow==='market-overview-flow/rules-v1'?'numeric':'window-results')&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,250));current=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport;}
    assert.ok(current,'The real no-model worker must save a numeric report for the complete flow');
    const recovery=(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:run.id}))!;
    if(flow==='market-overview-flow/rules-v1'){
-    assert.equal(current.report.phase,'numeric'); assert.equal(current.report.windowStatus,'complete'); assert.equal(current.report.ruleStatus,'complete'); assert.equal(current.report.semanticStatus,'skipped');
+    assert.equal(current.report.phase,'numeric'); assert.equal(current.report.windowStatus,'complete'); assert.equal(current.report.ruleStatus,'partial'); assert.ok(current.report.ruleBaseline!.missing.length>0,'Missing source metrics remain explicit even when the rule pipeline completed'); assert.equal(current.report.semanticStatus,'skipped');
    } else assert.equal(current.report.phase,'window-results',JSON.stringify({queuedAtRestart,steps:recovery.steps.map(step=>({kind:step.kind,status:step.status})),errors:recovery.attempts.filter(attempt=>attempt.status==='failed').map(attempt=>attempt.error)}));
    assert.equal(current.report.dataReady,true);
    if(flow!=='market-overview-flow/rules-v1'){

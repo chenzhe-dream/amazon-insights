@@ -42,7 +42,7 @@ const leaseMs = z.number().int().min(10).max(120_000);
 const errorSchema = z.object({code:z.enum(MARKET_STEP_ERROR_CODES),retryable:z.boolean(),admission:z.object({reason:z.enum(LOCAL_ADMISSION_REASONS),retryAt:z.string().datetime().nullable()}).strict().optional()}).strict().refine(e=>e.code==='local-admission' ? !!e.admission && (e.admission.reason!=='rolling-window'||e.admission.retryAt!==null) && (e.admission.reason==='rolling-window'||e.admission.retryAt===null) : e.admission===undefined);
 const outcomeSchema = z.union([
   z.object({status:z.enum(["succeeded","empty"]),output:json}).strict(),
-  z.object({status:z.literal("failed"),error:errorSchema,diagnostic:json.optional()}).strict(),
+  z.object({status:z.literal("failed"),error:errorSchema,diagnostic:json.optional(),output:json.optional()}).strict(),
 ]);
 const settlementSchema = z.object({claim:claimSchema,outcome:outcomeSchema,sources:z.array(json).max(2_000).default([]),inputs:z.array(json).max(2_000).default([]),children:z.array(stepSchema).max(2_000).default([])}).strict();
 const retrySchema = z.object({actor:actorSchema,moduleRunId:uuid4,steps:z.array(z.object({stepId:uuid4,failedAttemptId:uuid4}).strict()).min(1).max(2_000),idempotencyKey:uuid4}).strict();
@@ -205,7 +205,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   private async completeRulesOnlyRun(run:RunRow):Promise<void>{
     const mapped=mapRun(run),flow=String(obj(mapped.params).flow);
-    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION||flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION))return;
+    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||flow==='market-overview-flow/rules-v3'||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION||flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION))return;
     const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:run.id});if(!view)return;
     const now=(await this.queries.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.toISOString();
     const frontier=inspectMarketContinuation(view,now),current=view.steps.filter(step=>frontier.currentStepKeys.includes(step.stepKey));
@@ -229,7 +229,10 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
     const input=settlementSchema.parse(value),{claim}=input;let outcome=input.outcome;
     const lost:MarketStepSettlementReceipt={status:"lease-lost",attemptId:claim.attemptId,sourceIds:[],inputIds:[],childStepIds:[]};
     if(canonicalJsonSha256(claim.step)!==claim.inputHash)return lost;
-    if(outcome.status==="failed" && (input.sources.length||input.inputs.length||input.children.length))throw new MarketExecutionConflictError();
+    // Only this versioned multi-source collector may preserve partial evidence on
+    // failure. Ordinary failed steps still cannot publish outputs or snapshots.
+    const partialDemand=outcome.status==='failed'&&outcome.output!=null&&claim.step.kind==='collect-overview-month'&&(claim.step.input as {phase?:string}).phase==='overview-industry-demand';
+    if(outcome.status==='failed'&&(input.sources.length||input.inputs.length||input.children.length||outcome.output!==undefined)&&(!partialDemand||input.inputs.length!==1||input.children.length))throw new MarketExecutionConflictError();
     // A renewal changes leaseUntil but does not change the attempt or its logical completion.
     const {leaseUntil:ignoredDeadline,...identity}=claim;void ignoredDeadline;
     const completionHash=canonicalJsonSha256({...input,claim:identity});
@@ -238,7 +241,8 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
         const actor={organizationId:claim.organizationId,userId:claim.createdBy};
         if(!await this.active(actor))return lost;
         const result=await this.queries.query<RunRow>("SELECT * FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2 AND study_id=$3 AND created_by=$4 FOR UPDATE",[claim.moduleRunId,claim.organizationId,claim.studyId,claim.createdBy]);
-        const run=result.rows[0];if(!run)return lost;mapRun(run);
+        const run=result.rows[0];if(!run)return lost;const mappedRun=mapRun(run);
+        if(partialDemand&&(mappedRun.moduleKind!=='overview'||(mappedRun.params as {flow?:string}).flow!=='market-overview-flow/rules-v3'))throw new MarketExecutionConflictError();
         const attempts=await this.queries.query<AttemptRow>("SELECT * FROM market_analysis_step_attempts WHERE id=$1 AND organization_id=$2 AND run_id=$3 AND step_id=$4 FOR UPDATE",[claim.attemptId,claim.organizationId,run.id,claim.stepId]);
         const attempt=attempts.rows[0];
         if(!attempt||attempt.lease_owner_id!==claim.leaseOwnerId||attempt.lease_generation!==claim.leaseGeneration||attempt.input_hash!==claim.inputHash)return lost;
@@ -307,14 +311,14 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
         if(automated){
           const current=await this.findModuleRun({actor,moduleRunId:run.id});if(!current)throw new MarketExecutionConflictError();
           current.steps=current.steps.map(s=>s.id===step.id?{...s,status:retry?'queued':outcome.status}:s);
-          current.attempts=current.attempts.map(a=>a.id===claim.attemptId?{...a,status:outcome.status,output:outcome.status==='failed'?null:outcome.output,error:outcome.status==='failed'?outcome.error:null}:a);
+          current.attempts=current.attempts.map(a=>a.id===claim.attemptId?{...a,status:outcome.status,output:outcome.status==='failed'?(outcome.output??null):outcome.output,error:outcome.status==='failed'?outcome.error:null}:a);
           childStepIds.push(...await this.insertSteps(run,inspectMarketContinuation(current,now).children,step.id,claim.attemptId));
         }
         const receipt:MarketStepSettlementReceipt={status:"committed",attemptId:claim.attemptId,sourceIds,inputIds,childStepIds};
-        const output=outcome.status==="failed"?null:outcome.output;
+        const output=outcome.status==="failed"?(outcome.output??null):outcome.output;
         const error=outcome.status==="failed"?outcome.error:null;
         const diagnostic=outcome.status==="failed"?(outcome.diagnostic??null):null;
-        await this.queries.query("UPDATE market_analysis_step_attempts SET status=$2,output_json=$3::jsonb,output_hash=$4,error_json=$5::jsonb,diagnostic_json=$6::jsonb,completion_hash=$7,receipt_json=$8::jsonb,finished_at=clock_timestamp() WHERE id=$1",[claim.attemptId,outcome.status,JSON.stringify(output),outcome.status==="failed"?null:canonicalJsonSha256(output),JSON.stringify(error),JSON.stringify(diagnostic),completionHash,JSON.stringify(receipt)]);
+        await this.queries.query("UPDATE market_analysis_step_attempts SET status=$2,output_json=$3::jsonb,output_hash=$4,error_json=$5::jsonb,diagnostic_json=$6::jsonb,completion_hash=$7,receipt_json=$8::jsonb,finished_at=clock_timestamp() WHERE id=$1",[claim.attemptId,outcome.status,JSON.stringify(output),outcome.status==="failed"&&output===null?null:canonicalJsonSha256(output),JSON.stringify(error),JSON.stringify(diagnostic),completionHash,JSON.stringify(receipt)]);
         await this.queries.query("UPDATE market_analysis_steps SET status=$2,lease_owner_id=NULL,lease_until=NULL,next_attempt_at=GREATEST(clock_timestamp()+($3*interval '1 second'),COALESCE($4::timestamptz,clock_timestamp())),round_attempt_count=GREATEST(0,round_attempt_count-$5),updated_at=clock_timestamp() WHERE id=$1",[step.id,retry?"queued":outcome.status,localWait?1:step.round_attempt_count===1?5:30,localWait?admission?.retryAt??null:null,localWait?1:0]);
         if(publishReport)await this.queries.query('UPDATE market_analysis_module_runs SET latest_report_attempt_id=$2 WHERE id=$1',[run.id,claim.attemptId]);
         if(childStepIds.length)await this.queries.query("UPDATE market_analysis_module_runs SET plan_revision=plan_revision+1 WHERE id=$1",[run.id]);

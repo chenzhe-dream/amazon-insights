@@ -41,7 +41,7 @@ export class MarketOverviewReportService{
       }
       const latestSavedReport=history.find(r=>r.attemptId===view.run.latestReportAttemptId)??null;
       if(view.run.latestReportAttemptId&&!latestSavedReport)throw new MarketExecutionConflictError();
-      const currentReport=history.find(r=>r.current&&r.report.reportVersion==='market-overview-report/v2')??history.find(r=>r.current&&r.report.phase==='window-results')??history.find(r=>r.current&&r.report.phase==='numeric')??null;
+      const currentReport=(latestSavedReport?.current&&'industryDemandAttemptId' in latestSavedReport.report?latestSavedReport:null)??history.find(r=>r.current&&'industryDemandAttemptId' in r.report)??history.find(r=>r.current&&r.report.reportVersion==='market-overview-report/v2')??history.find(r=>r.current&&r.report.phase==='window-results')??history.find(r=>r.current&&r.report.phase==='numeric')??null;
       return {reports:{moduleRunId:view.run.id,currentReport,latestSavedReport,history},detail};
   }
 }

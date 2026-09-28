@@ -17,7 +17,7 @@ export type MarketModuleRunView = { run: MarketModuleRun; steps: MarketExecution
 export type MarketStepClaim = { organizationId: string; studyId: string; moduleRunId: string; stepId: string; attemptId: string; createdBy: string; leaseOwnerId: string; leaseGeneration: number; inputHash: string; leaseUntil: string; step: MarketStepDefinition };
 export const MARKET_STEP_ERROR_CODES = ["upstream-temporary", "timeout", "interrupted", "authentication", "local-admission", "governance", "invalid-data", "scope-mismatch", "cancelled", "internal"] as const;
 export type MarketStepError = { code: typeof MARKET_STEP_ERROR_CODES[number]; retryable: boolean; admission?: LocalAdmission };
-export type MarketStepOutcome = { status: "succeeded" | "empty"; output: MarketJsonValue } | { status: "failed"; error: MarketStepError; diagnostic?: MarketJsonValue };
+export type MarketStepOutcome = { status: "succeeded" | "empty"; output: MarketJsonValue } | { status: "failed"; error: MarketStepError; diagnostic?: MarketJsonValue; output?: MarketJsonValue };
 /** Source/input values are T4/T1 factory inputs, validated again by the shared T10 store. */
 export type MarketStepSettlement = { claim: MarketStepClaim; outcome: MarketStepOutcome; sources?: MarketJsonValue[]; inputs?: MarketJsonValue[]; children?: MarketStepDefinition[] };
 export type MarketStepSettlementReceipt = { status: "committed" | "already-committed" | "lease-lost"; attemptId: string; sourceIds: string[]; inputIds: string[]; childStepIds: string[] };

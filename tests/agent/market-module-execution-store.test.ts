@@ -46,6 +46,14 @@ test("market module execution persists independent runs and database-clock fence
     const manual=await claim(run.id);assert.ok(manual);await store.settleAndEnqueue({claim:manual,outcome:success});
   });
 
+  await t.test('ordinary failures cannot attach partial output or source snapshots',async()=>{
+    const run=(await store.createModuleRun(request())).run,active=await claim(run.id);assert.ok(active);
+    await assert.rejects(()=>store.settleAndEnqueue({claim:active,outcome:{status:'failed',error:{code:'timeout',retryable:false},output:{partial:true}}}));
+    await assert.rejects(()=>store.settleAndEnqueue({claim:active,outcome:{status:'failed',error:{code:'timeout',retryable:false}},inputs:[inputSnapshot()]}));
+    await store.settleAndEnqueue({claim:active,outcome:{status:'failed',error:{code:'timeout',retryable:false}}});
+    assert.equal((await store.findModuleRun({actor,moduleRunId:run.id}))!.attempts[0].output,null);
+  });
+
   await t.test('local cooldown is durable, refunds failure budget, rechecks once and cancels safely',async()=>{
     const run=(await store.createModuleRun({...request(),initialSteps:[step('waiting'),step('sibling')]})).run;
     const first=await claim(run.id);assert.ok(first);

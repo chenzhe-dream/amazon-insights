@@ -14,26 +14,49 @@ const reasons:Record<string,string>={'not-collected':'尚未采集','collection-
 const dimensions:Record<string,string>={'sample-scale':'样本规模','concentration':'头部集中度','brand-seller-counts':'品牌与卖家数量','new-product-summary':'新品概况','rating-price-averages':'评分与价格均值','reported-sample-sales-trend':'样本成交趋势','search-demand':'搜索需求','product-share-distribution':'商品份额分布','brand-share-distribution':'品牌份额分布','seller-share-distribution':'卖家份额分布','seller-type-distribution':'卖家类型','seller-location-distribution':'卖家所属地','content-aplus-video-distribution':'A+ 与视频配置','listing-age-distribution':'上架年龄分布','listing-trend':'上架趋势','review-count-distribution':'评价数分布','rating-distribution':'评分分布','price-distribution':'价格分布'};
 const coverageLabels={available:'本次可用',partial:'部分可用',missing:'本次未取得', 'not-integrated':'尚未接入'};
 function value(number:number|null,unit:{status:string;unit?:string;currency?:string}|null){if(number===null||unit?.status!=='known')return '未知';const text=new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(number);return unit.unit==='currency'?`${unit.currency??'币种未知'} ${text}`:unit.unit==='percent'?`${text}%`:unit.unit==='ratio'?`${text}（比例原值）`:text;}
-export function MarketOverviewMetricCards({metrics,headTopN=10,newProductMonths=6,topProducts}:{metrics:Details['numbers']['months'][number]['metrics'];headTopN?:number;newProductMonths?:number;topProducts?:{count:number;unitsSharePct:number}|null}){
+export function MarketOverviewMetricCards({metrics,originalSummary,headTopN=10,newProductMonths=6,topProducts}:{metrics:Details['numbers']['months'][number]['metrics'];originalSummary?:Details['numbers']['originalSummary'];headTopN?:number;newProductMonths?:number;topProducts?:{count:number;unitsSharePct:number}|null}){
   const show=(id:string)=>{const metric=metrics[id];return metric?value(metric.value,metric.unit):'未知';};
+  const original=(id:string,digits=0)=>{const field=originalSummary?.fields[id];if(!field||field.value===null)return '未知';if(typeof field.value==='string')return field.value;
+    const number=new Intl.NumberFormat('zh-CN',{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(field.value);
+    return field.unit==='currency'?`${originalSummary?.currency??''} ${number}`:field.unit==='percent'?`${number}%`:number;};
+  const originalNumber=(id:string)=>originalSummary?.fields[id]?.value;
+  const originalAvailable=(id:string)=>originalNumber(id)!==null&&originalNumber(id)!==undefined;
   return <div className="ss-report-kpis" aria-label="市场报告核心指标">
     <article><span>样本商品 {show('sampleProducts')}</span><b>{show('avgPrice')}</b><small>
       品牌 {show('brands')} / 卖家 {show('sellers')}<br/>
-      样本月销 {show('totalUnits')} · 样本月销额 {show('totalRevenue')}<br/>
-      单品均月销 {show('avgUnits')} · 评分 {show('avgRating')} · {show('avgRatings')} 评<br/>
-      均 BSR 未知 · 均卖家数 未知<br/>
-      毛利率、重量、体积：当前来源未保存
+      {originalSummary?<>
+        均月销 {show('avgUnits')} · 均月销额 {original('avgRevenue')}<br/>
+        均 BSR {original('avgBsr')} · 评分 {show('avgRating')} · {show('avgRatings')} 评<br/>
+        均卖家数 {original('avgSellers',1)} · 毛利率 {original('avgProfit',1)}<br/>
+        均重 {original('avgWeightLb',2)} lb（{original('avgWeightG')} g）<br/>
+        均体积 {original('avgVolumeIn3',2)} in³（{original('avgVolumeCm3')} cm³）
+      </>:<>
+        样本月销 {show('totalUnits')} · 样本月销额 {show('totalRevenue')}<br/>
+        单品均月销 {show('avgUnits')} · 评分 {show('avgRating')} · {show('avgRatings')} 评<br/>
+        均 BSR 未知 · 均卖家数 未知<br/>
+        毛利率、重量、体积：当前来源未保存
+      </>}
     </small></article>
-    <article><span>头部 Top{headTopN}</span><b>未知</b><small>
-      头部均价尚无已保存指标<br/>
-      头部均月销、均月销额、BSR、评分：未知<br/>
-      商品集中度 {show('productConcentrationRaw')} · 品牌 {show('brandConcentrationRaw')} · 卖家 {show('sellerConcentrationRaw')}
+    <article><span>头部 Top{originalSummary?.headTopN??headTopN}</span><b>{original('hlAvgPrice',2)}</b><small>
+      {originalSummary?<>
+        头部均月销 {original('hlAvgUnits')} · 均月销额 {original('hlAvgRevenue')}<br/>
+        均 BSR {original('hlAvgBsr')} · 评分 {original('hlAvgRating',1)}<br/>
+      </>:<>
+        头部均价尚无已保存指标<br/>
+        头部均月销、均月销额、BSR、评分：未知<br/>
+      </>}
+      商品集中度 {originalAvailable('productCrn')?original('productCrn',1):show('productConcentrationRaw')} · 品牌 {originalAvailable('brandCrn')?original('brandCrn',1):show('brandConcentrationRaw')} · 卖家 {originalAvailable('sellerCrn')?original('sellerCrn',1):show('sellerConcentrationRaw')}
       {topProducts&&<><br/>返回商品前 {topProducts.count} 条销量占该接口样本 {new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(topProducts.unitsSharePct)}%</>}
-      <br/>各接口分母独立，原始比例单位未确认时不换算。
+      <br/>{originalSummary?'集中度按原报告比例口径显示；各接口分母独立。':'各接口分母独立，原始比例单位未确认时不换算。'}
     </small></article>
-    <article><span>新品 {newProductMonths} 个月内</span><b>{show('newCount')}</b><small>
-      均价 {show('newAvgPrice')} · 均月销 {show('newAvgUnits')}<br/>
-      占比、均月销额、评分、最早与最新上架日：当前来源未保存
+    <article><span>新品 {originalSummary?.newProductMonths??newProductMonths} 个月内</span><b>{originalAvailable('newCount')?original('newCount'):show('newCount')}</b><small>
+      均价 {originalAvailable('newAvgPrice')?original('newAvgPrice',2):show('newAvgPrice')} · 均月销 {originalAvailable('newAvgUnits')?original('newAvgUnits'):show('newAvgUnits')}<br/>
+      {originalSummary?<>
+      占比 {original('newRatio',0)} · 均月销额 {original('newAvgRevenue')}<br/>
+      评分 {original('newAvgRating',1)} · {original('newAvgRatings')} 评<br/>
+      最早 {original('firstShelfDate')} · 最新 {original('lastShelfDate')}
+      {originalSummary&&Object.values(originalSummary.fields).some(field=>field.value!==null&&field.scopeBasis==='request-bound')&&<><br/>以上补充字段按所选月份请求；响应未确认月份。</>}
+      </>:'占比、均月销额、评分、最早与最新上架日：当前来源未保存'}
     </small></article>
   </div>;
 }
@@ -50,7 +73,7 @@ export function MarketOverviewReportView({entry,detail,error,onRetry,headTopN,ne
   const option=(id:string)=>{const o=semantic?.interpretationOptions.find(o=>o.optionId===id);if(o?.kind==='risk')return '证据缺失限制了结论，需要补充核实。';if(o?.templateId.includes('not-causal'))return '样本成交变化提供趋势线索，不能据此推断原因或整个市场变化。';return '该解释尚未提供可展示的模板。';};
   return <section className="market-research-result ss-report-page" aria-label="已保存总览报告">
     <div className="ss-report-hero"><div className="ss-report-hero-title"><h3>{siteTitle}{categoryName||`类目 ${r.scope.nodeIdPath.split(':').at(-1)}`}市场分析报告</h3><span>{entry.current?'当前报告':'历史报告'} · {r.scope.fromMonth} 至 {r.scope.toMonth}</span></div>
-      {detail&&<MarketOverviewMetricCards metrics={detail.numbers.months.find(m=>m.month===r.scope.toMonth)?.metrics??{}} headTopN={headTopN} newProductMonths={newProductMonths} topProducts={topProducts}/>}
+      {detail&&<MarketOverviewMetricCards metrics={detail.numbers.months.find(m=>m.month===r.scope.toMonth)?.metrics??{}} originalSummary={detail.numbers.originalSummary} headTopN={headTopN} newProductMonths={newProductMonths} topProducts={topProducts}/>}
     </div>
     <p>{r.scope.marketplace} · 类目 {r.scope.nodeIdPath} · {r.scope.fromMonth} 至 {r.scope.toMonth}</p><p className="market-research-note">数据截止：{r.dataCutoffAt}。样本指标不代表整个市场，缺失不会当作零。</p>
     <div className="market-research-notice"><p>{r.reportVersion==='market-overview-report/v2'?'跨维综合解释已保存；来源缺口仍保留，请结合下方依据和限制解读。':r.semanticStatus==='skipped'&&r.ruleStatus?'本地规则结果已保存；跨维语义解释尚未运行，请查看下方已取得的样本事实与来源限制。':r.windowStatus==='complete'?'当前输入的分析分段已执行完成；完整综合判断仍待补齐，请查看下方维度覆盖。':r.windowStatus==='pending'?'数字已保存，解释仍在处理中。':r.windowStatus==='no-input'?'暂无可供解释的有效事实，保留已取得的数字与缺口。':'解释存在失败或缺口，已保存的数字和成功部分继续保留。'}</p></div>

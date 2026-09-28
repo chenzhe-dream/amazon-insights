@@ -1,3 +1,4 @@
+import {readOverviewIndustryDemand} from './market-overview-industry-demand-step';
 import {z} from 'zod';
 import {MarketSemanticRecordSchema} from '../../shared/market-semantic-contracts';
 import {PostgresQueryContext} from '../db/postgres/query-context';
@@ -12,6 +13,7 @@ import {readMarketOverviewCatalog} from './market-overview-catalog-step';
 import {canonicalJsonSha256 as digest} from './model-request-accounting';
 import type {MarketOverviewAnalysis} from '../../shared/market-overview-analysis-contracts';
 import {MarketRuleBaselineSchema} from '../../shared/market-rule-baseline-contracts';
+import {projectMarketOverviewOriginalFields} from '../domain/market-research/overview-original-fields';
 
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 function same(a:unknown,b:unknown){if(digest(a)!==digest(b))throw new TypeError('Overview report frozen evidence differs');}
@@ -22,8 +24,9 @@ function invalid():never{throw new TypeError('Overview report frozen evidence is
 export async function readMarketOverviewReport(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal){
   signal.throwIfAborted();const input=MarketOverviewReportInputSchema.parse(definition.input);
   same({stepKey:definition.stepKey,kind:definition.kind,subject:definition.subject,input:definition.input,inputRefs:definition.inputRefs},marketOverviewReportDefinition(view,input));
-  if(view.run.moduleKind!=='overview'||!['market-overview-flow/v2','market-overview-flow/v3','market-overview-flow/v4','market-overview-flow/v5','market-overview-flow/rules-v1','market-overview-flow/rules-v2'].includes(String(obj(view.run.params).flow)))invalid();
-  const {catalog,output:catalogOutput}=await readMarketOverviewCatalog(context,view,input.catalogAttemptId,signal,'frozen');same(input.numericInputSnapshotId,catalog.numericSnapshot.snapshotId);
+  if(view.run.moduleKind!=='overview'||!['market-overview-flow/v2','market-overview-flow/v3','market-overview-flow/v4','market-overview-flow/v5','market-overview-flow/rules-v1','market-overview-flow/rules-v2','market-overview-flow/rules-v3'].includes(String(obj(view.run.params).flow)))invalid();
+  const {catalog,sources,output:catalogOutput}=await readMarketOverviewCatalog(context,view,input.catalogAttemptId,signal,'frozen');same(input.numericInputSnapshotId,catalog.numericSnapshot.snapshotId);
+  const industryDemand=input.industryDemandAttemptId?await readOverviewIndustryDemand(context,view,input.catalogAttemptId,input.industryDemandAttemptId,signal,sources):undefined;
   const full=catalog.semanticSnapshot,actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy},scope={actor,studyId:view.run.scope.researchId,moduleRunId:view.run.id};
   const snapshots=new PostgresMarketAnalysisSnapshotStore(context),audits=new PostgresMarketAgentRunStore(context);
   const terminal=(id:string)=>{const a=view.attempts.find(a=>a.id===id),s=view.steps.find(s=>s.id===a?.stepId);if(!a||!s||!['succeeded','empty','failed','interrupted'].includes(a.status))invalid();return {a,s};};
@@ -102,17 +105,17 @@ export async function readMarketOverviewReport(context:PostgresQueryContext,view
     availableMetrics:d.distribution?.groups.filter(g=>g.products!==null||g.units!==null).map(g=>`${d.operation}/${g.id}`)??[],
     missingMetrics:d.issues.map(i=>i.code)}));
   const dataReady=catalog.months.some(m=>Object.values(m.metrics).some(v=>v.state==='known'))||!!distributions?.some(d=>d.distribution?.rows.some(r=>r.products!==null||r.units!==null));
-  const rulesOnly=['market-overview-flow/rules-v1','market-overview-flow/rules-v2'].includes(String(obj(view.run.params).flow));
+  const rulesOnly=['market-overview-flow/rules-v1','market-overview-flow/rules-v2','market-overview-flow/rules-v3'].includes(String(obj(view.run.params).flow));
   const windowStatus=!full?'no-input' as const:rulesOnly?'complete' as const:input.phase==='numeric'?'pending' as const:!failures.length&&!rejectedCount&&expectedWindowCount>0&&modelResults.length===expectedWindowCount&&modelResults.every(r=>r.status==='succeeded')?'complete' as const:'partial' as const;
   const ruleBaseline='ruleBaseline' in obj(catalogOutput)?MarketRuleBaselineSchema.parse(obj(catalogOutput).ruleBaseline):undefined;
   const report={reportVersion:'market-overview-report/v1' as const,moduleRunId:view.run.id,scope:view.run.scope,versions:view.run.versions,...input,dataCutoffAt:catalog.numericSnapshot.collectedAt,
-    sourceRefs:catalog.sourceRefs,dataReady,analysisStatus:dataReady?'partial' as const:'no-data' as const,windowStatus,expectedWindowCount,rejectedCount,modelResults,failures,
+    sourceRefs:industryDemand?[...new Set([...catalog.sourceRefs,...(obj(view.attempts.find(a=>a.id===input.industryDemandAttemptId)?.output).sourceRefs as string[]??[])])]:catalog.sourceRefs,dataReady,analysisStatus:dataReady?'partial' as const:'no-data' as const,windowStatus,expectedWindowCount,rejectedCount,modelResults,failures,
     coverage:[...coverage,trendCoverage,...(distributionCoverage??missingDimensions.map(dimension=>({dimension,status:'not-integrated' as const,availableMetrics:[],missingMetrics:[]})))],
     reasons:[...(!dataReady?['no-numeric-data']:[]),...(windowStatus!=='complete'?[`explanation-${windowStatus}`]:[]),...(distributions?['distribution-synthesis-not-integrated']:['full-overview-dimensions-not-integrated']),...(rulesOnly?[]:['cross-window-synthesis-not-integrated'])],
     ...(rulesOnly?{ruleStatus:ruleBaseline?.status??(dataReady?'partial':'unavailable'),semanticStatus:'skipped' as const,...(ruleBaseline?{ruleBaseline}: {})}:{}),};
   // Internal evidence only: public details continue to select numbers/semantic.
   // A consumer must require complete windows and replay the complete manifest
   // before promoting these audited sections to a synthesis input.
-  return {report:{...report,reportHash:digest(report)},numbers:{months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{})},semantic,
+  return {report:{...report,reportHash:digest(report)},numbers:{...(industryDemand?{industryDemand}:{}),months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{}),originalSummary:projectMarketOverviewOriginalFields({scope:view.run.scope,parameters:catalog.parameters,sources})},semantic,
     synthesisSource:full&&synthesisPlan?{catalog:full,plan:synthesisPlan,windows:synthesisWindows}:null};
 }

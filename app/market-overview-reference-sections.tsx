@@ -5,6 +5,7 @@ import type {MarketOverviewDetailsResponseSchema,MarketOverviewReportEntrySchema
 import {overviewPresentationSections,selectOverviewDistributionEntries,selectOverviewSalesPoints,selectOverviewReportedMetric,selectOverviewRawConcentration} from './lib/market-overview-presentation';
 import {MarketOverviewDistributions} from './market-overview-distributions';
 import {MarketOverviewConcentrationChart} from './market-overview-concentration-chart';
+import {MarketOverviewDemandTrend} from './market-overview-demand-trend';
 import {MarketOverviewSynthesis} from './market-overview-synthesis';
 type Details=z.infer<typeof MarketOverviewDetailsResponseSchema>;
 type Entry=z.infer<typeof MarketOverviewReportEntrySchema>;
@@ -71,7 +72,7 @@ export function MarketOverviewReferenceSections({entry,detail,overview,headTopN=
  return <>{overviewPresentationSections.map(section=>{
   const entries=section.operation?selectOverviewDistributionEntries(detail.numbers.distributions??[],section.operation):[];
   return <section key={section.id} className="ss-report-block" data-report-section={section.id}><header><div><h4>{section.title}</h4><small>{entry.report.scope.fromMonth} 至 {entry.report.scope.toMonth} · 当前保存报告</small></div></header>
-   {section.id==='overview'?<><SavedOverviewFacts detail={detail}/>{overview}</>:section.id==='sales-trend'?<SavedSalesChart detail={detail}/>:section.id==='product-crn'?<SavedProductConcentration detail={detail} headTopN={headTopN}/>:section.operation?entries.length?<MarketOverviewDistributions key={`${entry.attemptId}/${section.id}`} entries={entries} currency={entry.report.scope.currency} embedded/>:<p className="ss-report-empty">此版本尚无该维度的已保存数据，其他可用结果继续保留。</p>:<p className="ss-report-empty">{section.missing}</p>}
+   {section.id==='overview'?<><SavedOverviewFacts detail={detail}/>{overview}</>:section.id==='demand-keywords'?<MarketOverviewDemandTrend demand={detail.numbers.industryDemand}/>:section.id==='sales-trend'?<SavedSalesChart detail={detail}/>:section.id==='product-crn'?<SavedProductConcentration detail={detail} headTopN={headTopN}/>:section.operation?entries.length?<MarketOverviewDistributions key={`${entry.attemptId}/${section.id}`} entries={entries} currency={entry.report.scope.currency} embedded/>:<p className="ss-report-empty">此版本尚无该维度的已保存数据，其他可用结果继续保留。</p>:<p className="ss-report-empty">{section.missing}</p>}
    {section.id==='listing-trend'&&<p className="market-research-note">上架时间分布反映返回样本的构成，不等于历年新增销量。</p>}
    {entry.report.reportVersion==='market-overview-report/v2'&&section.id!=='overview'&&(section.operation||section.id==='sales-trend')&&<MarketOverviewSynthesis synthesis={entry.report.synthesis} semantic={detail.semantic?.task==='market-overview-explanation'?detail.semantic:null} dimensionPrefix={section.operation??'sample-trend'}/>}
   </section>;

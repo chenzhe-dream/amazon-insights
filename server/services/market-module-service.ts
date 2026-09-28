@@ -23,7 +23,7 @@ import { MARKET_THEME_MAPPING_RULE_VERSION } from '../domain/market-research/cus
 import { MarketThemeDetailQueryError } from '../domain/market-research/customer-theme-details';
 import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewSavedRunQuerySchema,MarketOverviewSavedRunResponseSchema} from '../../shared/market-overview-report-contracts';
 import {MarketOverviewReportService} from './market-overview-report-service';
-import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps,inspectMarketOverviewContinuation,isMarketOverviewFlow} from '../domain/market-research/overview-flow';
 import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../domain/market-research/overview-complete-catalog';
 import {isMarketAutomaticFlow,inspectMarketContinuation} from '../domain/market-research/module-flow';
 import {MarketShapeStartRequestSchema,MARKET_SHAPE_REFERENCE_RULE_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION,isMarketShapeRulesFlow,marketShapeFlowInitialSteps,isMarketShapeFlow} from '../domain/market-research/shape-price-flow';
@@ -131,8 +131,8 @@ export class MarketModuleService {
     };
     const previous=await replay();if(previous)return previous;
     const {study}=await this.findStudy(actor,studyId);
-    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION},
-      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,
+    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION},
+      versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,
         model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
     try{result=await this.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)});}
@@ -148,7 +148,7 @@ export class MarketModuleService {
       const current=new Set(inspectMarketOverviewContinuation(view,this.now()).currentStepKeys),p=obj(view.run.params);
       return MarketOverviewRunResponseSchema.parse({run:{id,scope:view.run.scope,status:view.run.status,createdAt:view.run.createdAt,planRevision:view.run.planRevision,
         params:{headTopN:p.headTopN,newProductMonths:p.newProductMonths},currentReport:reports.currentReport,latestSavedReport:reports.latestSavedReport,history:reports.history,
-        steps:view.steps.map(s=>{const a=view.attempts.find(a=>a.id===s.latestAttemptId);return {id:s.id,kind:s.kind,status:s.status,latestAttemptId:s.latestAttemptId,attemptCount:s.attemptCount,nextAttemptAt:s.nextAttemptAt??null,current:current.has(s.stepKey),...(s.kind==='collect-overview-month'?{source:{month:obj(s.input).month,operation:obj(s.input).operation}}:{}),
+        steps:view.steps.map(s=>{const a=view.attempts.find(a=>a.id===s.latestAttemptId);return {id:s.id,kind:s.kind,status:s.status,latestAttemptId:s.latestAttemptId,attemptCount:s.attemptCount,nextAttemptAt:s.nextAttemptAt??null,current:current.has(s.stepKey),...(obj(s.input).phase==='overview-industry-demand'?{industryDemand:true}:{}),...(s.kind==='collect-overview-month'&&obj(s.input).phase!=='overview-industry-demand'?{source:{month:obj(s.input).month,operation:obj(s.input).operation}}:{}),
           canRetry:current.has(s.stepKey)&&s.status==='failed'&&view.run.status!=='cancelled',asin:null,errorCode:['failed','interrupted'].includes(a?.status??'')?obj(a?.error).code??'internal':null};})}});
     });
   }
@@ -297,7 +297,7 @@ export class MarketModuleService {
       if (!previous.rowCount) {
         if(view.run.scope.marketplace!=='US'&&input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&s.kind==='collect-keyword-aba')))
           throw new MarketModuleServiceError(400,'此站点尚无已验证的 ABA 补充接口，不能重试此补充步骤');
-        const rulesOnly=['market-theme-flow/rules-v1','market-theme-flow/rules-v2','market-theme-flow/rules-v3'].includes(String(obj(view.run.params).flow))||isMarketShapeRulesFlow(obj(view.run.params).flow)||String(obj(view.run.params).flow)==='market-keyword-flow/rules-v1'||['market-overview-flow/rules-v1','market-overview-flow/rules-v2'].includes(String(obj(view.run.params).flow));
+        const rulesOnly=['market-theme-flow/rules-v1','market-theme-flow/rules-v2','market-theme-flow/rules-v3'].includes(String(obj(view.run.params).flow))||isMarketShapeRulesFlow(obj(view.run.params).flow)||String(obj(view.run.params).flow)==='market-keyword-flow/rules-v1'||['market-overview-flow/rules-v1','market-overview-flow/rules-v2','market-overview-flow/rules-v3'].includes(String(obj(view.run.params).flow));
         const requiresModel=rulesOnly?false:isMarketKeywordFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&['prepare-model-batches','model-batch'].includes(s.kind))):isMarketShapeExplanationFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&s.kind!=='report')):isMarketShapeFlow(view.run)?input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&(['prepare-model-batches','model-batch'].includes(s.kind)||s.kind==='prepare-members'&&obj(s.input).phase!=='select-shape-members'))):!isMarketOverviewFlow(view.run)||input.steps.some(selected=>view.steps.some(s=>s.id===selected.stepId&&['prepare-members','prepare-model-batches','model-batch'].includes(s.kind)));
         const model=requiresModel?(isMarketShapeExplanationFlow(view.run)?this.deps.shapeModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(view.run.params).analysisMode==='global-reconciliation/v2'?this.deps.keywordExplicitModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(view.run.params).analysisMode==='global-reconciliation/v1'?this.deps.keywordReconciliationModelIdentity?.():isMarketKeywordFlow(view.run)&&obj(obj(view.run.params).catalog).discoveryMode==='labels-and-clusters/v1'?this.deps.keywordModelIdentity?.():this.model()):null; if(requiresModel&&!model)throw new MarketModuleServiceError(503,'该分析模型暂不可用，已保存输入与报告保留'); if (model&&(view.run.versions.configuration !== model.configurationVersion || view.run.versions.prompt !== model.promptVersion))
           throw new MarketModuleServiceError(503, '该任务的模型版本暂不可用，请保留报告并使用当前版本创建分析');

@@ -37,8 +37,8 @@ test('overview entry freezes local rules identity and replays commands by public
     const key=randomUUID(),started=await service.startOverview(first.actor,first.scope.researchId,PARAMS,key);
     assert.equal(started.created,true);
     const saved=await new PostgresMarketModuleExecutionStore(first.context).findModuleRun({actor:first.actor,moduleRunId:started.run.id});assert.ok(saved);
-    assert.deepEqual(saved.run.params,{...PARAMS,flow:'market-overview-flow/rules-v2'});
-    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:'market-overview-flow/rules-v2',model:null,prompt:null,configuration:null});
+    assert.deepEqual(saved.run.params,{...PARAMS,flow:'market-overview-flow/rules-v3'});
+    assert.deepEqual(saved.run.versions,{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:'market-overview-flow/rules-v3',model:null,prompt:null,configuration:null});
     assert.equal(saved.steps.filter(step=>step.kind==='collect-overview-month'&&(step.input as {operation:string}).operation==='market_product_concentration').length,1);
   });
 

@@ -1,3 +1,6 @@
+import {MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,marketOverviewFlowInitialSteps} from '../../server/domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from '../../server/domain/market-research/overview-complete-catalog';
+import {MARKET_SOURCE_HANDLER_VERSION} from '../../shared/market-source-contracts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -14,7 +17,7 @@ import {MarketOverviewReportService} from '../../server/services/market-overview
 import {ConnectorError,type RemoteMcpConnector} from '../../server/connectors/connector-contract';
 import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
 
-test('native overview collects all distributions, keeps partial reports and retries one endpoint without rewriting history',{timeout:120000},async t=>{
+test('legacy rules-v2 overview collects all distributions, keeps partial reports and retries one endpoint without rewriting history',{timeout:120000},async t=>{
   const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);const f=await createMarketSemanticFixture(pg.pool);
   await f.stores.steps.cancelModuleRun({actor:f.actor,moduleRunId:f.subject.moduleRunId,idempotencyKey:randomUUID()});
   const calls:string[]=[];let failPrice=true;
@@ -27,8 +30,10 @@ test('native overview collects all distributions, keeps partial reports and retr
     return {data:{code:'OK',...identities,data},source:{connectorId:'sellerSprite',operation:op,fetchedAt:new Date().toISOString(),attemptCount:1}};
   }};
   const service=new MarketModuleService({context:f.context,modelIdentity:()=>null}),key=randomUUID();
-  const started=await service.startOverview(f.actor,f.scope.researchId,{},key);assert.equal(started.run.steps.length,27);
-  const repeated=await service.startOverview(f.actor,f.scope.researchId,{},key);assert.equal(repeated.run.id,started.run.id);
+  // Frozen legacy generation: new default demand collection is covered separately.
+  const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{flow:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,headTopN:10,newProductMonths:6},versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,model:null,prompt:null,configuration:null},collectionRevision:'legacy-distribution-test/v1',idempotencyKey:key};
+  const created=await f.stores.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)}),started=await service.findOverview(f.actor,created.run.id);assert.equal(started.run.steps.length,27);
+  const repeated=await f.stores.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)});assert.equal(repeated.run.id,started.run.id);
   const id=started.run.id,view=async()=>(await f.stores.steps.findModuleRun({actor:f.actor,moduleRunId:id}))!;
   const makeWorker=()=>new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:connector,sorftime:connector}}),rules:createMarketOverviewCatalogStep(f.context),'prepare-members':createMarketOverviewWindowsStep(f.context,null),report:createMarketOverviewReportStep(f.context)}});
   let worker=makeWorker();t.after(()=>worker.stop());for(let i=0;i<8;i++)await worker.tick();await worker.stop();worker=makeWorker();for(let i=0;i<35&&await worker.tick();i++){}
