@@ -16,6 +16,15 @@
 
 数据库回归先证实旧实现超过7天仍命中；修复后检查边界、超过1ms、部分报告过期、活动任务恢复、自然月/最近30天、历史可读、查看不续期，以及组织和条件隔离。时间通过隔离测试服务时钟推进，不修改不可变任务创建时间。
 
-前端回归先证实已加载旧报告绕过查找；修复后检查过期重新查找、近期报告快捷显示、超期活动任务恢复、手动历史读取零采集写入。数据库12项、页面及关键词缓存5项均通过。类型检查及正式发布结果完成后追加。
+前端回归先证实已加载旧报告绕过查找；修复后检查过期重新查找、近期报告快捷显示、超期活动任务恢复、手动历史读取零采集写入。数据库12项、页面及关键词缓存5项均通过，TypeScript检查通过。
 
 其余四类进度见modules12-four-category-checklist-20260928.md；不把“待用户验收”和“仍有外部缺口”标为完全完成。
+
+## 正式发布
+
+- 正式代码b4f073abc278bea24006cffc3b82b556066c8e81，制品75d61cadeef893d40be10ffc1ea5f9a59bb622c912340e28159bed2cb99b3f00，sourceHash 95ff1f67190468e990b18cf790dfe54d989a834e47716aa68b3f4a0b6a6f7e00。Web/Agent健康。
+- 回滚引用codex/rollback-before-overview-cache-ttl-20260929指向3caa7f7a。
+- 线上真实历史读取成功，7天规则可见，真实saved接口返回符合有效期的任务；超期边界由隔离数据库与页面测试验证，不修改正式任务时间。
+- 线上两次重新采集按钮用受控POST验证新命令，未调用供应商；原报告步骤ID/output_hash不变，页面错误0，截图已检查。临时用户停用、会话撤销。
+- 证据test-results/overview-cache-ttl-online/{result.json,cache-entry.png,repeat-submit.png}，overview-cache-ttl-publish.log，overview-cache-ttl-typecheck.log。
+- C6在本轮截图仍可复现，保持待修；未扩大到其他区域。
