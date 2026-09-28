@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
+import {chromium} from 'playwright';
+import {createServer} from 'vite';
+import react from '@vitejs/plugin-react';
+import {buildKeywordOriginalClassification} from '../../server/domain/market-research/keyword-original-classification';
+import {buildMarketKeywordRuleReport} from '../../server/domain/market-research/keyword-rule-report';
+import {buildKeywordOriginalEstimate} from '../../server/domain/market-research/keyword-original-estimate';
+import {MarketKeywordRunResponseSchema} from '../../shared/market-keyword-public-contracts';
+
+test('desktop real-source replay renders archive scores through actual query entry and refreshes without recollection',{timeout:60000},async t=>{
+ if(!existsSync('test-results/keyword-recovered-real.json')){t.skip('Requires local saved real source response; synthetic entry tests run independently');return;}
+ const payload=JSON.parse(await readFile('test-results/keyword-recovered-real.json','utf8')),run=payload.run;
+ run.automaticClassification=buildKeywordOriginalClassification(run.facts,'floor lamp');
+ run.ruleReport=buildMarketKeywordRuleReport({facts:run.facts,classification:{kind:'local',report:run.automaticClassification}});
+ run.originalEstimate=buildKeywordOriginalEstimate({facts:run.facts,productSeed:'floor lamp'});
+ MarketKeywordRunResponseSchema.parse(payload);
+ const out='test-results/keyword-original-estimate-20260928';await mkdir(out,{recursive:true});
+ const server=await createServer({configFile:false,cacheDir:out+'/vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});
+ const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage({viewport:{width:1536,height:1050}}),errors:string[]=[],writes:string[]=[];
+ page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(10000);
+ await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();
+  if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-keyword-browser-harness.tsx"></script></body></html>`)});
+  if(!url.pathname.startsWith('/api/'))return route.continue();
+  if(req.method()!=='GET')writes.push(url.pathname);
+  if(req.method()==='GET'&&url.pathname.endsWith('/keywords'))return route.fulfill({json:payload});
+  return route.fulfill({status:404,json:{}});
+ });
+ await page.goto(`${origin}/?keywordRun=${run.id}`);
+ const heading=page.getByRole('heading',{name:'原版估算评分',exact:true});await heading.waitFor();
+ assert.ok(await page.getByRole('heading',{name:'五维综合结论',exact:true}).isVisible());
+ const scores=heading.locator('xpath=ancestor::section[1]');
+ assert.equal(await scores.locator('tbody tr').count(),run.originalEstimate.report.synthesis.clusters.length);
+ assert.ok(!(await scores.innerText()).includes('NaN'));
+ const strict=page.locator('details').filter({has:page.locator('summary',{hasText:'严格数据核对'})}).first();assert.equal(await strict.getAttribute('open'),null);
+ await heading.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/scores.png'});
+ await page.getByRole('heading',{name:'五维综合结论',exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:out+'/summary.png'});
+ await page.getByRole('heading',{name:'产品开发方向',exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:out+'/directions.png'});
+ await strict.locator('summary').first().click();await page.getByRole('heading',{name:'W5 需求变化与 PVS 评分',exact:true}).waitFor();
+ await page.reload();await heading.waitFor();assert.deepEqual(writes,[]);assert.deepEqual(errors,[]);
+ await writeFile(out+'/result.json',JSON.stringify({source:'saved-real-response/local-replay',members:run.facts.members.length,effective:run.originalEstimate.report.scope.sampleCount,clusters:run.originalEstimate.report.synthesis.clusters.length,responseBytes:Buffer.byteLength(JSON.stringify(payload)),errors,writes},null,2));
+});

@@ -1,4 +1,6 @@
 "use client";
+import type {MarketKeywordOriginalEstimate} from '../shared/market-keyword-original-estimate-contracts';
+import {MarketKeywordOriginalEstimateReport} from './market-keyword-original-estimate-report';
 import React, {useState} from 'react';
 import type {MarketKeywordFacts,MarketKeywordRunResponse} from '../shared/market-keyword-public-contracts';
 import type {MarketKeywordRevisionCatalog} from '../shared/market-keyword-revision-contracts';
@@ -94,23 +96,25 @@ function GlobalSemantics({facts,result}:{facts:MarketKeywordFacts;result:MarketK
   <Pages items={result.decisions} label="跨批归并明细" render={rows=><ul className="market-theme-rows">{rows.map(row=><li key={row.keywordId}><h4>{words.get(row.keywordId)??row.keywordId}</h4>{([...dimensions,'cluster'] as const).map(d=>{const cell=row[d];return <div key={d}><p><strong>{d==='cluster'?'需求簇':dimensionNames[d]}：</strong>{cell.status==='supported'?cell.candidateIds.map(id=>labels.get(id)?.label??'标签名称缺失').join('、'):`${cell.status==='unknown'?'未知':'不可用'}（${reasons[cell.reason??'']??'待验证'}）`}</p><details><summary>定义与原词证据</summary>{cell.candidateIds.map(id=><p key={id}>{labels.get(id)?.definition}</p>)}<Evidence spans={cell.evidence}/></details></div>;})}</li>)}</ul>}/>
  </section>;
 }
-export function MarketKeywordFactsReport({emptyReason,facts,catalog,reconciliation,ruleReport,scoreInputAudit,queryName,semanticSkipped=false,automaticClassification}:{emptyReason?:string;automaticClassification?:MarketKeywordOriginalClassification;queryName?:string;facts:MarketKeywordFacts;catalog?:SourceCatalog;reconciliation?:MarketKeywordReconciliationReport;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;semanticSkipped?:boolean}){
+export function MarketKeywordFactsReport({emptyReason,facts,catalog,reconciliation,ruleReport,scoreInputAudit,originalEstimate,queryName,semanticSkipped=false,automaticClassification}:{emptyReason?:string;automaticClassification?:MarketKeywordOriginalClassification;queryName?:string;facts:MarketKeywordFacts;catalog?:SourceCatalog;reconciliation?:MarketKeywordReconciliationReport;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;originalEstimate?:MarketKeywordOriginalEstimate;semanticSkipped?:boolean}){
+ const estimate=originalEstimate?.factsId===facts.factsId&&originalEstimate.classificationId===null?originalEstimate:undefined;
  return <section className="market-research-result market-keyword-report-stack" aria-label="关键词来源事实报告"><h3 className="market-research-sr-only">关键词来源事实</h3>
   {emptyReason&&<p role="status" className="market-research-notice">{emptyReason}</p>}
   <MarketKeywordTable automaticClassification={automaticClassification} queryName={queryName} facts={facts} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped} details={m=><MemberDetails member={m}/>}/>
-  <MarketKeywordDemandSummary emptyReason={emptyReason} automaticClassification={automaticClassification} queryName={queryName} facts={facts} reconciliation={semanticSkipped?undefined:reconciliation} ruleReport={ruleReport} semanticSkipped={semanticSkipped}/>
+  <>{estimate?<MarketKeywordOriginalEstimateReport estimate={estimate}/>:<MarketKeywordDemandSummary emptyReason={emptyReason} automaticClassification={automaticClassification} queryName={queryName} facts={facts} reconciliation={semanticSkipped?undefined:reconciliation} ruleReport={ruleReport} semanticSkipped={semanticSkipped}/>}</>
   <details className="card market-insights-evidence"><summary>{semanticSkipped?'来源范围与覆盖':'来源范围、覆盖与原始模型证据'}</summary><Scope facts={facts}/><Boundaries facts={facts}/>  <p className="market-research-note">参考月搜索量只采用 {facts.referenceMonth} 明确月份数据。同比比较去年同月，环比比较上月；原始增长比例按百分比展示。来源未注明月份的指标独立保留，不能补齐参考月。推荐竞价非实际 CPC，实际 CPC 未知。</p>
   <p>固定词池共 {facts.members.length} 个词，分页不改变统计分母。</p>
 {semanticSkipped?<p>语义分析未启用；本报告展示本地规则与已保存来源。</p>:<SemanticBatches facts={facts} catalog={catalog}/>}</details>
   {!semanticSkipped&&reconciliation&&<details className="card market-insights-evidence"><summary>跨批标签与需求簇明细</summary><GlobalSemantics facts={facts} result={reconciliation}/></details>}
-  {ruleReport&&<MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/>}
+  {ruleReport&&(estimate?<details className="card market-insights-evidence"><summary>严格数据核对（不采用估算占位分）</summary><MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/></details>:<MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/>)}
   <MarketKeywordTaxonomyView automaticClassification={automaticClassification} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped}/>
-  <p className="market-research-note">{semanticSkipped?automaticClassification?'W1–W4 与需求簇按原版规则自动分类，可在下方人工校对；W5 / PVS 缺少输入保持待验证。':'W5 / PVS 按本次已保存规则报告展示；W1–W4 未分类时保持未知，缺少输入保持待验证。':'标签提案保留原词证据；跨批归并和 W5 / PVS 按本次已保存报告展示，语义质量仍需独立校对，缺少输入保持待验证。'}</p>
+  <p className="market-research-note">{estimate?'业务报告按原版有效样本和估算规则展示；来源缺失单独保留，人工校对与历史报告仍可使用。':semanticSkipped?automaticClassification?'W1–W4 与需求簇按原版规则自动分类，可在下方人工校对；W5 / PVS 缺少输入保持待验证。':'W5 / PVS 按本次已保存规则报告展示；W1–W4 未分类时保持未知，缺少输入保持待验证。':'标签提案保留原词证据；跨批归并和 W5 / PVS 按本次已保存报告展示，语义质量仍需独立校对，缺少输入保持待验证。'}</p>
   <details className="market-research-boundaries"><summary>事实版本与来源截止时间</summary><p>数据截止：{facts.pool.dataCutoffAt}<br/>事实版本：{facts.factsId}<br/>原始词池快照：{facts.pool.rawInputSnapshotId}<br/>语义快照：{facts.pool.semanticInputSnapshotId}</p></details>
  </section>;
 }
-export function MarketKeywordRevisionReport({catalog,ruleReport,scoreInputAudit,semanticSkipped=false}:{catalog:MarketKeywordRevisionCatalog;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;semanticSkipped?:boolean}){
+export function MarketKeywordRevisionReport({catalog,ruleReport,scoreInputAudit,originalEstimate,semanticSkipped=false}:{catalog:MarketKeywordRevisionCatalog;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;originalEstimate?:MarketKeywordOriginalEstimate;semanticSkipped?:boolean}){
  const {facts,classification,aggregation,revision}=catalog,names=new Map(facts.members.map(m=>[m.keywordId,m.keyword]));
+ const estimate=originalEstimate?.factsId===facts.factsId&&originalEstimate.classificationId===revision.revisionId?originalEstimate:undefined;
  const clusters=new Map(classification.clusters.map(c=>[c.clusterId,c]));
  const summaries=[...aggregation.clusters,aggregation.unassigned];
  const missing=Object.fromEntries(dimensions.map(d=>[d,classification.assignments.filter(a=>!a[d].length).length]));
@@ -127,8 +131,8 @@ export function MarketKeywordRevisionReport({catalog,ruleReport,scoreInputAudit,
   <h4>人工词标签与需求簇归属</h4>
   <Pages key={`assignments:${revision.revisionId}`} items={classification.assignments} label="人工关键词归属" render={rows=><div className="market-shape-table" role="region" aria-label="人工关键词归属表" tabIndex={0}><table><thead><tr><th>关键词</th>{dimensions.map(d=><th key={d}>{dimensionNames[d]}</th>)}<th>需求簇</th></tr></thead><tbody>{rows.map(a=><tr key={a.keywordId}><th>{names.get(a.keywordId)??a.keywordId}</th>{dimensions.map(d=><td key={d}>{a[d].length?a[d].map(id=>classification.labels[d].find(l=>l.labelId===id)?.label??id).join('、'):'未知（未归类）'}</td>)}<td>{a.clusterId===null?'未分组':clusters.get(a.clusterId)?.label??a.clusterId}</td></tr>)}</tbody></table></div>}/>
   <details><summary>人工标签定义</summary>{dimensions.map(d=><div key={d}><h5>{dimensionNames[d]}</h5>{classification.labels[d].length?<ul>{classification.labels[d].map(l=><li key={l.labelId}>{l.label}：{l.definition}</li>)}</ul>:<p>尚未定义标签。</p>}</div>)}</details>
-  {ruleReport&&<MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/>}
-  <p className="market-research-note">人工修订确认已指定的标签与归属，并按原词重算。W5 诊断与 PVS 是否可用取决于来源覆盖，语义质量仍待独立验证。</p>
+  {ruleReport&&(estimate?<details className="card market-insights-evidence"><summary>严格数据核对（不采用估算占位分）</summary><MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/></details>:<MarketKeywordRulesReport report={ruleReport} scoreInputAudit={scoreInputAudit}/>)}
+  {estimate&&<MarketKeywordOriginalEstimateReport estimate={estimate} manual/>}<p className="market-research-note">人工修订确认已指定的标签与归属，并按原词重算。W5 诊断与 PVS 是否可用取决于来源覆盖，语义质量仍待独立验证。</p>
   <details className="market-research-boundaries"><summary>人工版本与事实基线</summary><p>版本：{revision.revisionId}<br/>父版本：{revision.parentRevisionId??'首个版本'}<br/>事实基线：{facts.factsId}<br/>数据截止：{facts.pool.dataCutoffAt}</p></details>
  </section>;
 }

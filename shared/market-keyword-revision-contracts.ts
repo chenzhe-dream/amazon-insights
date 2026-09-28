@@ -1,3 +1,4 @@
+import {MarketKeywordOriginalEstimateSchema} from './market-keyword-original-estimate-contracts';
 import { z } from 'zod';
 import { MarketKeywordFactsSchema } from './market-keyword-public-contracts';
 import {MarketKeywordRuleReportSchema} from './market-keyword-rule-report-contracts';
@@ -24,4 +25,4 @@ export const MarketKeywordRevisionCatalogSchema = z.object({
 export type MarketKeywordRevisionRequest = z.infer<typeof MarketKeywordRevisionRequestSchema>;
 export type MarketKeywordRevisionCatalog = z.infer<typeof MarketKeywordRevisionCatalogSchema>;
 /** Read response siblings never become part of the immutable revision catalog. */
-export const MarketKeywordRevisionEntrySchema=z.object({ordinal:z.number().int().min(1),catalog:MarketKeywordRevisionCatalogSchema,ruleReport:MarketKeywordRuleReportSchema.optional(),scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional()}).strict();
+export const MarketKeywordRevisionEntrySchema=z.object({ordinal:z.number().int().min(1),catalog:MarketKeywordRevisionCatalogSchema,ruleReport:MarketKeywordRuleReportSchema.optional(),originalEstimate:MarketKeywordOriginalEstimateSchema.optional(),scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional()}).strict();

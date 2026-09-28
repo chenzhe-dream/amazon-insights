@@ -1,3 +1,4 @@
+import {buildKeywordOriginalEstimate} from '../domain/market-research/keyword-original-estimate';
 import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
 import {PostgresMarketShapeDraftStore} from '../db/postgres/market-shape-draft-store';
 import {queryShapeRun} from './market-shape-query-service';
@@ -192,21 +193,21 @@ export class MarketModuleService {
     const {facts,reconciliation}=result.run;
     const automaticClassification=facts&&result.run.semanticStatus==='skipped'?buildKeywordOriginalClassification(facts,result.run.params.plannedPages[0].seed):undefined;
     const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:automaticClassification?{kind:'local',report:automaticClassification}:reconciliation?{kind:'global',report:reconciliation}:null}):null;
-    return {...result,run:{...result.run,...(automaticClassification?{automaticClassification}:{}),...(ruleReport&&facts?{ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
+    return {...result,run:{...result.run,...(automaticClassification?{automaticClassification}:{}),...(ruleReport&&facts?{ruleReport,originalEstimate:automaticClassification?buildKeywordOriginalEstimate({facts,productSeed:automaticClassification.productSeed}):undefined,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
   }
   async saveKeywordRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);
     const result=await new PostgresMarketKeywordRevisionStore(this.deps.context).save({actor,moduleRunId:id,request:body,idempotencyKey:MarketModuleIdSchema.parse(key)});
     const {created,...revision}=result;
     const ruleReport=buildMarketKeywordRuleReport({facts:revision.catalog.facts,classification:{kind:'manual',revision:revision.catalog}});
-    return {created,revision:{...revision,ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts:revision.catalog.facts,report:ruleReport})}};
+    return {created,revision:{...revision,ruleReport,originalEstimate:buildKeywordOriginalEstimate({facts:revision.catalog.facts,productSeed:revision.catalog.facts.members[0]?.occurrences[0]?.seed??'产品',revision:revision.catalog}),scoreInputAudit:buildMarketKeywordScoreInputAudit({facts:revision.catalog.facts,report:ruleReport})}};
   }
   async keywordRevision(actor:MarketExecutionActor,id:string,revisionId:string){
     id=MarketModuleIdSchema.parse(id);revisionId=MarketKeywordRevisionIdSchema.parse(revisionId);
     const revision=await new PostgresMarketKeywordRevisionStore(this.deps.context).find({actor,moduleRunId:id,revisionId});
     if(!revision)throw unavailable();
     const ruleReport=buildMarketKeywordRuleReport({facts:revision.catalog.facts,classification:{kind:'manual',revision:revision.catalog}});
-    return {revision:{...revision,ruleReport,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts:revision.catalog.facts,report:ruleReport})}};
+    return {revision:{...revision,ruleReport,originalEstimate:buildKeywordOriginalEstimate({facts:revision.catalog.facts,productSeed:revision.catalog.facts.members[0]?.occurrences[0]?.seed??'产品',revision:revision.catalog}),scoreInputAudit:buildMarketKeywordScoreInputAudit({facts:revision.catalog.facts,report:ruleReport})}};
   }
   async findShapes(actor:MarketExecutionActor,id:string){
     id=MarketModuleIdSchema.parse(id);const result=await readMarketShapeRun(this.deps.context,actor,id);if(!result)throw unavailable();return result;

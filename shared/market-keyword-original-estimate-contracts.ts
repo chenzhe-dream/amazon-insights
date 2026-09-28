@@ -1,0 +1,12 @@
+import {z} from 'zod';
+const finite=z.number().finite(),count=finite.nonnegative(),strings=z.array(z.string()).max(2000);
+const tier=z.enum(['P1','P2','P3','P4']),quadrant=z.enum(['主战场','红海','机会缝隙','暂缓区']);
+const cluster=z.object({id:z.string(),name:z.string(),w1What:z.string(),w2Who:z.string().nullable(),w3Where:z.string().nullable(),w4Features:strings,keywords:strings,monthlySearches:count,yoyGrowth:finite.nullable(),growth3m:finite.nullable(),ppcBid:finite.nullable(),w5Diagnosis:z.string(),computed:z.object({rawGrowth:finite,s1:finite,s2:finite,s3:z.literal(50),s4:finite,s5:z.literal(50),pvs:finite,sharePct:finite,quadrant,demandClass:z.enum(['主流需求','细分需求','观察需求']),validationTier:tier,warnings:strings}).strict()}).strict();
+const dimension=z.object({id:z.enum(['W1','W2','W3','W4','W5']),title:z.string(),question:z.string(),conclusion:z.string(),rows:z.array(z.object({label:z.string(),keywords:strings,monthlySearches:count,sharePct:finite,note:z.string().optional()}).strict()).max(2000),dataQuality:z.string().optional()}).strict();
+export const MarketKeywordOriginalEstimateSchema=z.object({
+ version:z.literal('keyword-original-estimate/v1'),estimateId:z.string().regex(/^keyword-original-estimate:[a-f0-9]{64}$/),factsId:z.string(),classificationId:z.string().nullable(),
+ sampleVolumeBasis:z.literal('source-page-monthly-volume/unspecified-window'),excludedKeywordIds:strings,totalKeywordCount:count,notes:strings,
+ report:z.object({skillName:z.enum(['amazon-keyword-demand-analysis','amazon-demand-five-dimensions-model']),status:z.enum(['ok','partial','insufficient_data']),scope:z.object({marketplace:z.string(),productScope:z.string(),source:z.string(),sampleCount:count,totalMonthlyVolume:count,trendEnrichedCount:count}).strict(),sampleWarning:z.string().nullable(),dataNotes:strings,
+ dimensions:z.object({w1:dimension,w2:dimension,w3:dimension,w4:dimension,w5:dimension}).strict(),synthesis:z.object({headline:z.string(),bullets:strings,clusters:z.array(cluster).max(2000)}).strict(),mainstream:z.array(cluster).max(2000),niche:z.array(cluster).max(2000),developmentDirections:z.array(z.object({direction:z.string(),evidence:z.string(),priority:z.string(),feasibility:z.string()}).strict()).max(6),validationPriorities:z.array(z.object({hypothesis:z.string(),method:z.string(),tier,effort:z.string(),quadrant}).strict()).max(8)}).strict()
+}).strict();
+export type MarketKeywordOriginalEstimate=z.infer<typeof MarketKeywordOriginalEstimateSchema>;

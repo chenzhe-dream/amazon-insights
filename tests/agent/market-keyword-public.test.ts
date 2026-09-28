@@ -72,6 +72,10 @@ test('public keyword start and read bind source months and native audited batche
     const saved = (await service.findKeywords(actor, started.run.id)).run;
     assert.equal((await steps.findModuleRun({ actor, moduleRunId: started.run.id }))!.run.versions.planner, MARKET_KEYWORD_RULES_FLOW_VERSION);
     assert.equal(saved.semanticStatus, 'skipped');
+    assert.equal(saved.originalEstimate?.factsId,saved.facts!.factsId);
+    assert.equal(saved.originalEstimate?.version,'keyword-original-estimate/v1');
+    assert.equal(saved.originalEstimate?.sampleVolumeBasis,'source-page-monthly-volume/unspecified-window');
+    assert.ok(saved.originalEstimate!.report.synthesis.clusters.every(c=>Number.isFinite(c.computed.pvs)&&c.computed.s3===50&&c.computed.s5===50));
     assert.equal(saved.automaticClassification?.factsId,saved.facts!.factsId);
     assert.equal(saved.ruleReport?.classification.kind,'local');
     assert.equal(saved.ruleReport?.classification.identity,saved.automaticClassification?.identity);
@@ -187,6 +191,9 @@ test('public keyword start and read bind source months and native audited batche
   assert.deepEqual(facts.members[0].trend.historyMonths!.map(point=>[point.month,point.searchVolume.value]),[['2025-08',10],['2026-05',15],['2026-07',20],['2026-08',0]],'Saved full-history observations remain available outside the research window');
   assert.deepEqual(revision.catalog.facts.members[0].trend.comparisonMonths,facts.members[0].trend.comparisonMonths,'Manual history preserves the original calendar comparison evidence');
   assert.equal(revision.ruleReport.clusters[0].score.pvs,null,'Missing source metrics cannot manufacture PVS');
+  assert.equal(revision.originalEstimate.classificationId,revision.catalog.revision.revisionId);
+  assert.equal(revision.originalEstimate.factsId,revision.catalog.facts.factsId);
+  assert.ok(revision.originalEstimate.report.synthesis.clusters.every((c:any)=>Number.isFinite(c.computed.pvs)));
   assert.equal(revision.ordinal, 1); assert.equal(revision.catalog.aggregation.pool.totalSearchVolume, 0);
   assert.deepEqual(revision.catalog.facts.semantics, facts.semantics);
   assert.equal(revision.catalog.aggregation.clusters[0].searchVolumeSharePercent, null);

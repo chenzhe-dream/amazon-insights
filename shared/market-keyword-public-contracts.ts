@@ -1,3 +1,4 @@
+import {MarketKeywordOriginalEstimateSchema} from './market-keyword-original-estimate-contracts';
 import { z } from 'zod';
 import { MarketAnalysisScopeSchema } from './market-analysis-contracts';
 import { MarketKeywordStartRequestSchema } from './market-keyword-flow-contracts';
@@ -61,7 +62,7 @@ export const MarketKeywordRunResponseSchema = z.object({ run: z.object({ id: z.s
   params: MarketKeywordStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), facts: MarketKeywordFactsSchema.nullable(), ruleStatus:z.enum(['complete','partial','unavailable']).optional(), semanticStatus:z.enum(['skipped','pending','partial','complete','unavailable']).optional(),
   reconciliation:MarketKeywordReconciliationReportSchema.optional(),
   automaticClassification:MarketKeywordOriginalClassificationSchema.optional(),
-  ruleReport:MarketKeywordRuleReportSchema.optional(),
+  ruleReport:MarketKeywordRuleReportSchema.optional(),originalEstimate:MarketKeywordOriginalEstimateSchema.optional(),
   scoreInputAudit:MarketKeywordScoreInputAuditSchema.optional(),
   history: z.array(z.object({ revisionId: z.string().regex(/^market-keyword-revision:[a-f0-9]{64}$/),
     parentRevisionId: z.string().regex(/^market-keyword-revision:[a-f0-9]{64}$/).nullable(), ordinal: count,
