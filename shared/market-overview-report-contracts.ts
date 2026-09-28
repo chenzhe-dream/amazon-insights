@@ -12,7 +12,7 @@ import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 import {MarketOverviewOriginalFieldsSchema} from './market-overview-original-fields';
 const id=z.string().min(1).max(240),hash=z.string().regex(/^[a-f0-9]{64}$/),count=z.number().int().nonnegative().safe(),month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
 export const MarketOverviewStartRequestSchema=z.object({headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]).default(10),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6)}).strict();
-export const MarketOverviewSavedRunQuerySchema=z.object({marketplace:MarketAnalysisScopeSchema.shape.marketplace,nodeIdPath:MarketAnalysisScopeSchema.shape.nodeIdPath,toMonth:MarketAnalysisScopeSchema.shape.toMonth,
+export const MarketOverviewSavedRunQuerySchema=z.object({marketplace:MarketAnalysisScopeSchema.shape.marketplace,nodeIdPath:MarketAnalysisScopeSchema.shape.nodeIdPath,toMonth:MarketAnalysisScopeSchema.shape.toMonth,overviewPeriod:MarketAnalysisScopeSchema.shape.overviewPeriod,
   headTopN:z.coerce.number().pipe(z.union([z.literal(5),z.literal(10),z.literal(20)])),newProductMonths:z.coerce.number().pipe(z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]))}).strict();
 export const MarketOverviewSavedRunResponseSchema=z.object({runId:uuid.nullable(),fromMonth:month.nullable()}).strict();
 export const MarketOverviewLegacyReportSchema=z.object({reportVersion:z.literal('market-overview-report/v1'),moduleRunId:uuid,scope:MarketAnalysisScopeSchema,versions:MarketThemeReportSchema.shape.versions,

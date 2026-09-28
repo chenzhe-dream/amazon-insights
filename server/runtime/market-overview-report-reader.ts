@@ -1,3 +1,4 @@
+import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 import {readOverviewExternal,projectOverviewProductDemand} from './market-overview-external-step';
 import {projectMarketOverviewOriginalSynthesis} from '../domain/market-research/overview-original-synthesis';
 import {readOverviewIndustryDemand} from './market-overview-industry-demand-step';
@@ -23,15 +24,15 @@ function invalid():never{throw new TypeError('Overview report frozen evidence is
 
 /** Replay only declared immutable attempts, not whichever attempt is now latest.
  * This is shared by settlement and history reads, and never invokes providers. */
-export async function readMarketOverviewReport(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal){
+export async function readMarketOverviewReport(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,readerActor?:MarketExecutionActor){
   signal.throwIfAborted();const input=MarketOverviewReportInputSchema.parse(definition.input);
   same({stepKey:definition.stepKey,kind:definition.kind,subject:definition.subject,input:definition.input,inputRefs:definition.inputRefs},marketOverviewReportDefinition(view,input));
   if(view.run.moduleKind!=='overview'||!['market-overview-flow/v2','market-overview-flow/v3','market-overview-flow/v4','market-overview-flow/v5','market-overview-flow/rules-v1','market-overview-flow/rules-v2','market-overview-flow/rules-v3','market-overview-flow/rules-v4'].includes(String(obj(view.run.params).flow)))invalid();
-  const {catalog,sources,output:catalogOutput}=await readMarketOverviewCatalog(context,view,input.catalogAttemptId,signal,'frozen');same(input.numericInputSnapshotId,catalog.numericSnapshot.snapshotId);
-  const industryDemand=input.industryDemandAttemptId?await readOverviewIndustryDemand(context,view,input.catalogAttemptId,input.industryDemandAttemptId,signal,sources):undefined;
-  const externalData=String(obj(view.run.params).flow)==='market-overview-flow/rules-v4'?await readOverviewExternal(context,view,input.catalogAttemptId,input.externalAttemptIds??[],signal,sources):undefined;
+  const {catalog,sources,output:catalogOutput}=await readMarketOverviewCatalog(context,view,input.catalogAttemptId,signal,'frozen',readerActor);same(input.numericInputSnapshotId,catalog.numericSnapshot.snapshotId);
+  const industryDemand=input.industryDemandAttemptId?await readOverviewIndustryDemand(context,view,input.catalogAttemptId,input.industryDemandAttemptId,signal,sources,readerActor):undefined;
+  const externalData=String(obj(view.run.params).flow)==='market-overview-flow/rules-v4'?await readOverviewExternal(context,view,input.catalogAttemptId,input.externalAttemptIds??[],signal,sources,readerActor):undefined;
   const productDemand=externalData?projectOverviewProductDemand(sources,view.run.scope.toMonth,obj(catalogOutput).failures):undefined;
-  const full=catalog.semanticSnapshot,actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy},scope={actor,studyId:view.run.scope.researchId,moduleRunId:view.run.id};
+  const full=catalog.semanticSnapshot,actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy},scope={actor,studyId:view.run.scope.researchId,moduleRunId:view.run.id};
   const snapshots=new PostgresMarketAnalysisSnapshotStore(context),audits=new PostgresMarketAgentRunStore(context);
   const terminal=(id:string)=>{const a=view.attempts.find(a=>a.id===id),s=view.steps.find(s=>s.id===a?.stepId);if(!a||!s||!['succeeded','empty','failed','interrupted'].includes(a.status))invalid();return {a,s};};
   const modelResults:Array<{attemptId:string;bindingId:string;status:'succeeded'|'failed'|'empty';errorCode:string|null;agentRunId:string|null;output:ReturnType<typeof validateMarketOverviewExplanation>|null}>=[];

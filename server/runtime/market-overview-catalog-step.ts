@@ -1,3 +1,5 @@
+import {overviewSourceMonth} from '../../shared/market-overview-period';
+import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 import {overviewExternalAsins} from '../services/market-overview-external-collector';
 import {z} from 'zod';
 import {MarketInputRecordSchema,type MarketInputSnapshot} from '../../shared/market-analysis-contracts';
@@ -35,18 +37,18 @@ export function createMarketOverviewCatalogStep(context:PostgresQueryContext):Ma
   };
 }
 /** Replays the frozen source receipts before a model plan consumes the saved facts. */
-export async function readMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,attemptId:string,signal:AbortSignal,mode:'current'|'frozen'='current'){
+export async function readMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,attemptId:string,signal:AbortSignal,mode:'current'|'frozen'='current',readerActor?:MarketExecutionActor){
   const a=view.attempts.find(a=>a.id===attemptId),step=view.steps.find(s=>s.id===a?.stepId);
   if(!a||!step||step.kind!=='rules'||!['succeeded','empty'].includes(a.status)||mode==='current'&&(step.latestAttemptId!==a.id||step.status!==a.status))invalid();
-  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode,Object.hasOwn(obj(a.output),'ruleBaseline'));if(digest(a.output)!==digest(computed.output))invalid();
-  const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
+  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode,Object.hasOwn(obj(a.output),'ruleBaseline'),readerActor);if(digest(a.output)!==digest(computed.output))invalid();
+  const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
   for(const value of [computed.catalog.numericSnapshot,...(computed.catalog.semanticSnapshot?[computed.catalog.semanticSnapshot]:[])]){
     signal.throwIfAborted();const saved=await snapshots.findInput({actor,studyId:view.run.scope.researchId,id:value.snapshotId});if(!saved||digest(saved.snapshot)!==digest(value))invalid();
   }
   return computed;
 }
-async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,mode:'current'|'frozen'='current',includeRuleBaseline=false){
-    const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy},studyId=view.run.scope.researchId;
+async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,mode:'current'|'frozen'='current',includeRuleBaseline=false,readerActor?:MarketExecutionActor){
+    const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy},studyId=view.run.scope.researchId;
     const input=MarketOverviewCatalogStepInputSchema.parse(definition.input),params=MarketOverviewFlowParamsSchema.parse(view.run.params),expected=marketOverviewFlowInitialSteps(view.run);
     const sourceSteps=expected.map((d,i)=>{const s=view.steps.find(s=>s.stepKey===d.stepKey),a=view.attempts.find(a=>a.id===input.sourceAttemptIds[i]);
       if(!s||!a||a.stepId!==s.id||s.inputHash!==digest(d))invalid();
@@ -66,7 +68,7 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
       const source=await snapshots.findSource({actor,studyId,id:ref}),saved=await snapshots.findInput({actor,studyId,id});
       if(!source||!saved||digest(saved.snapshot.scope)!==digest(view.run.scope)||saved.snapshot.kind!=='overview'||saved.snapshot.sourceVersion!==MARKET_SOURCE_HANDLER_VERSION||saved.snapshot.collectedAt!==source.evidence.fetchedAt||saved.snapshot.records.length!==1)invalid();
       const record=saved.snapshot.records[0];
-      if(record.id!==`${month}:${operation}`||digest(record.data)!==digest({collection:'overview-month',month,operation,parameters,sourceRef:ref})||source.evidence.operation!==operation||source.evidence.requestIdentity.month!==month)invalid();
+      if(record.id!==`${month}:${operation}`||digest(record.data)!==digest({collection:'overview-month',month,operation,parameters,sourceRef:ref})||source.evidence.operation!==operation||overviewSourceMonth(source.evidence)!==month)invalid();
       sources.push(source.evidence);receipts.push({month,operation,attemptId:a.id,status:output.collectionStatus,sourceRef:ref,inputSnapshotId:id});
     }
     const common={scope:view.run.scope,parameters:{headTopN:params.headTopN,newProductMonths:params.newProductMonths},dataCutoffAt:input.dataCutoffAt,sources};

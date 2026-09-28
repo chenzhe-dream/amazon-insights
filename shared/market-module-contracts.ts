@@ -6,7 +6,7 @@ import {MarketThemeSourceIssueSchema} from './market-theme-source-issue';
 
 export const MarketModuleIdSchema = z.string().uuid().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i).toLowerCase();
 const { organizationId: _organizationId, researchId: _researchId, ...publicScopeShape } = MarketAnalysisScopeSchema.shape;
-export const MarketStudyRequestSchema = z.object(publicScopeShape).strict().refine(v => v.fromMonth <= v.toMonth, 'Research period is reversed').refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
+export const MarketStudyRequestSchema = z.object(publicScopeShape).strict().refine(v=>!v.overviewPeriod||v.fromMonth===v.toMonth,'Rolling overview uses one historical cutoff').refine(v => v.fromMonth <= v.toMonth, 'Research period is reversed').refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
 export const MarketStudyResponseSchema = z.object({ study: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema, createdAt: z.string().datetime() }).strict() }).strict();
 export const MarketThemeStartRequestSchema = z.object({ memberCount: z.number().int().min(1).max(20).default(20),
   poolSize: z.number().int().min(1).max(100).default(100), newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]).default(6),

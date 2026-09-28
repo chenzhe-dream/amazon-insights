@@ -24,7 +24,7 @@ export async function collectMarketOverviewSource(input:Params&{scope:MarketAnal
   const check=()=>{if(performance.now()>=deadline)controller.abort();signal.throwIfAborted();};
   try{
     check();if(input.connector.id!=='sellerSprite')throw new SourceFailure('source-mismatch');
-    const request={marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month:month.replaceAll('-',''),newProduct:newProductMonths,
+    const request={marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month:month.replaceAll('-','')}),newProduct:newProductMonths,
       ...(operation==='market_research'?{topNum:headTopN,page:1,size:10}:{topN:headTopN})};
     const response=await new Promise<Awaited<ReturnType<RemoteMcpConnector['execute']>>>((resolve,reject)=>{
       const abort=()=>reject(new SourceFailure(input.signal?.aborted?'interrupted':'timeout'));signal.addEventListener('abort',abort,{once:true});
@@ -49,7 +49,7 @@ export async function collectMarketOverviewSource(input:Params&{scope:MarketAnal
     for(const [record,path] of [[envelope,[]],[data,dataPath],[row,rowPath]] as Array<[Record<string,unknown>,MarketSourcePayloadPath]>){
       const location=JSON.stringify(path);if(visited.has(location))continue;visited.add(location);
       for(const field of ['marketplace','nodeIdPath','nodeId','month','currency'] as const){
-        if(!Object.hasOwn(record,field))continue;const v=MarketSourceIdentityValueSchemas[field].safeParse(record[field]);
+        if(field==='month'&&scope.overviewPeriod)continue;if(!Object.hasOwn(record,field))continue;const v=MarketSourceIdentityValueSchemas[field].safeParse(record[field]);
         if(!v.success||v.data!==expected[field])throw new SourceFailure('scope-mismatch');(paths[field]??=[]).push([...path,field]);
       }
     }
@@ -60,8 +60,8 @@ export async function collectMarketOverviewSource(input:Params&{scope:MarketAnal
     for(const field of available)units[field]=field.endsWith('Crn')?{status:'unknown',rawUnit:null,reason:'来源未说明ratio或percent口径'}:
       /Price|Revenue/.test(field)?paths.currency?.length?{status:'known',unit:'currency',rawUnit:'currency',currency:scope.currency}:{status:'unknown',rawUnit:null,reason:'来源未回显金额币种'}:
       {status:'known',unit:'count',rawUnit:field};
-    const evidence=createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month},responseIdentityPaths:paths,payload,
-      fetchedAt:metadata.data.fetchedAt,observationPeriod:{kind:'calendar-months',fromMonth:month,toMonth:month},units,coverage:{receivedCount:empty?0:1,expectedCount:empty?0:1,truncation:{status:'unknown',reason:'来源聚合样本，未证明全类目覆盖'}}},now());
+    const evidence=createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month})},responseIdentityPaths:paths,payload,
+      fetchedAt:metadata.data.fetchedAt,observationPeriod:scope.overviewPeriod?{kind:'trailing-days',days:30,asOf:metadata.data.fetchedAt}:{kind:'calendar-months',fromMonth:month,toMonth:month},units,coverage:{receivedCount:empty?0:1,expectedCount:empty?0:1,truncation:{status:'unknown',reason:'来源聚合样本，未证明全类目覆盖'}}},now());
     const issues:Issue[]=[];
     if(evidence.responseIdentity.nodeIdPath.status!=='verified'||evidence.responseIdentity.month.status!=='verified')issues.push({code:'identity-unverified',retryable:false});
     if(Object.values(units).some(u=>u.status==='unknown'))issues.push({code:'unit-unknown',retryable:false});

@@ -125,6 +125,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   async createModuleRun(value:unknown):Promise<{run:MarketModuleRun;created:boolean}>{
     bounded(value);const {actor,idempotencyKey,...request}=createSchema.parse(value);
+    if(request.scope.overviewPeriod&&request.moduleKind!=='overview')throw new MarketExecutionConflictError();
     request.initialSteps.sort((a,b)=>a.stepKey<b.stepKey?-1:a.stepKey>b.stepKey?1:0);
     if(isMarketThemeFlow(request) && canonicalJsonSha256(request.initialSteps)!==canonicalJsonSha256(marketThemeFlowInitialSteps(request)))throw new MarketExecutionConflictError();
     if(isMarketOverviewFlow(request) && canonicalJsonSha256(request.initialSteps)!==canonicalJsonSha256(marketOverviewFlowInitialSteps(request)))throw new MarketExecutionConflictError();

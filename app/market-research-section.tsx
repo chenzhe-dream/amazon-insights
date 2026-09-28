@@ -1,4 +1,5 @@
 "use client";
+import {overviewMonthLabel} from '../shared/market-overview-period';
 import { browserRequestId } from "./lib/browser-request-id";
 import {publishUsagePage} from "./lib/usage-analytics-browser";
 import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView } from "./lib/market-navigation";
@@ -54,7 +55,7 @@ export function MarketOverviewResult({ report, onOpenReport }: { report: MarketO
     { title: `上架 ${report.scope.newProductMonths} 个月内的新品`, fields: [["新品数量", metrics.newCount], ["新品平均价格", metrics.newAvgPrice, true], ["新品平均销量", metrics.newAvgUnits]] },
   ];
   return <section className="market-research-result" aria-label="市场总览结果">
-    <div className="market-research-result-heading"><div><h3>{report.categoryName || `类目 ${report.nodeId}`}</h3><p>{report.scope.marketplace} · {report.scope.month} · Node {report.nodeId}</p></div><p>采集时间（北京时间）<br />{displayTime(report.collectedAt)}</p></div>
+    <div className="market-research-result-heading"><div><h3>{report.categoryName || `类目 ${report.nodeId}`}</h3><p>{report.scope.marketplace} · {overviewMonthLabel(report.scope.month)} · Node {report.nodeId}</p></div><p>采集时间（北京时间）<br />{displayTime(report.collectedAt)}</p></div>
     <p className="market-research-note">以下为上游返回的样本指标，不代表整个市场。未知表示本次未获得该指标。</p>
     <div className="ss-niche-table-wrap" role="region" aria-label="类目市场概览表" tabIndex={0}><table className="ss-niche-table"><thead><tr>{['#','细分市场','样本数量','月总销量','月均销量 / 头部','月均销售额 / 头部','平均评分数 / 星级','平均 BSR / 头部','平均卖家数 / 均价','卖家类型','集中度','新品数量 / 占比','商品总数','退货率 / 同类目','操作'].map(h=><th key={h} scope="col">{h}</th>)}</tr></thead><tbody><tr><td>1</td><td className="ss-niche-name"><b>{report.categoryName||report.nodeId}</b></td><td><div>商品 {numeric(metrics.sampleProducts)}</div><small>品牌 {numeric(metrics.brands)} · 卖家 {numeric(metrics.sellers)}</small></td><td className="ss-niche-accent">{numeric(metrics.totalUnits)}</td><td>{numeric(metrics.avgUnits)}<small>头部 未知</small></td><td>未知<small>头部 未知</small></td><td>{numeric(metrics.avgRatings)}<small>{numeric(metrics.avgRating)}</small></td><td>未知<small>头部 未知</small></td><td>未知<small>{numeric(metrics.avgPrice,true)}</small></td><td>未知</td><td>单位待确认<small>原值见详情</small></td><td>{numeric(metrics.newCount)}<small>占比未知</small></td><td>未知</td><td>未知<small>同类目 未知</small></td><td className="ss-niche-ops">{onOpenReport&&<button type="button" onClick={onOpenReport}>查看市场分析报告</button>}<button type="button" onClick={()=>setExpanded(v=>!v)} aria-expanded={expanded}>{expanded?'收起指标':'查看指标详情'}</button></td></tr></tbody></table></div>
     <details className="market-research-boundaries" open={expanded} onToggle={e=>setExpanded(e.currentTarget.open)}><summary>完整基础指标与原始比例</summary>
@@ -120,7 +121,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
   async function submit(event: FormEvent) {
     event.preventDefault();
     const parsed = MarketResearchScopeSchema.safeParse(scope);
-    if (!parsed.success || scope.month > previousCompleteMonth()) { setError("请输入有效的数字类目节点或冒号分隔的路径，并选择已结束的月份。"); return; }
+    if (!parsed.success || scope.month!=='last30'&&scope.month > previousCompleteMonth()) { setError("请输入有效的数字类目节点或冒号分隔的路径，并选择最近30天或已结束的月份。"); return; }
     const serialized = JSON.stringify(parsed.data);
     await mutate(signal => {
       if (submission.current?.scope !== serialized) submission.current = { scope: serialized, key: browserRequestId() };
@@ -153,13 +154,13 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
   const selected = jobs.find(job => job.id === selectedId) ?? null;
   return <div className="market-research-page">
     <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
-    <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${selected.scope.month} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，统计以完整自然月为准。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
+    <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${overviewMonthLabel(selected.scope.month)} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，支持最近30天或完整自然月。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
       {selected?.report?<MarketOverviewResult report={selected.report} onOpenReport={()=>{const nodeIdPath=selected.report?.nodeIdPath??selected.scope.nodeQuery;if(nodeIdPath!==selected.scope.nodeQuery)setScope(current=>({...current,nodeQuery:nodeIdPath}));overviewController.current?.openReport({...selected.scope,nodeQuery:nodeIdPath});}}/>:<div className="pending-box" role="status"><strong>{submitting||selected?.status==='queued'||selected?.status==='running'?'正在从卖家精灵拉取':selected?.status==='failed'?'卖家精灵暂无可用结果':'等待指定类目节点'}</strong><span>{selected?.error?.message??'已有数据和历史版本会保留；没有来源的指标不会填零。'}</span></div>}
-    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} showAuditDetails={showAuditDetails} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
+    <MarketOverviewSection controller={overviewController} scope={scope} fromMonth={fromMonth} onFromMonth={setFromMonth} showAuditDetails={showAuditDetails} categoryName={jobs.find(job=>job.report?.nodeIdPath===scope.nodeQuery&&job.scope.marketplace===scope.marketplace)?.report?.categoryName} onRestoreScope={run=>{setScope({marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,headTopN:run.params.headTopN,newProductMonths:run.params.newProductMonths});setFromMonth(run.scope.fromMonth);}}/>
     </LaunchSection>
     <details className="card market-reference-history"><summary>采集历史与状态</summary><div className="market-research-body"><aside className="card market-research-history"><div className="section-head"><h3>采集历史</h3><button className="ghost-btn" type="button" disabled={submitting} onClick={() => void refresh()}>刷新</button></div>
       <p className="market-research-note">最近 30 次，可刷新页面恢复结果。</p>
-      {loading ? <p role="status">正在读取…</p> : jobs.length === 0 ? <p>暂无采集记录。</p> : <ol>{jobs.map(job => <li key={job.id}><button type="button" aria-pressed={job.id === selectedId} onClick={() => setSelectedId(job.id)}><strong>{job.report?.categoryName || `类目 ${job.scope.nodeQuery}`}</strong><span>{job.scope.month} · Top {job.scope.headTopN} · 新品 {job.scope.newProductMonths} 个月</span><span className={`market-research-status ${job.status}`}>{statusLabels[job.status]}</span><small>{displayTime(job.createdAt)}</small></button></li>)}</ol>}
+      {loading ? <p role="status">正在读取…</p> : jobs.length === 0 ? <p>暂无采集记录。</p> : <ol>{jobs.map(job => <li key={job.id}><button type="button" aria-pressed={job.id === selectedId} onClick={() => setSelectedId(job.id)}><strong>{job.report?.categoryName || `类目 ${job.scope.nodeQuery}`}</strong><span>{overviewMonthLabel(job.scope.month)} · Top {job.scope.headTopN} · 新品 {job.scope.newProductMonths} 个月</span><span className={`market-research-status ${job.status}`}>{statusLabels[job.status]}</span><small>{displayTime(job.createdAt)}</small></button></li>)}</ol>}
     </aside><section className="card market-research-detail" aria-live="polite">{selected ? <><div className="market-research-job-heading"><span className={`market-research-status ${selected.status}`}>{statusLabels[selected.status]}</span><span>已尝试 {selected.attempts} 次</span></div>
       {(selected.status === "queued" || selected.status === "running") && <p role="status">{selected.status === "queued" ? "任务正在排队，可稍后回来查看。" : "正在获取类目数据，状态会自动更新。"}</p>}
       {selected.error && <div className="market-research-notice"><p>{selected.error.message}</p>{canRetryMarketResearchJob(selected) && <button className="primary-btn" type="button" disabled={submitting} onClick={() => void mutate(signal => retryMarketResearchJob(selected.id, signal))}>重试采集</button>}</div>}
@@ -201,7 +202,7 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     }else{
       setScope(current=>({...current,marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US'}));
       const parsed=MarketResearchScopeSchema.safeParse({marketplace:MarketSiteSchema.safeParse(params.get('marketSite')).data??'US',nodeQuery:params.get('marketNode')??'',month:params.get('marketMonth')??previousCompleteMonth(),headTopN:Number(params.get('marketHead')??10),newProductMonths:Number(params.get('marketNew')??6)});
-      if(parsed.success&&parsed.data.month<=latest){setScope(parsed.data);const from=params.get('marketFrom');setFromMonth(from&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(from)&&from<=parsed.data.month?from:parsed.data.month);}
+      if(parsed.success&&(parsed.data.month==='last30'||parsed.data.month<=latest)){setScope(parsed.data);const from=params.get('marketFrom');setFromMonth(from&&/^20\d{2}-(0[1-9]|1[0-2])$/.test(from)&&from<=parsed.data.month?from:parsed.data.month==='last30'?latest:parsed.data.month);}
     }
   },[]);
   const rememberScope=(next:MarketResearchScope)=>{const url=new URL(window.location.href);url.searchParams.set('marketSite',next.marketplace);url.searchParams.set('marketNode',next.nodeQuery);url.searchParams.set('marketMonth',next.month);url.searchParams.set('marketHead',String(next.headTopN));url.searchParams.set('marketNew',String(next.newProductMonths));window.history.replaceState(window.history.state,'',url);};
@@ -225,8 +226,8 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     if(favorite.module==='overview'){
       const next=MarketResearchScopeSchema.safeParse({marketplace:favorite.query.marketSite??'US',nodeQuery:favorite.query.marketNode??'',month:favorite.query.marketMonth??previousCompleteMonth(),headTopN:Number(favorite.query.marketHead??10),newProductMonths:Number(favorite.query.marketNew??6)});
       const restored=next.success?next.data:{marketplace:'US' as const,nodeQuery:'',month:previousCompleteMonth(),headTopN:10 as const,newProductMonths:6 as const};
-      setScope(restored);setFromMonth(favorite.query.marketFrom??restored.month);
-      params.set('marketSite',restored.marketplace);params.set('marketNode',restored.nodeQuery);params.set('marketMonth',restored.month);params.set('marketFrom',favorite.query.marketFrom??restored.month);params.set('marketHead',String(restored.headTopN));params.set('marketNew',String(restored.newProductMonths));
+      setScope(restored);setFromMonth(favorite.query.marketFrom??(restored.month==='last30'?previousCompleteMonth():restored.month));
+      params.set('marketSite',restored.marketplace);params.set('marketNode',restored.nodeQuery);params.set('marketMonth',restored.month);params.set('marketFrom',favorite.query.marketFrom??(restored.month==='last30'?previousCompleteMonth():restored.month));params.set('marketHead',String(restored.headTopN));params.set('marketNew',String(restored.newProductMonths));
     }else if(favorite.query.marketNode){
       const targetView=favorite.module,selection:MarketModuleSelection={marketplace:favorite.query.marketSite??'US',nodeIdPath:favorite.query.marketNode,fromMonth:favorite.query.marketFrom??favorite.query.marketMonth??previousCompleteMonth(),toMonth:favorite.query.marketMonth??previousCompleteMonth()};
       setModuleSelections(current=>({...current,[targetView]:selection}));writeMarketModuleSelection(params,targetView,selection);

@@ -41,7 +41,7 @@ function assertScope(row: Record<string,unknown>, nodeId:string, nodeIdPath:stri
     (row.nodeIdPath!==undefined && String(row.nodeIdPath)!==nodeIdPath) ||
     (row.marketplace!==undefined && normalizeMarketSite(String(row.marketplace))!==scope.marketplace) ||
     (row.currency!==undefined && row.currency!==marketSiteCurrency(scope.marketplace)) ||
-    (row.month!==undefined && String(row.month).replaceAll("-","")!==month.replaceAll("-",""))) {
+    (month!=='last30' && row.month!==undefined && String(row.month).replaceAll("-","")!==month.replaceAll("-",""))) {
     throw new MarketResearchCollectionError(issue(dataset,"scope-mismatch"));
   }
 }
@@ -80,19 +80,18 @@ export async function collectMarketOverview(input: {
   let categoryName="";
   if(!scope.nodeQuery.includes(":")) {
     try {
-      const result=await execute("product_node",{marketplace:scope.marketplace,keyword:nodeId,month:scope.month.replaceAll("-","")});
+      const result=await execute("product_node",{marketplace:scope.marketplace,keyword:nodeId,...(scope.month==='last30'?{}:{month:scope.month.replaceAll("-","")})});
       const payload=unwrap(result.data,"node");
       const nodes=Array.isArray(payload)?payload:[payload];
       const matches=nodes.map(record).filter(row=>/^\d+(?::\d+)*$/.test(String(row.nodeIdPath??"")) && String(row.nodeIdPath).split(":").at(-1)===nodeId);
-      const paths=new Set(matches.map(row=>String(row.nodeIdPath)));
-      if(paths.size!==1) throw new MarketResearchCollectionError(issue("node","scope-mismatch"));
+      if(!matches.length) throw new MarketResearchCollectionError(issue("node","scope-mismatch"));
       nodeIdPath=String(matches[0].nodeIdPath);
       categoryName=String(matches[0].nodeLabelPath??"").slice(0,300);
       addEvidence("node",result);
     } catch(error) {throw new MarketResearchCollectionError(marketResearchFailure(error,"node"));}
   }
   signal.throwIfAborted();
-  const request={marketplace:scope.marketplace,nodeIdPath,month:scope.month.replaceAll("-",""),newProduct:scope.newProductMonths};
+  const request={marketplace:scope.marketplace,nodeIdPath,...(scope.month==='last30'?{}:{month:scope.month.replaceAll("-","")}),newProduct:scope.newProductMonths};
   const results=await Promise.allSettled([
     execute("market_research",{...request,topNum:scope.headTopN,page:1,size:10}),
     execute("market_research_statistics",{...request,topN:scope.headTopN}),

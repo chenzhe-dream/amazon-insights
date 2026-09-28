@@ -6,10 +6,10 @@ import {createThemeStudy} from './market-theme-browser';
 export {retryThemeSteps as retryOverviewSteps,cancelThemeRun as cancelOverviewRun} from './market-theme-browser';
 export async function createOverviewStudy(scope:z.input<typeof MarketStudyRequestSchema>,key:string,signal?:AbortSignal){
   const input=MarketStudyRequestSchema.parse(scope),study=await createThemeStudy(input,key,signal);
-  if(Object.entries(input).some(([name,value])=>study.scope[name as keyof typeof input]!==value))throw new Error('研究范围不一致，未加载该结果。');return study;
+  if(Object.entries(input).some(([name,value])=>name==='nodeIdPath'&&!String(value).includes(':')?study.scope.nodeIdPath.split(':').at(-1)!==value:study.scope[name as keyof typeof input]!==value))throw new Error('研究范围不一致，未加载该结果。');return study;
 }
 export async function findSavedOverviewRun(input:z.input<typeof MarketOverviewSavedRunQuerySchema>,signal?:AbortSignal){
-  const query=MarketOverviewSavedRunQuerySchema.parse(input),search=new URLSearchParams(Object.entries(query).map(([key,value])=>[key,String(value)]));
+  const query=MarketOverviewSavedRunQuerySchema.parse(input),search=new URLSearchParams(Object.entries(query).filter(([,value])=>value!==undefined).map(([key,value])=>[key,String(value)]));
   return request(`overview/saved?${search}`,MarketOverviewSavedRunResponseSchema,{signal});
 }
 function validateRun(run:z.infer<typeof MarketOverviewRunResponseSchema>['run']){

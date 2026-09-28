@@ -23,7 +23,7 @@ export class MarketResearchService {
     const idempotency=MarketResearchIdempotencyKeySchema.safeParse(key);
     if(!parsed.success || !idempotency.success) throw new MarketResearchServiceError(400,"请填写有效的类目、月份和调研参数");
     const now=this.now();
-    if(parsed.data.month>=now.slice(0,7)) throw new MarketResearchServiceError(400,"请选择当前月份之前的完整月份");
+    if(parsed.data.month!=='last30'&&parsed.data.month>=now.slice(0,7)) throw new MarketResearchServiceError(400,"请选择当前月份之前的完整月份");
     return this.deps.repository.create({...actor,id:randomUUID(),scope:parsed.data,idempotencyKey:idempotency.data,now});
   }
   async list(actor:MarketResearchActor){await this.authorize(actor);return this.deps.repository.list(actor);}

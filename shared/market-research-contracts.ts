@@ -6,7 +6,7 @@ const numberOrMissing = z.number().finite().nonnegative().nullable();
 export const MarketResearchScopeSchema = object({
   marketplace: MarketSiteSchema,
   nodeQuery: z.string().trim().min(1).max(240).regex(/^\d+(?::\d+)*$/),
-  month: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
+  month: z.union([z.literal('last30'),z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/)]),
   headTopN: z.union([z.literal(5), z.literal(10), z.literal(20)]),
   newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
 });

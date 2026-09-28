@@ -1,3 +1,4 @@
+import {overviewSourceMonth} from '../../../shared/market-overview-period';
 import {z} from 'zod';
 import {MarketAnalysisScopeSchema,type MarketAnalysisScope} from '../../../shared/market-analysis-contracts';
 import type {MarketSourceEvidence} from '../../../shared/market-source-contracts';
@@ -16,7 +17,7 @@ export function buildMarketOverviewExpandedCatalog(input:{scope:MarketAnalysisSc
   const base=buildMarketOverviewSourceCatalog({...input,scope,sources:basic,failures:failures.filter(f=>!additional(f.operation)).map(f=>MarketOverviewSourceFailureSchema.parse(f)),version:MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION});
   const distributions:MarketOverviewDistributionEntry[]=[],accepted=new Map<string,MarketSourceEvidence>(),failed=new Map<string,MarketOverviewExpandedSourceFailureV2>();
   for(const source of input.sources.filter(s=>additional(s.operation))){
-    const month=source.requestIdentity.month,key=`${month}/${source.operation}`;
+    const month=overviewSourceMonth(source),key=`${month}/${source.operation}`;
     if(digest(source.scope)!==digest(scope)||source.provider!=='sellerSprite'||!month||month<scope.fromMonth||month>scope.toMonth||accepted.has(key))throw new TypeError('Expanded overview source scope or endpoint differs');accepted.set(key,source);
   }
   for(const failure of failures.filter(f=>additional(f.operation))){const key=`${failure.month}/${failure.operation}`;

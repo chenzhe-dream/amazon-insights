@@ -26,7 +26,7 @@ export async function collectMarketOverviewDistribution(input:Params&{originalDe
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,...(input.signal?[input.signal]:[])]),timer=setTimeout(()=>controller.abort(),Math.max(0,deadline-performance.now()));timer.unref();
   const check=()=>{if(performance.now()>=deadline)controller.abort();signal.throwIfAborted();};
   try{
-    check();const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month:month.replaceAll('-',''),...(input.originalDemand&&operation==='market_product_demand_trend'?{topN:100}:{newProduct:newProductMonths,topN:headTopN})}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
+    check();const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month:month.replaceAll('-','')}),...(input.originalDemand&&operation==='market_product_demand_trend'?{topN:100}:{newProduct:newProductMonths,topN:headTopN})}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
     let abortListener:()=>void=()=>{};
     const response=await Promise.race([request,new Promise<never>((_,reject)=>{abortListener=()=>reject(new SourceFailure(input.signal?.aborted?'interrupted':'timeout'));signal.addEventListener('abort',abortListener,{once:true});if(signal.aborted)abortListener();})]).finally(()=>signal.removeEventListener('abort',abortListener));check();
     const metadata=z.object({connectorId:z.literal('sellerSprite'),operation:z.literal(operation),fetchedAt:z.string().datetime(),attemptCount:z.number().int().positive()}).passthrough().safeParse(response.source);
@@ -50,7 +50,7 @@ export function projectMarketOverviewDistribution(input:Params&{scope:MarketAnal
     const paths:Record<string,MarketSourcePayloadPath[]>={},expected={marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,nodeId:scope.nodeIdPath.split(':').at(-1),month,currency:scope.currency};
     const locations:Array<[Record<string,unknown>,MarketSourcePayloadPath]>=[[envelope,[]],...(demand?[[obj(data),['data']] as [Record<string,unknown>,MarketSourcePayloadPath]]:rows.map((row,i)=>[obj(row),['data',i]] as [Record<string,unknown>,MarketSourcePayloadPath]))];
     for(const [record,path] of locations)for(const field of ['marketplace','nodeIdPath','nodeId','month','currency'] as const){
-      if(!Object.hasOwn(record,field))continue;const echoed=MarketSourceIdentityValueSchemas[field].safeParse(record[field]);
+      if(field==='month'&&scope.overviewPeriod)continue;if(!Object.hasOwn(record,field))continue;const echoed=MarketSourceIdentityValueSchemas[field].safeParse(record[field]);
       if(!echoed.success||echoed.data!==expected[field])throw new SourceFailure('scope-mismatch');(paths[field]??=[]).push([...path,field]);
     }
     // No response echoes are synthesized from the request. Currency must be
@@ -68,8 +68,8 @@ export function projectMarketOverviewDistribution(input:Params&{scope:MarketAnal
     if(demand){const d=obj(data);empty=(d.items as unknown[]).length===0&&Object.entries(d).filter(([key])=>!['items','marketplace','nodeIdPath','nodeId','month','currency'].includes(key)).every(([,v])=>v===null||v===undefined);
       if(!empty)issues.push({code:'demand-series-not-normalized',retryable:false});
     }else{distribution=normalizeMarketOverviewDistribution(operation,payload,currencyKnown?{currency:scope.currency}:{});empty=distribution.status==='empty';issues.push(...distribution.issues.map(code=>({code,retryable:false})));}
-    const evidence=createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month},responseIdentityPaths:paths,payload,
-      fetchedAt:input.fetchedAt,observationPeriod:{kind:'calendar-months',fromMonth:month,toMonth:month},units,
+    const evidence=createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month})},responseIdentityPaths:paths,payload,
+      fetchedAt:input.fetchedAt,observationPeriod:scope.overviewPeriod?{kind:'trailing-days',days:30,asOf:input.fetchedAt}:{kind:'calendar-months',fromMonth:month,toMonth:month},units,
       coverage:{receivedCount:demand?(obj(data).items as unknown[]).length:rows.length,expectedCount:null,truncation:{status:'unknown',reason:'来源返回分组，未证明覆盖整个类目'}}},input.now??new Date());
     if(evidence.responseIdentity.nodeIdPath.status!=='verified'||evidence.responseIdentity.month.status!=='verified')issues.push({code:'identity-request-bound',retryable:false});
     return {...base,status:empty?'empty':issues.length?'partial':'ready',evidence,distribution,issues};

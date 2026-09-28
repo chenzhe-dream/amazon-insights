@@ -1,3 +1,4 @@
+import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 export {projectOverviewProductDemand} from '../domain/market-research/overview-product-demand';
 import {OverviewExternalInputSchema,MarketOverviewExternalDataSchema,type MarketOverviewExternalData} from '../../shared/market-overview-external';
 import {MarketInputRecordSchema} from '../../shared/market-analysis-contracts';
@@ -31,9 +32,9 @@ export function createOverviewExternalStep(context:PostgresQueryContext,connecto
  const data={collection:'overview-external',stage,...result.result,sourceRef:`market-source:${digest(result.evidence)}`},factory={scope:view.run.scope,kind:'overview' as const,sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'overview-external/v1',collectedAt:result.evidence.fetchedAt,expectedRecordIds:['external'],records:[{id:'external',scope:view.run.scope,data:json(data)}]},snapshot=createMarketInputSnapshot(factory);
  return {kind:'settlement',value:{sources:[json(result.proposal)],inputs:[json(factory)],outcome:{status:result.result.receivedCount?'succeeded':'empty',output:json({...data,inputSnapshotId:snapshot.snapshotId})}}};
 };}
-export async function readOverviewExternal(context:PostgresQueryContext,view:MarketModuleRunView,catalogAttemptId:string,attemptIds:string[],signal:AbortSignal,baseSources:readonly MarketSourceEvidence[]){
+export async function readOverviewExternal(context:PostgresQueryContext,view:MarketModuleRunView,catalogAttemptId:string,attemptIds:string[],signal:AbortSignal,baseSources:readonly MarketSourceEvidence[],readerActor?:MarketExecutionActor){
  if(obj(view.run.params).flow!=='market-overview-flow/rules-v4')invalid();
- const requestedAsins=overviewExternalAsins(baseSources,view.run.scope),snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
+ const requestedAsins=overviewExternalAsins(baseSources,view.run.scope),snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
  const series=():MarketOverviewExternalData['salesTrend']=>({status:'not-collected',points:[],sourceRefs:[],errorCode:null});
  const sales=series(),prices=series(),profits:MarketOverviewExternalData['asinProfits']={status:'not-collected',items:{},requestedAsins,missingAsins:requestedAsins,sourceRefs:[],errorCode:null};
  const keys=new Set<string>(),profitPages=new Map<number,number>(),profitTotal=new Map<number,number>();let profitFailed=false,profitCollected=false;
@@ -47,7 +48,7 @@ export async function readOverviewExternal(context:PostgresQueryContext,view:Mar
   const output=obj(attempt.output),ref=String(output.sourceRef),source=await snapshots.findSource({actor,studyId:view.run.scope.researchId,id:ref}),saved=await snapshots.findInput({actor,studyId:view.run.scope.researchId,id:String(output.inputSnapshotId)});
   if(!source||!saved)invalid();same(source.evidence.scope,view.run.scope);same(ref,`market-source:${digest(source.evidence)}`);
   const evidence=source.evidence,operation=stage.kind==='profits'?'competitor_lookup':'category_trend';
-  if(evidence.operation!==operation||evidence.provider!==(stage.kind==='profits'?'sellerSprite':'sorftime')||evidence.requestIdentity.nodeIdPath!==view.run.scope.nodeIdPath||evidence.requestIdentity.month!==view.run.scope.toMonth||stage.kind==='profits'&&evidence.requestIdentity.page!==stage.page)invalid();
+  if(evidence.operation!==operation||evidence.provider!==(stage.kind==='profits'?'sellerSprite':'sorftime')||evidence.requestIdentity.nodeIdPath!==view.run.scope.nodeIdPath||evidence.requestIdentity.month!==(stage.kind==='profits'&&view.run.scope.overviewPeriod?undefined:view.run.scope.toMonth)||stage.kind==='profits'&&evidence.requestIdentity.page!==stage.page)invalid();
   if(stage.kind!=='profits'&&evidence.units.value?.rawUnit!==(stage.kind==='sales'?'SalesCount':'AvgPrice'))invalid();
   const result=projectOverviewExternal(stage,evidence.payload,view.run.scope.toMonth),data={collection:'overview-external',stage,...result,sourceRef:ref};same(output,{...data,inputSnapshotId:saved.snapshot.snapshotId});
   same(saved.snapshot,createMarketInputSnapshot({scope:view.run.scope,kind:'overview',sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'overview-external/v1',collectedAt:evidence.fetchedAt,expectedRecordIds:['external'],records:[{id:'external',scope:view.run.scope,data:json(data)}]}));

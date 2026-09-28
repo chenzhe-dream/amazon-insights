@@ -1,3 +1,4 @@
+import {overviewSourceMonth} from '../../../shared/market-overview-period';
 import {z} from 'zod';
 import {MarketAnalysisScopeSchema, type MarketAnalysisScope, type MarketJsonValue} from '../../../shared/market-analysis-contracts';
 import type {MarketSourceEvidence,MarketSourceUnit} from '../../../shared/market-source-contracts';
@@ -54,7 +55,7 @@ export function buildMarketOverviewSourceCatalog(input:{scope:MarketAnalysisScop
     const rebuilt=createMarketSourceEvidence({scope:source.scope,provider:source.provider,operation:source.operation,requestIdentity:source.requestIdentity,responseIdentityPaths:paths,payload:source.payload,
       fetchedAt:source.fetchedAt,observationPeriod:source.observationPeriod,units:source.units,coverage:source.coverage});equal(rebuilt,source);
     if(source.provider!=='sellerSprite'||!['market_research','market_research_statistics'].includes(source.operation)||source.requestIdentity.nodeIdPath!==scope.nodeIdPath||source.requestIdentity.marketplace!==scope.marketplace||Date.parse(source.fetchedAt)>Date.parse(cutoff))throw new TypeError('Unsupported overview source');
-    const month=source.requestIdentity.month;if(!month||month<scope.fromMonth||month>scope.toMonth)throw new TypeError('Overview source month is missing');
+    const month=overviewSourceMonth(source);if(!month||month<scope.fromMonth||month>scope.toMonth)throw new TypeError('Overview source month is missing');
     const key=`${month}/${source.operation}`;if(seen.has(key))throw new TypeError('Duplicate overview endpoint');seen.add(key);
     const payload=obj(source.payload);if(payload.isError===true||(payload.code!==undefined&&payload.code!=='OK'))throw new TypeError('Unsuccessful overview response');
     const data=obj(payload.data??payload),statistics=source.operation==='market_research_statistics';let row=data;
@@ -65,7 +66,7 @@ export function buildMarketOverviewSourceCatalog(input:{scope:MarketAnalysisScop
       else{if(matches.length!==1)throw new TypeError('Overview category row is ambiguous');row=matches[0];}
     }
     for(const [field,value] of Object.entries({marketplace:scope.marketplace,currency:scope.currency,nodeIdPath:scope.nodeIdPath,nodeId:scope.nodeIdPath.split(':').at(-1),month})){
-      if(row[field]!==undefined&&(field==='month'?String(row[field]).replaceAll('-',''):String(row[field]))!==(field==='month'?String(value).replaceAll('-',''):String(value)))throw new TypeError('Overview response row conflicts with scope');
+      if(!(field==='month'&&scope.overviewPeriod)&&row[field]!==undefined&&(field==='month'?String(row[field]).replaceAll('-',''):String(row[field]))!==(field==='month'?String(value).replaceAll('-',''):String(value)))throw new TypeError('Overview response row conflicts with scope');
     }
     const group=byMonth.get(month)??[];group.push({source,ref:`market-source:${digest(source)}`,row,statistics});byMonth.set(month,group);
   }
@@ -84,7 +85,7 @@ export function buildMarketOverviewSourceCatalog(input:{scope:MarketAnalysisScop
         const raw=row[field] as MarketJsonValue,value=numeric(raw),unit=source.units[field]??null;
         const period=source.observationPeriod;
         const verified=source.responseIdentity.nodeIdPath.status==='verified'&&source.responseIdentity.month.status==='verified';
-        const reason:Reason|null=value===null?'invalid-source':!expanded&&!verified?'invalid-source':period.kind!=='calendar-months'||period.fromMonth!==month||period.toMonth!==month?'period-incompatible':!validUnit(name,value,unit??undefined,scope)?'unit-unknown':null;
+        const reason:Reason|null=value===null?'invalid-source':!expanded&&!verified?'invalid-source':(scope.overviewPeriod?period.kind!=='trailing-days'||period.days!==30:period.kind!=='calendar-months'||period.fromMonth!==month||period.toMonth!==month)?'period-incompatible':!validUnit(name,value,unit??undefined,scope)?'unit-unknown':null;
         return [{sourceRef:ref,field,raw,value,unit,reason,...(expanded?{scopeBasis:verified?'response-verified' as const:'request-bound' as const}:{})}];
       });
       const valid=observations.filter(o=>o.reason===null),conflict=valid.some(o=>o.value!==valid[0].value||unitKey(o.unit)!==unitKey(valid[0].unit));

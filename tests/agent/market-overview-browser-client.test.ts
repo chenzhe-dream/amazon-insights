@@ -12,3 +12,8 @@ test('overview client rejects cross-scope reports and altered history versions w
     mode='study';await assert.rejects(createOverviewStudy({marketplace:'US',currency:'USD',nodeIdPath:'123:456',fromMonth:'2026-07',toMonth:'2026-08'},overviewStudyId),/范围不一致/);
   }finally{globalThis.fetch=saved;}
 });
+
+test('overview accepts the resolved path of a bare node without accepting another leaf',async()=>{
+ const saved=globalThis.fetch;let path='123:456';globalThis.fetch=async()=>Response.json({study:{id:overviewStudyId,scope:{...overviewScope,nodeIdPath:path},createdAt:'2026-09-12T00:00:00.000Z'}});
+ try{const input={marketplace:'US' as const,currency:'USD' as const,nodeIdPath:'456',fromMonth:overviewScope.fromMonth,toMonth:overviewScope.toMonth};assert.equal((await createOverviewStudy(input,overviewStudyId)).scope.nodeIdPath,'123:456');path='123:789';await assert.rejects(createOverviewStudy(input,overviewStudyId),/范围不一致/);}finally{globalThis.fetch=saved;}
+});

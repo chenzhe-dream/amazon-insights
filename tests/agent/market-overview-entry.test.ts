@@ -125,6 +125,13 @@ test('saved overview lookup is read-only and exact to organization, node, month 
   const response=await app.inject({method:'GET',url:`/v1/market-analysis/overview/saved?${new URLSearchParams(Object.entries(query).map(([key,value])=>[key,String(value)]))}`});
   assert.equal(response.statusCode,200,response.body);
   assert.deepEqual(response.json(),{runId:started.run.id,fromMonth:first.scope.fromMonth});
+  assert.deepEqual(await service.findSavedOverview(first.actor,{...query,overviewPeriod:'last30'}),{runId:null,fromMonth:null});
   const after=Number((await pg.pool.query('SELECT count(*) AS n FROM market_analysis_module_runs')).rows[0].n);
   assert.equal(after,before,'lookup must not create a study or analysis run');
+  const rollingScope={...first.scope,researchId:randomUUID(),fromMonth:first.scope.toMonth,overviewPeriod:'last30' as const};
+  await new PostgresMarketAnalysisSnapshotStore(first.context).createStudy({actor:first.actor,scope:rollingScope,idempotencyKey:randomUUID(),now:NOW});
+  const rolling=await service.startOverview(first.actor,rollingScope.researchId,PARAMS,randomUUID());
+  assert.equal((await service.findSavedOverview(first.actor,{...query,overviewPeriod:'last30'})).runId,rolling.run.id);
+  assert.equal((await service.findSavedOverview(first.actor,query)).runId,started.run.id);
+
 });

@@ -1,3 +1,4 @@
+import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 import {z} from 'zod';
 import {MarketInputRecordSchema} from '../../shared/market-analysis-contracts';
 import {MarketSemanticRecordSchema} from '../../shared/market-semantic-contracts';
@@ -21,7 +22,7 @@ const sameSet=(left:readonly string[],right:readonly string[])=>{if(new Set(left
 
 /** Named successful attempts are immutable history. Current-attempt fencing is
  * enforced by settlement, while historical reads remain valid after retries. */
-export async function readMarketOverviewSynthesisReport(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal){
+export async function readMarketOverviewSynthesisReport(context:PostgresQueryContext,view:MarketModuleRunView,definition:MarketStepDefinition,signal:AbortSignal,readerActor?:MarketExecutionActor){
  signal.throwIfAborted();const input=MarketOverviewSynthesisReportInputSchema.parse(definition.input);
  same({stepKey:definition.stepKey,kind:definition.kind,subject:definition.subject,input:definition.input,inputRefs:definition.inputRefs},marketOverviewSynthesisReportDefinition(input));
  if(view.run.moduleKind!=='overview')fail();
@@ -36,7 +37,7 @@ export async function readMarketOverviewSynthesisReport(context:PostgresQueryCon
  same(round.step.inputHash,digest(marketOverviewSynthesisRoundDefinition(roundInput)));
  same({sourceReportAttemptId:manifest.sourceReportAttemptId,basisAttemptIds:manifest.basisAttemptIds,childIds:manifest.childIds},
   {sourceReportAttemptId:roundInput.sourceReportAttemptId,basisAttemptIds:roundInput.basisAttemptIds,childIds:roundInput.childIds});
- const actor={organizationId:view.run.scope.organizationId,userId:view.run.createdBy},studyId=view.run.scope.researchId,moduleRunId=view.run.id;
+ const actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy},studyId=view.run.scope.researchId,moduleRunId=view.run.id;
  const snapshots=new PostgresMarketAnalysisSnapshotStore(context),saved=await snapshots.findInput({actor,studyId,id:input.inputSnapshotId});if(!saved)fail();
  if(saved.snapshot.kind!=='overview'||saved.snapshot.records.length!==1||saved.snapshot.expectedRecordIds.length!==1||saved.snapshot.expectedRecordIds[0]!==node.nodeId)fail();same(saved.snapshot.scope,view.run.scope);
  const semantic=MarketSemanticRecordSchema.parse(obj(saved.snapshot.records[0].data).semantic);

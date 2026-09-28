@@ -1,3 +1,4 @@
+import {overviewSourceMonth} from '../../../shared/market-overview-period';
 import type {MarketAnalysisScope} from '../../../shared/market-analysis-contracts';
 import type {MarketSourceEvidence} from '../../../shared/market-source-contracts';
 import {MarketOverviewOriginalFieldsSchema} from '../../../shared/market-overview-original-fields';
@@ -32,7 +33,7 @@ const definition=(head:string,neu:string):Record<string,{unit:Unit;primary:strin
 /** Reads only the exact saved monthly aggregate endpoints; the caller has already replayed their receipts. */
 export function projectMarketOverviewOriginalFields(input:{scope:MarketAnalysisScope;parameters:Parameters;sources:readonly MarketSourceEvidence[]}){
   const {scope,parameters}=input,month=scope.toMonth;
-  const source=(operation:string)=>input.sources.find(s=>s.provider==='sellerSprite'&&s.operation===operation&&s.scope.organizationId===scope.organizationId&&s.scope.researchId===scope.researchId&&s.scope.marketplace===scope.marketplace&&s.scope.nodeIdPath===scope.nodeIdPath&&s.scope.currency===scope.currency&&s.requestIdentity.marketplace===scope.marketplace&&s.requestIdentity.nodeIdPath===scope.nodeIdPath&&s.requestIdentity.month===month&&s.observationPeriod.kind==='calendar-months'&&s.observationPeriod.fromMonth===month&&s.observationPeriod.toMonth===month);
+  const source=(operation:string)=>input.sources.find(s=>s.provider==='sellerSprite'&&s.operation===operation&&s.scope.organizationId===scope.organizationId&&s.scope.researchId===scope.researchId&&s.scope.marketplace===scope.marketplace&&s.scope.nodeIdPath===scope.nodeIdPath&&s.scope.currency===scope.currency&&s.requestIdentity.marketplace===scope.marketplace&&s.requestIdentity.nodeIdPath===scope.nodeIdPath&&overviewSourceMonth(s)===month&&(scope.overviewPeriod==='last30'?s.observationPeriod.kind==='trailing-days'&&s.observationPeriod.days===30:s.observationPeriod.kind==='calendar-months'&&s.observationPeriod.fromMonth===month&&s.observationPeriod.toMonth===month));
   const research=source('market_research'),statistics=source('market_research_statistics');
   const row=(s:MarketSourceEvidence|undefined)=>{const data=obj(obj(s?.payload).data??s?.payload);if(s?.operation==='market_research'){
     const nodeId=scope.nodeIdPath.split(':').at(-1);

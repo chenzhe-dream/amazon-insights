@@ -27,11 +27,11 @@ test('bare category node resolves to the unique canonical path', async () => {
   assert.deepEqual(calls[0]?.input, { request: { marketplace: 'US', keyword: '1063294', month: '202608' } });
 });
 
-test('ambiguous category node is rejected instead of selecting the first result', async () => {
-  await assert.rejects(() => resolveMarketNodePath({
+test('same leaf with multiple paths follows the original first matching result', async () => {
+  const path=await resolveMarketNodePath({
     marketplace: 'US', nodeId: '1063294', month: '2026-08', organizationId: 'org-a', jobId: 'job-a',
     connector: connector(() => ({ data: [
       { nodeIdPath: '123:1063294' }, { nodeIdPath: '456:1063294' },
     ] })),
-  }), error => error instanceof Error && error.message === 'scope-mismatch');
+  });assert.equal(path,'123:1063294');
 });

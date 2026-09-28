@@ -27,7 +27,7 @@ export async function resolveMarketNodePath(input: MarketNodePathResolutionInput
   if (input.connector.id !== 'sellerSprite') throw new MarketNodePathResolutionError('source-mismatch');
   const response = await input.connector.execute({
     operation: 'product_node',
-    input: { request: { marketplace: input.marketplace, keyword: input.nodeId, month: input.month.replaceAll('-', '') } },
+    input: { request: { marketplace: input.marketplace, keyword: input.nodeId, ...(input.month==='last30'?{}:{month: input.month.replaceAll('-', '')}) } },
     signal: input.signal,
     governorScope: { organizationId: input.organizationId, jobId: input.jobId },
   });
@@ -39,6 +39,6 @@ export async function resolveMarketNodePath(input: MarketNodePathResolutionInput
     .filter(row => /^\d+(?::\d+)*$/.test(String(row.nodeIdPath ?? '')))
     .filter(row => String(row.nodeIdPath).split(':').at(-1) === input.nodeId);
   const paths = new Set(matches.map(row => String(row.nodeIdPath)));
-  if (paths.size !== 1) throw new MarketNodePathResolutionError(paths.size === 0 ? 'empty' : 'scope-mismatch');
+  if (!paths.size) throw new MarketNodePathResolutionError('empty');
   return z.string().regex(/^\d+(?::\d+)*$/).parse([...paths][0]);
 }

@@ -80,3 +80,19 @@ test("a cancelled collection does not return a successful report",async()=>{
   const controller=new AbortController();controller.abort();
   await assert.rejects(()=>collectMarketOverview({scope,...actor,signal:controller.signal,connector:connector(()=>research())}));
 });
+
+test("multiple paths for the exact same node use the original first matching path",async()=>{
+ const calls:ConnectorRequest[]=[];
+ const result=await collectMarketOverview({scope:{...scope,nodeQuery:'456'},...actor,connector:connector(request=>{calls.push(request);
+ return request.operation==='product_node'?{data:[{nodeIdPath:'123:999'},{nodeIdPath:'123:456'},{nodeIdPath:'987:456'}]}:request.operation==='market_research'?research():{data:{brands:12}};
+ })});
+ assert.equal(result.nodeIdPath,'123:456');
+ assert.ok(calls.slice(1).every(r=>(r.input.request as any).nodeIdPath==='123:456'));
+});
+
+test("last30 omits the provider month instead of substituting the previous calendar month",async()=>{
+ const calls:ConnectorRequest[]=[];
+ const result=await collectMarketOverview({scope:{...scope,nodeQuery:'456',month:'last30'},...actor,connector:connector(request=>{calls.push(request);return request.operation==='product_node'?{data:[{nodeIdPath:'123:456'}]}:request.operation==='market_research'?research():{data:{brands:12}};})});
+ assert.equal(result.scope.month,'last30');assert.equal(calls.length,3);
+ assert.ok(calls.every(r=>!Object.hasOwn(r.input.request as object,'month')));
+});

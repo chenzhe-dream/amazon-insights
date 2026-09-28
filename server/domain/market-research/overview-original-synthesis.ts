@@ -1,3 +1,4 @@
+import {overviewSourceMonth} from '../../../shared/market-overview-period';
 import {projectOverviewProductDemand} from './overview-product-demand';
 import type {MarketOverviewExternalData} from '../../../shared/market-overview-external';
 import type {MarketAnalysisScope} from '../../../shared/market-analysis-contracts';
@@ -22,7 +23,7 @@ const moneyKey=(key:string)=>/price|revenue|fba$/i.test(key)&&!/^fbaProportion$/
 export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalysisScope;parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12};sources:readonly MarketSourceEvidence[];industryDemand?:MarketOverviewIndustryDemand;externalData?:MarketOverviewExternalData}){
  const {scope,parameters}=input,month=scope.toMonth;
  const gaps=new Set<string>(),refs=new Set<string>();
- const source=(operation:string)=>input.sources.find(s=>s.provider==='sellerSprite'&&s.operation===operation&&s.scope.organizationId===scope.organizationId&&s.scope.researchId===scope.researchId&&s.scope.marketplace===scope.marketplace&&s.scope.nodeIdPath===scope.nodeIdPath&&s.scope.currency===scope.currency&&s.requestIdentity.marketplace===scope.marketplace&&s.requestIdentity.nodeIdPath===scope.nodeIdPath&&s.requestIdentity.month===month&&s.observationPeriod.kind==='calendar-months'&&s.observationPeriod.fromMonth===month&&s.observationPeriod.toMonth===month);
+ const source=(operation:string)=>input.sources.find(s=>s.provider==='sellerSprite'&&s.operation===operation&&s.scope.organizationId===scope.organizationId&&s.scope.researchId===scope.researchId&&s.scope.marketplace===scope.marketplace&&s.scope.nodeIdPath===scope.nodeIdPath&&s.scope.currency===scope.currency&&s.requestIdentity.marketplace===scope.marketplace&&s.requestIdentity.nodeIdPath===scope.nodeIdPath&&overviewSourceMonth(s)===month&&(scope.overviewPeriod==='last30'?s.observationPeriod.kind==='trailing-days'&&s.observationPeriod.days===30:s.observationPeriod.kind==='calendar-months'&&s.observationPeriod.fromMonth===month&&s.observationPeriod.toMonth===month));
  const remember=(s:MarketSourceEvidence)=>refs.add(`market-source:${digest(s)}`);
  const currencyValid=(s:MarketSourceEvidence,r:Record<string,unknown>)=>s.responseIdentity.currency.echoes.every(e=>e.value===scope.currency)&&(r.currency===undefined||r.currency===scope.currency);
  const sanitize=(raw:Record<string,unknown>,s:MarketSourceEvidence,label:string):Record<string,unknown>=>{

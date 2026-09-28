@@ -34,7 +34,7 @@ export class MarketOverviewReportService{
       for(const a of view.attempts){
         const step=view.steps.find(s=>s.id===a.stepId);if(!step||step.kind!=='report'||!['succeeded','empty'].includes(a.status)||(a.output as {superseded?:boolean})?.superseded)continue;
         const reader=(step.input as {phase?:string})?.phase==='overview-synthesis-report'?readMarketOverviewSynthesisReport:readMarketOverviewReport;
-        const resolved=await reader(this.context,view,step,new AbortController().signal),{report}=resolved;
+        const resolved=await reader(this.context,view,step,new AbortController().signal,input.actor),{report}=resolved;
         if(digest(report)!==digest(a.output))throw new MarketExecutionConflictError();
         if(a.id===detailAttemptId)detail=resolved;
         history.push({attemptId:a.id,current:current.has(step.stepKey)&&step.latestAttemptId===a.id,report});

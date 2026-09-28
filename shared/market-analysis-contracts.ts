@@ -52,7 +52,8 @@ export const MarketAnalysisScopeSchema = z.object({
   fromMonth: month,
   toMonth: month,
   currency: MarketCurrencySchema,
-}).strict().refine(value => value.fromMonth <= value.toMonth, "Research period is reversed").refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
+  overviewPeriod: z.literal('last30').optional(),
+}).strict().refine(value=>!value.overviewPeriod||value.fromMonth===value.toMonth,'Rolling overview uses one historical cutoff').refine(value => value.fromMonth <= value.toMonth, "Research period is reversed").refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
 export type MarketAnalysisScope = z.infer<typeof MarketAnalysisScopeSchema>;
 
 export const MarketInputRecordSchema = z.object({

@@ -1,3 +1,4 @@
+import {overviewPeriodLabel} from '../shared/market-overview-period';
 import React from 'react';
 import type {z} from 'zod';
 import type {MarketOverviewReportEntrySchema} from '../shared/market-overview-report-contracts';
@@ -14,7 +15,7 @@ const formulas:Record<string,string>={
 export function MarketOverviewRuleExplanation({entry,semantic}:{entry:z.infer<typeof MarketOverviewReportEntrySchema>;semantic:Semantic|null}){
  const r=entry.report,versions=[...new Set(semantic?.metrics.map(m=>m.formulaVersion)??[])];
  return <details className="market-research-boundaries"><summary>本报告的分析规则</summary>
-  <p>统计范围：{r.scope.marketplace} · 类目 {r.scope.nodeIdPath} · {r.scope.fromMonth} 至 {r.scope.toMonth}；数据截止 {r.dataCutoffAt}。</p>
+  <p>统计范围：{r.scope.marketplace} · 类目 {r.scope.nodeIdPath} · {overviewPeriodLabel(r.scope)}；数据截止 {r.dataCutoffAt}。</p>
   <p>规则版本：{r.versions.rule}；执行版本：{r.versions.planner}。以下说明对应已保存报告，历史读取不重新采集。</p>
   <p>来源缺失、范围冲突和单位未确认均保留缺失原因，不补零。模型只解释本报告绑定的事实，不能补造数值；模型失败时保留数字和成功结果。</p>
   {semantic?.analysisBrief&&<p>{semantic.analysisBrief.scopeStatement}</p>}

@@ -1,3 +1,4 @@
+import {overviewSourceMonth} from '../../shared/market-overview-period';
 import {ResourceGovernorAdmissionError,type LocalAdmission} from '../db/concurrency-control-repository';
 import {performance} from 'node:perf_hooks';
 import {z} from 'zod';
@@ -102,7 +103,7 @@ export function pickCategoryKeywords(rows: CategoryKeywordRow[], seed: string) {
 
 
 export function overviewDemandSeed(sources:readonly MarketSourceEvidence[],scope:MarketAnalysisScope):string|null{
- for(const source of sources){if(source.operation!=='market_research'||source.requestIdentity.month!==scope.toMonth)continue;const row=list(source.payload).find(r=>r.nodeIdPath===scope.nodeIdPath||String(r.nodeId??'')===scope.nodeIdPath.split(':').at(-1));if(!row)continue;const seed=String(row.nodeLabelPath??row.nodeLabelName??row.name??'').split(':').filter(Boolean).at(-1)?.replace(/\s+/g,' ').trim();if(seed&&!/^\d+$/.test(seed))return seed;}return null;
+ for(const source of sources){if(source.operation!=='market_research'||overviewSourceMonth(source)!==scope.toMonth)continue;const row=list(source.payload).find(r=>r.nodeIdPath===scope.nodeIdPath||String(r.nodeId??'')===scope.nodeIdPath.split(':').at(-1));if(!row)continue;const seed=String(row.nodeLabelPath??row.nodeLabelName??row.name??'').split(':').filter(Boolean).at(-1)?.replace(/\s+/g,' ').trim();if(seed&&!/^\d+$/.test(seed))return seed;}return null;
 }
 export async function collectOverviewIndustryDemand(input:{scope:MarketAnalysisScope;seed:string|null;jobId:string;connectors:Pick<ConnectorMap,'sellerSprite'|'sorftime'>;signal?:AbortSignal;timeoutMs?:number;now?:()=>Date}){
  const scope=MarketAnalysisScopeSchema.parse(input.scope),now=input.now??(()=>new Date()),sources:MarketSourceEvidenceInput[]=[],evidence:MarketSourceEvidence[]=[],issues:MarketOverviewIndustryDemand['issues']=[],series:MarketOverviewIndustryDemand['series']=[];
