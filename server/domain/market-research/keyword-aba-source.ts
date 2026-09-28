@@ -27,12 +27,31 @@ function freeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
 }
+function failureFieldTypes(rawPayload: MarketJsonValue | null, issues: readonly z.core.$ZodIssue[]) {
+  // rawPayload has already passed plain-JSON admission. Only follow schema issue paths;
+  // never retain provider values, prose, keyword text or arbitrary provider keys.
+  const atPath = (path: readonly PropertyKey[]): unknown => path.reduce<unknown>((value, key) =>
+    value !== null && typeof value === 'object' && Object.hasOwn(value, key)
+      ? (value as Record<PropertyKey, unknown>)[key] : undefined, rawPayload);
+  return issues.slice(0, 12).filter(issue => issue.code === 'invalid_type').map(issue => {
+    const value = atPath(issue.path);
+    const actualType = (value === undefined ? 'missing' : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value) as
+      NonNullable<MarketKeywordAbaFailureDiagnostic['fieldTypes']>[number]['actualType'];
+    const dataPoints = atPath(['keywords', issue.path[1], 'data_points']);
+    const historyPoints: NonNullable<MarketKeywordAbaFailureDiagnostic['fieldTypes']>[number]['historyPoints'] = dataPoints === undefined ? 'missing' : dataPoints === 0 ? 'zero' :
+      typeof dataPoints === 'number' && Number.isSafeInteger(dataPoints) && dataPoints > 0 ? 'positive' : 'invalid';
+    return { path: issue.path.slice(0, 12).map(segment => typeof segment === 'number' ? segment : String(segment).slice(0, 64)), actualType,
+      ...(issue.path[0] === 'keywords' && typeof issue.path[1] === 'number' ? { historyPoints } : {}) };
+  });
+}
 function failed(code: MarketKeywordAbaSourceFailure['failure']['code'], rawPayload: MarketJsonValue | null = null,
   stage: MarketKeywordAbaFailureDiagnostic['stage'] = code === 'invalid-request' ? 'request-validation' : 'payload-validation',
   issues: readonly z.core.$ZodIssue[] = []): MarketKeywordAbaSourceFailure {
   // Schema paths contain fixed field names and row/array indices; never include issue messages/input.
+  const fieldTypes = stage === 'payload-validation' ? failureFieldTypes(rawPayload, issues) : [];
   const diagnostic: MarketKeywordAbaFailureDiagnostic = { stage, issues: issues.slice(0, 12).map(issue => ({ code: issue.code,
-    path: issue.path.slice(0, 12).map(segment => typeof segment === 'number' ? segment : String(segment).slice(0, 64)) })), truncated: issues.length > 12 };
+    path: issue.path.slice(0, 12).map(segment => typeof segment === 'number' ? segment : String(segment).slice(0, 64)) })), truncated: issues.length > 12,
+    ...(fieldTypes.length ? { fieldTypes } : {}) };
   return freeze({ schemaVersion: MARKET_KEYWORD_ABA_SOURCE_VERSION, status: 'failed', operation, failure: { code }, rawPayload, diagnostic });
 }
 

@@ -60,6 +60,12 @@ export interface MarketKeywordAbaFailureDiagnostic {
   readonly stage: 'request-validation' | 'transport' | 'response-identity' | 'payload-validation' | 'evidence-admission';
   readonly issues: readonly Readonly<{ code: string; path: readonly (string | number)[] }>[];
   readonly truncated: boolean;
+  /** Structural facts only: distinguish absent history from a malformed provider response. */
+  readonly fieldTypes?: readonly Readonly<{
+    path: readonly (string | number)[];
+    actualType: 'missing' | 'null' | 'array' | 'object' | 'string' | 'number' | 'boolean';
+    historyPoints?: 'missing' | 'zero' | 'positive' | 'invalid';
+  }>[];
 }
 export interface MarketKeywordAbaSourceFailure {
   readonly schemaVersion: typeof MARKET_KEYWORD_ABA_SOURCE_VERSION;

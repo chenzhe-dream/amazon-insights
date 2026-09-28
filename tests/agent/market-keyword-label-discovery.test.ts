@@ -14,7 +14,10 @@ const scope = { organizationId: 'test-org', researchId: 'aaaaaaaa-aaaa-4aaa-8aaa
 const date = '2026-09-01T00:00:00.000Z';
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const schemaDigest = (schema: z.ZodType) => {
-  const bytes = JSON.stringify(z.toJSONSchema(schema));
+  return jsonDigest(z.toJSONSchema(schema));
+};
+const jsonDigest = (value: unknown) => {
+  const bytes = JSON.stringify(value);
   return [createHash('sha256').update(bytes).digest('hex'), Buffer.byteLength(bytes)] as const;
 };
 const unknown = { status: 'unknown', reason: 'insufficient-evidence', evidence: [] } as const;
@@ -60,9 +63,31 @@ function reject(f: ReturnType<typeof fixture>, code: string) {
     (error: unknown) => error instanceof z.ZodError && error.issues.some(issue => issue.message === code));
 }
 
-test('legacy keyword schema JSON bytes remain identical to the pre-discovery runtime identity', () => {
-  assert.deepEqual(schemaDigest(contracts.MarketKeywordSemanticsLegacyInputSchema), ['38fd3a836c09a2b564ae4f2cb20f78d94f0129b53c68c4adce16f7423bc56284', 4934]);
+test('legacy keyword protocol retains the old US identity apart from the explicit multi-site expansion', () => {
+  // 2cec2947 expanded the common scope to eight sites and matching currencies.
+  // Discovery must not alter any other legacy JSON-schema field or its output.
+  const inputSchema = z.toJSONSchema(contracts.MarketKeywordSemanticsLegacyInputSchema);
+  assert.deepEqual(schemaDigest(contracts.MarketKeywordSemanticsLegacyInputSchema), ['2f39c35c1f3114750d1da14810e86b64485f4b3b0222ae1297c8829ffb75ea9b', 4995]);
+  const scopeProperties = (inputSchema.properties!.scope as { properties: Record<string, unknown> }).properties;
+  assert.deepEqual(scopeProperties.marketplace, { type: 'string', enum: ['US', 'UK', 'DE', 'FR', 'IT', 'ES', 'JP', 'CA'] });
+  assert.deepEqual(scopeProperties.currency, { type: 'string', enum: ['USD', 'GBP', 'EUR', 'JPY', 'CAD'] });
+  scopeProperties.marketplace = { type: 'string', const: 'US' };
+  scopeProperties.currency = { type: 'string', const: 'USD' };
+  assert.deepEqual(jsonDigest(inputSchema), ['38fd3a836c09a2b564ae4f2cb20f78d94f0129b53c68c4adce16f7423bc56284', 4934]);
   assert.deepEqual(schemaDigest(contracts.MarketKeywordSemanticsLegacyOutputSchema), ['a56411e4fc55c3740eb41a352900456944decfb860f2e95163944daf77576de0', 10328]);
+});
+
+test('legacy input accepts old US requests and the expanded matching site currencies only', () => {
+  const { input } = fixture();
+  assert.deepEqual(contracts.MarketKeywordSemanticsLegacyInputSchema.parse(input), input);
+  const sites = [['US', 'USD'], ['UK', 'GBP'], ['DE', 'EUR'], ['FR', 'EUR'], ['IT', 'EUR'], ['ES', 'EUR'], ['JP', 'JPY'], ['CA', 'CAD']] as const;
+  for (const [marketplace, currency] of sites) {
+    const request = { ...input, scope: { ...input.scope, marketplace, currency } };
+    assert.equal(contracts.MarketKeywordSemanticsLegacyInputSchema.safeParse(request).success, true, marketplace);
+    const wrongCurrency = currency === 'USD' ? 'EUR' : 'USD';
+    assert.equal(contracts.MarketKeywordSemanticsLegacyInputSchema.safeParse({ ...request, scope: { ...request.scope, currency: wrongCurrency } }).success, false, `${marketplace}/${wrongCurrency}`);
+  }
+  assert.equal(contracts.MarketKeywordSemanticsLegacyInputSchema.safeParse({ ...input, scope: { ...input.scope, marketplace: 'IN', currency: 'INR' } }).success, false);
 });
 
 test('discovery accepts source-grounded W1 and W4 labels while leaving W2 and W3 unknown', () => {

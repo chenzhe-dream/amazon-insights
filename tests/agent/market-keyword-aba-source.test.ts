@@ -113,3 +113,38 @@ test('ABA history alignment failure identifies the row without admitting invalid
   assert.deepEqual(result.diagnostic.issues, [{ code: 'custom', path: ['keywords', 0] }]);
   assert.equal(result.diagnostic.stage, 'payload-validation');
 });
+
+test('ABA type diagnostics distinguish absent, null and invalid arrays without retaining source values', () => {
+  const malformed = {
+    keyword: 'floor lamps', data_points: 0,
+    dates: null, volumes: 'provider-private-message', ranks: {}, top3_click_shares: false,
+  };
+  const result = normalize(input([malformed]));
+  assert.equal(result.status, 'failed');
+  if (result.status !== 'failed') return;
+  assert.deepEqual(result.diagnostic.fieldTypes, [
+    { path: ['keywords', 0, 'dates'], actualType: 'null', historyPoints: 'zero' },
+    { path: ['keywords', 0, 'volumes'], actualType: 'string', historyPoints: 'zero' },
+    { path: ['keywords', 0, 'ranks'], actualType: 'object', historyPoints: 'zero' },
+    { path: ['keywords', 0, 'top3_click_shares'], actualType: 'boolean', historyPoints: 'zero' },
+    { path: ['keywords', 0, 'top3_conversion_shares'], actualType: 'missing', historyPoints: 'zero' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result.diagnostic), /provider-private-message|floor lamps/);
+});
+
+test('ABA type diagnostics classify history counts and remain bounded without changing rejection', () => {
+  for (const [dataPoints, expected] of [[1, 'positive'], [undefined, 'missing'], [null, 'invalid'], [-1, 'invalid'], ['0', 'invalid']] as const) {
+    const sourceRow = { ...row(), data_points: dataPoints, dates: null };
+    if (dataPoints === undefined) delete (sourceRow as { data_points?: unknown }).data_points;
+    const result = normalize(input([sourceRow]));
+    assert.equal(result.status, 'failed');
+    if (result.status !== 'failed') continue;
+    assert.equal(result.diagnostic.fieldTypes?.find(field => field.path.at(-1) === 'dates')?.historyPoints, expected);
+  }
+  const result = normalize(input([{ ...row(), volumes: Array(40).fill('private-invalid-count') }]));
+  assert.equal(result.status, 'failed');
+  if (result.status !== 'failed') return;
+  assert.equal(result.diagnostic.fieldTypes?.length, 12);
+  assert.ok(JSON.stringify(result.diagnostic).length < 5000);
+  assert.doesNotMatch(JSON.stringify(result.diagnostic), /private-invalid-count/);
+});

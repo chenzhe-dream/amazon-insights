@@ -11,6 +11,8 @@
 .market-research-fields label { display: grid; align-content: start; gap: 7px; font-size: 13px; font-weight: 600; }
 .market-research-fields input, .market-research-fields select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; border: 1px solid #ccd3dd; border-radius: 8px; padding: 9px 11px; color: inherit; background: #fff; font: inherit; }
 .market-research-fields input[readonly] { background: #f4f6f8; }
+.market-keyword-page .market-research-fields label:has(input[type="checkbox"]) { display: flex; align-items: center; align-self: end; min-height: 40px; }
+.market-keyword-page .market-research-fields input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; flex: 0 0 auto; }
 .market-research-note { color: #5e6b7c; font-size: 13px; }
 .market-research-error { background: #fff0ed; border: 1px solid #e4aaa0; color: #9d3423; padding: 12px; border-radius: 8px; }
 .market-research-body { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 20px; align-items: start; }

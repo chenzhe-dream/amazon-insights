@@ -10,8 +10,8 @@ function monthDate(value: string): Date | undefined {
 }
 
 /** UI dates are local calendar months; the API continues to receive YYYY-MM. */
-export function MarketShapeMonthPicker({label, value, max, disabled, onChange}: {
-  label: string; value: string; max: string; disabled?: boolean; onChange: (month: string) => void;
+export function MarketShapeMonthPicker({label, value, min = '2000-01', max, disabled, onChange}: {
+  label: string; value: string; min?: string; max: string; disabled?: boolean; onChange: (month: string) => void;
 }) {
   const id = useId();
   const picker = useRef<DatePicker>(null);
@@ -35,7 +35,7 @@ export function MarketShapeMonthPicker({label, value, max, disabled, onChange}: 
         const input = event?.target;
         if (!(input instanceof HTMLInputElement)) return;
         const raw = input.value;
-        input.setCustomValidity(raw && (!monthDate(raw) || raw > max) ? `请输入不晚于 ${max} 的有效月份（YYYY-MM）` : '');
+        input.setCustomValidity(raw && (!monthDate(raw) || raw < min || raw > max) ? `请输入 ${min} 至 ${max} 之间的有效月份（YYYY-MM）` : '');
       }}
       onCalendarClose={clearValidity}
       dateFormat="yyyy-MM"
@@ -50,6 +50,7 @@ export function MarketShapeMonthPicker({label, value, max, disabled, onChange}: 
       strictParsing
       required
       disabled={disabled}
+      minDate={monthDate(min)}
       maxDate={maxDate}
       calendarClassName="shape-month-calendar"
       popperClassName="shape-month-popper"

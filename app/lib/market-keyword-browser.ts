@@ -10,11 +10,19 @@ export {retryThemeSteps as retryKeywordSteps, cancelThemeRun as cancelKeywordRun
 
 const revisionEntry = MarketKeywordRevisionEntrySchema;
 const readRevision = z.object({revision:revisionEntry}).strict();
+class KeywordHttpError extends Error {
+ constructor(message:string,readonly status:number){super(message);}
+}
+/** Read-only recovery: never resubmit a collection or retry an invalid/authenticated response. */
+export function keywordReadRetryDelay(error:unknown,consecutiveFailures:number):number|null {
+ const temporary=error instanceof TypeError||(error instanceof KeywordHttpError&&(error.status===408||error.status===429||error.status>=500));
+ return temporary&&consecutiveFailures>=1&&consecutiveFailures<=5?Math.min(2000*2**(consecutiveFailures-1),30000):null;
+}
 async function request<T>(path:string,schema:z.ZodType<T>,init:RequestInit={}){
  init.signal?.throwIfAborted();
  const response=await localAgentFetch(`/v1/market-analysis/${path}`,{...init,cache:'no-store'});
- const body:unknown=await response.json().catch(()=>null);init.signal?.throwIfAborted();
- if(!response.ok)throw new Error(localAgentErrorMessage(body,'关键词分析请求失败，请保留输入并重试。'));
+ const body:unknown=await response.json().catch(error=>{if(error instanceof SyntaxError)return null;throw error;});init.signal?.throwIfAborted();
+ if(!response.ok)throw new KeywordHttpError(localAgentErrorMessage(body,'关键词分析请求失败，请保留输入并重试。'),response.status);
  const parsed=schema.safeParse(body);if(!parsed.success)throw new Error('关键词分析响应格式不正确，未加载该结果。');return parsed.data;
 }
 const post=(body:unknown,key:string,signal?:AbortSignal):RequestInit=>({method:'POST',signal,headers:{'idempotency-key':MarketModuleIdSchema.parse(key)},body:JSON.stringify(body)});
