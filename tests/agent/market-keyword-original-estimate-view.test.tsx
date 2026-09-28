@@ -13,7 +13,7 @@ test('live report shows archive estimates as main output while preserving source
  assert.equal(MarketKeywordRunResponseSchema.safeParse(response).success,true);
  const html=renderToStaticMarkup(<MarketKeywordFactsReport facts={facts} semanticSkipped ruleReport={response.run.ruleReport} originalEstimate={originalEstimate}/>);
  assert.match(html,/原版估算评分/);assert.match(html,/S3、S5 固定 50/);assert.match(html,/统计月份未注明/);
- assert.match(html,/严格数据核对/);assert.match(html,/产品开发方向/);assert.match(html,/验证优先级/);
+ assert.doesNotMatch(html,/严格数据核对/);assert.match(html,/<summary>评分与开发建议<\/summary>/);assert.match(html,/产品开发方向/);assert.match(html,/验证优先级/);
  assert.match(html,/关键词事实明细/);assert.match(html,/class="card launch-block/);
 });
 test('saved manual report uses its own estimate and stale estimate is not displayed',()=>{

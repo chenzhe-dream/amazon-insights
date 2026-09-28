@@ -18,7 +18,7 @@ for(const scenario of ['keyword draft waits for matching latest revision when fa
  await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-keyword-browser-harness.tsx"></script></body></html>`)});if(!url.pathname.startsWith('/api/'))return route.continue();assert.equal(req.method(),'GET');
  if(url.pathname.includes('/keywords/revisions/')){revisionReads++;return route.fulfill(revisionFailure?{status:503,json:{error:'temporary revision failure'}}:{json:{revision:{ordinal:1,catalog}}});}
  return route.fulfill({json:current});});
- await page.goto(`${origin}/?keywordRun=${keywordRunId}`,{timeout:30000});await page.getByText('人工校对与分类编辑',{exact:true}).click();await page.getByText('任务进度、重试与取消',{exact:true}).click();
+ await page.goto(`${origin}/?keywordRun=${keywordRunId}`,{timeout:30000});await page.getByRole('button',{name:'人工校对与历史版本',exact:true}).click();await page.getByRole('button',{name:'任务管理',exact:true}).click();await page.getByText('人工校对与分类编辑',{exact:true}).click();await page.getByText('任务进度、重试与取消',{exact:true}).click();
  if(scenario==='keyword draft waits for matching latest revision when facts and history arrive together'){
   await page.getByText('当前词池尚未就绪，已保存的历史报告仍可查看。').waitFor();
   current=ready;await page.getByRole('button',{name:'刷新关键词状态'}).click();

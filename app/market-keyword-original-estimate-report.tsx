@@ -164,8 +164,11 @@ export function MarketKeywordOriginalEstimateReport({estimate,manual=false}:{est
  const {report}=estimate,clusters=report.synthesis.clusters;
  const score=(value:number)=>value.toLocaleString('zh-CN',{maximumFractionDigits:2});
  return <section aria-label="原版关键词业务报告" className="market-keyword-report-stack">
-  <section className="card launch-block"><div className="launch-section-body"><strong>原版规则 · 估算评分</strong><p>采集词池 {estimate.totalKeywordCount} 词，纳入有效样本 {report.scope.sampleCount} 词，缺少来源月搜索量排除 {estimate.excludedKeywordIds.length} 词。规模统计月份未注明，采用来源页月搜索量；参考月趋势值保留在上方事实明细。</p>{estimate.notes.map(note=><p className="market-research-note" key={note}>{note}</p>)}</div></section>
   {!manual&&<ArchiveDemandSummary report={report}/>}
+  <p className="market-research-note">按 {report.scope.sampleCount}/{estimate.totalKeywordCount} 个有效样本分析；规模统计月份未注明，采用来源页月搜索量。S3、S5 固定 50，S4 含中性估算；评分仅用于样本比较。</p>
+  <details className="market-insights-evidence"><summary>评分与开发建议</summary>
+   <div className="market-keyword-report-stack">
+    {estimate.notes.map(note=><p className="market-research-note" key={note}>{note}</p>)}
   <LaunchSection title="原版估算评分" description="S1 规模 · S2 增长 · S3 竞争 · S4 执行成本 · S5 价值空间">
    <p>分数是样本内相对排名，不是增长率或成功概率。PVS = 28% S1 + 22% S2 + 20% S3 + 18% S4 + 12% S5。</p>
    {clusters.length?<LaunchTable className="launch-conclusion-table kw-launch-section-table"><thead><tr><th>需求簇</th><th>S1 规模</th><th>S2 增长</th><th>S3 竞争</th><th>S4 执行成本</th><th>S5 价值空间</th><th>PVS</th><th>类型 / 象限</th><th>估算依据</th></tr></thead><tbody>{clusters.map(c=><tr key={c.id}><th>{c.name}</th><td>{score(c.computed.s1)}</td><td>{score(c.computed.s2)}</td><td>50 <small>估算</small></td><td>{score(c.computed.s4)} <small>含估算</small></td><td>50 <small>估算</small></td><td><strong>{score(c.computed.pvs)}</strong></td><td>{c.computed.demandClass} · {c.computed.quadrant}</td><td><details><summary>查看依据</summary><p>历史增长 {c.yoyGrowth===null?'缺失':formatPct(c.yoyGrowth*100)}；近三月增长 {c.growth3m===null?'缺失':formatPct(c.growth3m*100)}；来源推荐竞价 {c.ppcBid===null?'缺失，按原版中位数回退':score(c.ppcBid)}。</p><p>S2 缺一项增长时使用另一项；两项都缺时以 0 参与排名。S4 使用低竞价优先排名与中性 50 分各占一半。</p><p>评分占比 {formatPct(c.computed.sharePct)} 为归并前口径；归并后展示规模 {formatNum(c.monthlySearches)}。</p>{c.computed.warnings.map(w=><p key={w}>{w}</p>)}</details></td></tr>)}</tbody></LaunchTable>:<div className="pending-box">当前没有可评分的有效需求簇；来源明细和已保存报告继续保留。</div>}
@@ -176,5 +179,7 @@ export function MarketKeywordOriginalEstimateReport({estimate,manual=false}:{est
   <LaunchSection title="验证优先级" description="按原版估算等级给出验证方式与周期，不代表已验证可行">
    {report.validationPriorities.length?<LaunchTable><thead><tr><th>需求假设</th><th>优先级</th><th>验证方式</th><th>周期</th></tr></thead><tbody>{report.validationPriorities.map((r,i)=><tr key={i}><th>{r.hypothesis}</th><td>{r.tier}</td><td>{r.method}</td><td>{r.effort}</td></tr>)}</tbody></LaunchTable>:<div className="pending-box">当前没有符合原版筛选条件的验证项。</div>}
   </LaunchSection>
+   </div>
+  </details>
  </section>;
 }

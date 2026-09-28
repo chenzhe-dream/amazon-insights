@@ -5,7 +5,7 @@ import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createKeywordStudy, startKeywordRun, readKeywordRun, retryKeywordSteps, cancelKeywordRun, saveKeywordRevision, readKeywordRevision} from '../../app/lib/market-keyword-browser';
-import {MarketKeywordFactsReport, MarketKeywordRevisionReport} from '../../app/market-keyword-report';
+import {MarketKeywordFactsReport, MarketKeywordRevisionReport, MarketKeywordAuditReport} from '../../app/market-keyword-report';
 import {keywordPageRun, keywordRunId, keywordUserId} from './helpers/market-keyword-page-fixture';
 import {buildMarketKeywordRevision} from '../../server/domain/market-research/keyword-revision';
 import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
@@ -66,19 +66,19 @@ test('facts report separates reference/unspecified periods, growth fractions, ze
  const facts=keywordPageRun().run.facts!;facts.members[0].reference.yoyGrowth=.25;facts.members[0].reference.recentGrowth=-.1;
  facts.members[0].trend.months=[{month:'2026-08',searchVolume:{value:0,reason:null},searchRank:{value:null,reason:'missing'},recommendedBid:{value:2.4,reason:null},yoyGrowth:{value:.25,reason:null,baselineMonth:'2025-08',baselineValue:0,formulaVersion:'calendar-month-growth/v1'},recentGrowth:{value:-.1,reason:null,baselineMonth:'2026-07',baselineValue:0,formulaVersion:'calendar-month-growth/v1'}}];
  facts.pool.missingPages=[{seed:'shelf lamp',page:2}];facts.pool.memberLimitReached=true;facts.pool.conflictingMemberIds=['keyword:0'];
- const html=renderToStaticMarkup(React.createElement(MarketKeywordFactsReport,{facts}));
+ const html=renderToStaticMarkup(React.createElement(MarketKeywordAuditReport,{facts}));
  for(const phrase of ['参考月搜索量','2026-08','25.0%','-10.0%','来源未注明月份','推荐竞价','非实际 CPC','币种未知','词池不是全市场','缺页','截断','冲突','未知维度','W1 产品','W2 人群','W3 场景','W4 功能属性'])assert.ok(html.includes(phrase),phrase);
  assert.match(html,/>0<\/td>/);assert.ok(!html.includes('2.4 USD'));assert.ok(!html.includes('"pageMetrics"'));
 });
 test('manual report shows independent author/time, unchanged pool denominator and unknown cluster share',()=>{
- const {catalog}=revisionFixture(),html=renderToStaticMarkup(React.createElement(MarketKeywordRevisionReport,{catalog}));
+ const {catalog}=revisionFixture(),html=renderToStaticMarkup(React.createElement(MarketKeywordRevisionReport,{catalog,showAuditDetails:true}));
  for(const phrase of ['关键词人工修订报告',keywordUserId,'2026-09-13','人工阅读照明','人工审核记录','词池分母','未知','已知搜索量','分页不改变统计分母','W5','PVS'])assert.ok(html.includes(phrase),phrase);
  assert.ok(!html.includes('NaN'));assert.ok(!html.includes('Infinity'));assert.ok(!html.includes('"aggregation"'));
 });
 test('model suggestions preserve batch-local proposal identity and keyword evidence',()=>{
  const facts=keywordPageRun().run.facts!;const evidence=[{refId:'evidence',start:0,end:5,quote:'shelf'}],unknown={status:'unknown' as const,reason:'insufficient-evidence' as const,evidence:[]};
  facts.semantics.status='validated';facts.semantics.batches=[keywordRunId,keywordUserId].map((batchId,i)=>({stepId:batchId,attemptId:batchId,agentRunId:batchId,bindingId:batchId,inputDigest:'a'.repeat(64),output:{schemaVersion:'1.0.0',task:'market-keyword-semantics',batchId,inputDigest:'a'.repeat(64),keywords:[{keywordId:`keyword:${i}`,W1:{status:'supported',labelIds:['shelf'],evidence},W2:unknown,W3:unknown,W4:unknown,cluster:{status:'proposed',proposalId:'same-id',evidence}}],proposals:[{proposalId:'same-id',labelZh:i?'第二批提案':'第一批提案',definition:'批内定义',evidence}],synonymRelations:[]}}));
- const html=renderToStaticMarkup(React.createElement(MarketKeywordFactsReport,{facts,catalog:keywordPageRun().run.params.catalog}));for(const phrase of ['第一批提案','第二批提案','层架灯','shelf','语义协议通过','不等于质量已验',keywordRunId,keywordUserId])assert.ok(html.includes(phrase),phrase);
+ const html=renderToStaticMarkup(React.createElement(MarketKeywordAuditReport,{facts,catalog:keywordPageRun().run.params.catalog}));for(const phrase of ['第一批提案','第二批提案','层架灯','shelf','语义协议通过','不等于质量已验',keywordRunId,keywordUserId])assert.ok(html.includes(phrase),phrase);
 });
 test('all keywords remain in the saved facts while report initially renders a bounded page',()=>{
  const facts=keywordPageRun().run.facts!;facts.members=Array.from({length:45},(_,i)=>({...facts.members[0],keywordId:`keyword:${i}`,keyword:`term-${i}`}));const before=digest(facts);
@@ -91,7 +91,7 @@ test('discovered labels are displayed by dimension and batch without replacing s
   return {stepId:batchId,attemptId:batchId,agentRunId:batchId,bindingId:batchId,inputDigest:'a'.repeat(64),output:{schemaVersion:'1.0.0',task:'market-keyword-semantics',batchId,inputDigest:'a'.repeat(64),keywords:[{keywordId:`keyword:${i}`,W1:{status:'supported',labelIds:['new-label'],evidence},W2:unknown,W3:unknown,W4:unknown,cluster:unknown}],proposals:[],synonymRelations:[],labelProposals:[{dimension:'W1',labelId:'new-label',label:i?'第二批产品':'第一批产品',definition:i?'第二批定义':'第一批定义',evidence}]}};
  });
  const before=digest({facts,catalog:run.params.catalog});
- const html=renderToStaticMarkup(React.createElement(MarketKeywordFactsReport,{facts,catalog:run.params.catalog}));
+ const html=renderToStaticMarkup(React.createElement(MarketKeywordAuditReport,{facts,catalog:run.params.catalog}));
  for(const value of ['第一批产品','第二批产品','第一批定义','第二批定义','此批标签提案'])assert.ok(html.includes(value),value);
   assert.ok(!html.includes('目录名称未取得'));assert.equal(digest({facts,catalog:run.params.catalog}),before);
 });

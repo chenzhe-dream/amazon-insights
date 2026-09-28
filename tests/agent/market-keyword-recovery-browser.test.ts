@@ -22,7 +22,7 @@ test('query entry recovers temporary read failures, retains edits, and uses year
  await page.getByRole('region',{name:'关键词参考月指标'}).waitFor();assert.equal(reads,2,'initial read recovers without manual refresh');
  await page.getByText('类目范围与采集设置',{exact:true}).click();await page.getByLabel('起始月',{exact:true}).click();await page.getByLabel('选择年份',{exact:true}).selectOption('2024');await page.screenshot({path:out+'/month-picker.png'});await page.getByText('一月',{exact:true}).click();assert.equal(await page.getByLabel('起始月',{exact:true}).inputValue(),'2024-01');await page.screenshot({path:out+'/query.png'});
  await page.getByLabel('结束月',{exact:true}).click();await page.getByLabel('选择年份',{exact:true}).selectOption('2023');assert.equal(await page.getByText('一月',{exact:true}).getAttribute('aria-disabled'),'true','end month cannot precede start month');await page.keyboard.press('Escape');
- await page.getByText('任务进度、重试与取消',{exact:true}).click();await page.getByLabel('类目说明',{exact:true}).fill('保留人工输入');failures=0;
+ await page.getByRole('button',{name:'任务管理',exact:true}).click();await page.getByText('任务进度、重试与取消',{exact:true}).click();await page.getByLabel('类目说明',{exact:true}).fill('保留人工输入');failures=0;
  await page.getByRole('button',{name:'刷新关键词状态',exact:true}).click();await page.getByRole('alert').filter({hasText:'自动重试'}).waitFor();
  assert.ok(await page.getByRole('region',{name:'关键词参考月指标'}).isVisible());
  await page.getByRole('alert').filter({hasText:'自动重试'}).waitFor({state:'hidden'});assert.equal(await page.getByLabel('类目说明',{exact:true}).inputValue(),'保留人工输入');
