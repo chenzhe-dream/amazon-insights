@@ -55,11 +55,18 @@ export interface MarketKeywordAbaSourceData {
   readonly evidence: MarketSourceEvidence;
   readonly payloadHash: string;
 }
+/** Value-free, bounded failure context. Never persist provider prose, raw values or exception messages here. */
+export interface MarketKeywordAbaFailureDiagnostic {
+  readonly stage: 'request-validation' | 'transport' | 'response-identity' | 'payload-validation' | 'evidence-admission';
+  readonly issues: readonly Readonly<{ code: string; path: readonly (string | number)[] }>[];
+  readonly truncated: boolean;
+}
 export interface MarketKeywordAbaSourceFailure {
   readonly schemaVersion: typeof MARKET_KEYWORD_ABA_SOURCE_VERSION;
   readonly status: 'failed';
   readonly operation: 'market_get_keyword_history';
   readonly failure: Readonly<{ code: 'invalid-request' | 'malformed-response' | 'identity-conflict' }>;
+  readonly diagnostic: MarketKeywordAbaFailureDiagnostic;
   /** Diagnostics only; this rejected payload is never admitted evidence. */
   readonly rawPayload: ReadonlyMarketJsonValue | null;
 }

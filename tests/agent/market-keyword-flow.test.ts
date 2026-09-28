@@ -114,3 +114,19 @@ test('pool manifest scope, current pages and raw-semantic separation are enforce
   const v=fixture(),p=publishedPool(v); mutate(p); assert.throws(()=>inspectMarketKeywordContinuation(v,now));
  }
 });
+
+test('automatic pagination starts one page per seed and stops at a short page',()=>{
+ const r={...request(),params:{...request().params,paginationMode:'until-short-page/v1'}};
+ const definitions=marketKeywordFlowInitialSteps(r);assert.equal(definitions.length,1);
+ const v={run:{...r,status:'running'},steps:[],attempts:[]} as unknown as MarketModuleRunView;definitions.forEach(d=>add(v,d));
+ settle(v,0,'succeeded',{...pageOutput(1),receivedCount:7});
+ const next=inspectMarketKeywordContinuation(v,now);assert.equal(next.children[0].kind,'prepare-keyword-pool');
+ assert.deepEqual((next.children[0].input as any).plannedPages,[{seed:'lamp',page:1}]);
+});
+test('automatic pagination advances a full page and retains failed page without fetching later pages',()=>{
+ const r={...request(),params:{...request().params,paginationMode:'until-short-page/v1'}};
+ const v={run:{...r,status:'running'},steps:[],attempts:[]} as unknown as MarketModuleRunView;marketKeywordFlowInitialSteps(r).forEach(d=>add(v,d));
+ settle(v,0,'succeeded',{...pageOutput(1),receivedCount:20});
+ let next=inspectMarketKeywordContinuation(v,now);assert.equal(next.children[0].kind,'collect-keyword-page');assert.deepEqual(next.children[0].input,{seed:'lamp',page:2});
+ add(v,next.children[0]);settle(v,1,'failed');next=inspectMarketKeywordContinuation(v,now);assert.equal(next.children[0].kind,'prepare-keyword-pool');assert.equal((next.children[0].input as any).plannedPages.length,2);
+});

@@ -173,7 +173,11 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if(scope.marketplace!=='US')return failure('unsupported-marketplace',false);
     if(!deps.connectors.sif)return failure('configuration',false);
     const result=await collectMarketKeywordAba({scope,keywords:input.members.map(m=>m.keyword),referenceMonth:input.referenceMonth,jobId:claim.moduleRunId,connector:deps.connectors.sif,signal});
-    if(result.status==='failed')return failure(result.failure.code,'retryable' in result.failure&&result.failure.retryable===true);
+    if(result.status==='failed'){
+      const rejected=failure(result.failure.code,'retryable' in result.failure&&result.failure.retryable===true);
+      if(rejected.kind==='settlement'&&rejected.value.outcome.status==='failed')rejected.value.outcome.diagnostic=json({...object(rejected.value.outcome.diagnostic),abaDiagnostic:result.diagnostic});
+      return rejected;
+    }
     const {evidence,...batch}=result,batchId=`keyword-aba-batch:${digest(input.members.map(m=>m.keywordId))}`;
     return collected(scope,'keywords',[batchId],[{id:batchId,data:{collection:'keyword-aba',result:batch}}],result.status,evidence,
       {sourceVersion:result.schemaVersion,referenceMonth:input.referenceMonth,keywordIds:input.members.map(m=>m.keywordId),batchId});

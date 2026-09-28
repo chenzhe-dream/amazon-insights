@@ -92,3 +92,24 @@ test('public ABA member schema validates paths and known versus missing metric s
   assert.equal(MarketKeywordAbaMemberSchema.safeParse({ ...member, searchVolume: { value: 5, reason: 'missing-value', path: null } }).success, false);
   assert.equal(MarketKeywordAbaMemberSchema.safeParse({ ...member, monthPath: ['keywords', -1] }).success, false);
 });
+
+test('rejected ABA history retains bounded value-free validation paths for diagnosis', () => {
+  const bad = input([{ ...row(), top3_click_shares: Array(40).fill('credential-secret'), _formatted: 'private upstream detail' }]);
+  const result = normalize(bad);
+  assert.equal(result.status, 'failed');
+  if (result.status !== 'failed') return;
+  assert.equal(result.diagnostic.stage, 'payload-validation');
+  assert.equal(result.diagnostic.issues.length, 12);
+  assert.equal(result.diagnostic.truncated, true);
+  assert.deepEqual(result.diagnostic.issues[0], { code: 'invalid_type', path: ['keywords', 0, 'top3_click_shares', 0] });
+  assert.doesNotMatch(JSON.stringify(result.diagnostic), /credential-secret|private upstream detail/);
+  assert.ok(JSON.stringify(result.diagnostic).length < 3000);
+});
+
+test('ABA history alignment failure identifies the row without admitting invalid facts', () => {
+  const result = normalize(input([{ ...row(), volumes: [20] }]));
+  assert.equal(result.status, 'failed');
+  if (result.status !== 'failed') return;
+  assert.deepEqual(result.diagnostic.issues, [{ code: 'custom', path: ['keywords', 0] }]);
+  assert.equal(result.diagnostic.stage, 'payload-validation');
+});

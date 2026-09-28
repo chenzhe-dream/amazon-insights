@@ -170,7 +170,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
 
 type MarketNavigationProps = { view?: MarketView; onViewChange?: (view: MarketView) => void };
 
-function MarketResearchModules({ view: controlledView, onViewChange, showAuditDetails=false }: MarketNavigationProps & {showAuditDetails?:boolean}) {
+function MarketResearchModules({ view: controlledView, onViewChange, showAuditDetails=false,sessionIdentity }: MarketNavigationProps & {showAuditDetails?:boolean;sessionIdentity:string}) {
   const [restoreVersion,setRestoreVersion]=useState(0),[favoriteRequest,setFavoriteRequest]=useState(0);
   const [keywordInput,setKeywordInput]=useState<KeywordFavoriteInput|undefined>(),[restoredKeywordInput,setRestoredKeywordInput]=useState<KeywordFavoriteInput|undefined>();
   const [localView,setView]=useState<MarketView>('overview');
@@ -239,8 +239,8 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
   }
   return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
     <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
-    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
+    <div key={restoreVersion}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection cacheIdentity={sessionIdentity} maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</div></div>;
 }
 export function MarketResearchSection({ sessionIdentity, showAuditDetails=false, ...navigation }: { sessionIdentity: string; showAuditDetails?:boolean } & MarketNavigationProps) {
-  return <MarketResearchModules key={sessionIdentity} showAuditDetails={showAuditDetails} {...navigation} />;
+  return <MarketResearchModules key={sessionIdentity} sessionIdentity={sessionIdentity} showAuditDetails={showAuditDetails} {...navigation} />;
 }

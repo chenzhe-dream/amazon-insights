@@ -337,3 +337,10 @@ test('maximum-cardinality ranks retain only one immutable membership pair per fi
  assert.ok(memberships.size<=14,`Expected field-shared membership arrays; got ${memberships.size}`);
  for(const ids of memberships)assert.ok(Object.isFrozen(ids));
 });
+
+test('equal-window evidence requires its explicit formula version while legacy YoY remains valid',()=>{
+ const input=fixture(),evidence=input.keywords[0].yoyGrowth.evidence!;
+ Object.assign(evidence,{method:'equal-history-window-change'});assert.throws(()=>first(input),/method/);
+ Object.assign(evidence,{methodVersion:'equal-history-window-growth/v1'});assert.equal(first(input).growth.value,.1);
+ Object.assign(evidence,{method:'year-over-year-change'});assert.throws(()=>first(input),/method/);
+});

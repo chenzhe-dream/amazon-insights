@@ -30,7 +30,7 @@ function params(request: Request) {
 export const isMarketKeywordFlow = (run: { params: unknown }) => [MARKET_KEYWORD_FLOW_VERSION, MARKET_KEYWORD_RULES_FLOW_VERSION].includes(String(obj(run.params).flow));
 export function marketKeywordFlowInitialSteps(request: Request): MarketStepDefinition[] {
   const p = params(request);
-  return p.plannedPages.map(page => ({ stepKey: key('page', page), kind: 'collect-keyword-page', subject: { flow: p.flow }, input: page, inputRefs: [] }));
+  return p.plannedPages.filter(page=>!p.paginationMode||page.page===1).map(page => ({ stepKey: key('page', page), kind: 'collect-keyword-page', subject: { flow: p.flow }, input: page, inputRefs: [] }));
 }
 
 /** Only the source/model frontier: no rules, human revisions or final report.
@@ -59,7 +59,23 @@ export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now:
       throw new TypeError('Keyword current attempt differs');
     return matches[0];
   }
-  const pages = marketKeywordFlowInitialSteps(view.run).map(d => find(d, true)!);
+  const pages:MarketExecutionStep[]=[];
+  if(p.paginationMode){
+    const stopped=new Set<string>(),waiting=new Set<string>(),children:MarketStepDefinition[]=[];
+    for(const page of p.plannedPages){
+      if(stopped.has(page.seed)||waiting.has(page.seed))continue;
+      const definition:MarketStepDefinition={stepKey:key('page',page),kind:'collect-keyword-page',subject:{flow:p.flow},input:page,inputRefs:[]};
+      const step=find(definition,page.page===1);
+      if(!step){children.push(definition);waiting.add(page.seed);continue;}
+      pages.push(step);
+      if(!terminal(step)){waiting.add(page.seed);continue;}
+      if(step.status==='failed'){stopped.add(page.seed);continue;}
+      const count=z.number().int().min(0).parse(obj(attempt(step).output).receivedCount);
+      if(count<20)stopped.add(page.seed);
+    }
+    if(children.length||waiting.size)return result(children);
+  }else pages.push(...marketKeywordFlowInitialSteps(view.run).map(d=>find(d,true)!));
+  const collectedPages=pages.map(s=>({seed:String(obj(s.input).seed),page:Number(obj(s.input).page)}));
   if (pages.some(s => !terminal(s))) return result();
   const attempts = pages.map(attempt);
   const sourceBasis = attempts.map(a => ({ id: a.id, status: a.status }));
@@ -73,7 +89,7 @@ export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now:
     inputSnapshotId: inputId.parse(obj(a.output).inputSnapshotId), sourceRef: sourceId.parse(obj(a.output).sourceRef),
   }));
   const poolDefinition: MarketStepDefinition = { stepKey: poolKey, kind: 'prepare-keyword-pool', subject: { flow: p.flow, frontierHash: digest(sourceBasis) },
-    input: { phase: 'assemble', plannedPages: p.plannedPages, maxMembers: p.maxMembers, pages: observations, catalog: p.catalog, selectionRevision, dataCutoffAt },
+    input: { phase: 'assemble', plannedPages: collectedPages, maxMembers: p.maxMembers, pages: observations, catalog: p.catalog, selectionRevision, dataCutoffAt },
     inputRefs: [...attempts.map(a => ({ kind: 'step-output' as const, id: a.id })),
       ...observations.flatMap(o => [{ kind: 'input' as const, id: o.inputSnapshotId }, { kind: 'source' as const, id: o.sourceRef }])] };
   const poolStep = find(poolDefinition);
@@ -82,7 +98,7 @@ export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now:
   const poolAttempt = attempt(poolStep), pool = obj(poolAttempt.output);
   const raw = inputId.parse(pool.rawInputSnapshotId), semantic = inputId.parse(pool.semanticInputSnapshotId);
   if (raw === semantic) throw new TypeError('Keyword raw and semantic pools differ in purpose');
-  const pageBindings = p.plannedPages.map((page, i) => ({ ...page,
+  const pageBindings = collectedPages.map((page, i) => ({ ...page,
     inputSnapshotId: success(pages[i]) ? inputId.parse(obj(attempts[i].output).inputSnapshotId) : null,
     sourceRef: success(pages[i]) ? sourceId.parse(obj(attempts[i].output).sourceRef) : null,
   })).sort((a, b) => a.seed < b.seed ? -1 : a.seed > b.seed ? 1 : a.page - b.page);

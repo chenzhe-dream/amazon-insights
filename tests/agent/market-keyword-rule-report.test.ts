@@ -142,3 +142,101 @@ test('ABA member evidence must bind the original member id, keyword and referenc
   assert.throws(()=>buildMarketKeywordRuleReport({facts:f.facts,classification:null}),/ABA member binding mismatch/);
  }
 });
+
+function historicalFixture(values:number[]=Array.from({length:12},(_,i)=>i<6?10:i<9?20:40)){
+ const f=fixture([values.at(-1)!,values.at(-1)!,values.at(-1)!]);
+ for(const member of f.facts.members){
+  const template=member.trend.months.at(-1)!;
+  const history=values.map((value,index)=>{const date=new Date(Date.UTC(2026,7-values.length+1+index,1));return {...template,month:date.toISOString().slice(0,7),searchVolume:{value,reason:null}};});
+  member.trend.months=[history.at(-1)!];
+  Object.assign(member.trend,{historyMonths:history});
+ }
+ rehash(f.facts);return f;
+}
+test('original history compares equal 6-month sums and recent 3-month sums with versioned lifecycle',()=>{
+ const f=historicalFixture(),r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+ assert.equal(r.version,'market-keyword-rule-report/v3');
+ assert.equal(r.keywords[0].w5.yoyGrowth.value,2);
+ assert.equal(r.keywords[0].w5.threeMonthGrowth.value,1);
+ assert.equal(r.keywords[0].w5.threeMonthGrowth.currentValue,120);
+ assert.equal(r.keywords[0].w5.threeMonthGrowth.baselineValue,60);
+ assert.equal(r.keywords[0].w5.threeMonthLabel,'近3月合计较前3月');
+ assert.equal(r.keywords[0].w5.lifecycle.status,'computed');
+ assert.equal((r.keywords[0].w5.lifecycle as any).diagnosis,'growing');
+ assert.equal(r.clusters[0].score.demandClass,'mainstream');
+ assert.equal(r.clusters[0].score.pvs,null);assert.equal(r.clusters[0].score.keywordValidationTier,null);
+ assert.equal((r.clusters[0] as any).development.status,'hypothesis');
+ assert.equal((r.clusters[0] as any).development.priority,null);
+ assert.deepEqual(MarketKeywordRuleReportSchema.parse(JSON.parse(JSON.stringify(r))),r);
+});
+test('missing calendar history and zero baselines remain missing without neutral lifecycle inputs',()=>{
+ for(const mode of ['gap','zero','short'] as const){
+  const f=historicalFixture(mode==='zero'?Array(12).fill(0):mode==='short'?Array(6).fill(40):undefined);
+  if(mode==='gap')for(const m of f.facts.members)(m.trend as any).historyMonths.splice(8,1);
+  rehash(f.facts);const r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+  assert.equal(r.keywords[0].w5.yoyGrowth.value,null);
+  assert.equal(r.keywords[0].w5.lifecycle.status,'unavailable');
+  if(mode!=='short')assert.equal(r.keywords[0].w5.threeMonthGrowth.value,null);
+ }
+});
+test('original lifecycle thresholds distinguish stable and weakening without claiming structural decline',()=>{
+ for(const [recent,expected] of [[10,'mature_stable'],[1,'recent_weakening']] as const){
+  const f=historicalFixture(Array.from({length:12},(_,i)=>i<6?10:recent));
+  const r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+  assert.equal((r.keywords[0].w5.lifecycle as any).diagnosis,expected);
+  assert.equal(r.clusters[0].score.keywordValidationTier,null);
+ }
+});
+
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {MarketKeywordRulesReport} from '../../app/market-keyword-rule-report';
+import {buildMarketKeywordScoreInputAudit} from '../../server/domain/market-research/keyword-score-input-audit';
+test('original report UI and input audit explain window sums and pending development validation',()=>{
+ const f=historicalFixture(),report=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+ const audit=buildMarketKeywordScoreInputAudit({facts:f.facts,report});
+ const html=renderToStaticMarkup(React.createElement(MarketKeywordRulesReport,{report,scoreInputAudit:audit}));
+ for(const expected of ['等长历史窗口','近3月合计较前3月','成长','主流需求','竞争象限','产品开发方向','验证优先级','可行性待验证'])assert.ok(html.includes(expected),expected);
+ assert.ok(!html.includes('当前月 / 三个月前单月'));
+ assert.ok(audit.formulas.some(f=>f.expression.includes('近3月合计 / 前3月合计')));
+ assert.ok(!html.includes('生命周期仍缺少诊断依据'));
+});
+
+test('v3 contract rejects mixed formula versions and fabricated development priorities',()=>{
+ const f=historicalFixture(),r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+ const mixed=structuredClone(r);mixed.threeMonthFormulaVersion='calendar-three-month-growth/v1';assert.equal(MarketKeywordRuleReportSchema.safeParse(mixed).success,false);
+ const invented=structuredClone(r);invented.clusters[0].development!.priority='P1';assert.equal(MarketKeywordRuleReportSchema.safeParse(invented).success,false);
+});
+test('original 12-month windows cap long histories and reject gaps, future months and conflicting sources',()=>{
+ const f=historicalFixture(Array.from({length:30},(_,i)=>i<18?10:20));
+ const r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+ assert.equal(r.keywords[0].w5.yoyGrowth.window!.months,12);assert.equal(r.keywords[0].w5.yoyGrowth.value,1);
+ const g=historicalFixture();g.facts.members[0].trend.historyMonths!.push({...g.facts.members[0].trend.months[0],month:'2026-09'});rehash(g.facts);
+ assert.throws(()=>buildMarketKeywordRuleReport({facts:g.facts,classification:null}),/reference month/);
+ const conflict=historicalFixture();conflict.facts.members[0].trend.months=structuredClone(conflict.facts.members[0].trend.months);conflict.facts.members[0].trend.historyMonths!.at(-1)!.searchVolume={value:999,reason:null};rehash(conflict.facts);
+ assert.throws(()=>buildMarketKeywordRuleReport({facts:conflict.facts,classification:null}),/Conflicting/);
+});
+
+test('cluster lifecycle does not merge growth from incomplete member coverage into a complete diagnosis',()=>{
+ const f=historicalFixture();f.facts.members[1].trend.historyMonths=f.facts.members[1].trend.historyMonths!.slice(-6);rehash(f.facts);
+ const r=buildMarketKeywordRuleReport({facts:f.facts,classification:manual(f)});
+ assert.equal(r.keywords[1].w5.lifecycle.status,'unavailable');assert.equal(r.clusters[0].lifecycle!.status,'unavailable');
+});
+
+test('rank-only older months cannot lengthen original search-volume comparison windows',()=>{
+ const base=historicalFixture(Array.from({length:12},(_,i)=>i<6?10:20));
+ const expected=buildMarketKeywordRuleReport({facts:base.facts,classification:manual(base)}).keywords[0].w5.yoyGrowth;
+ const extended=historicalFixture(Array.from({length:24},(_,i)=>i<18?10:20));
+ for(const member of extended.facts.members)for(const point of member.trend.historyMonths!.slice(0,12))point.searchVolume={value:null,reason:'missing'};
+ rehash(extended.facts);
+ const report=buildMarketKeywordRuleReport({facts:extended.facts,classification:manual(extended)});
+ assert.equal(report.keywords[0].w5.yoyGrowth.value,1);
+ assert.deepEqual(report.keywords[0].w5.yoyGrowth.window,expected.window);
+ assert.equal(report.keywords[0].w5.yoyGrowth.currentValue,120);assert.equal(report.keywords[0].w5.yoyGrowth.baselineValue,60);
+ for(const member of extended.facts.members)member.trend.historyMonths!.splice(16,1);
+ rehash(extended.facts);
+ const missing=buildMarketKeywordRuleReport({facts:extended.facts,classification:manual(extended)});
+ assert.equal(missing.keywords[0].w5.yoyGrowth.window!.months,6,'Interior gaps do not compress the calendar span');
+ assert.equal(missing.keywords[0].w5.yoyGrowth.value,null,'A real missing volume month still invalidates the comparison');
+ assert.equal(missing.keywords[0].w5.lifecycle.status,'unavailable');
+});

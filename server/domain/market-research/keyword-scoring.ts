@@ -105,7 +105,7 @@ function validateInput(value: unknown): ParsedInput {
   unique(input.comparisonClusterIds, "comparison cluster ID");
   unique(input.excludedClusters.map(c => c.clusterId), "excluded cluster ID");
   for (const member of input.keywords) {
-    for (const field of ["searchVolume", "cpc", "yoyGrowth", "recentGrowth"] as const) validateMetric(member[field], input, specs[field]);
+    for (const field of ["searchVolume", "cpc", "yoyGrowth", "recentGrowth"] as const) validateMetric(member[field], input, field==='yoyGrowth'&&member[field].evidence?.methodVersion==='equal-history-window-growth/v1'?["yoy-growth","fraction","equal-history-window-change",-1]:specs[field]);
   }
   for (const cluster of input.clusterMetrics) {
     unique(cluster.memberIds, "cluster member ID");

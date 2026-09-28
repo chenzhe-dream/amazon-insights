@@ -35,7 +35,7 @@ test('public keyword start and read bind source months and native audited batche
   const connector: RemoteMcpConnector = { id: 'sorftime', probe: async () => { throw new Error('Unused'); }, execute: async r => {
     calls++;
     if (r.operation === 'keyword_extends' && r.input.page === 2 && failSecond) throw new ConnectorError('sorftime', 'upstream-permanent', false);
-    const data = r.operation === 'keyword_extends' ? { data: r.input.keyword === 'empty' ? [] : [{ keyword: `synthetic lamp ${r.input.page}`, monthly_search_volume: 999, recommended_cpc_bid: '1.25' }] }
+    const data = r.operation === 'keyword_extends' ? { data: r.input.keyword === 'empty' ? [] : [{ keyword: `synthetic lamp ${r.input.page}`, monthly_search_volume: 999, recommended_cpc_bid: '1.25', seasonality: '11月' }] }
       : { data: { keyword: r.input.keyword, search_volume_trend: missingHistory ? [] : ['2025-08 search volume 10', '2026-05 search volume 15', '2026-07 search volume 20', '2026-08 search volume 0'],
         search_rank_trend: [], recommended_bid_trend: ['2026-08 CPC recommended bid 2.5'] } };
     return { data, source: { connectorId: 'sorftime', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
@@ -78,12 +78,24 @@ test('public keyword start and read bind source months and native audited batche
     assert.equal(saved.automaticClassification?.classification.assignments.length,saved.facts!.members.length);
     assert.ok(saved.ruleReport!.clusters.length>0);
     assert.ok(saved.ruleReport); assert.equal(saved.facts!.members[0].reference.searchVolume, 0);
+    assert.equal(saved.facts!.members[0].pageMetrics.seasonality, '11月');
+    assert.deepEqual(saved.facts!.members[0].trend.months.map(month=>month.month), ['2026-07','2026-08']);
+    assert.deepEqual(saved.facts!.members[0].trend.historyMonths!.map(month=>month.month), ['2025-08','2026-05','2026-07','2026-08']);
     assert.equal(modelCalls, 0);
     assert.ok(saved.steps.every(step => !['model-batch', 'prepare-model-batches', 'reconcile'].includes(step.kind)));
     const beforeCalls = calls;
     assert.deepEqual((await service.findKeywords(actor, started.run.id)).run, saved);
     assert.equal((await service.startKeywords(actor, study.study.id, input, key)).run.id, started.run.id);
     assert.equal(calls, beforeCalls); assert.equal(modelCalls, 0);
+  });
+  await t.test('automatic pagination stops at a short page and survives read replay without new calls',async()=>{
+    const beforeCalls=calls;
+    const started=await service.startKeywords(actor,study.study.id,{...body,paginationMode:'until-short-page/v1',plannedPages:Array.from({length:5},(_,i)=>({seed:'lamp',page:i+1})),maxMembers:100},randomUUID());
+    for(let i=0;i<30;i++){if(!await runtime.tick())break;assert.ok(i<29);}
+    const saved=(await service.findKeywords(actor,started.run.id)).run;
+    assert.equal(saved.params.plannedPages.length,5);assert.equal(saved.facts!.members.length,1);assert.equal(saved.facts!.pool.plannedPageCount,1);
+    assert.equal(saved.steps.filter(s=>s.kind==='collect-keyword-page').length,1);assert.equal(calls-beforeCalls,2);
+    assert.deepEqual((await service.findKeywords(actor,started.run.id)).run,saved);assert.equal(calls-beforeCalls,2);
   });
   // Seed historical semantic runs through the repository. New public commands stay rules-only.
   let seedLegacyModels = true;
@@ -147,8 +159,20 @@ test('public keyword start and read bind source months and native audited batche
   assert.equal(checkedRevision.scoreInputAudit.clusters[0].inputs.find(input=>input.field==='suggestedBid')!.value,null);
   assert.ok(revision.ruleReport,'Saved human revision exposes its frozen-basis W5 and PVS report');
   assert.equal(revision.ruleReport.factsId,facts.factsId);assert.equal(revision.ruleReport.classification.identity,revisionId);
-  assert.equal(revision.ruleReport.keywords[0].w5.yoyGrowth.value,-1,'A saved full-history baseline outside the research window must remain usable');
-  assert.equal(revision.ruleReport.keywords[0].w5.threeMonthGrowth.value,-1,'M-3 baseline is projected from the saved full series, without refetching');
+  // Four retained source months establish calendar comparisons, but cannot establish
+  // either two contiguous 3-month sums or two 6–12-month historical windows.
+  assert.equal(revision.ruleReport.version,'market-keyword-rule-report/v3');
+  assert.equal(revision.ruleReport.keywords[0].w5.searchVolume.value,0);
+  assert.equal(revision.ruleReport.keywords[0].w5.recentGrowth.value,-1,'The known previous month still supports calendar MoM');
+  assert.equal(revision.ruleReport.keywords[0].w5.yoyGrowth.value,null,'A single prior-year observation cannot establish equal historical windows');
+  assert.equal(revision.ruleReport.keywords[0].w5.yoyGrowth.reason,'insufficient-history');
+  assert.equal(revision.ruleReport.keywords[0].w5.yoyGrowth.formulaVersion,'equal-history-window-growth/v1');
+  assert.equal(revision.ruleReport.keywords[0].w5.threeMonthGrowth.value,null,'A saved M-3 observation cannot replace the six complete months required for sum growth');
+  assert.equal(revision.ruleReport.keywords[0].w5.threeMonthGrowth.reason,'insufficient-history');
+  assert.equal(revision.ruleReport.keywords[0].w5.threeMonthGrowth.formulaVersion,'three-month-sum-growth/v1');
+  assert.equal(revision.ruleReport.keywords[0].w5.lifecycle.status,'unavailable');
+  assert.deepEqual(facts.members[0].trend.historyMonths!.map(point=>[point.month,point.searchVolume.value]),[['2025-08',10],['2026-05',15],['2026-07',20],['2026-08',0]],'Saved full-history observations remain available outside the research window');
+  assert.deepEqual(revision.catalog.facts.members[0].trend.comparisonMonths,facts.members[0].trend.comparisonMonths,'Manual history preserves the original calendar comparison evidence');
   assert.equal(revision.ruleReport.clusters[0].score.pvs,null,'Missing source metrics cannot manufacture PVS');
   assert.equal(revision.ordinal, 1); assert.equal(revision.catalog.aggregation.pool.totalSearchVolume, 0);
   assert.deepEqual(revision.catalog.facts.semantics, facts.semantics);

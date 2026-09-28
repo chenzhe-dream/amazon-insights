@@ -29,3 +29,15 @@ test('ABA timeout settles even when a connector ignores abort; invalid input nev
  const invalid=await collectMarketKeywordAba({scope,keywords:Array(11).fill('floor lamp'),referenceMonth:'2026-08',jobId:'aba-collector',connector:hangs},now);
  assert.equal(invalid.status,'failed');assert.equal(calls,1);
 });
+
+test('ABA diagnostics distinguish transport rejection from response validation without leaking errors',async()=>{
+ const base={scope,keywords:['floor lamp'],referenceMonth:'2026-08',jobId:'aba-diagnostic'};
+ const transport=await collectMarketKeywordAba({...base,connector:connector(async()=>{throw new Error('credential-secret');})},now);
+ assert.equal(transport.status,'failed');if(transport.status!=='failed')return;
+ assert.equal(transport.diagnostic.stage,'transport');
+ assert.doesNotMatch(JSON.stringify(transport),/credential-secret/);
+ const response=await collectMarketKeywordAba({...base,connector:connector(async r=>({data:{...payload,keywords:[{...payload.keywords[0],top3_click_shares:[2]}]},source:{connectorId:'sif',operation:r.operation,fetchedAt:now.toISOString(),attemptCount:1}}))},now);
+ assert.equal(response.status,'failed');if(response.status!=='failed')return;
+ assert.equal(response.diagnostic.stage,'payload-validation');
+ assert.deepEqual(response.diagnostic.issues,[{code:'too_big',path:['keywords',0,'top3_click_shares',0]}]);
+});

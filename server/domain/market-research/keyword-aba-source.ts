@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { MarketInputRecordSchema, type MarketJsonValue } from '../../../shared/market-analysis-contracts';
-import { MARKET_KEYWORD_ABA_SOURCE_VERSION, MarketKeywordAbaSourceRequestSchema, type MarketKeywordAbaSourceData, type MarketKeywordAbaSourceFailure, type MarketKeywordAbaSourceMember, type MarketKeywordAbaSourceMetric, type MarketKeywordAbaSourceResult } from '../../../shared/market-keyword-aba-source-contracts';
+import { MARKET_KEYWORD_ABA_SOURCE_VERSION, MarketKeywordAbaSourceRequestSchema, type MarketKeywordAbaFailureDiagnostic, type MarketKeywordAbaSourceData, type MarketKeywordAbaSourceFailure, type MarketKeywordAbaSourceMember, type MarketKeywordAbaSourceMetric, type MarketKeywordAbaSourceResult } from '../../../shared/market-keyword-aba-source-contracts';
 import type { MarketSourceEvidenceInput, MarketSourceIdentityField, MarketSourcePayloadPath } from '../../../shared/market-source-contracts';
 import { createMarketSourceEvidence } from './source-evidence';
 import { marketKeywordMemberId } from './keyword-source-normalization';
@@ -27,8 +27,13 @@ function freeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
 }
-function failed(code: MarketKeywordAbaSourceFailure['failure']['code'], rawPayload: MarketJsonValue | null = null): MarketKeywordAbaSourceFailure {
-  return freeze({ schemaVersion: MARKET_KEYWORD_ABA_SOURCE_VERSION, status: 'failed', operation, failure: { code }, rawPayload });
+function failed(code: MarketKeywordAbaSourceFailure['failure']['code'], rawPayload: MarketJsonValue | null = null,
+  stage: MarketKeywordAbaFailureDiagnostic['stage'] = code === 'invalid-request' ? 'request-validation' : 'payload-validation',
+  issues: readonly z.core.$ZodIssue[] = []): MarketKeywordAbaSourceFailure {
+  // Schema paths contain fixed field names and row/array indices; never include issue messages/input.
+  const diagnostic: MarketKeywordAbaFailureDiagnostic = { stage, issues: issues.slice(0, 12).map(issue => ({ code: issue.code,
+    path: issue.path.slice(0, 12).map(segment => typeof segment === 'number' ? segment : String(segment).slice(0, 64)) })), truncated: issues.length > 12 };
+  return freeze({ schemaVersion: MARKET_KEYWORD_ABA_SOURCE_VERSION, status: 'failed', operation, failure: { code }, rawPayload, diagnostic });
 }
 
 /** Pure admission only. Authorization, transport, persistence and scoring belong to callers. */
@@ -39,16 +44,16 @@ export function normalizeMarketKeywordAbaSource(value: unknown, now: Date = new 
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return failed('invalid-request');
   const { rawPayload, ...requestInput } = json.data;
   const request = MarketKeywordAbaSourceRequestSchema.safeParse(requestInput);
-  if (!request.success) return failed('invalid-request');
+  if (!request.success) return failed('invalid-request', null, 'request-validation', request.error.issues);
   const { scope, keywords, referenceMonth, fetchedAt } = request.data;
   if (referenceMonth < scope.fromMonth || referenceMonth > scope.toMonth || scope.toMonth >= now.toISOString().slice(0, 7)
     || referenceMonth >= fetchedAt.slice(0, 7) || Date.parse(fetchedAt) > now.getTime()) return failed('invalid-request');
   if (rawPayload === undefined || Buffer.byteLength(JSON.stringify(rawPayload), 'utf8') > 8_000_000) return failed('malformed-response');
   const raw = JSON.parse(JSON.stringify(rawPayload)) as MarketJsonValue;
   const parsed = payloadSchema.safeParse(raw);
-  if (!parsed.success) return failed(object(raw) && Object.hasOwn(raw, 'country') && raw.country !== 'US' ? 'identity-conflict' : 'malformed-response', raw);
+  if (!parsed.success) return failed(object(raw) && Object.hasOwn(raw, 'country') && raw.country !== 'US' ? 'identity-conflict' : 'malformed-response', raw, 'payload-validation', parsed.error.issues);
   const rows = parsed.data.keywords;
-  if (new Set(rows.map(row => row.keyword)).size !== rows.length || rows.some(row => !keywords.includes(row.keyword))) return failed('identity-conflict', raw);
+  if (new Set(rows.map(row => row.keyword)).size !== rows.length || rows.some(row => !keywords.includes(row.keyword))) return failed('identity-conflict', raw, 'response-identity');
 
   const paths: MarketSourceEvidenceInput['responseIdentityPaths'] = { marketplace: [['country']] };
   // Check explicit identity echoes wherever this documented response has records.
@@ -64,7 +69,7 @@ export function normalizeMarketKeywordAbaSource(value: unknown, now: Date = new 
   };
   visit(parsed.data, []);
   // A singular root keyword echo cannot identify a multi-word response.
-  if (Object.hasOwn(parsed.data, 'keyword') && (keywords.length !== 1 || parsed.data.keyword !== keywords[0])) return failed('identity-conflict', raw);
+  if (Object.hasOwn(parsed.data, 'keyword') && (keywords.length !== 1 || parsed.data.keyword !== keywords[0])) return failed('identity-conflict', raw, 'response-identity');
   const members: MarketKeywordAbaSourceMember[] = keywords.map(keyword => {
     const index = rows.findIndex(row => row.keyword === keyword);
     const row = rows[index];
@@ -97,7 +102,7 @@ export function normalizeMarketKeywordAbaSource(value: unknown, now: Date = new 
     return freeze({ schemaVersion: MARKET_KEYWORD_ABA_SOURCE_VERSION, status: metrics.every(metric => metric.value !== null) ? 'ready' : metrics.every(metric => metric.value === null) ? 'empty' : 'partial',
       operation, referenceMonth, keywords, members, sourceScope: { kind: 'exact-keyword-marketplace', marketplace: 'US', nodeIdPath: null, nodeBinding: 'unverified' }, evidence, payloadHash: evidence.payloadHash });
   } catch (error) {
-    return failed(error instanceof TypeError && /conflict|identity|outside research scope/.test(error.message) ? 'identity-conflict' : 'malformed-response', raw);
+    return failed(error instanceof TypeError && /conflict|identity|outside research scope/.test(error.message) ? 'identity-conflict' : 'malformed-response', raw, 'evidence-admission');
   }
 }
 

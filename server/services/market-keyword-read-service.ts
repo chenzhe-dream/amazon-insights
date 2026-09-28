@@ -13,6 +13,7 @@ import { assembleMarketKeywordPool } from '../domain/market-research/keyword-sou
 import { keywordRuleBaselineFromPool } from '../domain/market-research/keyword-rule-baseline';
 import { readMarketKeywordTrendEvidence } from '../domain/market-research/keyword-trend-evidence';
 import {projectKeywordComparisonMonths} from '../domain/market-research/keyword-comparison-months';
+import {projectKeywordHistoryMonths} from '../domain/market-research/keyword-history-months';
 import {readMarketKeywordAbaEvidence} from '../domain/market-research/keyword-aba-evidence';
 import {MarketKeywordAbaMemberSchema} from '../../shared/market-keyword-aba-source-contracts';
 import { validateMarketKeywordSemantics } from '../domain/market-research/semantic-validation';
@@ -111,14 +112,15 @@ export async function readMarketKeywordRun(context: PostgresQueryContext, actor:
           same(out.keywordId, record.id); same(out.keyword, checked.keyword); same(out.collectionStatus, checked.status);
           trend = { status: checked.status, stepId: trendStep.id, attemptId: trendAttempt.id, inputSnapshotId: saved.snapshot.snapshotId,
             sourceRef: source.id, fetchedAt: source.evidence.fetchedAt, cpcCurrency: checked.cpcCurrency, months: [...checked.months],
-            comparisonMonths:projectKeywordComparisonMonths(checked,view.run.scope.toMonth) };
+            comparisonMonths:projectKeywordComparisonMonths(checked,view.run.scope.toMonth),
+            historyMonths:projectKeywordHistoryMonths(checked,view.run.scope.toMonth) };
         }
         const reference = trend.months.find(m => m.month === view.run.scope.toMonth);
         members.push({ keywordId: record.id, keyword: member.keyword, sourceRef: z.string().parse(data.sourceRef),
           ...(params.supplementalSources?{aba:abaById.get(record.id)??{status:view.run.status==='cancelled'?'cancelled':'pending',stepId:null,attemptId:null,inputSnapshotId:null,sourceRef:null,fetchedAt:null,referenceMonth:view.run.scope.toMonth,sourceScope:'exact-keyword-marketplace',nodeBinding:'not-provided',member:null}}:{}),
           occurrences: MarketKeywordFactsSchema.shape.members.element.shape.occurrences.parse(data.occurrences),
           pageMetrics: { monthlySearchVolume: member.monthlySearchVolume, weeklySearchVolume: member.weeklySearchVolume, weeklySearchRank: member.weeklySearchRank,
-            recommendedCpcUsd: member.recommendedCpcUsd, period: 'unspecified-source-window' }, trend,
+            recommendedCpcUsd: member.recommendedCpcUsd, seasonality:member.seasonality.value, period: 'unspecified-source-window' }, trend,
           reference: { searchVolume: reference?.searchVolume.value ?? null, yoyGrowth: reference?.yoyGrowth.value ?? null, recentGrowth: reference?.recentGrowth.value ?? null,
             actualCpcUsd: null, actualCpcReason: 'source-provides-recommended-bid-only' } });
       }
