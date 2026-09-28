@@ -9,9 +9,9 @@ const nextMonth=(month:string)=>{const [y,m]=month.split('-').map(Number);return
 const failureLabel=(code:string)=>({'timeout':'请求超时','configuration':'来源尚未配置','authentication':'来源认证失败','rate-limit':'来源限流','upstream-temporary':'来源暂时不可用','upstream-permanent':'来源拒绝请求','malformed-response':'来源响应格式异常','scope-mismatch':'来源范围不匹配','interrupted':'采集已中断','local-admission':'等待来源调用额度','category-seed-unavailable':'未取得类目关键词种子'} as Record<string,string>)[code]??'来源步骤未完成';
 
 /** Saved per-keyword searches only. Missing months stay gaps, not zero or a category total. */
-export function MarketOverviewDemandTrend({demand}:{demand?:Demand|null}){
+export function MarketOverviewDemandTrend({demand,hasDemandStage=false}:{demand?:Demand|null;hasDemandStage?:boolean}){
  const [hover,setHover]=useState<string|null>(null);
- if(!demand||demand.status==='not-collected')return <p className="ss-report-empty">此历史报告尚未采集行业关键词趋势。重新采集总览时将按原版流程补齐；查看此报告不会自动发起采集。</p>;
+ if(!demand||demand.status==='not-collected')return <p className="ss-report-empty">{hasDemandStage?'此版本已保存市场基础数据，行业关键词趋势尚未保存；请在任务进度中查看采集状态。':'此历史报告尚未采集行业关键词趋势。重新采集总览时将按原版流程补齐；查看此报告不会自动发起采集。'}</p>;
  const series=demand.series.filter(row=>row.points.length).map(row=>({...row,points:[...row.points].sort((a,b)=>a.month.localeCompare(b.month))})),months=[...new Set(series.flatMap(row=>row.points.map(p=>p.month)))].sort();
  const width=920,height=220,left=60,right=22,top=18,bottom=30,plotWidth=width-left-right,plotHeight=height-top-bottom;
  const max=Math.max(1,...series.flatMap(row=>row.points.map(p=>p.value))),x=(i:number)=>left+(i*plotWidth)/Math.max(months.length-1,1),y=(value:number)=>top+(1-value/max)*plotHeight;

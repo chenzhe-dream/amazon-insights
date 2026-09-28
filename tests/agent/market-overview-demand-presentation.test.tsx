@@ -9,6 +9,7 @@ test('saved demand trend keeps observed zero, breaks absent months and retains p
  assert.equal((html.match(/data-search-month=/g)??[]).length,3);assert.equal((html.match(/<polyline/g)??[]).length,1);assert.match(html,/2026-05 0 次/);assert.doesNotMatch(html,/data-search-month="2026-06"/);assert.match(html,/standing lamp：请求超时/);assert.match(html,/不代表全类目总需求/);
 });
 test('legacy, failed, empty and single-month states are distinct and do not fabricate curves',()=>{
+ const waiting=renderToStaticMarkup(<MarketOverviewDemandTrend hasDemandStage/>);assert.match(waiting,/请在任务进度中查看采集状态/);assert.doesNotMatch(waiting,/历史报告|重新采集/);
  const legacy=renderToStaticMarkup(<MarketOverviewDemandTrend/>);assert.match(legacy,/历史报告尚未采集/);assert.doesNotMatch(legacy,/<svg/);
  for(const status of ['failed','empty']){const html=renderToStaticMarkup(<MarketOverviewDemandTrend demand={{status,seed:null,referenceMonth:'2026-08',series:[],issues:[]}}/>);assert.doesNotMatch(html,/<svg/);assert.match(html,status==='failed'?/采集失败/:/未返回可用/);}
  const single=renderToStaticMarkup(<MarketOverviewDemandTrend demand={{status:'ready',seed:'Floor Lamps',referenceMonth:'2026-08',series:[{...series[0],points:[{month:'2026-08',value:0}]}],issues:[]}}/>);assert.match(single,/只有一个月/);assert.equal((single.match(/data-search-month=/g)??[]).length,1);assert.doesNotMatch(single,/<polyline/);
