@@ -9,7 +9,16 @@ import { marketKeywordMemberId } from './keyword-source-normalization';
 const operation = 'market_get_keyword_history' as const;
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const share = z.number().min(0).max(1).nullable();
-const rowSchema = z.object({
+const rowSchema = z.preprocess(value => {
+  // Observed SIF empty-history variant: data_points is 0 and history arrays are
+  // omitted. Normalize only the parsed projection, keeping raw evidence intact.
+  if (!object(value) || value.data_points !== 0) return value;
+  const projected = { ...value };
+  for (const field of ['dates', 'volumes', 'ranks', 'top3_click_shares', 'top3_conversion_shares']) {
+    if (!Object.hasOwn(projected, field)) projected[field] = [];
+  }
+  return projected;
+}, z.object({
   keyword: z.string().min(1).max(500), data_points: count,
   dates: z.array(z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/)),
   volumes: z.array(count.nullable()), ranks: z.array(count.nullable()),
@@ -19,7 +28,7 @@ const rowSchema = z.object({
     || row.data_points !== row.dates.length || row.dates.some((date, index) => index > 0 && date <= row.dates[index - 1])) {
     ctx.addIssue({ code: 'custom', message: 'History must have aligned arrays and strictly increasing unique months' });
   }
-});
+}));
 const payloadSchema = z.object({ country: z.literal('US'), granularity: z.literal('month'), keywords: z.array(rowSchema).max(10) }).passthrough();
 type JsonObject = { [key: string]: MarketJsonValue };
 function object(value: unknown): value is JsonObject { return value !== null && typeof value === 'object' && !Array.isArray(value); }

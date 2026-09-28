@@ -116,24 +116,24 @@ test('ABA history alignment failure identifies the row without admitting invalid
 
 test('ABA type diagnostics distinguish absent, null and invalid arrays without retaining source values', () => {
   const malformed = {
-    keyword: 'floor lamps', data_points: 0,
+    keyword: 'floor lamps', data_points: 1,
     dates: null, volumes: 'provider-private-message', ranks: {}, top3_click_shares: false,
   };
   const result = normalize(input([malformed]));
   assert.equal(result.status, 'failed');
   if (result.status !== 'failed') return;
   assert.deepEqual(result.diagnostic.fieldTypes, [
-    { path: ['keywords', 0, 'dates'], actualType: 'null', historyPoints: 'zero' },
-    { path: ['keywords', 0, 'volumes'], actualType: 'string', historyPoints: 'zero' },
-    { path: ['keywords', 0, 'ranks'], actualType: 'object', historyPoints: 'zero' },
-    { path: ['keywords', 0, 'top3_click_shares'], actualType: 'boolean', historyPoints: 'zero' },
-    { path: ['keywords', 0, 'top3_conversion_shares'], actualType: 'missing', historyPoints: 'zero' },
+    { path: ['keywords', 0, 'dates'], actualType: 'null', historyPoints: 'positive' },
+    { path: ['keywords', 0, 'volumes'], actualType: 'string', historyPoints: 'positive' },
+    { path: ['keywords', 0, 'ranks'], actualType: 'object', historyPoints: 'positive' },
+    { path: ['keywords', 0, 'top3_click_shares'], actualType: 'boolean', historyPoints: 'positive' },
+    { path: ['keywords', 0, 'top3_conversion_shares'], actualType: 'missing', historyPoints: 'positive' },
   ]);
   assert.doesNotMatch(JSON.stringify(result.diagnostic), /provider-private-message|floor lamps/);
 });
 
 test('ABA type diagnostics classify history counts and remain bounded without changing rejection', () => {
-  for (const [dataPoints, expected] of [[1, 'positive'], [undefined, 'missing'], [null, 'invalid'], [-1, 'invalid'], ['0', 'invalid']] as const) {
+  for (const [dataPoints, expected] of [[0, 'zero'], [1, 'positive'], [undefined, 'missing'], [null, 'invalid'], [-1, 'invalid'], ['0', 'invalid']] as const) {
     const sourceRow = { ...row(), data_points: dataPoints, dates: null };
     if (dataPoints === undefined) delete (sourceRow as { data_points?: unknown }).data_points;
     const result = normalize(input([sourceRow]));
@@ -147,4 +147,31 @@ test('ABA type diagnostics classify history counts and remain bounded without ch
   assert.equal(result.diagnostic.fieldTypes?.length, 12);
   assert.ok(JSON.stringify(result.diagnostic).length < 5000);
   assert.doesNotMatch(JSON.stringify(result.diagnostic), /private-invalid-count/);
+});
+
+test('zero-point ABA rows may omit arrays without discarding the other nine exact keyword histories', () => {
+  const keywords = Array.from({ length: 10 }, (_, index) => `fixture keyword ${index}`);
+  const rows = keywords.map((keyword, index) => index === 1 ? { keyword, data_points: 0 } : row(keyword));
+  const request = { ...input(rows), keywords };
+  const result = successful(request);
+  assert.equal(result.status, 'partial');
+  assert.equal(result.members.filter(member => member.top3ClickShare.value === 0.1).length, 9);
+  assert.deepEqual(result.members[1].top3ClickShare, { value: null, reason: 'missing-reference-month', path: null });
+  assert.equal(result.members[1].searchVolume.value, null);
+  assert.equal(result.members[1].monthPath, null);
+  assert.deepEqual(result.members[1].keywordPath, ['keywords', 1, 'keyword']);
+  assert.deepEqual(result.evidence.payload, request.rawPayload, 'Omitted source arrays remain omitted in raw evidence');
+  assert.deepEqual(replayMarketKeywordAbaSource(JSON.parse(JSON.stringify(result)), now), result);
+  const empty = successful(input([{ keyword: 'floor lamps', data_points: 0 }]));
+  assert.equal(empty.status, 'empty');
+});
+
+test('zero-point compatibility does not accept explicit nulls, positive counts without arrays or nonempty zero-point histories', () => {
+  for (const field of ['dates', 'volumes', 'ranks', 'top3_click_shares', 'top3_conversion_shares']) {
+    for (const invalid of [null, '', {}, [0]]) {
+      assert.equal(normalize(input([{ keyword: 'floor lamps', data_points: 0, [field]: invalid }])).status, 'failed', `${field}: ${JSON.stringify(invalid)}`);
+    }
+  }
+  assert.equal(normalize(input([{ keyword: 'floor lamps', data_points: 1 }])).status, 'failed');
+  assert.equal(normalize(input([{ ...row(), data_points: 0 }])).status, 'failed');
 });
