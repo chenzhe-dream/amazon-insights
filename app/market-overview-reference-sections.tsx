@@ -1,5 +1,5 @@
 "use client";
-import React,{useState} from 'react';
+import React,{useId,useState} from 'react';
 import type {z} from 'zod';
 import type {MarketOverviewDetailsResponseSchema,MarketOverviewReportEntrySchema} from '../shared/market-overview-report-contracts';
 import {overviewPresentationSections,selectOverviewDistributionEntries,selectOverviewSalesPoints,selectOverviewReportedMetric,selectOverviewRawConcentration} from './lib/market-overview-presentation';
@@ -50,6 +50,7 @@ function SavedOverviewFacts({detail}:{detail:Details}){
 }
 
 function SavedProductConcentration({detail,headTopN}:{detail:Details;headTopN:number}){
+ const [expanded,setExpanded]=useState(false),bodyId=useId();
  const source=detail.numbers.distributions?.find(e=>e.month===detail.entry.report.scope.toMonth&&e.operation==='market_product_concentration');
  const distribution=source?.distribution;
  if(distribution?.rows.length){
@@ -57,7 +58,7 @@ function SavedProductConcentration({detail,headTopN}:{detail:Details;headTopN:nu
   return <div className="market-reference-product-concentration"><p className="market-research-note">图表按来源顺序展示返回商品，明细表展示前 {rows.length} 条 Listing；销量占比以该接口返回的 {format(distribution.groups.find(g=>g.id==='sample')?.units??null)} 件销量为分母（共 {format(distribution.groups.find(g=>g.id==='sample')?.products??null)} 条商品），与顶部市场基础指标的样本不可混算。</p>
    {source?.scopeBasis==='request-bound'&&<p className="market-research-note">来源未回显类目和月份；以下仅为按所选条件返回的商品样本。</p>}
    <MarketOverviewConcentrationChart rows={distribution.rows.filter(row=>row.group==='sample')} kind="product" headTopN={headTopN} currency={distribution.currency}/>
-   <div className="market-overview-distribution-table" role="region" aria-label="商品集中度明细" tabIndex={0}><table><thead><tr><th scope="col">Listing</th><th scope="col">月销量</th><th scope="col">返回商品销量占比</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}><th scope="row">{row.label}</th><td>{format(row.units)}</td><td>{row.unitsSharePct===null?'不可计算':`${format(row.unitsSharePct)}%`}</td></tr>)}</tbody></table></div>
+   <div className="market-overview-distribution-table overview-product-details" role="region" aria-label="商品集中度明细" tabIndex={0}><table><thead><tr><th scope="col">Listing</th><th scope="col">月销量</th><th scope="col"><span className="overview-detail-heading">返回商品销量占比<button type="button" aria-expanded={expanded} aria-controls={bodyId} aria-label={expanded?'收起商品明细':'展开商品明细'} onClick={()=>setExpanded(value=>!value)}>{expanded?'收起':'展开'}{expanded?' ▴':' ▾'}</button></span></th></tr></thead><tbody id={bodyId} hidden={!expanded}>{rows.map(row=><tr key={row.id}><th scope="row">{row.label}</th><td>{format(row.units)}</td><td>{row.unitsSharePct===null?'不可计算':`${format(row.unitsSharePct)}%`}</td></tr>)}</tbody></table></div>
    <details><summary>来源与分母</summary><p>来源：{source?.sourceRef}；采集时间：{source?.fetchedAt}。</p><p>返回商品总销量：{format(distribution.groups.find(g=>g.id==='sample')?.units??null)}；未验证为全类目 Top Listing。</p></details>
   </div>;
  }
@@ -70,7 +71,7 @@ export function MarketOverviewReferenceSections({entry,detail,overview,headTopN=
  return <>{overviewPresentationSections.map(section=>{
   const entries=section.operation?selectOverviewDistributionEntries(detail.numbers.distributions??[],section.operation):[];
   return <section key={section.id} className="ss-report-block" data-report-section={section.id}><header><div><h4>{section.title}</h4><small>{entry.report.scope.fromMonth} 至 {entry.report.scope.toMonth} · 当前保存报告</small></div></header>
-   {section.id==='overview'?<><SavedOverviewFacts detail={detail}/>{overview}</>:section.id==='sales-trend'?<SavedSalesChart detail={detail}/>:section.id==='product-crn'?<SavedProductConcentration detail={detail} headTopN={headTopN}/>:section.operation?entries.length?<MarketOverviewDistributions entries={entries} currency={entry.report.scope.currency} embedded/>:<p className="ss-report-empty">此版本尚无该维度的已保存数据，其他可用结果继续保留。</p>:<p className="ss-report-empty">{section.missing}</p>}
+   {section.id==='overview'?<><SavedOverviewFacts detail={detail}/>{overview}</>:section.id==='sales-trend'?<SavedSalesChart detail={detail}/>:section.id==='product-crn'?<SavedProductConcentration detail={detail} headTopN={headTopN}/>:section.operation?entries.length?<MarketOverviewDistributions key={`${entry.attemptId}/${section.id}`} entries={entries} currency={entry.report.scope.currency} embedded/>:<p className="ss-report-empty">此版本尚无该维度的已保存数据，其他可用结果继续保留。</p>:<p className="ss-report-empty">{section.missing}</p>}
    {section.id==='listing-trend'&&<p className="market-research-note">上架时间分布反映返回样本的构成，不等于历年新增销量。</p>}
    {entry.report.reportVersion==='market-overview-report/v2'&&section.id!=='overview'&&(section.operation||section.id==='sales-trend')&&<MarketOverviewSynthesis synthesis={entry.report.synthesis} semantic={detail.semantic?.task==='market-overview-explanation'?detail.semantic:null} dimensionPrefix={section.operation??'sample-trend'}/>}
   </section>;

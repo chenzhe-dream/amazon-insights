@@ -62,6 +62,27 @@
 .market-overview-distribution-table table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }
 .market-overview-distribution-table th, .market-overview-distribution-table td { padding: 10px 12px; border-bottom: 1px solid #e0e4e9; text-align: left; }
 .market-overview-distribution-table thead { background: #f5f7fb; }
+.market-ui-reference .overview-product-details table { font-size: 11px; }
+.market-ui-reference .overview-product-details th,.market-ui-reference .overview-product-details td { padding: 7px 10px; }
+.overview-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.overview-detail-heading button { border: 1px solid #dce3ed; border-radius: 4px; padding: 3px 10px; color: #6d28d9; background: #fff; cursor: pointer; font: inherit; white-space: nowrap; }
+.overview-product-details tbody[hidden] { display: none; }
+.overview-month-switch { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.overview-month-switch button { border: 1px solid #dce3ed; border-radius: 5px; padding: 5px 12px; color: #566479; background: #fff; cursor: pointer; font-size: 12px; }
+.overview-month-switch button[aria-pressed="true"] { border-color: #a78bfa; color: #6d28d9; background: #f5f3ff; }
+.market-reference-distribution-content .market-reference-source h5 { margin: 8px 0; }
+.market-reference-distribution-content .market-reference-source { min-width: 0; }
+.overview-content-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 28px; }
+.overview-content-card { display: flex; flex-direction: column; align-items: center; min-width: 0; gap: 6px; }
+.overview-content-card h5 { align-self: flex-start; font-size: 13px; }
+.overview-content-pie { width: 260px; height: 260px; max-width: 100%; display: block; }
+.overview-pie-center { fill: #34465d; font-size: 15px; font-weight: 600; }
+.overview-pie-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; width: 100%; max-width: 450px; }
+.overview-pie-legend button { display: flex; align-items: center; gap: 5px; border: 0; padding: 4px 0; background: transparent; color: #526276; font-size: 11px; cursor: pointer; text-align: left; }
+.overview-pie-legend button[aria-pressed="true"] { color: #6d28d9; }
+.overview-pie-legend i { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.overview-pie-legend strong { margin-left: auto; }
+@media(max-width:1100px) { .overview-content-pair { grid-template-columns: 1fr; } }
 @keyframes market-theme-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .market-theme-spinner { animation: none; } }
 @media (max-width: 1150px) { .market-research-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } .market-research-node { grid-column: span 2; } .market-research-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

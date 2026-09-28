@@ -145,7 +145,7 @@ test('product concentration uses its own returned-product denominator and preser
  assert.match(product,/ss-crn-tabs/);assert.match(product,/ss-crn-layout/);
  assert.match(product,/销量分布/);assert.match(product,/销售额分布/);
  assert.match(product,/B000000001/);assert.match(product,/B000000002/);
- const table=product.match(/<div class="market-overview-distribution-table"[\s\S]*?<\/table>/)?.[0]??'';
+ const table=product.match(/<div class="market-overview-distribution-table overview-product-details"[\s\S]*?<\/table>/)?.[0]??'';
  assert.match(table,/B000000001/);assert.doesNotMatch(table,/B000000002/);
  assert.match(product,/30%/);assert.match(product,/2 条商品/);
  assert.match(product,/来源未回显类目和月份/);
