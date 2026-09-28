@@ -52,7 +52,10 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   async function start(requestScope=scope,startMonth=fromMonth){if(!/^\d+(?::\d+)*$/.test(requestScope.nodeQuery)||startMonth>requestScope.month){setError('请先选择有效类目和完整分析周期。');return;}
     lookupRevision.current++;setLookingUp(false);show(true);setNoSaved(false);
     const research={marketplace:requestScope.marketplace,currency:marketSiteCurrency(requestScope.marketplace),nodeIdPath:requestScope.nodeQuery,fromMonth:startMonth,toMonth:requestScope.month},params={headTopN:requestScope.headTopN,newProductMonths:requestScope.newProductMonths},signature=JSON.stringify({research,params});
-    await mutate(async signal=>{if(startKeys.current?.signature!==signature)startKeys.current={signature,study:browserRequestId(),run:browserRequestId()};const keys=startKeys.current;const study=await createOverviewStudy(research,keys.study,signal),next=await startOverviewRun(study.id,params,keys.run,signal);if(!signal.aborted){setRun(next);setRunId(next.id);setRestoreId(next.id);setChoice('latest');setReadError(null);remember(next.id);}});
+    await mutate(async signal=>{if(startKeys.current?.signature!==signature)startKeys.current={signature,study:browserRequestId(),run:browserRequestId()};const keys=startKeys.current;const study=await createOverviewStudy(research,keys.study,signal),next=await startOverviewRun(study.id,params,keys.run,signal);if(!signal.aborted){
+      // Keep command keys on uncertain failures, but a confirmed success ends this submission.
+      startKeys.current=null;
+      setRun(next);setRunId(next.id);setRestoreId(next.id);setChoice('latest');setReadError(null);remember(next.id);}});
   }
   async function action(kind:'retry'|'cancel',step?:Run['steps'][number]){if(!run)return;const id=run.id,steps=step?.latestAttemptId?[{stepId:step.id,failedAttemptId:step.latestAttemptId}]:[],signature=JSON.stringify({id,kind,steps});if(actionKey.current?.signature!==signature)actionKey.current={signature,key:browserRequestId()};const key=actionKey.current.key;
     await mutate(async signal=>{if(kind==='retry')await retryOverviewSteps(id,steps,key,signal);else await cancelOverviewRun(id,key,signal);const next=await readOverviewRun(id,signal);if(!signal.aborted){setRun(next);setReadError(null);}});}
