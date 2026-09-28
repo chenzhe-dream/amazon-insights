@@ -52,7 +52,7 @@ function SavedOverviewFacts({detail}:{detail:Details}){
  const facts=[['样本商品数','sampleProducts'],['样本销量','totalUnits'],['品牌数','brands'],['卖家数','sellers'],['新品数','newCount']] as const;
  const known=facts.flatMap(([label,key])=>{const metric=selectOverviewReportedMetric(detail,key);return metric?[{label,value:new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(metric.value),requestBound:metric.requestBound}]:[];});
  if(!known.length)return null;
- return <div className="ss-report-facts"><strong>本次返回样本 · {detail.entry.report.scope.overviewPeriod?'最近30天':detail.entry.report.scope.toMonth}</strong><dl>{known.map(f=><div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}</dl>{known.some(f=>f.requestBound)&&<small>来源按该月请求，响应未回显确认范围；只描述返回样本。</small>}</div>;
+ return <div className="ss-report-facts"><strong>本次返回样本 · {detail.entry.report.scope.overviewPeriod?'最近30天':detail.entry.report.scope.toMonth}</strong><dl>{known.map(f=><div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}</dl>{known.some(f=>f.requestBound)&&<small>来源按所选统计周期请求，响应未回显确认范围；只描述返回样本。</small>}</div>;
 }
 
 function SavedProductConcentration({detail,headTopN}:{detail:Details;headTopN:number}){
