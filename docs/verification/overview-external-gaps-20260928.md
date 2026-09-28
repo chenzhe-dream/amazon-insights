@@ -20,6 +20,20 @@ US / 228013:495224:3736561:1063294 / 2026-08：
 
 ## 验证与发布记录
 
-修复中。发布及正式入口新任务的最终结果将在验证后补充，不能把真实响应的本地回放当作线上整链路成功。
+已发布代码 `465aa8034e8875ac365564086c7e17e7d7506748`。制品 `1d7381bff90a66614f30f94caeb6cc66271b6180b6070e8129636b9289a00d99`，sourceHash `4291133adfdab2c24aa3189b7bce5e99b66d43f29ab7cb079e586e6940892b2b`。正式脚本发布成功，Web31900/Agent31901健康；回滚引用 `codex/rollback-before-overview-external-20260928` 指向94a3205f。
 
-本地证据目录（不提交原始供应商响应）：`test-results/external-gaps-probe/`、`external-gaps-browser/`、`external-gaps-review.md`。
+- 最终22项外部来源/原版总结/界面回归通过；2项真实独立PostgreSQL整合通过，覆盖四模块及分页、限流自动重试、手动重试、取消、历史冻结。类型检查通过。旧版需求持久化及入口重放回归亦通过。
+- 独立审查发现的响应范围别名、原版日期格式和部分需求数据隐藏三项已修复；后续统一了图表与评分的冲突月份过滤，原版评分公式未改。
+- 正式新任务 `07980a3c-1bd9-424d-93ab-b63c8aef615c`：succeeded，失败步骤0；13个商品浏览量月份；24个销量与24个推算销售额月份；利润24页，精确取得100/100个目标ASIN的毛利率，缺失0。
+- 原版行业关键词链路也完成真实验证：5个词均ready，各48个月。原始返回词中包含相关性较弱的词，沿用原版来源选择，不自行替换或改业务规则。
+- 正式页面商品需求、行业销量、价格带利润和原版总结截图已检查，浏览器错误0。补充隔离页面检查等待、失败、成功空和部分月份冲突四种状态。
+- 旧任务 `e78c38fe-d900-46c3-9e66-eb00bc3d0d3a` 仍为44分，6维总结及原有字段不变；全部尝试ID/output_hash不变，报告写请求0。临时验收账号已禁用、会话撤销。
+
+## 仍属来源限制的内容
+
+- 本次商品浏览量最新返回2026-05，早于研究月2026-08；页面显示来源最新日期，缺失月份不补造。
+- 多个分布来源未回显完整范围或金额币种确认，仍保留“部分可用”及原有金额缺口说明。本轮没有把未确认的来源元数据宣称为已确认。
+- 当前100/100利润覆盖只证明该次US落地灯样本；其他类目可能仍有缺月、空结果或未匹配ASIN，按实际来源状态展示。
+- 新能力用于新任务；旧报告保持冻结，需要重新采集才能生成含新增来源的报告。
+
+本地证据目录（不提交完整供应商响应）：`test-results/external-gaps-probe/`、`external-gaps-browser/`、`external-gaps-online/`、`external-gaps-states/`、`external-gaps-review.md`、`external-backend-report.md`、`external-gaps-final-unit.log`、`external-gaps-final-integration.log`、`external-gaps-publish.log`、`external-gaps-old-history.log`。
