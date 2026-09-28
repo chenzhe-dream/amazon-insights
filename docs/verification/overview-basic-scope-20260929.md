@@ -18,6 +18,15 @@
 
 新页面回归先失败，确认旧版无法等待报告范围或按其匹配。修复后覆盖基础历史先返回/报告先返回、不同类目/月/TopN/新品窗口、手动选择与刷新、返回对应记录、无匹配与空历史、匹配记录采集失败、历史接口失败、任务读取失败、最近30天、零采集写请求；纯匹配测试覆盖站点、完整路径冲突和裸节点。
 
-连同7天缓存、历史版本、重新采集、最近30天及原基础显示回归，共15项检查通过。TypeScript检查通过。正式入口截图、历史不可变及发布版本完成后追加。
+连同7天缓存、历史版本、重新采集、最近30天及原基础显示回归，共15项检查通过。TypeScript检查通过。补充复验读取失败时显示“基础概览暂不可用”，不误报没有匹配记录。
 
 范围到C6为止；其他原版能力和界面待用户验收、真实外部缺口及两项旧测试债继续独立记录。
+
+## 正式发布与只读验收
+
+- 正式代码4514bfc41625b527fa1d6c5851c354cd5ec0ab76；制品acbbc98cea10fd0e3990396a49cfe708ceed9d9a4a8f78327fcc52ba56aec767，sourceHash 253d1fcf21e00471f3012803ec428fcd11f80e8881f393bd07bb187d5a41d7fb。Web/Agent健康。
+- 回滚引用codex/rollback-before-overview-basic-scope-20260929指向b4f073ab。
+- 旧落地灯总览e78c38fe-d900-46c3-9e66-eb00bc3d0d3a匹配基础记录603e4282-e260-4fdc-81fe-7a0faa140872，月份2026-08；不再误显示滑板车。
+- 滑板车最近30天总览ba307b8e-8a9b-4cb5-a317-ee96e2d53b23匹配基础记录841a8f6c-52ca-47fd-8b68-6f1f7e163027，周期last30；不匹配自然月记录。
+- 正式页手动切换其他历史，范围差异提示、返回报告对应概览均通过；三张截图已检查，浏览器错误0。所有市场采集/分析POST为0，两个历史任务的步骤ID/output_hash不变。
+- 临时验收用户已停用，会话撤销。证据test-results/overview-basic-scope-online/{result.json,matched-0.png,matched-1.png,manual-mismatch.png}，overview-basic-scope-publish-final.log，overview-basic-scope-typecheck.log。
