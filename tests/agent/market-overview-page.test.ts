@@ -29,6 +29,11 @@ test('overview page restores fixed reports, keeps module selection independent a
   });
   await page.goto(`${origin}/?overviewRun=${overviewRunId}`);
   await page.getByRole('heading',{name:'总览分析与报告',exact:true}).waitFor();await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(writes.length,0);
+  const cacheInfo=page.getByLabel('已保存报告与重新采集');
+  await cacheInfo.waitFor();assert.equal(await cacheInfo.locator('time').getAttribute('datetime'),current.run.createdAt);
+  assert.match(await cacheInfo.innerText(),/读取已保存报告不会重新采集/);
+  assert.equal(await page.getByRole('button',{name:'重新采集',exact:true}).isEnabled(),true);
+  await mkdir('test-results/market-overview-page',{recursive:true});await cacheInfo.screenshot({path:'test-results/market-overview-page/cache-controls.png'});
   await page.getByRole('heading',{name:'价格分布',exact:true}).waitFor();await page.locator('[data-report-section="price"] summary').first().click();
   const price=page.getByRole('region',{name:'2026-08 价格分布明细'});await price.getByText('0-15',{exact:true}).waitFor();assert.equal(await price.getByText('50%',{exact:true}).count(),4);assert.equal(await price.getByText('未知',{exact:true}).count(),2);
   await page.locator('[data-report-section="product-demand"] summary').first().click();await page.getByText('来源本次未返回需求数据，未生成趋势或填零。',{exact:true}).waitFor();
@@ -47,6 +52,8 @@ test('overview page restores fixed reports, keeps module selection independent a
   await mkdir('test-results/market-overview-page',{recursive:true});await page.screenshot({path:'test-results/market-overview-page/report-and-selection.png',fullPage:true});
   allowStarts=true;await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByText('synthetic run unavailable').waitFor();
   await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();assert.equal(writes.length,5);
+  assert.equal(await page.getByRole('button',{name:'正在采集',exact:true}).isDisabled(),true);
+  assert.equal(await page.getByRole('button',{name:'开始总览分析',exact:true}).isDisabled(),true);
   assert.equal(new Set(writes.filter(w=>w.path.endsWith('/studies')).map(w=>w.key)).size,1);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,1);
   assert.equal(writes[0].body.nodeIdPath,'999:888');assert.equal(writes[0].body.fromMonth,'2026-07');assert.equal(writes[0].body.toMonth,'2026-08');
   failReads=true;await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();await page.getByText('状态读取失败：',{exact:false}).waitFor();assert.equal(await page.getByRole('button',{name:'取消总览分析',exact:true}).isDisabled(),true);
@@ -55,7 +62,7 @@ test('overview page restores fixed reports, keeps module selection independent a
   await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();
   assert.equal(writes.length,8);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/studies')).map(w=>w.key)).size,2,'a new successful action must use a new study command');assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,2,'a new successful action must use a new run command');
   current.run.steps=[];current.run.status='succeeded';await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();await page.getByRole('heading',{name:'部分报告已保存',exact:true}).waitFor();
-  await page.getByRole('button',{name:'开始总览分析',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();assert.equal(writes.length,10);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,3,'completed runs must not block a fresh same-condition collection');
+  await page.getByRole('button',{name:'重新采集',exact:true}).click();await page.getByRole('heading',{name:'总览分析进行中',exact:true}).waitFor();assert.equal(writes.length,10);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,3,'completed runs must not block a fresh same-condition collection');
   failReads=true;await page.reload();await page.getByText('未能读取任务，请刷新状态或检查任务编号。',{exact:true}).waitFor();assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);assert.equal(writes.length,10);
   failReads=false;current=overviewRun(true);current.run.status='partial';current.run.currentReport=null;current.run.latestSavedReport=null;current.run.history=[];
   current.run.steps=[{...current.run.steps[0],kind:'rules',status:'failed',current:true,canRetry:true,errorCode:'internal'}];
