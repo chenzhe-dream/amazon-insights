@@ -1,3 +1,4 @@
+import {MarketOverviewOriginalSynthesisSchema} from './market-overview-original-synthesis';
 import {MarketOverviewIndustryDemandSchema} from './market-overview-industry-demand';
 import {z} from 'zod';
 import {MarketAnalysisScopeSchema,MarketInputRecordSchema} from './market-analysis-contracts';
@@ -40,5 +41,5 @@ const reason=z.enum(['not-collected','collection-failed','field-absent','invalid
 const metric=z.object({state:z.enum(['known','missing','conflict']),value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),
   observations:z.array(z.object({sourceRef:id,field:id,raw:MarketInputRecordSchema.shape.data,value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),scopeBasis:z.enum(['request-bound','response-verified']).optional()}).strict())}).strict();
 export const MarketOverviewDetailsResponseSchema=z.object({entry:MarketOverviewReportEntrySchema,semantic:MarketSemanticRecordSchema.refine(s=>s.task==='market-overview-explanation').nullable(),numbers:z.object({months:z.array(z.object({month,metrics:z.record(id,metric),sourceRefs:z.array(id),
-  failures:z.array(z.object({month,operation:z.enum(['market_research','market_research_statistics']),attemptId:uuid,code:id}).strict())}).strict()),trendGaps:z.array(z.object({metricId:id,reason:id}).strict()),distributions:z.array(MarketOverviewDistributionEntrySchema).max(2000).optional(),originalSummary:MarketOverviewOriginalFieldsSchema.optional(),industryDemand:MarketOverviewIndustryDemandSchema.optional()}).strict()}).strict();
+  failures:z.array(z.object({month,operation:z.enum(['market_research','market_research_statistics']),attemptId:uuid,code:id}).strict())}).strict()),trendGaps:z.array(z.object({metricId:id,reason:id}).strict()),distributions:z.array(MarketOverviewDistributionEntrySchema).max(2000).optional(),originalSummary:MarketOverviewOriginalFieldsSchema.optional(),originalSynthesis:MarketOverviewOriginalSynthesisSchema.optional(),industryDemand:MarketOverviewIndustryDemandSchema.optional()}).strict()}).strict();
 export type MarketOverviewRunResponse=z.infer<typeof MarketOverviewRunResponseSchema>;

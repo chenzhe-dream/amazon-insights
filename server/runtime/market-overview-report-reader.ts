@@ -1,3 +1,4 @@
+import {projectMarketOverviewOriginalSynthesis} from '../domain/market-research/overview-original-synthesis';
 import {readOverviewIndustryDemand} from './market-overview-industry-demand-step';
 import {z} from 'zod';
 import {MarketSemanticRecordSchema} from '../../shared/market-semantic-contracts';
@@ -116,6 +117,6 @@ export async function readMarketOverviewReport(context:PostgresQueryContext,view
   // Internal evidence only: public details continue to select numbers/semantic.
   // A consumer must require complete windows and replay the complete manifest
   // before promoting these audited sections to a synthesis input.
-  return {report:{...report,reportHash:digest(report)},numbers:{...(industryDemand?{industryDemand}:{}),months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{}),originalSummary:projectMarketOverviewOriginalFields({scope:view.run.scope,parameters:catalog.parameters,sources})},semantic,
+  return {report:{...report,reportHash:digest(report)},numbers:{...(rulesOnly?{originalSynthesis:projectMarketOverviewOriginalSynthesis({scope:view.run.scope,parameters:catalog.parameters,sources,industryDemand})}:{}),...(industryDemand?{industryDemand}:{}),months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{}),originalSummary:projectMarketOverviewOriginalFields({scope:view.run.scope,parameters:catalog.parameters,sources})},semantic,
     synthesisSource:full&&synthesisPlan?{catalog:full,plan:synthesisPlan,windows:synthesisWindows}:null};
 }
