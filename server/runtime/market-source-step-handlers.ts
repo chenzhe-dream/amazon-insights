@@ -1,3 +1,4 @@
+import {createOverviewExternalStep} from './market-overview-external-step';
 import {createOverviewIndustryDemandStep} from './market-overview-industry-demand-step';
 import {inspectMarketThemeContinuation,MARKET_THEME_RULES_FLOW_V3} from '../domain/market-research/customer-theme-flow';
 import {collectMarketShapeProductImage} from '../services/market-shape-product-image';
@@ -199,11 +200,14 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     return collected(scope, 'customer-themes', [input.asin], [{ id: input.asin, data: { collection: 'customer-themes', result: result.result } }],
       result.result.status === 'empty' ? 'empty' : 'ready', result.evidence, { asin: input.asin, selectionInputSnapshotId: input.selectionInputSnapshotId, issues: result.issues });
   };
+  const external=createOverviewExternalStep(deps.context,deps.connectors);
   const demand=createOverviewIndustryDemandStep(deps.context,deps.connectors);
   const overview:MarketStepHandler=async({claim,signal})=>{
+    if(object(claim.step.input).phase==='overview-external')return external({claim,signal});
     if(object(claim.step.input).phase==='overview-industry-demand')return demand({claim,signal});
     const input=z.union([MarketOverviewSourceStepInputSchema,MarketOverviewDistributionStepInputSchema]).parse(claim.step.input),scope=await scopeFor(claim,signal,'overview');
-    const common={scope,jobId:claim.moduleRunId,connector:deps.connectors.sellerSprite,signal};
+    const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});
+    const common={scope,jobId:claim.moduleRunId,connector:deps.connectors.sellerSprite,signal,originalDemand:object(view?.run.params).flow==='market-overview-flow/rules-v4'};
     const result=MarketOverviewSourceStepInputSchema.safeParse(input).success?await collectMarketOverviewSource({...MarketOverviewSourceStepInputSchema.parse(input),...common}):await collectMarketOverviewDistribution({...MarketOverviewDistributionStepInputSchema.parse(input),...common});
     if(result.status==='failed'||!result.evidence)return failure(result.issues[0]?.code??'invalid-source',result.issues[0]?.retryable??false);
     const id=`${input.month}:${input.operation}`;

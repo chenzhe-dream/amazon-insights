@@ -1,3 +1,5 @@
+import {projectOverviewProductDemand} from './overview-product-demand';
+import type {MarketOverviewExternalData} from '../../../shared/market-overview-external';
 import type {MarketAnalysisScope} from '../../../shared/market-analysis-contracts';
 import type {MarketSourceEvidence} from '../../../shared/market-source-contracts';
 import type {MarketOverviewIndustryDemand} from '../../../shared/market-overview-industry-demand';
@@ -17,7 +19,7 @@ const distributions=[
 const moneyKey=(key:string)=>/price|revenue|fba$/i.test(key)&&!/^fbaProportion$/i.test(key);
 
 /** Pure projection of receipts already verified by the frozen-catalog reader. No fetching or cross-module lookup. */
-export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalysisScope;parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12};sources:readonly MarketSourceEvidence[];industryDemand?:MarketOverviewIndustryDemand}){
+export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalysisScope;parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12};sources:readonly MarketSourceEvidence[];industryDemand?:MarketOverviewIndustryDemand;externalData?:MarketOverviewExternalData}){
  const {scope,parameters}=input,month=scope.toMonth;
  const gaps=new Set<string>(),refs=new Set<string>();
  const source=(operation:string)=>input.sources.find(s=>s.provider==='sellerSprite'&&s.operation===operation&&s.scope.organizationId===scope.organizationId&&s.scope.researchId===scope.researchId&&s.scope.marketplace===scope.marketplace&&s.scope.nodeIdPath===scope.nodeIdPath&&s.scope.currency===scope.currency&&s.requestIdentity.marketplace===scope.marketplace&&s.requestIdentity.nodeIdPath===scope.nodeIdPath&&s.requestIdentity.month===month&&s.observationPeriod.kind==='calendar-months'&&s.observationPeriod.fromMonth===month&&s.observationPeriod.toMonth===month);
@@ -76,17 +78,21 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
   for(const series of demand.series)if(series.status==='ready'&&series.sourceRef)refs.add(series.sourceRef);
  }
  if(!report.keywordTrends.length)gaps.add('行业关键词需求趋势缺失，保留原版空趋势判断。');
- gaps.add('原版行业销量及销售额趋势依赖 Sorftime 类目销量与均价，当前冻结目录未采集，保留空趋势。');
+ if(input.externalData){
+  report.salesTrend=input.externalData.salesTrend.points;report.salesAmountTrend=input.externalData.salesAmountTrend.points;report.asinProfits=input.externalData.asinProfits.items;
+  for(const [key,label] of [['salesTrend','行业销量趋势'],['salesAmountTrend','行业销售额趋势'],['asinProfits','价格带商品毛利率']] as const){const value=input.externalData[key];for(const ref of value.sourceRefs)refs.add(ref);if(value.status!=='ready')gaps.add(`${label}：${value.status==='failed'?'采集失败':value.status==='empty'?'来源返回空数据':value.status==='not-collected'?'尚未采集':'部分数据缺失'}${value.errorCode?`（${value.errorCode}）`:''}。`);}
+ }else gaps.add('原版行业销量及销售额趋势依赖 Sorftime 类目销量与均价，当前冻结目录未采集，保留空趋势。');
  const productDemandSource=source('market_product_demand_trend');
  if(productDemandSource){
   const raw=obj(obj(productDemandSource.payload).data??productDemandSource.payload);
   if(raw.nodeIdPath===undefined||raw.nodeIdPath===scope.nodeIdPath){
-   report.productDemand=parseProductDemand(raw,{totalProducts:niche.totalProducts,returnRatio:niche.returnRatio,avgReturnRatio:niche.avgReturnRatio,searchToPurchaseRatio:niche.searchToPurchaseRatio});
+   if(input.externalData){const normalized=projectOverviewProductDemand([productDemandSource],month,[]);report.productDemand={asinCount:normalized.asinCount,returnRatio:normalized.returnRatio,avgReturnRatio:normalized.avgReturnRatio,searchToPurchaseRatio:normalized.searchToPurchaseRatio,avgSearchToPurchaseRatio:normalized.avgSearchToPurchaseRatio,pageViews:normalized.points,updatedAt:normalized.points.at(-1)?.month??null};if(normalized.errorCode)gaps.add(`商品浏览量趋势部分数据不可用（${normalized.errorCode}），仅使用已验证月份。`);}
+   else report.productDemand=parseProductDemand(raw,{totalProducts:niche.totalProducts,returnRatio:niche.returnRatio,avgReturnRatio:niche.avgReturnRatio,searchToPurchaseRatio:niche.searchToPurchaseRatio});
    remember(productDemandSource);
    if(!report.productDemand.pageViews.length)gaps.add('商品浏览量趋势来源返回空数据，保留原版空趋势判断。');
   }else gaps.add('商品浏览量趋势类目不匹配，保留原版空趋势判断。');
  }else gaps.add('商品浏览量趋势未采集，保留原版空趋势判断。');
- if(!report.prices.some(r=>r.items?.some(p=>p.profit!=null)))gaps.add('价格带商品毛利率样本缺失，未使用平均毛利率或跨模块数据补齐。');
+ if(!Object.values(report.asinProfits??{}).some(p=>p.profit!==null)&&!report.prices.some(r=>r.items?.some(p=>p.profit!=null)))gaps.add('价格带商品毛利率样本缺失，未使用平均毛利率或跨模块数据补齐。');
  return MarketOverviewOriginalSynthesisSchema.parse({version:6,summary:buildMarketOverviewSynthesis(niche,report),inputGaps:[...gaps],sourceRefs:[...refs],originalAssumptions:[
   '沿用原版第6版评分权重、阈值、机会标签及缺失数据默认判断；默认判断不表示源数据已完整。',
   '沿用原版数值转换：显式空值和空字符串可能转为零，未提供的字段保持缺失。',

@@ -29,6 +29,13 @@ function source(operation:string,values:Record<string,unknown>|Record<string,unk
  return createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{nodeIdPath:scope.nodeIdPath,marketplace:'US',month},responseIdentityPaths:{nodeIdPath:[[...path,'nodeIdPath']],month:[[...path,'month']],...(currency==='USD'?{currency:[[...path,'currency']]}:{})},payload:{code:'OK',data:operation==='market_research'?{items:[raw]}:raw},fetchedAt:'2026-09-12T00:00:00.000Z',observationPeriod:{kind:'calendar-months',fromMonth:month,toMonth:month},units:{},coverage:{receivedCount:1,expectedCount:1,truncation:{status:'not-truncated'}}});
 }
 const project=(sources:ReturnType<typeof source>[])=>projectMarketOverviewOriginalSynthesis({scope,parameters,sources});
+test('v4 synthesis excludes exactly the same conflicting and future demand months as the visible projection',()=>{
+ const items=Array.from({length:12},(_,i)=>({date:`2025-${String(i+1).padStart(2,'0')}-01`,glanceViews:100}));items.push({date:'2025-12-01',glanceViews:999999},{date:'2026-09-01',glanceViews:999999});
+ const emptySeries={status:'not-collected' as const,points:[],sourceRefs:[],errorCode:null},externalData={referenceMonth:scope.toMonth,salesTrend:emptySeries,salesAmountTrend:emptySeries,asinProfits:{status:'not-collected' as const,items:{},requestedAsins:[],missingAsins:[],sourceRefs:[],errorCode:null}};
+ const actual=projectMarketOverviewOriginalSynthesis({scope,parameters,sources:[source('market_product_demand_trend',{items,returnRatio:null})],externalData});
+ const report=emptyReport();report.productDemand={asinCount:null,returnRatio:null,avgReturnRatio:null,searchToPurchaseRatio:null,avgSearchToPurchaseRatio:null,pageViews:items.slice(0,11).map(r=>({month:r.date,value:r.glanceViews})),updatedAt:'2025-11-01'};
+ assert.deepEqual(actual.summary,buildMarketOverviewSynthesis(niche(),report));assert.ok(actual.inputGaps.some(g=>g.includes('conflicting-demand-month')));
+});
 
 test('no sources retains all original null-report defaults and declares gaps',()=>{
  const result=project([]);

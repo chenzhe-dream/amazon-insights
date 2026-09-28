@@ -1,0 +1,11 @@
+import {z} from 'zod';
+const month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),ref=z.string().regex(/^market-source:[a-f0-9]{64}$/);
+const status=z.enum(['ready','partial','empty','failed','not-collected']);
+export const OverviewExternalPointSchema=z.object({month,value:z.number().finite()}).strict();
+const series=z.object({status,points:z.array(OverviewExternalPointSchema),sourceRefs:z.array(ref),errorCode:z.string().nullable()}).strict();
+export const OverviewAsinProfitSchema=z.object({profit:z.number().finite().nullable(),price:z.number().finite().nullable(),fba:z.number().finite().nullable()}).strict();
+export const MarketOverviewExternalDataSchema=z.object({referenceMonth:month,salesTrend:series,salesAmountTrend:series,asinProfits:z.object({status,items:z.record(z.string(),OverviewAsinProfitSchema),requestedAsins:z.array(z.string()),missingAsins:z.array(z.string()),sourceRefs:z.array(ref),errorCode:z.string().nullable()}).strict()}).strict();
+export type MarketOverviewExternalData=z.infer<typeof MarketOverviewExternalDataSchema>;
+export const MarketOverviewProductDemandSchema=z.object({status:z.enum(['ready','partial','empty','failed','not-collected']),points:z.array(z.object({month:z.string(),value:z.number().finite()}).strict()),asinCount:z.number().finite().nullable(),returnRatio:z.number().finite().nullable(),avgReturnRatio:z.number().finite().nullable(),searchToPurchaseRatio:z.number().finite().nullable(),avgSearchToPurchaseRatio:z.number().finite().nullable(),sourceRef:ref.nullable(),errorCode:z.string().nullable()}).strict();
+export const OverviewExternalInputSchema=z.object({phase:z.literal('overview-external'),catalogAttemptId:z.string().uuid(),kind:z.enum(['sales','prices','profits']),batch:z.number().int().nonnegative().optional(),page:z.number().int().min(1).max(50).optional(),asins:z.array(z.string().regex(/^[A-Z0-9]{10}$/)).min(1).max(40).optional()}).strict().refine(v=>v.kind==='profits'?v.batch!==undefined&&v.page!==undefined&&v.asins!==undefined:v.batch===undefined&&v.page===undefined&&v.asins===undefined);
+export type OverviewExternalInput=z.infer<typeof OverviewExternalInputSchema>;

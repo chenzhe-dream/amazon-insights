@@ -1,3 +1,4 @@
+import {overviewExternalFrontier} from './overview-external-plan';
 import {inspectMarketOverviewSynthesisContinuation} from './overview-synthesis-continuation';
 import {z} from 'zod';
 import {MARKET_OVERVIEW_TABLE_CATALOG_VERSION,MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION} from './overview-complete-catalog';
@@ -17,15 +18,16 @@ export const MARKET_OVERVIEW_COMPLETE_FLOW_VERSION='market-overview-flow/v4';
 export const MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION='market-overview-flow/v5';
 export const MARKET_OVERVIEW_RULES_FLOW_VERSION='market-overview-flow/rules-v1';
 export const MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION='market-overview-flow/rules-v2';
+export const MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION='market-overview-flow/rules-v4';
 export const MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION='market-overview-flow/rules-v3';
-export const MarketOverviewFlowParamsSchema=z.object({flow:z.enum([MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION]),headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)])}).strict();
+export const MarketOverviewFlowParamsSchema=z.object({flow:z.enum([MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION]),headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)])}).strict();
 export const MarketOverviewCatalogStepInputSchema=z.object({task:z.literal('overview-source-catalog'),sourceAttemptIds:z.array(z.string().uuid()).min(1).max(2000),dataCutoffAt:z.string().datetime()}).strict();
 type Request=Pick<CreateMarketModuleRunInput,'scope'|'moduleKind'|'params'|'versions'>;
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
-export const isMarketOverviewFlow=(request:{params:unknown})=>[MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION].includes(String(obj(request.params).flow));
+export const isMarketOverviewFlow=(request:{params:unknown})=>[MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION].includes(String(obj(request.params).flow));
 export function marketOverviewFlowInitialSteps(request:Request):MarketStepDefinition[]{
   const p=MarketOverviewFlowParamsSchema.parse(request.params),scope=MarketAnalysisScopeSchema.parse(request.scope);
-  const productRows=p.flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||p.flow===MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,complete=productRows||p.flow===MARKET_OVERVIEW_COMPLETE_FLOW_VERSION||p.flow===MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION||p.flow===MARKET_OVERVIEW_RULES_FLOW_VERSION,expanded=complete||p.flow===MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,validRule=expanded?request.versions.rule===(productRows?MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION:complete?MARKET_OVERVIEW_TABLE_CATALOG_VERSION:MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION):request.versions.rule!==MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION&&MarketOverviewCatalogVersionSchema.safeParse(request.versions.rule).success;
+  const productRows=p.flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||p.flow===MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION||p.flow===MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION,complete=productRows||p.flow===MARKET_OVERVIEW_COMPLETE_FLOW_VERSION||p.flow===MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION||p.flow===MARKET_OVERVIEW_RULES_FLOW_VERSION,expanded=complete||p.flow===MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,validRule=expanded?request.versions.rule===(productRows?MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION:complete?MARKET_OVERVIEW_TABLE_CATALOG_VERSION:MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION):request.versions.rule!==MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION&&MarketOverviewCatalogVersionSchema.safeParse(request.versions.rule).success;
   if(request.moduleKind!=='overview'||request.versions.source!==MARKET_SOURCE_HANDLER_VERSION||!validRule||request.versions.mapping!==request.versions.rule||request.versions.planner!==p.flow)throw new TypeError('Overview flow versions differ');
   const definitions:MarketStepDefinition[]=[];
   for(let month=scope.fromMonth;month<=scope.toMonth;){
@@ -65,6 +67,13 @@ export function inspectMarketOverviewContinuation(view:MarketModuleRunView,now:s
   const catalogOutput=obj(catalog.output),inputId=z.string().regex(/^market-input:[a-f0-9]{64}$/),numericId=inputId.parse(catalogOutput.numericInputSnapshotId);
   const reportBase={task:'overview-report' as const,catalogAttemptId:catalog.id,numericInputSnapshotId:numericId};
   report({...reportBase,phase:'numeric',windowAttemptId:null,preparationAttemptIds:[],modelAttemptIds:[]});
+  if(flow===MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION){
+    const frontier=overviewExternalFrontier(view,catalog.id);currentStepKeys.push(...frontier.currentStepKeys);pending.push(...frontier.children);
+    if(frontier.externalAttemptIds.length||frontier.industryDemandAttemptId){const enriched=report({...reportBase,phase:'numeric',windowAttemptId:null,preparationAttemptIds:[],modelAttemptIds:[],externalAttemptIds:frontier.externalAttemptIds,...(frontier.industryDemandAttemptId?{industryDemandAttemptId:frontier.industryDemandAttemptId}:{})});
+      if(!enriched||!['succeeded','empty'].includes(enriched.status)){const prior=view.attempts.find(a=>a.id===view.run.latestReportAttemptId),priorStep=view.steps.find(s=>s.id===prior?.stepId);if(priorStep&&obj(priorStep.input).catalogAttemptId===catalog.id&&Array.isArray(obj(priorStep.input).externalAttemptIds))currentStepKeys.push(priorStep.stepKey);}
+    }
+    return result();
+  }
   if(flow===MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION){
     const definition=overviewIndustryDemandDefinition(view,catalog.id),saved=view.steps.find(s=>s.stepKey===definition.stepKey);currentStepKeys.push(definition.stepKey);
     if(!saved)return result([definition]);if(saved.inputHash!==digest(definition))throw new TypeError('Demand definition differs');
@@ -105,7 +114,7 @@ export function inspectMarketOverviewContinuation(view:MarketModuleRunView,now:s
 }
 
 export function overviewIndustryDemandDefinition(view:MarketModuleRunView,catalogAttemptId:string):MarketStepDefinition{
- if(view.run.moduleKind!=='overview'||obj(view.run.params).flow!==MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION)throw new TypeError('Demand requires its own overview flow');
+ if(view.run.moduleKind!=='overview'||![MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION].includes(String(obj(view.run.params).flow)))throw new TypeError('Demand requires its own overview flow');
  const attempt=view.attempts.find(a=>a.id===catalogAttemptId),step=view.steps.find(s=>s.id===attempt?.stepId);if(!attempt||!step||step.kind!=='rules'||obj(step.input).task!=='overview-source-catalog'||!['succeeded','empty'].includes(attempt.status))throw new TypeError('Demand requires saved overview catalog');
- return {stepKey:`overview-industry-demand/${catalogAttemptId}`,kind:'collect-overview-month',subject:{flow:MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION},input:{phase:'overview-industry-demand',catalogAttemptId},inputRefs:[{kind:'step-output',id:catalogAttemptId}]};
+ return {stepKey:`overview-industry-demand/${catalogAttemptId}`,kind:'collect-overview-month',subject:{flow:String(obj(view.run.params).flow)},input:{phase:'overview-industry-demand',catalogAttemptId},inputRefs:[{kind:'step-output',id:catalogAttemptId}]};
 }

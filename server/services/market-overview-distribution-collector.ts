@@ -18,7 +18,7 @@ export type MarketOverviewDistributionCollection={status:'ready'|'partial'|'empt
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 class SourceFailure extends Error{constructor(readonly code:string){super(code);}}
 
-export async function collectMarketOverviewDistribution(input:Params&{scope:MarketAnalysisScope;jobId:string;connector:RemoteMcpConnector;signal?:AbortSignal;timeoutMs?:number;now?:()=>Date}):Promise<MarketOverviewDistributionCollection>{
+export async function collectMarketOverviewDistribution(input:Params&{originalDemand?:boolean;scope:MarketAnalysisScope;jobId:string;connector:RemoteMcpConnector;signal?:AbortSignal;timeoutMs?:number;now?:()=>Date}):Promise<MarketOverviewDistributionCollection>{
   const scope=MarketAnalysisScopeSchema.parse(input.scope),{month,operation,headTopN,newProductMonths}=MarketOverviewDistributionStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths});
   const now=input.now??(()=>new Date()),started=now(),deadline=performance.now()+(input.timeoutMs??45000);
   if(month<scope.fromMonth||month>scope.toMonth||month>=started.toISOString().slice(0,7))throw new TypeError('Distribution requires a complete month within study scope');
@@ -26,7 +26,7 @@ export async function collectMarketOverviewDistribution(input:Params&{scope:Mark
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,...(input.signal?[input.signal]:[])]),timer=setTimeout(()=>controller.abort(),Math.max(0,deadline-performance.now()));timer.unref();
   const check=()=>{if(performance.now()>=deadline)controller.abort();signal.throwIfAborted();};
   try{
-    check();const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month:month.replaceAll('-',''),newProduct:newProductMonths,topN:headTopN}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
+    check();const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,month:month.replaceAll('-',''),...(input.originalDemand&&operation==='market_product_demand_trend'?{topN:100}:{newProduct:newProductMonths,topN:headTopN})}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
     let abortListener:()=>void=()=>{};
     const response=await Promise.race([request,new Promise<never>((_,reject)=>{abortListener=()=>reject(new SourceFailure(input.signal?.aborted?'interrupted':'timeout'));signal.addEventListener('abort',abortListener,{once:true});if(signal.aborted)abortListener();})]).finally(()=>signal.removeEventListener('abort',abortListener));check();
     const metadata=z.object({connectorId:z.literal('sellerSprite'),operation:z.literal(operation),fetchedAt:z.string().datetime(),attemptCount:z.number().int().positive()}).passthrough().safeParse(response.source);

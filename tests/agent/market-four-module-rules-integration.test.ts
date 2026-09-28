@@ -45,7 +45,7 @@ test('four market modules compose persisted rules-only flows in isolated Postgre
   const store = new PostgresMarketModuleExecutionStore(context);
   const started = [overview.run.id, shapes.run.id, keywords.run.id, themes.run.id];
   const expected = new Map([
-    [overview.run.id, 'market-overview-flow/rules-v2'],
+    [overview.run.id, 'market-overview-flow/rules-v4'],
     [shapes.run.id, 'market-shape-price-flow/rules-v4'],
     [keywords.run.id, 'market-keyword-flow/rules-v1'],
     [themes.run.id, 'market-theme-flow/rules-v3'],

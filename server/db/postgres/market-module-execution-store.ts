@@ -205,7 +205,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   private async completeRulesOnlyRun(run:RunRow):Promise<void>{
     const mapped=mapRun(run),flow=String(obj(mapped.params).flow);
-    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||flow==='market-overview-flow/rules-v3'||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION||flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION))return;
+    if(mapped.status!=='partial'||!(flow.endsWith('/rules-v1')||flow===MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION||['market-overview-flow/rules-v3','market-overview-flow/rules-v4'].includes(flow)||flow===MARKET_SHAPE_HISTORY_FLOW_VERSION||flow===MARKET_SHAPE_CATEGORY_FLOW_VERSION||flow===MARKET_SHAPE_SORFTIME_FLOW_VERSION))return;
     const view=await this.findModuleRun({actor:{organizationId:run.organization_id,userId:run.created_by},moduleRunId:run.id});if(!view)return;
     const now=(await this.queries.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.toISOString();
     const frontier=inspectMarketContinuation(view,now),current=view.steps.filter(step=>frontier.currentStepKeys.includes(step.stepKey));
@@ -242,7 +242,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
         if(!await this.active(actor))return lost;
         const result=await this.queries.query<RunRow>("SELECT * FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2 AND study_id=$3 AND created_by=$4 FOR UPDATE",[claim.moduleRunId,claim.organizationId,claim.studyId,claim.createdBy]);
         const run=result.rows[0];if(!run)return lost;const mappedRun=mapRun(run);
-        if(partialDemand&&(mappedRun.moduleKind!=='overview'||(mappedRun.params as {flow?:string}).flow!=='market-overview-flow/rules-v3'))throw new MarketExecutionConflictError();
+        if(partialDemand&&(mappedRun.moduleKind!=='overview'||!['market-overview-flow/rules-v3','market-overview-flow/rules-v4'].includes(String((mappedRun.params as {flow?:string}).flow))))throw new MarketExecutionConflictError();
         const attempts=await this.queries.query<AttemptRow>("SELECT * FROM market_analysis_step_attempts WHERE id=$1 AND organization_id=$2 AND run_id=$3 AND step_id=$4 FOR UPDATE",[claim.attemptId,claim.organizationId,run.id,claim.stepId]);
         const attempt=attempts.rows[0];
         if(!attempt||attempt.lease_owner_id!==claim.leaseOwnerId||attempt.lease_generation!==claim.leaseGeneration||attempt.input_hash!==claim.inputHash)return lost;

@@ -1,3 +1,4 @@
+import {overviewExternalAsins} from '../services/market-overview-external-collector';
 import {z} from 'zod';
 import {MarketInputRecordSchema,type MarketInputSnapshot} from '../../shared/market-analysis-contracts';
 import {MARKET_SOURCE_HANDLER_VERSION,type MarketSourceEvidence} from '../../shared/market-source-contracts';
@@ -71,6 +72,7 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
     const common={scope:view.run.scope,parameters:{headTopN:params.headTopN,newProductMonths:params.newProductMonths},dataCutoffAt:input.dataCutoffAt,sources};
     const catalog=view.run.versions.rule===MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true,productRows:true}):view.run.versions.rule===MARKET_OVERVIEW_TABLE_CATALOG_VERSION?buildMarketOverviewCompleteCatalog({...common,failures},{metricTable:true}):view.run.versions.rule===MARKET_OVERVIEW_EXPANDED_CATALOG_VERSION?buildMarketOverviewExpandedCatalog({...common,failures}):buildMarketOverviewSourceCatalog({...common,failures:failures.map(f=>MarketOverviewSourceFailureSchema.parse(f)),version:MarketOverviewCatalogVersionSchema.parse(view.run.versions.rule)});signal.throwIfAborted();
     const output:Record<string,unknown>={catalogVersion:catalog.version,numericInputSnapshotId:catalog.numericSnapshot.snapshotId,semanticInputSnapshotId:catalog.semanticSnapshot?.snapshotId??null,semanticStatus:catalog.semanticSnapshot?'pending':'no-input',sourceRefs:catalog.sourceRefs,sourceReceipts:receipts,sourceAttemptIds:input.sourceAttemptIds,dataCutoffAt:input.dataCutoffAt,failures};
+    if(params.flow==='market-overview-flow/rules-v4')output.externalAsins=overviewExternalAsins(sources,view.run.scope);
     if(includeRuleBaseline)output.ruleBaseline=buildOverviewRuleBaseline(catalog);
     return {catalog,sources,output:MarketInputRecordSchema.shape.data.parse(output)};
 }

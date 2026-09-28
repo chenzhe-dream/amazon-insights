@@ -14,7 +14,7 @@ import {MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_H
 import {MARKET_KEYWORD_FLOW_VERSION} from './domain/market-research/keyword-flow';
 import {createMarketKeywordPoolStep} from './runtime/market-keyword-pool-step';
 import {createMarketOverviewCatalogStep} from './runtime/market-overview-catalog-step';
-import {MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION} from './domain/market-research/overview-flow';
+import {MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION,MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION} from './domain/market-research/overview-flow';
 import {createMarketOverviewWindowsStep} from './runtime/market-overview-windows-step';
 import {createMarketOverviewReportStep} from './runtime/market-overview-report-step';
 import { PostgresMarketModuleExecutionStore } from './db/postgres/market-module-execution-store';
@@ -404,8 +404,8 @@ export async function createAgentService(
     const marketCollectionWorker = repository.marketExecutionContext && !marketModelRuntime ? new MarketModuleStepWorker({
       steps: new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
       moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords'],'prepare-model-batches':['overview']},
-      flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION],
-        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION],report:[...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
+      flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],
+        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION],report:[...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
       handlers: {
         ...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),
         rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),
