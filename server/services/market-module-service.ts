@@ -1,3 +1,4 @@
+import {MARKET_OVERVIEW_CACHE_TTL_MS} from '../../shared/market-overview-cache-policy';
 import {buildKeywordOriginalEstimate} from '../domain/market-research/keyword-original-estimate';
 import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
 import {PostgresMarketShapeDraftStore} from '../db/postgres/market-shape-draft-store';
@@ -115,11 +116,12 @@ export class MarketModuleService {
         AND r.request_json->'scope'=s.scope_json
         AND s.scope_json->>'marketplace'=$3 AND s.scope_json->>'nodeIdPath'=$4 AND s.scope_json->>'toMonth'=$5
         AND COALESCE(s.scope_json->>'overviewPeriod','')=$8
+        AND (r.status IN ('queued','running') OR r.created_at >= $9::timestamptz)
         AND r.request_json->'params'->>'headTopN'=$6 AND r.request_json->'params'->>'newProductMonths'=$7
         AND EXISTS(SELECT 1 FROM users u WHERE u.id=$2 AND u.organization_id=$1 AND u.status='active')
       ORDER BY (r.latest_report_attempt_id IS NOT NULL) DESC,
         (r.status IN ('queued','running','partial')) DESC,r.created_at DESC,r.id DESC LIMIT 1`,
-      [actor.organizationId,actor.userId,input.marketplace,input.nodeIdPath,input.toMonth,String(input.headTopN),String(input.newProductMonths),input.overviewPeriod??'']);
+      [actor.organizationId,actor.userId,input.marketplace,input.nodeIdPath,input.toMonth,String(input.headTopN),String(input.newProductMonths),input.overviewPeriod??'',new Date(Date.parse(this.now())-MARKET_OVERVIEW_CACHE_TTL_MS).toISOString()]);
     return MarketOverviewSavedRunResponseSchema.parse({runId:result.rows[0]?.id??null,fromMonth:result.rows[0]?.from_month??null});
   }
   async startOverview(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){

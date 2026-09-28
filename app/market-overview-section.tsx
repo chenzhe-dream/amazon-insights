@@ -1,4 +1,5 @@
 "use client";
+import {canReuseOverviewRun} from '../shared/market-overview-cache-policy';
 import {latestCompleteOverviewMonth,overviewPeriodLabel} from '../shared/market-overview-period';
 import { browserRequestId } from "./lib/browser-request-id";
 import {marketSiteCurrency} from "../shared/market-sites";
@@ -33,7 +34,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   useImperativeHandle(controller,()=>({openReport(requestScope){
     const selectedPeriod=period(requestScope),startMonth=selectedPeriod.overviewPeriod?selectedPeriod.toMonth:overviewReportStartMonth(requestScope.month,fromMonth);
     const matches=run&&run.scope.marketplace===requestScope.marketplace&&sameNode(run.scope.nodeIdPath,requestScope.nodeQuery)&&run.scope.fromMonth===startMonth&&run.scope.toMonth===selectedPeriod.toMonth&&run.scope.overviewPeriod===selectedPeriod.overviewPeriod&&run.params.headTopN===requestScope.headTopN&&run.params.newProductMonths===requestScope.newProductMonths;
-    if(matches){show(!expanded);return;}
+    if(matches&&run&&canReuseOverviewRun(run)){show(!expanded);return;}
     show(true);setError(null);setNoSaved(false);setLookingUp(true);
     const version=++lookupRevision.current,signal=owner.current?.signal;
     void findSavedOverviewRun({marketplace:requestScope.marketplace,nodeIdPath:requestScope.nodeQuery,...selectedPeriod,headTopN:requestScope.headTopN,newProductMonths:requestScope.newProductMonths},signal)
@@ -68,7 +69,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   const failedStep=currentSteps.find(step=>step.status==='failed');
   const runningStep=currentSteps.find(step=>step.status==='running')??currentSteps.find(step=>step.status==='queued');
   const processedSteps=currentSteps.filter(step=>['succeeded','empty','failed'].includes(step.status)).length;
-  const pendingTitle=lookingUp?'正在查找已保存报告…':busy?'正在提交总览分析':readError?'未能读取任务，请刷新状态或检查任务编号。':!run?runId?'正在读取总览任务…':noSaved?'尚无已保存报告':'报告尚未生成':isActive?`正在${labels[runningStep?.kind??'rules']??'处理任务'} · 已处理 ${processedSteps}/${currentSteps.length} 步`:failedStep?`${labels[failedStep.kind]??'总览分析'}失败：${errors[failedStep.errorCode??'internal']??'请查看任务进度'}`:run.status==='cancelled'?'分析已取消':'报告尚未生成，请刷新状态';
+  const pendingTitle=lookingUp?'正在查找已保存报告…':busy?'正在提交总览分析':readError?'未能读取任务，请刷新状态或检查任务编号。':!run?runId?'正在读取总览任务…':noSaved?'暂无7天内可复用的报告':'报告尚未生成':isActive?`正在${labels[runningStep?.kind??'rules']??'处理任务'} · 已处理 ${processedSteps}/${currentSteps.length} 步`:failedStep?`${labels[failedStep.kind]??'总览分析'}失败：${errors[failedStep.errorCode??'internal']??'请查看任务进度'}`:run.status==='cancelled'?'分析已取消':'报告尚未生成，请刷新状态';
   const different=run&&(run.scope.marketplace!==scope.marketplace||!sameNode(run.scope.nodeIdPath,scope.nodeQuery)||run.scope.toMonth!==period(scope).toMonth||run.scope.overviewPeriod!==period(scope).overviewPeriod||(!period(scope).overviewPeriod&&run.scope.fromMonth!==fromMonth)||run.params.headTopN!==scope.headTopN||run.params.newProductMonths!==scope.newProductMonths);
   return <section className="market-overview-native market-reference-overview" aria-label="总览分析任务">
     {!expanded&&runId&&<button type="button" className="ghost-btn" onClick={()=>show(true)}>展开已保存报告</button>}
@@ -78,12 +79,12 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
       <div className="market-reference-report-heading"><h2>总览分析与报告</h2><button type="button" className="ghost-btn" onClick={()=>show(false)}>收起报告</button></div>
       {run&&<div aria-label="已保存报告与重新采集" className="market-research-notice">
         <div className="market-theme-actions"><span>当前任务创建于 <time dateTime={run.createdAt}>{new Date(run.createdAt).toLocaleString('zh-CN',{hour12:false})}</time>（本地时间）</span><button type="button" className="ghost-btn" disabled={busy||lookingUp||!scope.nodeQuery||isActive&&!different} onClick={()=>void start()}>{busy?'提交中…':isActive&&!different?'正在采集':'重新采集'}</button></div>
-        <p>读取已保存报告不会重新采集；重新采集会按上方当前条件新建任务，向来源重新请求。任务创建时间不等于来源数据更新时间。</p>
+        <p>保存结果按任务创建时间复用7天，查看不续期；过期历史仍可手动读取。重新采集会按上方当前条件新建任务，向来源重新请求。读取已保存报告不会重新采集，任务创建时间不等于来源数据更新时间。</p>
       </div>}
       {different&&<div className="market-research-notice"><strong>查询条件已改变</strong><p>下方保留的是类目 {run.scope.nodeIdPath}、{overviewPeriodLabel(run.scope)} 的任务报告，不代表新条件的结果。</p></div>}
       {run&&<h3 className="market-reference-run-status">{!readError&&active(run)&&<span className="market-theme-spinner" aria-hidden="true"/>}{readError?'最新状态待确认':run.status==='cancelled'?'分析已取消':active(run)?'总览分析进行中':run.currentReport?'部分报告已保存':failedStep?'总览分析失败，可重试':'分析尚未完成'}</h3>}
       {run&&!run.currentReport&&selected&&<p className="market-research-notice">本轮尚无新报告，以下为之前保存的版本。</p>}
-      {selected?<MarketOverviewReport key={selected.attemptId} entry={selected} headTopN={run?.params.headTopN} newProductMonths={run?.params.newProductMonths} categoryName={run&&sameNode(run.scope.nodeIdPath,scope.nodeQuery)?categoryName:null} showAuditDetails={showAuditDetails}/>:<div className="market-reference-pending" role="status"><div className="market-reference-pending-copy">{(lookingUp||busy||isActive||runId&&!run&&!readError)&&<span className="market-theme-spinner" aria-hidden="true"/>}<div><strong>{pendingTitle}</strong><span>{noSaved?'这组类目和月份尚未生成总览报告。需要新分析时，请主动开始。':failedStep&&!isActive?'已采集的数据保留，可直接重试失败步骤。':runId?'已保存输入保留，详情与重试见下方「分析设置与任务管理」。':'打开历史报告不会自动采集。'}</span></div></div>{noSaved&&!lookingUp&&<button className="primary-btn" type="button" disabled={busy||!scope.nodeQuery} onClick={()=>void start(scope,scope.month==='last30'?period(scope).toMonth:overviewReportStartMonth(scope.month,fromMonth))}>开始总览分析</button>}{failedStep?.canRetry&&!readError&&!isActive&&<button className="ghost-btn" type="button" disabled={busy} onClick={()=>void action('retry',failedStep)}>重试{labels[failedStep.kind]??'失败步骤'}</button>}</div>}
+      {selected?<MarketOverviewReport key={selected.attemptId} entry={selected} headTopN={run?.params.headTopN} newProductMonths={run?.params.newProductMonths} categoryName={run&&sameNode(run.scope.nodeIdPath,scope.nodeQuery)?categoryName:null} showAuditDetails={showAuditDetails}/>:<div className="market-reference-pending" role="status"><div className="market-reference-pending-copy">{(lookingUp||busy||isActive||runId&&!run&&!readError)&&<span className="market-theme-spinner" aria-hidden="true"/>}<div><strong>{pendingTitle}</strong><span>{noSaved?'当前条件没有7天内可复用的报告。旧报告仍可通过历史链接或任务编号读取；需要更新时，请开始总览分析。':failedStep&&!isActive?'已采集的数据保留，可直接重试失败步骤。':runId?'已保存输入保留，详情与重试见下方「分析设置与任务管理」。':'打开历史报告不会自动采集。'}</span></div></div>{noSaved&&!lookingUp&&<button className="primary-btn" type="button" disabled={busy||!scope.nodeQuery} onClick={()=>void start(scope,scope.month==='last30'?period(scope).toMonth:overviewReportStartMonth(scope.month,fromMonth))}>开始总览分析</button>}{failedStep?.canRetry&&!readError&&!isActive&&<button className="ghost-btn" type="button" disabled={busy} onClick={()=>void action('retry',failedStep)}>重试{labels[failedStep.kind]??'失败步骤'}</button>}</div>}
     </div>}
     <details className="market-reference-tools"><summary>分析设置与任务管理</summary>
     <form onSubmit={e=>{e.preventDefault();if(!isActive||different)void start();}} className="market-theme-actions">{scope.month!=='last30'&&<label>分析起始月 <input required type="month" min="2000-01" max={scope.month} value={fromMonth} disabled={busy} onChange={e=>onFromMonth(e.target.value)}/></label>}<span>{scope.month==='last30'?'最近30天':`至 ${scope.month}`} · 类目 {scope.nodeQuery||'尚未选择'}</span><button className="primary-btn" type="submit" disabled={busy||lookingUp||!scope.nodeQuery||isActive&&!different}>{busy?'提交中…':'开始总览分析'}</button></form>

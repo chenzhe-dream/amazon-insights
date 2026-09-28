@@ -109,7 +109,7 @@ test('overview entry freezes local rules identity and replays commands by public
 
 test('saved overview lookup is read-only and exact to organization, node, month and report options',{timeout:120_000},async t=>{
   const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
-  const first=await seedStudy(pg.pool),service=new MarketModuleService({context:first.context,modelIdentity:()=>null,now:()=>new Date(NOW)});
+  let lookupNow=NOW;const first=await seedStudy(pg.pool),service=new MarketModuleService({context:first.context,modelIdentity:()=>null,now:()=>new Date(lookupNow)});
   const started=await service.startOverview(first.actor,first.scope.researchId,PARAMS,randomUUID());
   const query={marketplace:'US' as const,nodeIdPath:first.scope.nodeIdPath,toMonth:first.scope.toMonth,...PARAMS};
   const before=Number((await pg.pool.query('SELECT count(*) AS n FROM market_analysis_module_runs')).rows[0].n);
@@ -133,5 +133,22 @@ test('saved overview lookup is read-only and exact to organization, node, month 
   const rolling=await service.startOverview(first.actor,rollingScope.researchId,PARAMS,randomUUID());
   assert.equal((await service.findSavedOverview(first.actor,{...query,overviewPeriod:'last30'})).runId,rolling.run.id);
   assert.equal((await service.findSavedOverview(first.actor,query)).runId,started.run.id);
+
+  // A completed snapshot is reusable for seven days from creation, not from reading.
+  const expiresAt=Date.parse(started.run.createdAt)+7*86400000;lookupNow=new Date(expiresAt).toISOString();
+  await pg.pool.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1",[started.run.id]);
+  assert.equal((await service.findSavedOverview(first.actor,query)).runId,started.run.id,'exactly seven days remains in the window');
+  lookupNow=new Date(expiresAt+1).toISOString();
+  assert.equal((await service.findSavedOverview(first.actor,query)).runId,null,'older completed reports must not be reused');
+  assert.equal((await service.findOverview(first.actor,started.run.id)).run.id,started.run.id,'expiry never deletes or blocks explicit history');
+  const createdAt=(await pg.pool.query('SELECT created_at FROM market_analysis_module_runs WHERE id=$1',[started.run.id])).rows[0].created_at;
+  assert.equal(new Date(createdAt).toISOString(),started.run.createdAt,'reading never renews the TTL');
+  await pg.pool.query("UPDATE market_analysis_module_runs SET status='running' WHERE id=$1",[started.run.id]);
+  assert.equal((await service.findSavedOverview(first.actor,query)).runId,started.run.id,'active work remains recoverable beyond seven days');
+  await pg.pool.query("UPDATE market_analysis_module_runs SET status='partial' WHERE id=$1",[started.run.id]);
+  assert.equal((await service.findSavedOverview(first.actor,query)).runId,null,'old partial reports expire too');
+  lookupNow=new Date(Date.parse(rolling.run.createdAt)+7*86400000+1).toISOString();
+  await pg.pool.query("UPDATE market_analysis_module_runs SET status='succeeded' WHERE id=$1",[rolling.run.id]);
+  assert.equal((await service.findSavedOverview(first.actor,{...query,overviewPeriod:'last30'})).runId,null,'rolling reports use the same TTL');
 
 });
