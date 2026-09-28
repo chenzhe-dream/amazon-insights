@@ -30,4 +30,4 @@
 
 之前已确认的旧模型完整链路测试在未修改基线也失败，见 overview-fields-demand-region3-20260928.md；本次没有声称全项目测试全部通过。A6 外部数据缺口继续按独立区域处理。
 
-区域4正式发布与线上验收记录待补充。
+区域4正式版本 94a3205f0f8972f62300af4082f031c6bdafc98e，制品 ee59491cddc44b2ea5fc92f26ab6e9bb097875632d91dacefda40b308d621ed1。Web 31900 / Agent 31901 健康。正式旧报告入口读取显示 44 分、六个分项及 13 项来源缺口，完整结论与离线保存来源投影一致。字段/集中度图以及第三商品单月趋势同时回归通过；两处均 0 页面异常、0 报告写请求、步骤 ID/output_hash 不变。浏览器截图已检查；临时验收账号禁用、会话撤销。回滚引用 codex/rollback-before-overview-summary-20260928（7bce354d）。证据 overview-summary-online/* 和 single-month-online/*。
