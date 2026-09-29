@@ -21,6 +21,10 @@
 .market-ui-reference .market-reference-history .market-research-body { margin-top: 14px; }
 .market-ui-reference .market-reference-report-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; }
 .market-ui-reference .market-reference-report-heading h2 { margin: 0; font-size: 15px; }
+.market-ui-reference .market-reference-report-actions { display: flex; align-items: center; gap: 8px; }
+.market-ui-reference .market-reference-report-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 12px; color: #6e7d91; font-size: 12px; line-height: 1.6; }
+.market-ui-reference .market-reference-cache-help { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.market-ui-reference .market-reference-cache-help:focus-visible { outline: 2px solid #8f7dea; outline-offset: 2px; }
 .market-ui-reference .market-reference-run-status { font-size: 12px; font-weight: 500; color: #6e7d91; }
 .market-ui-reference .market-reference-overview .ss-market-report-panel { margin-top: 12px; }
 .market-ui-reference .market-reference-overview .ss-report-hero { display: grid; gap: 16px; padding: 16px 18px; }
