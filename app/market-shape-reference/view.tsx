@@ -112,7 +112,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const mom = latest?.value == null || previous?.value == null || previous.value <= 0 ? null : (latest.value / previous.value - 1) * 100;
   const headers: Record<TopSalesColumnId, ReactNode> = {
     bulk: <label className="shape-ref-bulk-heading">批量<input type="checkbox" aria-label="批量选择可见商品" disabled={disabled} checked={visible.length > 0 && visible.every(p => bulkSelected.includes(p.asin))} onChange={e => setBulkSelected(e.target.checked ? [...new Set([...bulkSelected, ...visible.map(p => p.asin)])] : bulkSelected.filter(asin => !visible.some(p => p.asin === asin)))} /></label>,
-    rank: <button type="button" onClick={() => toggleSort("rank")}>排名</button>, product: "商品", brand: "品牌", shape: "人工形态", launch: "上架年月", margin: "毛利润率", entry: "准入", price: "价格", band: "价格带",
+    rank: <button type="button" onClick={() => toggleSort("rank")}>排名</button>, product: "商品", brand: "品牌", shape: "商品形态", launch: "上架年月", margin: "毛利润率", entry: "准入", price: "价格", band: "价格带",
     sales30: <button type="button" onClick={() => toggleSort("sales30")}>近30天销量</button>, amount30: "近30天销售额", trend: "月度趋势",
     last3: <button type="button" onClick={() => toggleSort("last3Months")}>近3个月</button>, last6: <button type="button" onClick={() => toggleSort("last6Months")}>近6个月</button>,
     y2025: <button type="button" onClick={() => toggleSort("y2025")}>2025年</button>, y2024: <button type="button" onClick={() => toggleSort("y2024")}>2024年</button>,
