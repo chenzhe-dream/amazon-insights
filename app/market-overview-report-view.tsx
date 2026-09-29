@@ -1,6 +1,7 @@
 import {overviewPeriodLabel} from '../shared/market-overview-period';
 "use client";
 import React from 'react';
+import {MarketAdminContent} from './market-admin-tools';
 import {MarketOverviewOriginalSummary} from './market-overview-original-summary';
 import type {z} from 'zod';
 import type {MarketOverviewReportEntrySchema,MarketOverviewDetailsResponseSchema} from '../shared/market-overview-report-contracts';
@@ -81,14 +82,14 @@ export function MarketOverviewReportView({entry,detail,error,onRetry,headTopN,ne
     {!detail?.numbers.originalSynthesis&&<div className="market-research-notice"><p>{r.reportVersion==='market-overview-report/v2'?'跨维综合解释已保存；来源缺口仍保留，请结合下方依据和限制解读。':r.semanticStatus==='skipped'&&r.ruleStatus?'本地规则结果已保存；跨维语义解释尚未运行，请查看下方已取得的样本事实与来源限制。':r.windowStatus==='complete'?'当前输入的分析分段已执行完成；完整综合判断仍待补齐，请查看下方维度覆盖。':r.windowStatus==='pending'?'数字已保存，解释仍在处理中。':r.windowStatus==='no-input'?'暂无可供解释的有效事实，保留已取得的数字与缺口。':'解释存在失败或缺口，已保存的数字和成功部分继续保留。'}</p></div>}
     {error?<p role="alert" className="market-research-error">{error} <button type="button" className="ghost-btn" onClick={onRetry}>重新读取报告</button></p>:!detail?<p role="status"><span className="market-theme-spinner" aria-hidden="true"/>正在读取此版本报告…</p>:<>
       <MarketOverviewReferenceSections entry={entry} detail={detail} headTopN={headTopN} overview={rulesOnly&&detail.numbers.originalSynthesis?<MarketOverviewOriginalSummary result={detail.numbers.originalSynthesis}/>:r.reportVersion==='market-overview-report/v2'?<MarketOverviewSynthesis synthesis={r.synthesis} semantic={semantic}/>:<p className="ss-report-empty">{r.semanticStatus==='skipped'&&r.ruleStatus?'以上为本地规则可核对的样本事实；跨维综合判断尚未生成。':r.windowStatus==='pending'?'市场综合解释正在处理中，已保存数字和分段解释继续保留。':'此版本尚无完整市场综合解释，可查看下方已保存的分段解释。'}</p>}/>
-       {showAuditDetails&&<details className="market-research-boundaries"><summary>已保存指标与原始来源</summary>
+       {showAuditDetails&&<MarketAdminContent><details className="market-research-boundaries"><summary>已保存指标与原始来源</summary>
       {detail.numbers.months.map(m=><details key={m.month} className="market-research-boundaries"><summary>{r.scope.overviewPeriod?'最近30天':m.month} · 已保存指标</summary>{Object.values(m.metrics).some(metric=>metric.observations.some(o=>o.scopeBasis==='request-bound'))&&<p className="market-research-note">按所选统计周期请求；上游响应未确认范围。以下为返回样本数字，不据此生成已验证的月度趋势。</p>}<dl className="ss-report-kpis market-ui-metrics">{Object.entries(m.metrics).map(([id,metric])=><div key={id}><dt>{metricLabels[id]??id}</dt><dd>{value(metric.value,metric.unit)}</dd>{metric.reason&&<small>{reasons[metric.reason]}</small>}</div>)}</dl>
         <details><summary>此月来源与原字段</summary>{Object.entries(m.metrics).map(([id,metric])=><p key={id}>{metricLabels[id]??id}：{metric.observations.length?metric.observations.map(o=>`${o.field} · ${o.sourceRef}`).join('；'):'无有效原字段'}</p>)}</details></details>)}
-       </details>}
+       </details></MarketAdminContent>}
        {!rulesOnly&&<><h4>基于证据的分段分析</h4>{r.reasons.includes('distribution-synthesis-not-integrated')&&<p className="market-research-notice">分布数字已保存；分布与基础指标的综合模型分析尚未完成。下方已有解释仅覆盖其明确引用的事实。</p>}{r.modelResults.filter(m=>m.output).length===0?<p>此版本尚无成功的模型解释。</p>:r.modelResults.filter(m=>m.output).map(m=><div key={m.attemptId} className="market-overview-finding ss-report-analysis">{m.output!.analysis&&<MarketOverviewAnalysis analysis={m.output!.analysis} semantic={semantic} synthesisComplete={r.reportVersion==='market-overview-report/v2'}/>} {m.output!.findings.map(f=><div key={f.findingId}><strong>{f.mode==='observed'?'数据表现':'推断线索'}</strong>{f.mode==='inferred'&&<p>{option(f.optionId)}</p>}<ul>{f.factIds.map(id=><li key={id}>{fact(id)}</li>)}</ul></div>)}{m.output!.risks.map((risk,i)=><p key={`risk-${i}`}>风险：{option(risk.optionId)}</p>)}{m.output!.validationTasks.length>0&&<p>待验证：核对样本代表性、来源和缺失项后，再判断是否适用于整体市场。</p>}</div>)}</>}
     </>}
-     {showAuditDetails&&<><details className="market-research-boundaries"><summary>分析维度覆盖与缺口</summary><ul>{r.coverage.map(c=><li key={c.dimension}>{dimensions[c.dimension]??c.dimension}：{coverageLabels[c.status]}{c.missingMetrics.length?`（缺 ${c.missingMetrics.map(m=>metricLabels[m.split('/').at(-1)!]??m).join('、')}）`:''}</li>)}</ul></details>
+     {showAuditDetails&&<MarketAdminContent><details className="market-research-boundaries"><summary>分析维度覆盖与缺口</summary><ul>{r.coverage.map(c=><li key={c.dimension}>{dimensions[c.dimension]??c.dimension}：{coverageLabels[c.status]}{c.missingMetrics.length?`（缺 ${c.missingMetrics.map(m=>metricLabels[m.split('/').at(-1)!]??m).join('、')}）`:''}</li>)}</ul></details>
      <MarketOverviewRuleExplanation entry={entry} semantic={semantic}/>
-     <details className="market-research-boundaries"><summary>报告版本与来源身份</summary><p>报告：{entry.attemptId}</p><p>规则：{r.versions.rule}</p><p>来源响应：{r.sourceRefs.length} 份；报告摘要：{r.reportHash}</p></details></>}
+     <details className="market-research-boundaries"><summary>报告版本与来源身份</summary><p>报告：{entry.attemptId}</p><p>规则：{r.versions.rule}</p><p>来源响应：{r.sourceRefs.length} 份；报告摘要：{r.reportHash}</p></details></MarketAdminContent>}
   </section>;
 }

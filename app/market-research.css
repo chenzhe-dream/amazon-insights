@@ -2,6 +2,17 @@
 @import "./market-overview-reference.css";
 @import "./market-shape-reference.css";
 @import "./market-insights-reference.css";
+.market-ui-reference .market-admin-tools { margin-top: 20px; border: 1px solid #e4e8f1; border-radius: 10px; background: #fff; color: #34465d; }
+.market-ui-reference .market-admin-tools > summary { cursor: pointer; padding: 14px 18px; font-size: 13px; font-weight: 600; }
+.market-ui-reference .market-admin-tools > summary > span { margin-left: 12px; color: #7b8799; font-size: 11px; font-weight: 400; }
+.market-ui-reference .market-admin-tools-body { display: grid; gap: 0; padding: 0 18px 14px; min-width: 0; }
+.market-ui-reference .market-admin-tools-body > details { margin: 0; padding: 12px 0; border: 0; border-top: 1px solid #edf0f5; border-radius: 0; box-shadow: none; font-size: 12px; }
+.market-ui-reference .market-admin-tools-body > details > summary { cursor: pointer; color: #65758a; font-weight: 600; }
+.market-ui-reference .market-admin-tools summary:focus-visible { outline: 2px solid #8f7dea; outline-offset: 2px; }
+.market-ui-reference .market-admin-tools-body .shape-history-coverage-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-weight: 600; }
+.market-ui-reference .market-admin-tools-body p { margin: 8px 0; }
+.market-ui-reference .market-admin-tools-body li { overflow-wrap: anywhere; }
+.market-ui-reference .market-admin-tools-body .market-theme-actions { margin: 12px 0; }
 .market-research-page { display: grid; gap: 20px; min-width: 0; color: var(--text, #263244); }
 .market-research-page .card { padding: 22px; min-width: 0; }
 .market-research-page h2, .market-research-page h3, .market-research-page h4 { margin: 0; }

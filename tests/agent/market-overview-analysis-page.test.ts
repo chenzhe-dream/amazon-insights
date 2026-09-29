@@ -1,3 +1,4 @@
+import {openMarketAdminTools} from './helpers/open-market-admin-tools';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mkdir} from 'node:fs/promises';
@@ -27,7 +28,7 @@ test('saved model prose renders bound zero values and limitations while preservi
  await prose.getByText('查看本段依据',{exact:true}).first().click();await prose.getByText('统计周期：来源未确认',{exact:true}).first().waitFor();
  await mkdir('test-results/market-overview-analysis-page',{recursive:true});await prose.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/market-overview-analysis-page/prose-desktop.png'});
  await page.setViewportSize({width:390,height:844});await prose.scrollIntoViewIfNeeded();assert.ok(await prose.evaluate(el=>el.scrollWidth<=el.clientWidth+1));await page.screenshot({path:'test-results/market-overview-analysis-page/prose-mobile.png'});
- await page.getByText('分析设置与任务管理',{exact:true}).click();
+ await openMarketAdminTools(page);await page.getByText('分析设置与任务管理',{exact:true}).click();
  await page.getByLabel('总览报告版本').selectOption(overviewEntry(true).attemptId);await page.getByRole('region',{name:'已保存总览报告'}).getByText('17',{exact:true}).first().waitFor();assert.equal(await prose.count(),0);
  await page.getByLabel('总览报告版本').selectOption('latest');await prose.waitFor();await page.reload();await prose.waitFor();assert.equal(writes,0);assert.deepEqual(errors,[]);
 });

@@ -1,3 +1,4 @@
+import {openMarketAdminTools} from './helpers/open-market-admin-tools';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {chromium} from 'playwright';
@@ -37,7 +38,7 @@ test('history overview binds basic scope regardless of response order and preser
  const url=origin+'/?overviewRun='+overviewRunId;
  await page.goto(url);await page.getByText('正在匹配历史报告的基础概览',{exact:true}).waitFor();assert.equal(await page.getByRole('region',{name:'市场总览结果',exact:true}).count(),0,'unrelated newest data must not flash while the report loads');release();gate=null;
  const basic=page.getByRole('region',{name:'市场总览结果',exact:true});await basic.getByRole('heading',{name:'基础记录5',exact:true}).waitFor();assert.equal(writes,0);
- await page.getByText('采集历史与状态',{exact:true}).click();const history=page.locator('.market-research-history');await history.getByRole('button',{name:/基础记录1/}).click();await basic.getByRole('heading',{name:'基础记录1',exact:true}).waitFor();await page.getByText('基础概览与下方总览报告范围不同',{exact:true}).waitFor();
+ await openMarketAdminTools(page);await page.getByText('采集历史与状态',{exact:true}).click();const history=page.locator('.market-research-history');await history.getByRole('button',{name:/基础记录1/}).click();await basic.getByRole('heading',{name:'基础记录1',exact:true}).waitFor();await page.getByText('基础概览与下方总览报告范围不同',{exact:true}).waitFor();
  await history.getByRole('button',{name:'刷新',exact:true}).click();await basic.getByRole('heading',{name:'基础记录1',exact:true}).waitFor();await page.getByRole('button',{name:'返回报告对应概览',exact:true}).click();await basic.getByRole('heading',{name:'基础记录5',exact:true}).waitFor();
  jobsGate=new Promise<void>(r=>{release=r;});await page.goto(url+'&marketNode=999:888&marketMonth=2026-07');await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();assert.equal(await basic.count(),0);await page.getByText('正在匹配历史报告的基础概览',{exact:true}).waitFor();release();jobsGate=null;await basic.getByRole('heading',{name:'基础记录5',exact:true}).waitFor();await basic.screenshot({path:'test-results/overview-basic-scope-matched.png'});
  rows=[job(1,'999:888')];await page.reload();await page.getByText('最近30条采集历史中没有与该总览匹配的基础记录',{exact:true}).waitFor();assert.equal(await basic.count(),0);await page.getByRole('region',{name:'已保存总览报告'}).getByText('42',{exact:true}).first().waitFor();

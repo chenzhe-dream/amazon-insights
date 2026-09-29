@@ -1,3 +1,4 @@
+import {openMarketAdminTools} from './helpers/open-market-admin-tools';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir } from 'node:fs/promises';
@@ -42,7 +43,7 @@ test('reference result row opens current-backend report inline and reopening is 
  await open.click();try{await page.getByRole('region',{name:'已保存总览报告'}).waitFor();}catch(error){console.log('reference-flow',writes,errors,await page.locator('body').innerText());throw error;}
  assert.equal(writes.length,1,'viewing an existing report must not create a study or collect again');assert.equal(lookupCount,1);
  await page.locator('.ss-report-kpis article').first().waitFor();assert.equal(await page.locator('.ss-report-kpis article').count(),3);
- await page.getByText('本报告的分析规则',{exact:true}).click();
+ await openMarketAdminTools(page);await page.getByText('本报告的分析规则',{exact:true}).click();
  const rules=page.locator('details').filter({has:page.locator('summary').filter({hasText:'本报告的分析规则'})}).last();
  assert.match(await rules.innerText(),/不补零|来源缺失/);assert.match(await rules.innerText(),/历史读取不重新采集/);assert.equal(writes.length,1,'reading rule definitions must not start another analysis');
  await mkdir('test-results/market-reference-restored',{recursive:true});await page.screenshot({path:'test-results/market-reference-restored/overview-result-desktop.png',fullPage:true});
@@ -50,7 +51,7 @@ test('reference result row opens current-backend report inline and reopening is 
  await page.getByRole('button',{name:'收起报告',exact:true}).click();await page.getByRole('button',{name:'查看市场分析报告',exact:true}).click();assert.equal(writes.length,1);
  heldRead=new Promise(resolve=>{releaseRead=resolve;});await page.reload();await page.getByText('正在匹配历史报告的基础概览',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'查看市场分析报告',exact:true}).count(),0,'pending scope must not expose another record');assert.equal(writes.length,1,'pending restored report never starts another task');releaseRead?.();heldRead=undefined;await page.getByRole('region',{name:'已保存总览报告'}).waitFor();assert.equal(writes.length,1);
  failRead=true;await page.reload();await page.getByRole('alert').filter({hasText:'状态读取失败'}).waitFor();
- const beforeRecovery=readCount;failRead=false;await page.getByText('分析设置与任务管理',{exact:true}).click();await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();
+ const beforeRecovery=readCount;failRead=false;await openMarketAdminTools(page);await page.getByText('分析设置与任务管理',{exact:true}).click();await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();
  await page.getByRole('region',{name:'已保存总览报告'}).waitFor();
  assert.equal(readCount,beforeRecovery+1,'open retries the failed read exactly once');assert.equal(writes.length,1,'recovering a read must not create another study or analysis');
  assert.equal(await page.getByRole('alert').filter({hasText:'状态读取失败'}).count(),0);

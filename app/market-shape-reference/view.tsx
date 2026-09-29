@@ -10,6 +10,7 @@ import { CategoryComboChart, MonopolyTrendChart } from "./charts";
 import { buildReferenceConclusions } from "./conclusions";
 import { ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceMarginConclusion, ReferenceSummaryMetrics, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
 import { ResizeHeader, TOP_SALES_COLUMNS, useReferenceColumnWidths, type TopSalesColumnId } from "./column-resize";
+import {MarketAdminContent} from '../market-admin-tools';
 import {ReferenceHistoryCoverage} from './history-coverage';
 import {referenceSalesGapReason} from './history-status';
 import {ShapeCatalog,fixedShapeLabels} from './shape-catalog';
@@ -166,23 +167,23 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     </LaunchSection>
 
     <LaunchSection title="上架年份 · 销量结构分析" description="按已选商品的真实历史销量汇总；缺失历史不补零" badge={<span className="source-badge">{yearly.length} 年份组</span>}>
-      <ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={active} />
+      <ReferenceHistoryCoverage context="上架年份" calculationVersion={report.calculationVersion} products={active} />
       <AggregateTable calculationVersion={analysis.calculationVersion} rows={yearly} total={analysis.synthesis.totalSales} yearBasis />
       {conclusions.listingYear.status === "ready" ? <ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
-      <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
+      <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage context="形态销量" calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
       <AggregateTable sort={shapeSort} onSort={setShapeSort} calculationVersion={analysis.calculationVersion} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
-      <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
+      <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage context="形态价格带" calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
       <ShapePriceBandTable sort={bandSort} onSort={setBandSort} shapes={sortSectionRows(bandAnalysis.shapes,bandSort)} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
       {bandConclusion.status === "ready" ? <ReferenceShapePriceConclusion result={bandConclusion.result} embedded /> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
-      <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
+      <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage context="品牌价格带" calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
       <AggregateTable sort={brandSort} onSort={setBrandSort} calculationVersion={analysis.calculationVersion} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
@@ -191,7 +192,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
         <ReferenceSummaryMetrics items={[["所选商品链接", n(active.length)], ["近30天销量", n(currentUnits)], ["近30天销售额（来源值）", n(currentAmount, 2)], ["近6个月历史销量", n(periodTotal("last6Months"))], ["形态分组（含未分类）", n(analysis.shapes.length)], ["品牌 × 价格带组合", n(analysis.brandPriceBands.length)]]} />
         <div className="shape-summary-selection"><strong>毛利准入分布</strong>{marginGroups.length ? marginGroups.map(([label, count]) => <span key={label}>{label.replace("—", "未知")} <b>{count} 条</b></span>) : <span>暂无所选样本</span>}</div>
         {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} embedded /> : <div className="shape-summary-gap"><strong>综合判断尚缺数据</strong><p>{conclusions.synthesis.reason}。上方已获取的指标仍可查看。</p></div>}
-        <details className="shape-summary-source"><summary>数据范围与口径</summary><p className="shape-summary-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p></details>
+        <MarketAdminContent><details className="shape-summary-source"><summary>数据范围与口径</summary><p className="shape-summary-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p></details></MarketAdminContent>
       </div>
     </LaunchSection>
   </div>;

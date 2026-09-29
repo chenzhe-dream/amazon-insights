@@ -1,3 +1,4 @@
+import {openMarketAdminTools} from './helpers/open-market-admin-tools';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {chromium} from 'playwright';
@@ -25,7 +26,7 @@ test('last30 is selectable, survives URL restoration and creates an explicitly r
  await page.goto(origin+'/?themeView=overview&marketNode=123:456&marketMonth=last30');
  const chip=page.getByRole('button',{name:'最近30天',exact:true});await chip.waitFor();await page.waitForFunction(()=>document.querySelector('button[aria-pressed="true"]')?.textContent!==null);
  await chip.click();assert.equal(await chip.isEnabled(),true);assert.equal(await chip.getAttribute('aria-pressed'),'true');
- await page.getByText('分析设置与任务管理',{exact:true}).click();await page.getByRole('button',{name:'开始总览分析',exact:true}).click();
+ await openMarketAdminTools(page);await page.getByText('分析设置与任务管理',{exact:true}).click();await page.getByRole('button',{name:'开始总览分析',exact:true}).click();
  await page.waitForFunction(()=>location.search.includes('overviewRun='));
  const created=posts.find(p=>p.path.endsWith('/studies')).body;assert.equal(created.overviewPeriod,'last30');assert.equal(created.fromMonth,latestCompleteOverviewMonth());assert.equal(created.toMonth,created.fromMonth);
  assert.equal(await page.getByText('状态读取失败：',{exact:false}).count(),0);assert.deepEqual(errors,[]);

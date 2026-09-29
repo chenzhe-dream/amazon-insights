@@ -29,7 +29,7 @@ test('saved report keeps all fifteen original chapters in original order with vi
  assert.match(html,/数据源未回显完整范围/);
 });
 
-test('admin and member see the same business report, with audit panels only for admin',()=>{
+test('standalone business report never renders auxiliary audit panels outside an authorized tools host',()=>{
  const detail=overviewDistributionDetails();
  const render=(showAuditDetails?:boolean)=>renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={detail} error={null} onRetry={()=>{}} showAuditDetails={showAuditDetails}/>);
  const member=render(false),admin=render(true);
@@ -40,7 +40,7 @@ test('admin and member see the same business report, with audit panels only for 
   assert.match(html,/样本月销量/);
  }
  for(const label of ['已保存指标与原始来源','分析维度覆盖与缺口','本报告的分析规则','报告版本与来源身份']){
-  assert.ok(admin.includes(label),`admin should see ${label}`);
+  assert.ok(!admin.includes(label),`role flag alone without an authorized tools host must not mount ${label}`);
   assert.ok(!member.includes(label),`member should not see ${label}`);
  }
 });
@@ -51,7 +51,7 @@ test('role-specific audit visibility preserves report loading and failure recove
   const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={null} error={error} onRetry={()=>{}} showAuditDetails={showAuditDetails}/>);
   assert.match(html,/已保存总览报告/);
   assert.match(html,error?/读取暂时失败|重新读取报告/:/正在读取此版本报告/);
-  assert.equal(html.includes('报告版本与来源身份'),showAuditDetails);
+  assert.equal(html.includes('报告版本与来源身份'),false,'audit UI requires the client tools host');
  }
 });
 test('presentation selection preserves source entry identity and deterministic month order',()=>{

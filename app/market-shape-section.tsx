@@ -1,4 +1,5 @@
 'use client';
+import {MarketAdminContent} from './market-admin-tools';
 import {shapePollingDelay} from './lib/market-shape-polling';
 import {MarketShapeReferencePanel} from './market-shape-reference-panel';
 import {MarketShapeMonthPicker} from './market-shape-month-picker';
@@ -200,8 +201,8 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     <details className="market-shape-query-options"><summary>采集选项</summary><label className="market-shape-pool-size">商品池上限 <input type="number" min={1} max={300} value={poolSize} onChange={e=>setPoolSize(Number(e.target.value))} disabled={queryLocked}/></label></details>
     <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={queryLocked}>{busy?'提交中…':queryLocked?'正在采集':'筛选市场'}</button><button className="ghost-btn" type="button" disabled={queryLocked||!selection.nodeIdPath} onClick={()=>void start(undefined,poolSize,selection,true)}>重新采集</button><button className="ss-market-reset-btn" type="button" disabled={queryLocked} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);}}>重置条件</button></div>
    </div></form>
-  <div className="market-shape-query-footer"><details><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p></details>
-  {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</div>
+  <MarketAdminContent><details className="market-shape-query-footer"><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p>
+  {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</details></MarketAdminContent>
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，来源修改操作暂停。{lastReadAt&&` 最后成功读取：${lastReadAt}`}</p>}
  </section>
  {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>采集完成后直接查看看板，在 TOP 销售表修改形态即可更新统计；保存可保留当前版本。</span></div></LaunchSection>}
@@ -209,11 +210,11 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
    {!report && !run.source?.summary && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>
- <details className="market-shape-task-details"><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
+ <MarketAdminContent><details className="market-shape-task-details"><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
   <p>本任务范围：{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p><p className="market-research-note">样本使用供应商返回的商品池，尚未核验为 BSR 前 {run.params.poolSize} 名。{run.sourcePolicy?'站点和月份按接口查询范围绑定；币种依据供应商站点定义，响应回显另行记录。':'来源未确认单位或周期的原值不参与可比统计。'}</p>
   <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{s.categoryMetric?categoryNames[s.categoryMetric]:stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
   {active(run) && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
-  </details>
+  </details></MarketAdminContent>
   {run.source && <>
    {parent !== (run.latestRevision?.revisionId ?? null) && <p role="status">已有较新版本。当前草稿仍基于原版本，可先保留修改或重新载入。</p>}
    <div className="market-theme-actions"><label>参考价格带下界 <input value={bands} onChange={e => setBands(e.target.value)} disabled={busy}/></label><label>修订说明 <input value={note} maxLength={500} onChange={e => setNote(e.target.value)} disabled={busy}/></label><button className="primary-btn" disabled={busy || !!readError || !selected.length || run.status === 'cancelled'} onClick={() => void save()}>确认并重新计算</button><button className="ghost-btn" disabled={busy || !!readError} onClick={() => loadDraft(run)}>重新载入最新草稿</button></div><p className="market-research-note">例：0,20,40 分为 [0,20)、[20,40)、[40,+∞)。保存保留旧版本，未分类商品保留为单独分组；修改形态不会重新抓取。</p>
