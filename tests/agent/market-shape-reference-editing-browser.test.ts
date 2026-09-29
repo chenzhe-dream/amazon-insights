@@ -52,7 +52,7 @@ test('manual shape editing retains focus under an active shape filter and suppor
  assert.equal(await table.getByRole('button',{name:'移除',exact:true}).count(),2,'local filtering and batch edits do not change the sample');
  assert.equal(await shapeSection.locator('tbody tr:not(.shape-price-total-row)').count(),1);
  await page.getByText('管理形态名称',{exact:true}).click();await page.getByLabel('管理形态',{exact:true}).selectOption('弧形灯');await page.getByRole('button',{name:'删除形态',exact:true}).click();await page.getByText(/将把 1 件商品恢复为未分类/).waitFor();await page.getByRole('button',{name:'确认删除形态',exact:true}).click();assert.equal(await page.getByLabel('B000000002 人工形态',{exact:true}).inputValue(),'');
- const rect=await input.boundingBox();assert.ok(rect&&rect.height>=32&&rect.width>=110,JSON.stringify(rect));
+ const rect=await input.boundingBox();assert.ok(rect&&rect.height===28&&rect.width>=72,JSON.stringify(rect));
  await page.getByLabel('搜索商品',{exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:out+'/annotation-desktop.png'});
  await page.setViewportSize({width:390,height:844});await input.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/annotation-mobile.png'});await page.setViewportSize({width:1440,height:1000});

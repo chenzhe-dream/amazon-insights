@@ -72,9 +72,9 @@
 }
 
 /* Manual annotation remains legible inside the horizontally scrolling product table. */
-.market-shape-reference-view .shape-annotation-input { min-height: 36px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #24354b; font-size: 13px; line-height: 20px; }
+.market-shape-reference-view .shape-annotation-input { height: 28px; min-height: 28px; padding: 0 8px; border: 1px solid #dbe3ed; border-radius: 6px; background: #fff; color: #34465d; font-size: 10px; line-height: 1.4; }
 .market-shape-reference-view .shape-annotation-input::placeholder { color: #7c8ba1; }
-.market-shape-reference-view .shape-annotation-input:focus { outline: 2px solid #a78bfa; outline-offset: -2px; border-color: #8b5cf6; }
+.market-shape-reference-view .shape-annotation-input:focus { outline: none; border-color: #c084fc; box-shadow: 0 0 0 2px rgba(192,132,252,.18); }
 .market-shape-reference-view .shape-annotation-input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
 .market-shape-reference-view .top-sales-shape-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .market-shape-reference-view .top-sales-shape-bulk-bar .shape-annotation-input { width: min(240px,100%); box-sizing: border-box; }
@@ -88,18 +88,37 @@
 .market-shape-reference-view .shape-catalog summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .market-shape-reference-view .shape-catalog input,
 .market-shape-reference-view .shape-catalog select,
-.market-shape-reference-view .market-theme-actions select { min-height: 36px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #24354b; max-width: 100%; }
+.market-shape-reference-view .market-theme-actions select { height: 28px; min-height: 28px; padding: 0 8px; border: 1px solid #dbe3ed; border-radius: 6px; background: #fff; color: #34465d; max-width: 100%; font-size: 11px; }
 .market-shape-reference-view .shape-price-table td small { font-size: 11px; color: #687b94; padding-top: 3px; }
 .market-shape-reference-view .top-sales-table-filters { flex: 1 1 100%; min-width: 0; max-width: 100%; }
 .market-shape-reference-view .top-sales-table-filters label { max-width: 100%; }
+
+/* Density and colours from the supplied comparison-layout.css; current interactions stay intact. */
+.market-shape-reference-view .top-sales-table-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: #43566d; }
+.market-shape-reference-view .top-sales-table-filters label { display: inline-flex; align-items: center; gap: 6px; }
+.market-shape-reference-view .top-sales-table-filters input,
+.market-shape-reference-view .top-sales-table-filters select { height: 30px; min-height: 30px; padding: 0 8px; border: 1px solid #c7d2e0; border-radius: 6px; background: #fff; color: #24354a; font-size: 12px; }
+.market-shape-reference-view .top-sales-table-filters input { width: 168px; }
+.market-shape-reference-view .top-sales-table-filters select { width: 72px; }
+.market-shape-reference-view .top-sales-table-filters input:focus,
+.market-shape-reference-view .top-sales-table-filters select:focus { outline: none; border-color: #2f80ed; box-shadow: 0 0 0 2px rgba(47,128,237,.14); }
+.market-shape-reference-view .market-theme-actions { font-size: 11px; align-items: center; gap: 8px; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table tbody td,
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table tbody th { padding: 6px 8px; font-size: 10px; border-top: 1px solid #e8edf3; line-height: 1.6; vertical-align: middle; font-variant-numeric: tabular-nums; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table tbody td { text-align: right; color: #24354a; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table tbody th { min-width: 132px; max-width: 180px; text-align: left; white-space: normal; color: #34465d; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table .shape-price-band-row th { padding-left: 22px; font-weight: 500; background: #fff; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table .shape-price-subtotal-row > * { background: #f3f7fb; border-top: 2px solid #dbe3ed; }
+.market-ui-reference.market-shape-reference-view .launch-table.shape-price-table .shape-price-total-row > * { background: #eef4fa; border-top: 2px solid #c5d4e4; font-weight: 700; color: #24354a; }
 
 /* The month detail is portaled so the scrolling table cannot clip it. */
 .shape-ref-trend { min-width: 0; }
 .shape-ref-trend-mini { display: block; width: 100%; max-width: 108px; height: 34px; }
 .shape-ref-trend-trigger { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .market-shape-reference-view .top-sales-table td.shape-ref-frozen { position: sticky; z-index: 2; background: #fff; }
-.market-shape-reference-view .top-sales-table .top-sales-row-selected td.shape-ref-frozen { background: #f8fbff; }
-.market-shape-reference-view .top-sales-table th.shape-ref-frozen { background: #f4f7fb; }
+.market-shape-reference-view .top-sales-table .top-sales-row-selected td { background: #fafcff; }
+.market-shape-reference-view .top-sales-table .top-sales-row-selected td.shape-ref-frozen { background: #fafcff; }
+.market-shape-reference-view .top-sales-table th.shape-ref-frozen { background: #f7f9fc; }
 .shape-ref-bulk-heading { display: flex; align-items: center; gap: 4px; }
 .shape-ref-trend-trigger:focus-visible { outline: 2px solid #2f80ed; outline-offset: 2px; }
 .shape-ref-trend-popover { box-sizing: border-box; overflow: auto; padding: 14px 16px 12px; border: 1px solid #dfe6ee; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(36,53,74,.18); color: #24354a; white-space: normal; }

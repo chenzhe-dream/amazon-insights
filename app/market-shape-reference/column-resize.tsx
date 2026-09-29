@@ -3,16 +3,16 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export const TOP_SALES_COLUMNS = [
-  ["bulk", 65], ["rank", 50], ["product", 240], ["brand", 90],
-  ["shape", 160], ["launch", 85], ["margin", 80], ["entry", 110], ["price", 80],
-  ["band", 95], ["sales30", 105], ["amount30", 115], ["trend", 145],
-  ["last3", 90], ["last6", 90], ["y2025", 90], ["y2024", 90],
-  ["rating", 55], ["reviews", 75], ["delivery", 70], ["seller", 105], ["action", 70],
+  ["bulk", 65], ["rank", 44], ["product", 240], ["brand", 88],
+  ["shape", 120], ["launch", 72], ["margin", 72], ["entry", 108], ["price", 80],
+  ["band", 92], ["sales30", 96], ["amount30", 112], ["trend", 128],
+  ["last3", 88], ["last6", 88], ["y2025", 72], ["y2024", 72],
+  ["rating", 48], ["reviews", 68], ["delivery", 56], ["seller", 96], ["action", 70],
 ] as const;
 export type TopSalesColumnId = (typeof TOP_SALES_COLUMNS)[number][0];
 
 const WIDTHS_KEY = 'market-shape-reference-column-widths/v1';
-const clampWidth = (width: number, id: TopSalesColumnId) => Math.min(560, Math.max(id === "shape" ? 140 : 40, Math.round(width)));
+const clampWidth = (width: number, id: TopSalesColumnId) => Math.min(560, Math.max(id === "shape" ? 96 : 40, Math.round(width)));
 /** Column sizes are browser display preferences, independent of report data. */
 export function useReferenceColumnWidths() {
   const [widths, setWidths] = useState<Record<TopSalesColumnId, number>>(
