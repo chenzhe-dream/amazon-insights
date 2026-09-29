@@ -158,3 +158,46 @@
 .keyword-panel-heading p { margin-bottom: 0; }
 .keyword-management-panel .market-insights-workflow, .keyword-management-panel .market-insights-saved-report { box-shadow: none; }
 .keyword-management-panel .market-keyword-editor select[multiple] { min-width: 140px; width: 100%; border: 1px solid #ccd6e7; border-radius: 6px; padding: 6px; font: inherit; background: #fff; }
+
+/* Supporting controls follow the reference report's compact cards and disclosures. */
+.market-research-page .market-reference-support,
+.market-shape-controls.market-reference-support { padding: 14px 18px; border: 1px solid #dce5ef; border-radius: 10px; background: #fff; }
+.shape-draft-status-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 32px; }
+.shape-draft-status-row > div { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 13px; color: #263b56; }
+.shape-draft-status { font-size: 12px; color: #73849a; }
+.shape-draft-status-saved { color: #258661; }
+.shape-draft-status-pending,.shape-draft-status-conflict,.shape-draft-status-unsaved { color: #9a651d; }
+.market-reference-support .shape-draft-description { margin: 2px 0 10px; font-size: 12px; color: #73849a; }
+.shape-collection-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; font-size: 12px; color: #536780; }
+.shape-collection-counts > span { padding: 4px 9px; border: 1px solid #e5ebf3; border-radius: 5px; background: #f7f9fc; }
+.shape-collection-counts .shape-collection-failure { color: #a04436; background: #fff7f4; border-color: #f1d8d1; }
+.market-reference-support .ghost-btn { min-height: 30px; padding: 5px 10px; border: 1px solid #d7e1ef; border-radius: 5px; box-shadow: none; font-size: 12px; }
+.market-reference-support > [role="alert"] { font-size: 12px; line-height: 1.6; }
+.market-support-details,
+.market-research-page .market-reference-tools,
+.market-research-page .market-reference-history,
+.market-research-result > .market-research-boundaries { margin-top: 12px; padding: 0; border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; box-shadow: none; }
+.market-support-details > summary,
+.market-research-page .market-reference-tools > summary,
+.market-research-page .market-reference-history > summary,
+.market-research-result > .market-research-boundaries > summary { padding: 10px 12px; color: #566b87; background: #f8faff; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.market-support-details > summary:hover,
+.market-research-page .market-reference-tools > summary:hover,
+.market-research-page .market-reference-history > summary:hover,
+.market-research-result > .market-research-boundaries > summary:hover { color: #6f45c2; background: #f5f1fb; }
+.market-support-details > summary:focus-visible,
+.market-research-page .market-reference-tools > summary:focus-visible,
+.market-research-page .market-reference-history > summary:focus-visible,
+.market-research-result > .market-research-boundaries > summary:focus-visible { outline: 2px solid #aa87ed; outline-offset: 2px; }
+.market-support-details > :not(summary),
+.market-research-page .market-reference-tools > :not(summary),
+.market-research-result > .market-research-boundaries > :not(summary) { margin: 12px; }
+.market-support-details .market-theme-steps,
+.market-research-page .market-reference-tools .market-theme-steps { max-height: 280px; overflow: auto; padding: 0; list-style: none; border-top: 1px solid #e8edf4; }
+.market-support-details .market-theme-steps li,
+.market-research-page .market-reference-tools .market-theme-steps li { padding: 8px 10px; border-bottom: 1px solid #e8edf4; font-size: 12px; color: #546780; }
+.market-research-page .market-reference-history > .market-research-body { padding: 12px; gap: 12px; }
+.market-reference-history .market-research-history,
+.market-reference-history .market-research-detail { padding: 12px; box-shadow: none; border: 1px solid #e5ebf3; }
+.market-reference-tools .market-theme-actions { gap: 8px 12px; font-size: 12px; }
+.market-reference-tools input,.market-reference-tools select { padding: 6px 8px; border: 1px solid #d7e1ef; border-radius: 5px; background: #fff; color: #354c69; font: inherit; }

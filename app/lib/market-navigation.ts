@@ -1,10 +1,10 @@
 import { marketModuleNodeQueryKey, marketModuleSelectionQueryKeys } from './market-module-selection';
 
 export const marketNavigation = [
-  { view: "overview", label: "市场总览", sub: "类目采集 · 基础指标" },
-  { view: "shapes", label: "商品形态及价格带", sub: "商品形态 · 价格分布" },
-  { view: "keywords", label: "类目关键词洞察", sub: "搜索需求 · 关键词分析" },
-  { view: "themes", label: "类目买家评论见解", sub: "买家主题 · 评论洞察" },
+  { view: "overview", visualDim: "market-overview", label: "市场总览", sub: "规模 · 趋势 · 垄断" },
+  { view: "shapes", visualDim: "market-structure", label: "商品形态及价格带", sub: "形态 · 价格带 · TOP销量 · 上架" },
+  { view: "keywords", visualDim: "market-traffic", label: "类目关键词洞察", sub: "搜索需求 · 词洞察 · CPC" },
+  { view: "themes", visualDim: "market-review-insight", label: "类目买家评论见解", sub: "TOP20 · Customers Say · 主题聚合" },
 ] as const;
 
 export type MarketView = typeof marketNavigation[number]["view"];

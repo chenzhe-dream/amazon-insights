@@ -194,7 +194,10 @@ type NavTheme =
 
 const navThemeByDim: Record<string, NavTheme> = {
   "market-group": "insight",
-  "market-overview": "insight",
+  "market-overview": "traffic",
+  "market-structure": "params",
+  "market-traffic": "ads",
+  "market-review-insight": "review",
   "overview-group": "overview",
   overview: "params",
   "overview-images": "gallery",
@@ -1978,12 +1981,12 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
 <ModuleVisibilityLink
               key={child.marketView ?? child.id}
               visibleModules={authSession.visibleModules} tab={child.id} href={leafHref(child)}
-              data-dim={child.id}
+              data-dim={child.marketView ? marketNavigation.find(item => item.view === child.marketView)!.visualDim : child.id}
               className={isLeafActive(child) ? "sidebar-flyout-item active" : "sidebar-flyout-item"}
               aria-current={isLeafActive(child) ? "page" : undefined}
               onClick={closeFlyout}
             >
-              <NavThemeIcon dim={child.id} />
+              <NavThemeIcon dim={child.marketView ? marketNavigation.find(item => item.view === child.marketView)!.visualDim : child.id} />
               <span className="nav-item-copy">
                 <b>{child.label}</b>
                 <NavSubText text={child.sub} />

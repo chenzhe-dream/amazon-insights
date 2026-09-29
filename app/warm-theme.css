@@ -1088,3 +1088,8 @@ body {
     height: 44px;
   }
 }
+
+/* Market subpages retain their original visual identities without changing routes. */
+.sidebar-flyout-item[data-dim="market-overview"] { --nav-theme: var(--dim-traffic); }
+.sidebar-flyout-item[data-dim="market-structure"] { --nav-theme: var(--dim-convert); }
+.sidebar-flyout-item[data-dim="market-traffic"] { --nav-theme: var(--dim-ads); }

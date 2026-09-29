@@ -37,8 +37,11 @@ test('draft autosave survives reload and capacity change; offline edits and conf
     return route.fulfill({contentType:'application/json',body:JSON.stringify({draft:serverDraft})});
   });
   await page.goto(origin);
-  await page.getByRole('button',{name:'保存报告版本'}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'保存报告版本'}).isDisabled(),true,'snapshot save waits for a trusted draft');
+  await page.locator('.market-shape-controls').waitFor();
+  assert.equal(await page.getByRole('button',{name:'保存报告版本'}).count(),0);
+  assert.equal(await page.getByLabel('形态报告版本').count(),0);
+  assert.equal(await page.getByText('版本备注（选填）',{exact:true}).count(),0);
+  assert.equal(await page.getByLabel('B000000001 人工形态',{exact:true}).isDisabled(),true,'editing waits for a trusted draft');
   releaseDraftRead();
   const first=page.getByLabel('B000000001 人工形态',{exact:true}),second=page.getByLabel('B000000002 人工形态',{exact:true});
   await first.waitFor();await page.getByText(/草稿：已保存/).waitFor();
@@ -55,6 +58,7 @@ test('draft autosave survives reload and capacity change; offline edits and conf
   await secondRow.getByRole('button',{name:'移除',exact:true}).click();
   await page.getByText(/草稿：已保存/).waitFor();
   assert.equal(serverDraft.items.find(item=>item.asin==='B000000002')?.included,false);
+  await page.evaluate(()=>localStorage.clear());
   await page.reload();await second.waitFor();
   assert.equal(await second.inputValue(),'Tall');
   await secondRow.getByRole('button',{name:'恢复',exact:true}).click();
