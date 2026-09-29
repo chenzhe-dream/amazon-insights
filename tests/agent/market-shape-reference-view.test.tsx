@@ -16,6 +16,18 @@ const report: SorftimeCategoryDashboardReport = {
   productSalesTotals: { last3Months: 600, last6Months: 1100, y2024: 1800, y2025: 1900, monthsAvailable: 24 }, topLinkCount: 100,
 };
 
+test('partial table totals disclose known sums and never average only observed links', () => {
+  const value = structuredClone(report);
+  value.products[0].sales.last6Months = 600;
+  value.products.push({...structuredClone(value.products[0]), asin:'B000000002', sales:{...value.products[0].sales,last6Months:null}});
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}} />);
+  assert.match(html, /单链月均按全部链接计算/);
+  const totals = [...html.matchAll(/<tr class="shape-price-total-row">(.*?)<\/tr>/g)].map(match=>match[1]);
+  assert.ok(totals.length >= 3);
+  assert.ok(totals.every(row=>row.includes('已知 600')));
+  assert.ok(totals.filter(row=>row.includes('合计')).every(row=>/<td>2<\/td><td[^>]*>未知<\/td><td>—<\/td>/.test(row)));
+});
+
 test('product table exposes only batch checkboxes and retains excluded sample recovery', () => {
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{B000000001:'折叠款'}} selectedAsins={[]} onAssignment={() => {}} onSelected={() => {}} />);
   assert.doesNotMatch(html, /aria-label="选择 B000000001"/);
@@ -34,9 +46,9 @@ test("summary status distinguishes computed conclusions from missing evidence", 
   const missing = structuredClone(report);
   missing.products[0].sales.y2024 = null;
   const partial = render(missing);
-  assert.match(partial, /综合结论待补数据/);
+  assert.match(partial, /规则结论已生成/);
   assert.match(partial, /B000000001 缺少 2024 销量/);
-  assert.doesNotMatch(partial, /规则结论已生成/);
+
 });
 
 test("margin cards keep missing margins unknown and explain both denominators", () => {

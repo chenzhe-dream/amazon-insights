@@ -5,7 +5,7 @@ import { browserRequestId } from "./lib/browser-request-id";
 import {marketSiteCurrency} from "../shared/market-sites";
 import React,{useEffect,useImperativeHandle,useRef,useState,type FormEvent} from 'react';
 import {MarketModuleIdSchema} from '../shared/market-module-contracts';
-import type {MarketResearchScope} from '../shared/market-research-contracts';
+import type {MarketOverviewReport as BasicReport,MarketResearchScope} from '../shared/market-research-contracts';
 import type {MarketOverviewRunResponse} from '../shared/market-overview-report-contracts';
 import {createOverviewStudy,startOverviewRun,readOverviewRun,retryOverviewSteps,cancelOverviewRun,findSavedOverviewRun} from './lib/market-overview-browser';
 import {MarketOverviewReport} from './market-overview-report';
@@ -22,6 +22,7 @@ function remember(id:string){const url=new URL(window.location.href);url.searchP
 function forget(){const url=new URL(window.location.href);url.searchParams.delete('overviewRun');window.history.replaceState(window.history.state,'',url);}
 export type MarketOverviewController = { openReport: (scope: MarketResearchScope) => void };
 export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScope,controller,onExpandedChange,onContextChange,categoryName,showAuditDetails=false}:{scope:MarketResearchScope;fromMonth:string;onFromMonth:(value:string)=>void;onRestoreScope:(run:Run)=>void;controller?:React.Ref<MarketOverviewController>;onExpandedChange?:(open:boolean)=>void;onContextChange?:(context:OverviewBasicContext)=>void;categoryName?:string|null;showAuditDetails?:boolean}){
+  const [basicSnapshot,setBasicSnapshot]=useState<{key:string;report:BasicReport|null|undefined}|null>(null);
   const [expanded,setExpanded]=useState(false);
   const [runId,setRunId]=useState<string|null>(null),[run,setRun]=useState<Run|null>(null),[restoreId,setRestoreId]=useState(''),[choice,setChoice]=useState('latest'),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
   const [lookingUp,setLookingUp]=useState(false),[noSaved,setNoSaved]=useState(false);
@@ -30,13 +31,15 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   const startKeys=useRef<{signature:string;study:string;run:string}|null>(null),actionKey=useRef<{signature:string;key:string}|null>(null);
   useEffect(()=>{props.current={scope,onRestoreScope};},[scope,onRestoreScope]);
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('overviewRun'));if(restored.success)queueMicrotask(()=>{if(!abort.signal.aborted){setRunId(restored.data);setRestoreId(restored.data);setExpanded(true);}});return()=>{abort.abort();owner.current=null;};},[]);
+  const selected=run?(choice==='latest'?run.currentReport??run.latestSavedReport:run.history.find(r=>r.attemptId===choice)??null):null;
+  const basicReportKey=selected?`${selected.report.moduleRunId}/${selected.attemptId}/${selected.report.reportHash}`:null;
   useEffect(()=>{
     if(!onContextChange)return;
     if(lookingUp){onContextChange({status:'loading'});return;}
-    if(run){onContextChange({status:'ready',runId:run.id,scope:{marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,...run.params}});return;}
+    if(run){onContextChange({status:'ready',runId:run.id,report:basicSnapshot?.key===basicReportKey?basicSnapshot?.report??null:null,scope:{marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,...run.params}});return;}
     const restoring=!!runId||MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('overviewRun')).success;
     onContextChange({status:readError?'failed':restoring?'loading':'idle'});
-  },[onContextChange,run,runId,readError,lookingUp]);
+  },[onContextChange,run,runId,readError,lookingUp,basicSnapshot,basicReportKey]);
   function period(query:MarketResearchScope){const rolling=query.month==='last30',toMonth=rolling?latestCompleteOverviewMonth():query.month;return {toMonth,...(rolling?{overviewPeriod:'last30' as const}:{})};}
   function show(open:boolean){setExpanded(open);onExpandedChange?.(open);}
   useImperativeHandle(controller,()=>({openReport(requestScope){
@@ -71,7 +74,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
   async function action(kind:'retry'|'cancel',step?:Run['steps'][number]){if(!run)return;const id=run.id,steps=step?.latestAttemptId?[{stepId:step.id,failedAttemptId:step.latestAttemptId}]:[],signature=JSON.stringify({id,kind,steps});if(actionKey.current?.signature!==signature)actionKey.current={signature,key:browserRequestId()};const key=actionKey.current.key;
     await mutate(async signal=>{if(kind==='retry')await retryOverviewSteps(id,steps,key,signal);else await cancelOverviewRun(id,key,signal);const next=await readOverviewRun(id,signal);if(!signal.aborted){setRun(next);setReadError(null);}});}
   function restore(event:FormEvent){event.preventDefault();const parsed=MarketModuleIdSchema.safeParse(restoreId.trim());if(!parsed.success){setError('请输入有效任务编号。');return;}lookupRevision.current++;setLookingUp(false);show(true);setRun(null);setNoSaved(false);setChoice('latest');setRunId(parsed.data);setReadError(null);remember(parsed.data);setReload(n=>n+1);}
-  const selected=run?(choice==='latest'?run.currentReport??run.latestSavedReport:run.history.find(r=>r.attemptId===choice)??null):null;
+
   const currentSteps=run?.steps.filter(step=>step.current)??[];
   const isActive=run?active(run):false;
   const failedStep=currentSteps.find(step=>step.status==='failed');
@@ -92,7 +95,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
       {different&&<div className="market-research-notice"><strong>查询条件已改变</strong><p>下方保留的是类目 {run.scope.nodeIdPath}、{overviewPeriodLabel(run.scope)} 的任务报告，不代表新条件的结果。</p></div>}
       {run&&<h3 className="market-reference-run-status">{!readError&&active(run)&&<span className="market-theme-spinner" aria-hidden="true"/>}{readError?'最新状态待确认':run.status==='cancelled'?'分析已取消':active(run)?'总览分析进行中':run.currentReport?'部分报告已保存':failedStep?'总览分析失败，可重试':'分析尚未完成'}</h3>}
       {run&&!run.currentReport&&selected&&<p className="market-research-notice">本轮尚无新报告，以下为之前保存的版本。</p>}
-      {selected?<MarketOverviewReport key={selected.attemptId} entry={selected} headTopN={run?.params.headTopN} newProductMonths={run?.params.newProductMonths} categoryName={run&&sameNode(run.scope.nodeIdPath,scope.nodeQuery)?categoryName:null} showAuditDetails={showAuditDetails}/>:<div className="market-reference-pending" role="status"><div className="market-reference-pending-copy">{(lookingUp||busy||isActive||runId&&!run&&!readError)&&<span className="market-theme-spinner" aria-hidden="true"/>}<div><strong>{pendingTitle}</strong><span>{noSaved?'当前条件没有7天内可复用的报告。旧报告仍可通过历史链接或任务编号读取；需要更新时，请开始总览分析。':failedStep&&!isActive?'已采集的数据保留，可直接重试失败步骤。':runId?'已保存输入保留，详情与重试见下方「分析设置与任务管理」。':'打开历史报告不会自动采集。'}</span></div></div>{noSaved&&!lookingUp&&<button className="primary-btn" type="button" disabled={busy||!scope.nodeQuery} onClick={()=>void start(scope,scope.month==='last30'?period(scope).toMonth:overviewReportStartMonth(scope.month,fromMonth))}>开始总览分析</button>}{failedStep?.canRetry&&!readError&&!isActive&&<button className="ghost-btn" type="button" disabled={busy} onClick={()=>void action('retry',failedStep)}>重试{labels[failedStep.kind]??'失败步骤'}</button>}</div>}
+      {selected?<MarketOverviewReport onBasicSnapshot={setBasicSnapshot} key={selected.attemptId} entry={selected} headTopN={run?.params.headTopN} newProductMonths={run?.params.newProductMonths} categoryName={run&&sameNode(run.scope.nodeIdPath,scope.nodeQuery)?categoryName:null} showAuditDetails={showAuditDetails}/>:<div className="market-reference-pending" role="status"><div className="market-reference-pending-copy">{(lookingUp||busy||isActive||runId&&!run&&!readError)&&<span className="market-theme-spinner" aria-hidden="true"/>}<div><strong>{pendingTitle}</strong><span>{noSaved?'当前条件没有7天内可复用的报告。旧报告仍可通过历史链接或任务编号读取；需要更新时，请开始总览分析。':failedStep&&!isActive?'已采集的数据保留，可直接重试失败步骤。':runId?'已保存输入保留，详情与重试见下方「分析设置与任务管理」。':'打开历史报告不会自动采集。'}</span></div></div>{noSaved&&!lookingUp&&<button className="primary-btn" type="button" disabled={busy||!scope.nodeQuery} onClick={()=>void start(scope,scope.month==='last30'?period(scope).toMonth:overviewReportStartMonth(scope.month,fromMonth))}>开始总览分析</button>}{failedStep?.canRetry&&!readError&&!isActive&&<button className="ghost-btn" type="button" disabled={busy} onClick={()=>void action('retry',failedStep)}>重试{labels[failedStep.kind]??'失败步骤'}</button>}</div>}
     </div>}
     <details className="market-reference-tools"><summary>分析设置与任务管理</summary>
     <form onSubmit={e=>{e.preventDefault();if(!isActive||different)void start();}} className="market-theme-actions">{scope.month!=='last30'&&<label>分析起始月 <input required type="month" min="2000-01" max={scope.month} value={fromMonth} disabled={busy} onChange={e=>onFromMonth(e.target.value)}/></label>}<span>{scope.month==='last30'?'最近30天':`至 ${scope.month}`} · 类目 {scope.nodeQuery||'尚未选择'}</span><button className="primary-btn" type="submit" disabled={busy||lookingUp||!scope.nodeQuery||isActive&&!different}>{busy?'提交中…':'开始总览分析'}</button></form>

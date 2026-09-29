@@ -17,7 +17,7 @@ export const MarketShapeReferenceRevisionRequestSchema=z.object({
  if(selected.size!==v.selectedAsins.length||new Set(v.assignments.map(a=>a.asin)).size!==v.assignments.length)ctx.addIssue({code:'custom',message:'Duplicate manual product assignment'});
 });
 export const MarketShapeReferenceRevisionDataSchema=z.object({
- calculationVersion:z.literal('shape-known-coverage/2').optional(),
+ calculationVersion:z.enum(['shape-known-coverage/2','shape-all-links/3']).optional(),
  scope:MarketAnalysisScopeSchema,
  pool:SorftimeShapePoolPublicSchema,
  productImages:MarketShapeProductImagesPublicSchema.optional(),

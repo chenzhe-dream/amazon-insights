@@ -16,7 +16,7 @@ import {readMarketOverviewCatalog} from './market-overview-catalog-step';
 import {canonicalJsonSha256 as digest} from './model-request-accounting';
 import type {MarketOverviewAnalysis} from '../../shared/market-overview-analysis-contracts';
 import {MarketRuleBaselineSchema} from '../../shared/market-rule-baseline-contracts';
-import {projectMarketOverviewOriginalFields} from '../domain/market-research/overview-original-fields';
+import {projectMarketOverviewBasicReport,projectMarketOverviewOriginalFields} from '../domain/market-research/overview-original-fields';
 
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 function same(a:unknown,b:unknown){if(digest(a)!==digest(b))throw new TypeError('Overview report frozen evidence differs');}
@@ -121,6 +121,6 @@ export async function readMarketOverviewReport(context:PostgresQueryContext,view
   // Internal evidence only: public details continue to select numbers/semantic.
   // A consumer must require complete windows and replay the complete manifest
   // before promoting these audited sections to a synthesis input.
-  return {report:{...report,reportHash:digest(report)},numbers:{...(externalData?{externalData,productDemand}:{}),...(rulesOnly?{originalSynthesis:projectMarketOverviewOriginalSynthesis({scope:view.run.scope,parameters:catalog.parameters,sources,industryDemand,externalData})}:{}),...(industryDemand?{industryDemand}:{}),months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{}),originalSummary:projectMarketOverviewOriginalFields({scope:view.run.scope,parameters:catalog.parameters,sources})},semantic,
+  return {report:{...report,reportHash:digest(report)},numbers:{...(externalData?{externalData,productDemand}:{}),...(rulesOnly?{originalSynthesis:projectMarketOverviewOriginalSynthesis({scope:view.run.scope,parameters:catalog.parameters,sources,industryDemand,externalData})}:{}),...(industryDemand?{industryDemand}:{}),months:catalog.months,trendGaps:catalog.trendGaps,...(distributions?{distributions}:{}),basicOverview:projectMarketOverviewBasicReport({scope:view.run.scope,parameters:catalog.parameters,sources}),originalSummary:projectMarketOverviewOriginalFields({scope:view.run.scope,parameters:catalog.parameters,sources})},semantic,
     synthesisSource:full&&synthesisPlan?{catalog:full,plan:synthesisPlan,windows:synthesisWindows}:null};
 }

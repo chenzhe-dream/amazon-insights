@@ -1,3 +1,4 @@
+import {projectBasicOverviewTableMetrics} from '../domain/market-research/overview-basic-table';
 import { createHash } from "node:crypto";
 import {marketSiteCurrency,normalizeMarketSite} from '../../shared/market-sites';
 import { MarketOverviewReportSchema, type MarketOverviewReport, type MarketResearchIssue, type MarketResearchScope } from "../../shared/market-research-contracts";
@@ -116,7 +117,7 @@ export async function collectMarketOverview(input: {
       if(!Object.keys(selected).length) throw new MarketResearchCollectionError(issue(dataset,"empty"));
       assertScope(selected,nodeId,nodeIdPath,scope.month,dataset,scope);
       const sourceMetrics=dataset==="research"?readMetrics(selected,{},scope):readMetrics({},selected,scope);
-      if(Object.values(sourceMetrics).every(value=>value===null)) {
+      if(Object.values({...sourceMetrics,...projectBasicOverviewTableMetrics(dataset==='research'?selected:{},dataset==='statistics'?selected:{},scope)}).every(value=>value===null)) {
         throw new MarketResearchCollectionError(issue(dataset,"malformed-response"));
       }
       if(dataset==="research") research=selected; else statistics=selected;
@@ -126,13 +127,14 @@ export async function collectMarketOverview(input: {
   // The statistics endpoint is requested with the same explicit node/month. Its
   // missing identity fields are not replaced with the first research search hit.
   const metrics=readMetrics(research,statistics,scope);
-  if(Object.values(metrics).every(value=>value===null)) throw new MarketResearchCollectionError(issues[0]??issue("research","empty"));
+  const tableMetrics=projectBasicOverviewTableMetrics(research,statistics,scope);
+  if(Object.values({...metrics,...tableMetrics}).every(value=>value===null)) throw new MarketResearchCollectionError(issues[0]??issue("research","empty"));
   return MarketOverviewReportSchema.parse({schemaVersion:"market-overview/v1",scope,nodeId,nodeIdPath,
     categoryName:String(research.nodeLabelName??research.nodeLabelPath??categoryName).slice(0,300),currency:marketSiteCurrency(scope.marketplace),
-    collectedAt:(input.now?.()??new Date()).toISOString(),metrics,evidence,issues,boundaries:[
+    collectedAt:(input.now?.()??new Date()).toISOString(),metrics,tableMetrics,evidence,issues,boundaries:[
       "指标基于数据源返回的类目样本，样本商品数不等于全市场商品数。",
-      `头部口径 CR${scope.headTopN} 与新品窗口 ${scope.newProductMonths} 个月分别计算。集中度暂保留上游原值，单位确认前不换算百分比。`,
-      "本版提供市场总览基础指标；详细分布、历史趋势和综合机会评分尚未接入。",
+      `头部口径 CR${scope.headTopN} 与新品窗口 ${scope.newProductMonths} 个月分别计算。集中度与新品占比沿用原版：研究接口0～1的比例乘100，统计接口百分数直接显示。`,
+      "本表保存本次基础采集指标；详细分布、历史趋势和评分见对应总览报告。",
       "单月数据不能证明市场增长、需求旺季、盈利能力或立项可行性。",
     ]});
 }

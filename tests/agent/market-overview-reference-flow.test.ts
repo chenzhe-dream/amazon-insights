@@ -48,9 +48,9 @@ test('reference result row opens current-backend report inline and reopening is 
  await mkdir('test-results/market-reference-restored',{recursive:true});await page.screenshot({path:'test-results/market-reference-restored/overview-result-desktop.png',fullPage:true});
  await page.getByRole('button',{name:'收起报告',exact:true}).click();await page.getByRole('button',{name:'展开已保存报告',exact:true}).click();assert.equal(writes.length,1);
  await page.getByRole('button',{name:'收起报告',exact:true}).click();await page.getByRole('button',{name:'查看市场分析报告',exact:true}).click();assert.equal(writes.length,1);
- heldRead=new Promise(resolve=>{releaseRead=resolve;});await page.reload();await page.getByRole('button',{name:'查看市场分析报告',exact:true}).click();await page.waitForTimeout(200);assert.equal(writes.length,1,'pending restored report never starts another task');releaseRead?.();heldRead=undefined;await page.getByRole('region',{name:'已保存总览报告'}).waitFor();assert.equal(writes.length,1);
+ heldRead=new Promise(resolve=>{releaseRead=resolve;});await page.reload();await page.getByText('正在匹配历史报告的基础概览',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'查看市场分析报告',exact:true}).count(),0,'pending scope must not expose another record');assert.equal(writes.length,1,'pending restored report never starts another task');releaseRead?.();heldRead=undefined;await page.getByRole('region',{name:'已保存总览报告'}).waitFor();assert.equal(writes.length,1);
  failRead=true;await page.reload();await page.getByRole('alert').filter({hasText:'状态读取失败'}).waitFor();
- const beforeRecovery=readCount;failRead=false;await page.getByRole('button',{name:'查看市场分析报告',exact:true}).click();
+ const beforeRecovery=readCount;failRead=false;await page.getByText('分析设置与任务管理',{exact:true}).click();await page.getByRole('button',{name:'刷新总览状态',exact:true}).click();
  await page.getByRole('region',{name:'已保存总览报告'}).waitFor();
  assert.equal(readCount,beforeRecovery+1,'open retries the failed read exactly once');assert.equal(writes.length,1,'recovering a read must not create another study or analysis');
  assert.equal(await page.getByRole('alert').filter({hasText:'状态读取失败'}).count(),0);
@@ -58,7 +58,7 @@ test('reference result row opens current-backend report inline and reopening is 
  assert.deepEqual(errors,[]);
  savedRunId=false;await page.setViewportSize({width:1440,height:1000});await page.goto(origin+'?marketNode=456&marketMonth=2026-08');
  await page.getByRole('button',{name:'查看市场分析报告',exact:true}).click();
- await page.getByText('尚无已保存报告',{exact:true}).waitFor();
+ await page.getByText('暂无7天内可复用的报告',{exact:true}).waitFor();
  assert.equal(writes.length,1,'viewing an empty report does not begin collection');
  await page.screenshot({path:'test-results/market-reference-restored/overview-empty-desktop.png',fullPage:true});
  await page.getByRole('button',{name:'开始总览分析',exact:true}).click();

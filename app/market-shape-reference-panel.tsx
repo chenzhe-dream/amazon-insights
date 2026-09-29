@@ -1,4 +1,5 @@
 "use client";
+import {CURRENT_SHAPE_CALCULATION_VERSION} from '../shared/market-shape-calculation-version';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import type {MarketShapeRun} from '../shared/market-shape-public-contracts';
 import type {MarketShapeReferenceRevisionData} from '../shared/market-shape-reference-revision-contracts';
@@ -39,7 +40,7 @@ export function MarketShapeReferencePanel({run,readError,onRefresh,starting=fals
   activeRunId.current=run.id;
   useEffect(()=>{current.current=draft;},[draft]);
   useEffect(()=>{const abort=new AbortController();owner.current=abort;return()=>abort.abort();},[]);
-  const live=useMemo<MarketShapeReferenceRevisionData|null>(()=>run.source?.sorftimePool&&run.source.productHistory&&run.source.productAmountHistory&&run.categoryDashboard?{calculationVersion:'shape-known-coverage/2',scope:run.scope,pool:run.source.sorftimePool,productImages:run.source.productImages,productHistory:run.source.productHistory,productAmountHistory:run.source.productAmountHistory,categoryDashboard:run.categoryDashboard}:null,[run]);
+  const live=useMemo<MarketShapeReferenceRevisionData|null>(()=>run.source?.sorftimePool&&run.source.productHistory&&run.source.productAmountHistory&&run.categoryDashboard?{calculationVersion:CURRENT_SHAPE_CALCULATION_VERSION,scope:run.scope,pool:run.source.sorftimePool,productImages:run.source.productImages,productHistory:run.source.productHistory,productAmountHistory:run.source.productAmountHistory,categoryDashboard:run.categoryDashboard}:null,[run]);
   const currentAsins=run.source?.sorftimePool?.products.map(product=>product.asin)??[];
   useEffect(()=>{
     const abort=new AbortController();setReady(false);setError(null);setServerConflict(null);

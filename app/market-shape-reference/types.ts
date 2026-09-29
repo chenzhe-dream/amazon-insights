@@ -46,7 +46,7 @@ export type SorftimeCategoryDashboardProduct = {
 
 export type SorftimeCategoryDashboardReport = {
   /** Missing on pre-versioned saved revisions; those retain the original aggregate rules. */
-  calculationVersion?: 'shape-reference/1' | 'shape-known-coverage/2';
+  calculationVersion?: import('../../shared/market-shape-calculation-version').ShapeCalculationVersion;
   marketplace: string;
   sorftimeSite: string;
   nodeId: string;

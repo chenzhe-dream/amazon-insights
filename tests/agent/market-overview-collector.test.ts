@@ -10,6 +10,19 @@ function connector(handler:(request:ConnectorRequest)=>unknown): RemoteMcpConnec
   return {id:"sellerSprite",probe:async()=>{throw new Error("No probe expected");},execute:async request=>({data:await handler(request) as Record<string,unknown>,source:{connectorId:"sellerSprite",operation:request.operation,fetchedAt:"2026-09-12T00:00:00.000Z",attemptCount:1}})};
 }
 function research(extra={}) {return {code:"OK",data:{items:[{nodeId:"456",nodeIdPath:"123:456",nodeLabelName:"Floor Lamps",currency:"USD",topProducts:100,totalUnits:1000,avgPrice:20,...extra}]}};}
+
+test('basic table saves original fields with the selected head divisor and percentage conventions',async()=>{
+ const result=await collectMarketOverview({scope,...actor,connector:connector(r=>r.operation==='market_research'?research({top10ProductSales:1000,top10ProductRevenue:20000,avgRevenue:300,avgBsr:0,avgSellers:1.2,top10ProductCrn:.42,top10BrandCrn:60,l6NewRatio:.2,fbaProportion:90,amazonSelfProportion:0,fbmProportion:10,totalProducts:800,returnRatio:2.3,avgReturnRatio:3}):{data:{hlAvgBsr:120,hlAvgUnits:999,avgRevenue:888}})});
+ assert.deepEqual(result.tableMetrics,{hlAvgUnits:100,hlAvgRevenue:2000,avgRevenue:300,avgBsr:0,hlAvgBsr:120,avgSellers:1.2,productCrn:42,brandCrn:60,sellerCrn:null,newRatio:20,fbaProportion:90,amazonSelfProportion:0,fbmProportion:10,totalProducts:800,returnRatio:2.3,avgReturnRatio:3});
+});
+
+test('basic table does not invent missing fields or mix invalid scope and fallback units',async()=>{
+ const result=await collectMarketOverview({scope,...actor,connector:connector(r=>r.operation==='market_research'?research({avgRevenue:'',avgBsr:false,l6NewRatio:null}):{data:{hlAvgUnits:0,newProductProportion:.3,avgRevenue:12}})});
+ assert.equal(result.tableMetrics?.hlAvgUnits,0); assert.equal(result.tableMetrics?.newRatio,.3);
+ assert.equal(result.tableMetrics?.avgBsr,null); assert.equal(result.tableMetrics?.totalProducts,null);
+ const mismatch=await collectMarketOverview({scope,...actor,connector:connector(r=>r.operation==='market_research'?research():{data:{nodeId:'999',hlAvgUnits:777}})});
+ assert.equal(mismatch.tableMetrics?.hlAvgUnits,null);
+});
 test("market overview retains scope and missing values without inventing percentages",async()=>{
   const calls:ConnectorRequest[]=[];
   const result=await collectMarketOverview({scope,...actor,connector:connector(request=>{calls.push(request);return request.operation==="market_research"?research({totalRevenue:null,avgRatings:"",top10ProductCrn:0.42,l6NewCount:0}):{code:"OK",data:{brands:12,sellers:9}};})});

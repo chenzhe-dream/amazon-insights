@@ -1,5 +1,6 @@
+import {CURRENT_SHAPE_CALCULATION_VERSION} from '../../../shared/market-shape-calculation-version';
 import type { SorftimeCategoryDashboardReport as SavedReport } from "../types";
-import { referencePeriodContribution,hasReferencePeriodDateConflict,parseReferenceListingDate,resolveReferenceProductShape } from '../rules';
+import { resolveProductPriceBand,referencePeriodContribution,hasReferencePeriodDateConflict,parseReferenceListingDate,resolveReferenceProductShape } from '../rules';
 import {
   buildListingYearAnalysis,
   buildShapePriceBandAnalysis,
@@ -49,10 +50,11 @@ export function buildReferenceConclusions(
   assignments: Readonly<Record<string, string>>,
   selectedAsins?: readonly string[],
 ): ReferenceConclusions {
+  const current = (report.calculationVersion ?? CURRENT_SHAPE_CALCULATION_VERSION) === CURRENT_SHAPE_CALCULATION_VERSION;
   const selected = selectedAsins ? new Set(selectedAsins) : null;
   const sourceProducts=report.products.filter(product => selected === null || selected.has(product.asin));
   const conflicting=sourceProducts.find(product=>PERIODS.some(period=>hasReferencePeriodDateConflict(product,period,report.calculationVersion)));
-  const products = sourceProducts.map(product=>({...product,sales:{...product.sales,
+  const products = sourceProducts.map(product=>({...product,...(current?{priceBand:resolveProductPriceBand(product)}:{}),sales:{...product.sales,
     y2024:referencePeriodContribution(product,'y2024',report.calculationVersion),y2025:referencePeriodContribution(product,'y2025',report.calculationVersion),
   }}));
   if (!products.length) return unavailable("所选范围没有 Sorftime 商品链接");
@@ -66,24 +68,30 @@ export function buildReferenceConclusions(
   };
   const sixMonthGap = missingSales(products, ["last6Months"]);
   const recentGap = missingSales(products, ["last3Months", "last6Months"]);
-  const uncertainDate = report.calculationVersion === 'shape-reference/1' ? null : products.find(product => parseReferenceListingDate(product.onlineDate).status === 'uncertain');
+  const uncertainDate = report.calculationVersion === 'shape-reference/1' ? null : products.find(product => (current ? parseReferenceListingDate(product.onlineDate).status !== 'known' : parseReferenceListingDate(product.onlineDate).status === 'uncertain'));
   const listingDateGap = uncertainDate ? `${uncertainDate.asin} 上市日期待核实，当前结论数据不足` : null;
   const fullGap = conflicting?`${conflicting.asin} 年度销量与上市日期冲突，当前结论数据不足`:missingSales(products, PERIODS);
   const listingYear = sixMonthGap || listingDateGap ? insufficient(sixMonthGap ?? listingDateGap!) : ready(analyzeListingAgeSalesShare(buildListingAgeSalesShareInputsFromProducts(scoped.products, "last6Months"), {
     analysisDate: report.fetchedAt, salesPeriod: "last6Months", sampleScope,
     categoryName: report.categoryName, marketplace: report.marketplace,
   }));
-  const margin = sixMonthGap ? insufficient(sixMonthGap) : ready(buildTopSalesMarginEntryConclusion(scoped.products, { getProductShape: shape }));
-  const brandPrice = recentGap ? insufficient(recentGap) : ready(analyzeBrandPriceOpportunity(buildBrandPriceOpportunityInputsFromProducts(scoped.products, {
+  const priceMissing = current ? products.find(p => !(typeof p.price === 'number' && Number.isFinite(p.price) && p.price > 0) && (!p.priceBand?.trim() || p.priceBand === '—')) : null;
+  const priceGap = priceMissing ? `${priceMissing.asin} 缺少价格及价格带，当前结论数据不足` : null;
+  const marginMissing = current ? products.find(p => typeof p.grossProfitMargin !== 'number' || !Number.isFinite(p.grossProfitMargin)) : null;
+  const marginGap = marginMissing ? `${marginMissing.asin} 缺少毛利润率，综合结论数据不足` : null;
+  const allMarginsMissing = current && products.every(p => typeof p.grossProfitMargin !== 'number' || !Number.isFinite(p.grossProfitMargin));
+  const marginBlock = sixMonthGap ?? priceGap ?? (allMarginsMissing ? marginGap : null);
+  const margin = marginBlock ? insufficient(marginBlock) : ready(buildTopSalesMarginEntryConclusion(scoped.products, { getProductShape: shape }));
+  const brandPrice = recentGap || priceGap ? insufficient(recentGap ?? priceGap!) : ready(analyzeBrandPriceOpportunity(buildBrandPriceOpportunityInputsFromProducts(scoped.products, {
     getShape: shape,
   }), { analysisDate: report.fetchedAt, sampleScope, categoryName: report.categoryName, marketplace: report.marketplace }));
-  if (fullGap) return {
+  if (!current && fullGap) return {
     listingYear, margin,
     listingYearRows: insufficient(fullGap), shapeSales: insufficient(fullGap), shapePrice: insufficient(fullGap),
     brandPrice: report.calculationVersion === 'shape-reference/1' ? insufficient(fullGap) : brandPrice,
     synthesis: insufficient(fullGap),
   };
-  const listingYearRows = listingDateGap ? insufficient(listingDateGap) : ready(buildListingYearAnalysis(scoped.products.map(product => ({
+  const listingYearRows = fullGap || listingDateGap ? insufficient(fullGap ?? listingDateGap!) : ready(buildListingYearAnalysis(scoped.products.map(product => ({
     listingYear: formatOnlineDateYear(product.onlineDate),
     onlineDate: product.onlineDate,
     sales: product.sales,
@@ -96,11 +104,22 @@ export function buildReferenceConclusions(
     trendMissing: isProductSalesTrendMissing(product),
   })), { fetchedAt: report.fetchedAt });
   const shapeAggregates = buildShapeAggregatesFromPriceBandRows(shapeRows, { fetchedAt: report.fetchedAt });
-  const shapeSales = ready(analyzeShapeSalesShare(shapeAggregates));
-  const shapePrice = ready(analyzeShapePriceBandStructure({
+  // Annual shares are optional to the price structure analyzer. Do not let
+  // the original row builder's missing-as-zero fallback turn them into evidence.
+  if (current) for (const period of ['y2024','y2025'] as const) {
+    if (missingSales(products,[period])) {
+      for (const row of shapeRows) row[`${period}SharePct`] = null;
+      for (const row of shapeAggregates) row[`${period}SharePct`] = null;
+    }
+  }
+  const shapeSalesGap = current ? missingSales(products,['last3Months','last6Months','y2024']) : fullGap;
+  const shapeSales = shapeSalesGap ? insufficient(shapeSalesGap) : ready(analyzeShapeSalesShare(shapeAggregates));
+  const shapePriceGap = recentGap ?? priceGap;
+  const shapePrice = shapePriceGap ? insufficient(shapePriceGap) : ready(analyzeShapePriceBandStructure({
     rows: shapeRows, shapeAggregates, sampleScope,
     structuralPeriod: "2024 / 2025 / 近6个月 / 近3个月",
   }));
-  const synthesis = listingDateGap ? insufficient(listingDateGap) : ready(buildMarketStructureSynthesis(scoped, { getProductShape: shape }));
+  const synthesisGap = (current ? recentGap ?? priceGap ?? marginGap : fullGap) ?? listingDateGap;
+  const synthesis = synthesisGap ? insufficient(synthesisGap) : ready(buildMarketStructureSynthesis(scoped, { getProductShape: shape }));
   return { listingYear, listingYearRows, margin, shapeSales, shapePrice, brandPrice, synthesis };
 }

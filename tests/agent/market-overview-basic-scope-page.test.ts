@@ -24,13 +24,13 @@ test('basic scope matches canonical leaves but not different explicit paths, sit
 
 test('history overview binds basic scope regardless of response order and preserves explicit history choices',{timeout:90000},async t=>{
  const server=await createServer({configFile:false,cacheDir:'test-results/overview-basic-scope-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close();});const origin=server.resolvedUrls!.local[0].replace(/\/$/,'');const page=await browser.newPage({viewport:{width:1500,height:1000}});page.setDefaultTimeout(6000);
- let current=overviewRun(),rows=[job(1,'999:888'),job(2,'123:456','2026-07'),job(3,'123:456','2026-08',5),job(4,'123:456','2026-08',10,3),job(5)],failJobs=false,failRun=false,writes=0;
+ let current=overviewRun(),rows=[job(1,'999:888'),job(2,'123:456','2026-07'),job(3,'123:456','2026-08',5),job(4,'123:456','2026-08',10,3),job(5)],failJobs=false,failRun=false,writes=0,includeBasic=false,wrongBasic=false,failDetails=false;
  let release!:()=>void;let gate:Promise<void>|null=new Promise<void>(r=>{release=r;});let jobsGate:Promise<void>|null=null;const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();
   if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-overview-browser-harness.tsx"></script></body></html>`)});
   if(!url.pathname.startsWith('/api/'))return route.continue();if(req.method()!=='GET'){writes++;return route.abort();}
   if(url.pathname.endsWith('/market-research/jobs')){if(jobsGate)await jobsGate;return route.fulfill(failJobs?{status:503,json:{error:{message:'基础历史读取失败'}}}:{json:{jobs:rows}});}
-  if(url.pathname.includes('/reports/')){const detail=overviewDistributionDetails();detail.entry.report.scope=current.run.scope;return route.fulfill({json:detail});}
+  if(url.pathname.includes('/reports/')){if(failDetails)return route.fulfill({status:503,json:{error:{message:'冻结来源读取失败'}}});const detail=overviewDistributionDetails();detail.entry.report.scope=current.run.scope;if(includeBasic){const saved=job(99,wrongBasic?'999:888':current.run.scope.nodeIdPath,current.run.scope.overviewPeriod??current.run.scope.toMonth).report!;saved.metrics.totalUnits=3456;saved.categoryName='冻结报告的完整概览';detail.numbers.basicOverview=saved;}return route.fulfill({json:detail});}
   if(url.pathname.endsWith(`/runs/${overviewRunId}/overview`)){if(gate)await gate;return route.fulfill(failRun?{status:503,json:{error:{message:'历史任务读取失败'}}}:{json:current});}
   return route.fulfill({status:404,json:{}});
  });
@@ -47,4 +47,9 @@ test('history overview binds basic scope regardless of response order and preser
  failJobs=false;failRun=true;await page.reload();await page.getByText('未能确认历史报告范围',{exact:true}).waitFor();assert.equal(await basic.count(),0);
  failRun=false;current=overviewRun();current.run.scope={...current.run.scope,fromMonth:'2026-08',overviewPeriod:'last30'};for(const entry of [...current.run.history,current.run.currentReport!,current.run.latestSavedReport!])entry.report.scope=current.run.scope;
  rows=[job(5),job(6,'123:456','last30')];await page.reload();await basic.getByRole('heading',{name:'基础记录6',exact:true}).waitFor();assert.equal(writes,0);assert.deepEqual(errors,[]);
+ includeBasic=true;rows=[];await page.reload();await basic.getByRole('heading',{name:'冻结报告的完整概览',exact:true}).waitFor();assert.match(await basic.innerText(),/3,456/);
+ await page.getByRole('button',{name:'收起报告',exact:true}).click();await basic.getByRole('heading',{name:'冻结报告的完整概览',exact:true}).waitFor();
+ wrongBasic=true;await page.reload();await page.getByText('最近30条采集历史中没有与该总览匹配的基础记录',{exact:true}).waitFor();assert.equal(await basic.count(),0);
+ wrongBasic=false;failDetails=true;await page.reload();await page.getByText('冻结来源读取失败',{exact:false}).first().waitFor();assert.equal(await basic.count(),0);
+ assert.equal(writes,0);assert.deepEqual(errors,[]);
 });

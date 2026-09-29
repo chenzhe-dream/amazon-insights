@@ -3,7 +3,7 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { LaunchSection, LaunchTable } from "../launch-section";
 import type { SorftimeCategoryDashboardProduct, SorftimeCategoryDashboardReport } from "./types";
-import { buildReferenceShapeAnalysis, resolveListingYear, parseReferenceListingDate, resolveProductPriceBand, resolveSorftimeMarginEntryLabel, isReferencePeriodBeforeLaunch, hasReferencePeriodDateConflict, type ReferenceGroupRow } from "./rules";
+import { referenceMonthlyAverage, buildReferenceShapeAnalysis, resolveListingYear, parseReferenceListingDate, resolveProductPriceBand, resolveSorftimeMarginEntryLabel, isReferencePeriodBeforeLaunch, hasReferencePeriodDateConflict, type ReferenceGroupRow } from "./rules";
 import { TopSalesMultiSelectFilter } from "./top-sales-multi-select-filter";
 import type { TopSalesMultiSelectFilterState } from "./multi-filter";
 import { CategoryComboChart, MonopolyTrendChart } from "./charts";
@@ -167,12 +167,12 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
 
     <LaunchSection title="上架年份 · 销量结构分析" description="按已选商品的真实历史销量汇总；缺失历史不补零" badge={<span className="source-badge">{yearly.length} 年份组</span>}>
       <ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={active} />
-      <AggregateTable legacy={report.calculationVersion==='shape-reference/1'} rows={yearly} total={analysis.synthesis.totalSales} yearBasis />
+      <AggregateTable calculationVersion={analysis.calculationVersion} rows={yearly} total={analysis.synthesis.totalSales} yearBasis />
       {conclusions.listingYear.status === "ready" ? <ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
       <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
-      <AggregateTable sort={shapeSort} onSort={setShapeSort} legacy={report.calculationVersion==='shape-reference/1'} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
+      <AggregateTable sort={shapeSort} onSort={setShapeSort} calculationVersion={analysis.calculationVersion} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
@@ -183,7 +183,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
       <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
-      <AggregateTable sort={brandSort} onSort={setBrandSort} legacy={report.calculationVersion==='shape-reference/1'} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
+      <AggregateTable sort={brandSort} onSort={setBrandSort} calculationVersion={analysis.calculationVersion} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">{conclusions.synthesis.status === "ready" ? "规则结论已生成" : "综合结论待补数据"}</span>}>
@@ -197,7 +197,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   </div>;
 }
 
-function AggregateTable({ rows, total, yearBasis = false,legacy=false,sort,onSort }: { legacy?:boolean; rows: ReferenceGroupRow[]; total: Record<Period, number | null>; yearBasis?: boolean;sort?:SectionSort;onSort?:(sort:SectionSort)=>void }) {
+function AggregateTable({ rows, total, yearBasis = false,calculationVersion,sort,onSort }: { calculationVersion: SorftimeCategoryDashboardReport['calculationVersion']; rows: ReferenceGroupRow[]; total: Record<Period, number | null>; yearBasis?: boolean;sort?:SectionSort;onSort?:(sort:SectionSort)=>void }) {
   const [localSort,setLocalSort]=useState<SectionSort>(null);
   const currentSort=onSort?sort??null:localSort;
   const sorted = onSort ? rows : localSort ? sortSectionRows(rows,localSort) : rows;
@@ -205,7 +205,7 @@ function AggregateTable({ rows, total, yearBasis = false,legacy=false,sort,onSor
   const header=(metric:SectionSortMetric,label:string)=><SectionSortButton metric={metric} sort={currentSort} onSort={update}>{label}</SectionSortButton>;
   return <LaunchTable stickyHeader className="shape-price-table"><thead><tr><th>{header('label','分组')}</th>{periods.map(p => <th key={p.key}>{header(p.key,`${p.label}销量`)} / {header(`${p.key}SharePct`,'已知销量内占比')}</th>)}<th>{header('linkCount','链接数')}</th><th>{header('avgLast6MonthsMonthlyPerLink','近6个月单链月均')}</th><th>{header('avgY2025MonthlyPerLink','2025年单链月均')}</th></tr></thead><tbody>
     {sorted.map(row => <tr key={JSON.stringify([row.shape,row.brand,row.priceBand,row.label])}><th>{row.label}</th>{periods.map(period => <td key={period.key}>{yearBasis && (period.key === "y2024" || period.key === "y2025") && Number(row.label) > Number(period.key.slice(1)) ? "不适用" : <><RowSales row={row} period={period.key}/> / {row.sharePct[period.key]===null?"不可计算":`${n(row.sharePct[period.key],2)}%`}</>}</td>)}<td>{row.linkCount}</td><td>{n(row.avgLast6MonthsMonthlyPerLink, 1)}</td><td>{yearBasis&&Number(row.label)>2025?"不适用":n(row.avgY2025MonthlyPerLink, 1)}</td></tr>)}
-    <tr className="shape-price-total-row"><th>合计</th>{periods.map(period => <td key={period.key}>{n(total[period.key])} / {total[period.key] === null || total[period.key]===0 ? "不可计算" : "100%"}</td>)}<td>{rows.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>{total.last6Months === null || !rows.length ? "未知" : n(total.last6Months / rows.reduce((sum, row) => sum + (legacy?row.linkCount:row.coverage.last6Months.known), 0) / 6, 1)}</td><td>—</td></tr>
+    <tr className="shape-price-total-row"><th>合计</th>{periods.map(period => <td key={period.key}>{totalSalesText(total[period.key], rows, period.key)} / {total[period.key] === null || total[period.key]===0 ? "不可计算" : "100%"}</td>)}<td>{rows.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>{n(referenceMonthlyAverage(total.last6Months, combinedCoverage(rows, "last6Months"), 6, calculationVersion, false), 1)}</td><td>—</td></tr>
   </tbody></LaunchTable>;
 }
 
@@ -213,7 +213,7 @@ function ShapePriceBandTable({ shapes, bands, total,sort,onSort }: { shapes: Ref
   const header=(metric:SectionSortMetric,label:string)=><SectionSortButton metric={metric} sort={sort} onSort={onSort}>{label}</SectionSortButton>;
   return <LaunchTable stickyHeader className="shape-price-table shape-price-band-table"><thead><tr><th>{header('label','商品形态 / 价格带')}</th>{periods.map(p => <th key={p.key}>{header(p.key,`${p.label}销量`)} / {header(`${p.key}SharePct`,'形态内已知销量占比')}</th>)}<th>{header('linkCount','链接数')}</th><th>{header('avgLast6MonthsMonthlyPerLink','近6个月单链月均')}</th><th>{header('avgY2025MonthlyPerLink','2025年单链月均')}</th></tr></thead><tbody>
     {shapes.map(shapeRow => <FragmentRows key={shapeRow.label} shape={shapeRow} bands={bands.filter(row => row.shape===shapeRow.label)} />)}
-    <tr className="shape-price-total-row"><th>全部形态</th>{periods.map(p => <td key={p.key}>{n(total[p.key])}</td>)}<td>{shapes.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>—</td><td>—</td></tr>
+    <tr className="shape-price-total-row"><th>全部形态</th>{periods.map(p => <td key={p.key}>{totalSalesText(total[p.key], shapes, p.key)}</td>)}<td>{shapes.reduce((sum, row) => sum + row.linkCount, 0)}</td><td>—</td><td>—</td></tr>
   </tbody></LaunchTable>;
 }
 
@@ -224,3 +224,10 @@ function FragmentRows({ shape: row, bands }: { shape: ReferenceGroupRow; bands: 
 }
 
 function RowSales({row,period}:{row:ReferenceGroupRow;period:Period}){const c=row.coverage[period];return <span title={`可计算 ${c.known}/${c.total}${c.notApplicable?` · 不适用 ${c.notApplicable}`:''}${c.missing?` · 缺失 ${c.missing}`:''}`}>{c.notApplicable===c.total&&c.total>0?'不适用':`${c.missing>0&&row.sales[period]!==null?'已知 ':''}${n(row.sales[period])}`}</span>;}
+
+function combinedCoverage(rows: ReferenceGroupRow[], period: Period) {
+  return rows.reduce((sum, row) => ({known:sum.known+row.coverage[period].known, total:sum.total+row.linkCount, missing:sum.missing+row.coverage[period].missing, notApplicable:sum.notApplicable+row.coverage[period].notApplicable}), {known:0,total:0,missing:0,notApplicable:0});
+}
+function totalSalesText(value:number|null, rows:ReferenceGroupRow[], period:Period) {
+  return `${value !== null && combinedCoverage(rows, period).missing > 0 ? '已知 ' : ''}${n(value)}`;
+}

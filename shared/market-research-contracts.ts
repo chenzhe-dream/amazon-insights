@@ -1,3 +1,4 @@
+import {MarketOverviewTableMetricsSchema} from './market-overview-table-metrics';
 import { z } from "zod";
 import {MarketSiteSchema,MarketCurrencySchema,marketSiteCurrency} from './market-sites';
 
@@ -45,6 +46,7 @@ export const MarketOverviewReportSchema = object({
   currency: MarketCurrencySchema,
   collectedAt: z.string().datetime(),
   metrics: MarketOverviewMetricsSchema,
+  tableMetrics: MarketOverviewTableMetricsSchema.optional(),
   evidence: z.array(MarketResearchEvidenceSchema).max(3),
   issues: z.array(MarketResearchIssueSchema).max(3),
   boundaries: z.array(z.string().max(300)).max(10),

@@ -6,6 +6,7 @@ import {
   parseReferenceListingDate,
   resolveSorftimeMarginEntryLabel,
   resolveY2025MonthDivisor,
+  referenceMonthlyAverage,
 } from "../../app/market-shape-reference/rules";
 import type { SorftimeCategoryDashboardReport } from "../../app/market-shape-reference/types";
 
@@ -68,6 +69,34 @@ test("partial sales retain known totals and disclose coverage", () => {
   assert.equal(result.shapePriceBands[1].sales.last6Months, null);
   assert.equal(result.synthesis.totalSales.last6Months, 90);
   assert.equal(result.synthesis.marginCounts["—"], 1);
+  assert.equal(result.shapes[0].avgLast6MonthsMonthlyPerLink, null);
+  assert.equal(result.shapes[0].avgY2025MonthlyPerLink, null);
+});
+
+test('current monthly averages use every group link including confirmed prelaunch links', () => {
+  const source = report();
+  source.products[0].sales.last6Months = 600;
+  source.products[1].sales.last6Months = 0;
+  source.products[0].sales.y2025 = 1200;
+  source.products[1].sales.y2025 = null;
+  source.products[1].onlineDate = '2026-01-01';
+  const result = buildReferenceShapeAnalysis(source, {A1:'Floor', A2:'Floor'});
+  assert.equal(result.shapes[0].avgLast6MonthsMonthlyPerLink, 50);
+  assert.equal(result.shapes[0].avgY2025MonthlyPerLink, 67); // 1200 / 2 links / 9 months
+  source.products[1].sales.last6Months = null;
+  assert.equal(buildReferenceShapeAnalysis(source, {A1:'Floor', A2:'Floor'}).shapes[0].avgLast6MonthsMonthlyPerLink, null);
+});
+
+test('saved v2 preserves its historical observed-link denominator', () => {
+  const source = report(); source.calculationVersion = 'shape-known-coverage/2';
+  const result = buildReferenceShapeAnalysis(source, {A1:'Floor', A2:'Floor'});
+  assert.equal(result.shapes[0].avgLast6MonthsMonthlyPerLink, 15);
+});
+
+test('table total precision is preserved for current and saved versions',()=>{
+ for(const version of ['shape-reference/1','shape-known-coverage/2','shape-all-links/3'] as const){
+   assert.equal(referenceMonthlyAverage(100,{known:3,total:3,missing:0,notApplicable:0},6,version,false),100/3/6);
+ }
 });
 
 test("selected products set the denominator and observed zero remains zero", () => {

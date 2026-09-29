@@ -5,7 +5,8 @@ export const REFERENCE_PERIODS: readonly ReferencePeriod[] = ["last3Months", "la
 export type ReferencePeriodValues = Record<ReferencePeriod, number | null>;
 export type ReferenceCoverage = { known: number; total: number; missing: number; notApplicable: number };
 export type ReferencePeriodCoverage = Record<ReferencePeriod, ReferenceCoverage>;
-export const CURRENT_SHAPE_CALCULATION_VERSION = 'shape-known-coverage/2' as const;
+export { CURRENT_SHAPE_CALCULATION_VERSION } from '../../shared/market-shape-calculation-version';
+import { CURRENT_SHAPE_CALCULATION_VERSION, type ShapeCalculationVersion } from '../../shared/market-shape-calculation-version';
 
 export type ReferenceGroupRow = {
   label: string;
@@ -25,7 +26,7 @@ export type ReferenceMarginLabel = "优先进入" | "建议进入" | "谨慎进�
 export type ReferenceMarginCounts = Record<ReferenceMarginLabel, number>;
 
 export type ReferenceShapeAnalysis = {
-  calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION;
+  calculationVersion: ShapeCalculationVersion;
   overview: SorftimeCategoryDashboardReport["stats"] & { history: SorftimeCategoryDashboardReport["history"] };
   products: SorftimeCategoryDashboardProduct[];
   listingYears: ReferenceGroupRow[];
@@ -82,6 +83,15 @@ function percentage(part: number | null, whole: number | null): number | null {
     : Number(((part / whole) * 100).toFixed(2));
 }
 
+export function referenceMonthlyAverage(sales: number | null, coverage: ReferenceCoverage, months: number, version: ShapeCalculationVersion = CURRENT_SHAPE_CALCULATION_VERSION, round = true): number | null {
+  if (sales === null || coverage.total === 0 || months <= 0) return null;
+  if (version === CURRENT_SHAPE_CALCULATION_VERSION && coverage.missing > 0) return null;
+  const links = version === 'shape-known-coverage/2' ? coverage.known : coverage.total;
+  if (links === 0) return null;
+  const average = sales / links / months;
+  return round ? Math.round(average) : average;
+}
+
 export function formatPriceBand(price: number | null | undefined): string {
   const value = known(price);
   if (value === null || value <= 0) return "—";
@@ -116,7 +126,7 @@ export function resolveY2025MonthDivisor(fetchedAt?: string, referenceDate = new
   return Math.max(1, date.getMonth() + 1);
 }
 
-export function getReferencePeriodTotals(products: readonly SorftimeCategoryDashboardProduct[], calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION = CURRENT_SHAPE_CALCULATION_VERSION): ReferencePeriodValues {
+export function getReferencePeriodTotals(products: readonly SorftimeCategoryDashboardProduct[], calculationVersion: ShapeCalculationVersion = CURRENT_SHAPE_CALCULATION_VERSION): ReferencePeriodValues {
   return Object.fromEntries(REFERENCE_PERIODS.map(period => [
     period,
     (calculationVersion === 'shape-reference/1' ? sumKnown : sumObserved)(products.map(product => referencePeriodContribution(product, period, calculationVersion))),
@@ -178,7 +188,7 @@ function groupRows(
   totals: ReferencePeriodValues,
   y2025Divisor: number,
   denominatorForGroup?: (members: SorftimeCategoryDashboardProduct[]) => ReferencePeriodValues,
-  calculationVersion: 'shape-reference/1' | typeof CURRENT_SHAPE_CALCULATION_VERSION = CURRENT_SHAPE_CALCULATION_VERSION,
+  calculationVersion: ShapeCalculationVersion = CURRENT_SHAPE_CALCULATION_VERSION,
   parts?: (members: SorftimeCategoryDashboardProduct[]) => Pick<ReferenceGroupRow, 'shape' | 'brand' | 'priceBand'>,
   getKey?: (product: SorftimeCategoryDashboardProduct) => string,
 ): ReferenceGroupRow[] {
@@ -204,8 +214,8 @@ function groupRows(
       sales,
       coverage,
       sharePct,
-      avgLast6MonthsMonthlyPerLink: six === null ? null : Math.round(six / (calculationVersion === 'shape-reference/1' ? members.length : coverage.last6Months.known) / 6),
-      avgY2025MonthlyPerLink: y2025 === null || (calculationVersion !== 'shape-reference/1' && coverage.y2025.known === 0) ? null : Math.round(y2025 / (calculationVersion === 'shape-reference/1' ? members.length : coverage.y2025.known) / y2025Divisor),
+      avgLast6MonthsMonthlyPerLink: referenceMonthlyAverage(six, coverage.last6Months, 6, calculationVersion),
+      avgY2025MonthlyPerLink: referenceMonthlyAverage(y2025, coverage.y2025, y2025Divisor, calculationVersion),
       trendMissingLinkCount: members.filter(product =>
         (product.sales?.monthsAvailable ?? 0) === 0 && (known(product.monthlySalesVolume) ?? 0) > 0,
       ).length,

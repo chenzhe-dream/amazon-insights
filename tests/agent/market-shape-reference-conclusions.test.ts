@@ -66,10 +66,9 @@ test("missing historical sales stay unknown instead of becoming zero-valued conc
   assert.equal(result.listingYear.status, "ready");
   assert.equal(result.margin.status, "ready");
   assert.equal(result.shapeSales.status, "insufficient");
-  assert.equal(result.shapePrice.status, "insufficient");
+  assert.equal(result.shapePrice.status, "ready");
   assert.equal(result.brandPrice.status, "ready");
-  assert.equal(result.synthesis.status, "insufficient");
-  if (result.synthesis.status === "insufficient") assert.match(result.synthesis.reason, /2024/);
+  assert.equal(result.synthesis.status, "ready");
   const html = renderToStaticMarkup(createElement(ReferenceConclusionsView, { result }));
   assert.match(html, /上架年份 · 新品准入结论/);
   assert.match(html, /缺少 2024 销量/);
@@ -80,6 +79,19 @@ test("brand price uses complete recent periods without requiring unrelated annua
   const result = buildReferenceConclusions(incomplete, { A: "Desk" });
   assert.equal(result.brandPrice.status, "ready");
   assert.equal(result.shapeSales.status, "insufficient");
+});
+
+test('optional annual columns never become zero-share price structure evidence',()=>{
+ const source=structuredClone(report);source.products[0].sales.y2025=null;
+ const result=buildReferenceConclusions(source,{A:'Desk',B:'Floor'});
+ assert.equal(result.shapeSales.status,'ready','2025 is not used by the original shape entry rule');
+ assert.equal(result.shapePrice.status,'ready');
+ if(result.shapePrice.status==='ready'){
+   assert.ok(JSON.stringify(result.shapePrice.result).includes('"y2025":null'));
+ }
+ source.products[0].sales.y2024=null;
+ assert.equal(buildReferenceConclusions(source,{}).shapeSales.status,'insufficient','2024 is required for long trend');
+ assert.equal(buildReferenceConclusions(source,{}).synthesis.status,'ready');
 });
 
 test("uncertain 1970 launch does not yield an unsupported listing-age conclusion", () => {
@@ -106,8 +118,8 @@ test("a confirmed new listing has no pre-launch annual contribution and does not
  assert.equal(buildReferenceConclusions(unknownDate,{A:'Desk'}).synthesis.status,'insufficient');
  const conflict={...recent,products:[{...recent.products[0],sales:{...recent.products[0].sales,y2024:5}}]};
  const conflictResult=buildReferenceConclusions(conflict,{A:'Desk'});
- assert.equal(conflictResult.synthesis.status,'insufficient');
- if(conflictResult.synthesis.status==='insufficient')assert.match(conflictResult.synthesis.reason,/冲突/);
+ assert.equal(conflictResult.synthesis.status,'ready','annual conflict does not alter recent-only synthesis');
+ assert.equal(conflictResult.shapeSales.status,'insufficient');
  for(const date of ['2026-08-99','2026-08-foo','2026-02-30'])assert.equal(buildReferenceConclusions({...recent,products:[{...recent.products[0],onlineDate:date}]},{A:'Desk'}).synthesis.status,'insufficient');
 });
 
@@ -117,11 +129,19 @@ test("missing margin is excluded from observed margin evidence", () => {
     products: report.products.map(p => ({ ...p, grossProfitMargin: null })),
   };
   const result = buildReferenceConclusions(noMargin, { A: "Desk", B: "Floor" });
-  assert.equal(result.synthesis.status, "ready");
-  if (result.synthesis.status !== "ready") return;
-  const margin = result.synthesis.result.moduleSections.find(section => section.key === "marginMarketAccess")?.marginAccessDetail;
-  assert.equal(margin?.withMarginCount, 0);
-  assert.equal(margin?.linkGreenSharePct, 0);
+  assert.equal(result.margin.status, "insufficient");
+  assert.equal(result.synthesis.status, "insufficient");
+});
+
+test('current synthesis guards missing date, price and partial margin without inventing zero scores', () => {
+  for (const patch of [{onlineDate:null},{price:null,priceBand:'—'},{grossProfitMargin:null}]) {
+    const source = structuredClone(report); Object.assign(source.products[0],patch);
+    assert.equal(buildReferenceConclusions(source,{}).synthesis.status,'insufficient',JSON.stringify(patch));
+  }
+  const partial=structuredClone(report);partial.products[0].grossProfitMargin=null;
+  assert.equal(buildReferenceConclusions(partial,{}).margin.status,'ready','original margin analyzer explains observed subset');
+  const legacy=structuredClone(partial);legacy.calculationVersion='shape-known-coverage/2';
+  assert.equal(buildReferenceConclusions(legacy,{}).synthesis.status,'ready','saved old semantics');
 });
 
 test("renders the original five-dimension card structure with concrete conclusions", () => {

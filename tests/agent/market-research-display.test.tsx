@@ -14,6 +14,12 @@ const report: MarketOverviewReport = {
     productConcentrationRaw: 0.6, brandConcentrationRaw: 60, sellerConcentrationRaw: null, newCount: 4, newAvgPrice: null, newAvgUnits: 0 },
   evidence: [], issues: [], boundaries: ["样本数据不代表整个市场。"],
 };
+
+test('basic table renders supplied original fields including true zero and explicit head labels',()=>{
+ const html=renderToStaticMarkup(<MarketOverviewResult report={{...report,tableMetrics:{hlAvgUnits:101,hlAvgRevenue:202,avgRevenue:303,avgBsr:404,hlAvgBsr:505,avgSellers:1.5,productCrn:42,brandCrn:60,sellerCrn:0,newRatio:20,fbaProportion:90,amazonSelfProportion:0,fbmProportion:10,totalProducts:800,returnRatio:2.3,avgReturnRatio:3}}}/>);
+ for(const value of ['头部 101','404','505','1.5','FBA 90%','自营 0%','商品 42%','品牌 60%','卖家 0%','占比 20%','800','2.3%','同类目 3%'])assert.ok(html.includes(value),value);
+ assert.doesNotMatch(html,/头部 未知|单位待确认/);
+});
 const job: MarketResearchJob = { id: "10000000-0000-4000-8000-000000000001", scope, status: "failed", attempts: 1,
   createdAt: report.collectedAt, updatedAt: report.collectedAt, report: null,
   error: { dataset: "research", code: "timeout", message: "上游暂时不可用", retryable: true } };

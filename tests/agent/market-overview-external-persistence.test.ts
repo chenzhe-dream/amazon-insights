@@ -51,6 +51,10 @@ for(const rolling of [false,true])test(`external pages preserve reports, retries
  assert.equal(price.status,'failed');assert.equal(profit.status,'queued');assert.equal((view.attempts.find(a=>a.id===profit.latestAttemptId)!.error as any).code,'local-admission');
  const entry=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport!;
  const detail=(await reports.details({actor:f.actor,moduleRunId:run.id,attemptId:entry.attemptId}))!;
+ assert.ok(detail.numbers.basicOverview,'basic table is restored from the same frozen report');
+ assert.equal(detail.numbers.basicOverview.nodeIdPath,f.scope.nodeIdPath);
+ assert.equal(detail.numbers.basicOverview.scope.month,rolling?'last30':f.scope.toMonth);
+ assert.ok(detail.numbers.basicOverview.tableMetrics);
  if(rolling){assert.equal(detail.entry.report.scope.overviewPeriod,'last30');assert.ok(detail.numbers.months.some(m=>Object.values(m.metrics).some(v=>v.state==='known')));assert.ok(detail.numbers.originalSummary);assert.ok(detail.numbers.originalSynthesis);}
  assert.deepEqual(detail.numbers.externalData!.salesTrend.points,[{month:'2026-06',value:10},{month:'2026-07',value:11},{month:'2026-08',value:12}]);
  assert.equal(detail.numbers.externalData!.salesAmountTrend.status,'failed');assert.equal(detail.numbers.externalData!.salesAmountTrend.errorCode,'timeout');

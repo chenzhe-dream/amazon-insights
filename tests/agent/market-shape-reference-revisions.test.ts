@@ -41,8 +41,8 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  const command={actor:f.actor,moduleRunId:started.run.id,request,idempotencyKey:randomUUID()};
  const first=await store.save(command),same=await store.save(command);
  assert.equal(first.created,true);assert.equal(same.created,false);assert.deepEqual(same.revision,first.revision);
- assert.equal(first.revision.data.calculationVersion,'shape-known-coverage/2');
- assert.equal(toShapeReferenceReport(first.revision.data).calculationVersion,'shape-known-coverage/2');
+ assert.equal(first.revision.data.calculationVersion,'shape-all-links/3');
+ assert.equal(toShapeReferenceReport(first.revision.data).calculationVersion,'shape-all-links/3');
  const {calculationVersion:_version,...legacyData}=first.revision.data;
  assert.equal(toShapeReferenceReport(legacyData).calculationVersion,'shape-reference/1');
  assert.equal(first.revision.data.productAmountHistory.products[0].status,'failed');
