@@ -1,6 +1,6 @@
 import {buildMarketOverviewSynthesis,MARKET_SYNTHESIS_DIMENSIONS} from './original-overview/sellersprite-market-overview-synthesis';
 import {analyzePriceBands} from './original-overview/sellersprite-market-price-analysis';
-import {buildCheckedOverviewSynthesis,direction,yoy,type OverviewInputIssues} from './overview-score-readiness';
+import {buildCheckedOverviewSynthesis,direction,yoy,drop,validPoints,type OverviewInputIssues} from './overview-score-readiness';
 import type {SellerSpriteMarketNiche as Niche,SellerSpriteMarketReport as Report,SellerSpriteDistRow as Row} from './original-overview/sellersprite-market-niche';
 import type {MarketOverviewOriginalSynthesis} from '../../../shared/market-overview-original-synthesis';
 
@@ -23,10 +23,11 @@ export function buildItemCheckedOverviewSynthesis(niche:Niche,report:Report,issu
  const raw=buildMarketOverviewSynthesis(niche,report),legacy=buildCheckedOverviewSynthesis(niche,report,issues);
  const good=(key:keyof OverviewInputIssues)=>!issues[key]?.length;
  const item=(id:string,label:string,valid:boolean,value:number,reason:string,group?:Item['group']):Item=>({id,label,status:valid?'known':'missing',score:valid?value:null,missing:valid?[]:[reason],...(group?{group}:{})});
- const keywordTrendReady=good('keywords')&&!legacy.evaluation.dimensions.marketDemand.missing.some(m=>m.includes('关键词'));
  const keywordSearchReady=good('keywordSearches')&&report.keywordTrends.length>0&&report.keywordTrends.every(k=>nonnegative(k.searches));
  const points=new Map<string,number>();for(const k of report.keywordTrends)for(const p of k.points)points.set(p.month,(points.get(p.month)??0)+p.value);
- const keywordDir=direction([...points].sort(([a],[b])=>a.localeCompare(b)).map(([month,value])=>({month,value})));
+ const keywordPoints=[...points].sort(([a],[b])=>a.localeCompare(b)).map(([month,value])=>({month,value}));
+ const keywordDir=direction(keywordPoints),keywordMonths=drop(keywordPoints).slice(-12).map(p=>p.month);
+ const keywordTrendReady=good('keywords')&&keywordDir!==null&&report.keywordTrends.length>0&&report.keywordTrends.every(k=>validPoints(k.points)&&keywordMonths.every(month=>k.points.some(p=>p.month===month)));
  const salesDir=direction(report.salesTrend,true),viewsDir=direction(report.productDemand?.pageViews??[],true),salesYoy=yoy(report.salesTrend);
  const salesReady=good('sales')&&salesDir!==null,viewsReady=good('views')&&viewsDir!==null;
  const searches=report.keywordTrends.reduce((n,k)=>n+(k.searches??0),0),units=niche.totalUnits??0;

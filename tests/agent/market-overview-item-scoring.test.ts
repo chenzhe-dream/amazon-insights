@@ -49,6 +49,13 @@ test('monthly keyword volume remains observed when the separate history request 
  const failed=buildItemCheckedOverviewSynthesis(niche,report,{keywordSearches:['query-failed']});
  assert.equal(failed.evaluation.dimensions.marketDemand.items?.find(i=>i.id==='searches')?.score,null);
 });
+test('a missing monthly keyword volume does not invalidate its observed historical trend',()=>{
+ const {niche,report}=completeScoreFixture();report.keywordTrends[0].searches=null;
+ const result=buildItemCheckedOverviewSynthesis(niche,report);
+ assert.equal(result.evaluation.dimensions.marketDemand.items?.find(i=>i.id==='searches')?.score,null);
+ assert.equal(result.evaluation.dimensions.marketDemand.items?.find(i=>i.id==='keyword-growth')?.score,6);
+ assert.equal(result.evaluation.dimensions.marketDemand.items?.find(i=>i.id==='not-declining')?.score,4);
+});
 test('all unavailable inputs have no confirmed baseline or phantom grade',()=>{
  const {niche,report}=completeScoreFixture();for(const key of Object.keys(niche))if(typeof (niche as any)[key]==='number')(niche as any)[key]=null;
  for(const key of Object.keys(report))if(Array.isArray((report as any)[key]))(report as any)[key]=[];

@@ -12,12 +12,12 @@ const pct=(v:unknown):v is number=>nonnegative(v)&&v<=100;
 const check=(valid:boolean,message:string)=>valid?[]:[message];
 const unique=(messages:string[])=>[...new Set(messages)];
 // Match original preprocessing (sales/views pass through this once before direction()).
-function drop(points:Point[]){
+export function drop(points:Point[]){
  if(points.length<3)return points;
  const last=points.at(-1)!,prior=points.at(-2)!;
  return prior.value>0&&last.value<prior.value*.4?points.slice(0,-1):points;
 }
-function validPoints(points:Point[]){
+export function validPoints(points:Point[]){
  return points.length>0&&points.every(p=>/^\d{4}-(0[1-9]|1[0-2])(?:-\d{2})?$/.test(p.month)&&nonnegative(p.value))&&new Set(points.map(p=>p.month.slice(0,7))).size===points.length&&points.every((p,i)=>i===0||points[i-1].month<p.month);
 }
 function consecutive(points:Point[]){return points.every((p,i)=>{if(!i)return true;const a=points[i-1].month.split('-').map(Number),b=p.month.split('-').map(Number);return b[0]*12+b[1]===a[0]*12+a[1]+1;});}
