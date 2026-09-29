@@ -16,6 +16,16 @@ const report: SorftimeCategoryDashboardReport = {
   productSalesTotals: { last3Months: 600, last6Months: 1100, y2024: 1800, y2025: 1900, monthsAvailable: 24 }, topLinkCount: 100,
 };
 
+test('existing coverage disclosure separates supplied margins from price conflicts',()=>{
+  const value=structuredClone(report);
+  value.products[0].marginSource={basis:'detail',note:'Sorftime 商品详情毛利润率；同ASIN、同售价 20'};
+  value.products.push({...structuredClone(value.products[0]),asin:'B000000002',grossProfitMargin:null,marginSource:{basis:'price-mismatch',note:'详情售价与商品池售价不同，未混用毛利润率'}});
+  const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);
+  assert.match(html,/毛利润率：可用1\/2件，商品详情补充1件，待核实1件/);
+  assert.match(html,/B000000002：详情售价与商品池售价不同/);
+  assert.match(html,/title="Sorftime 商品详情毛利润率；同ASIN、同售价 20"/);
+});
+
 test('partial table totals disclose known sums and never average only observed links', () => {
   const value = structuredClone(report);
   value.products[0].sales.last6Months = 600;

@@ -28,7 +28,7 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
   calls++;
   if(r.input.product_trend_type==='SalesAmount'&&failAmount)throw new ConnectorError('sorftime','upstream-permanent',false);
   if(r.operation==='product_detail'&&failImage)throw new ConnectorError('sorftime','upstream-permanent',false);
-  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,main_image:'https://m.media-amazon.com/images/I/after-retry.jpg'}}:r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:70,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
+  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,gross_profit_rate:75,price:30,main_image:'https://m.media-amazon.com/images/I/after-retry.jpg'}}:r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:null,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
   return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
@@ -47,7 +47,7 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  assert.equal(toShapeReferenceReport(legacyData).calculationVersion,'shape-reference/1');
  assert.equal(first.revision.data.productAmountHistory.products[0].status,'failed');
  assert.equal(first.revision.data.productImages!.products[0].imageUrl,null);
- assert.equal(first.revision.data.pool.products[0].grossProfitMargin,70);
+ assert.equal(first.revision.data.pool.products[0].grossProfitMargin,null);
  assert.equal(first.revision.assignments[0].label,'Floor Lamp');
  assert.equal(first.revision.ordinal,1);
  const afterSave=calls;await store.find({actor:f.actor,moduleRunId:started.run.id});assert.equal(calls,afterSave);
@@ -69,6 +69,11 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  assert.equal(old!.revision.data.productImages!.products[0].imageUrl,null);
  const second=await store.save({...command,idempotencyKey:randomUUID(),request:{...request,expectedParentRevisionId:first.revision.revisionId,note:'After retry'}});
  assert.equal(second.revision.data.productAmountHistory.products[0].status,'ready');
+ assert.equal(toShapeReferenceReport(first.revision.data).products[0].grossProfitMargin,null);
+ assert.equal(toShapeReferenceReport(second.revision.data).products[0].grossProfitMargin,75);
+ assert.deepEqual(second.revision.data.productImages!.products[0].marginObservation,{grossProfitMargin:75,price:30});
+ const legacy=structuredClone(second.revision.data);delete legacy.productImages!.products[0].marginObservation;
+ assert.equal(toShapeReferenceReport(legacy).products[0].grossProfitMargin,null);
  assert.equal(second.revision.data.productAmountHistory.products[0].points.at(-1)!.amount,30.25);
  assert.equal(second.revision.data.productImages!.products[0].imageUrl,'https://m.media-amazon.com/images/I/after-retry.jpg');
  assert.equal((await store.find({actor:f.actor,moduleRunId:started.run.id}))!.revision.revisionId,second.revision.revisionId);

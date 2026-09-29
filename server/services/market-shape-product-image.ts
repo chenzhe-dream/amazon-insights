@@ -8,6 +8,7 @@ import {createMarketSourceEvidence} from '../domain/market-research/source-evide
 import {createMarketInputSnapshot} from '../domain/market-research/snapshot';
 import {DeadlineError,executeOnce} from './market-keyword-collector';
 import {canonicalJsonSha256 as digest} from '../runtime/model-request-accounting';
+import {parseSorftimeMarginObservation} from '../../shared/market-shape-margin-observation';
 import type {MarketExecutionActor,MarketModuleRunView} from '../db/market-module-execution-repository';
 import {PostgresMarketAnalysisSnapshotStore} from '../db/postgres/market-analysis-snapshot-store';
 
@@ -64,7 +65,7 @@ export async function readMarketShapeImages(input:{view:MarketModuleRunView;acto
   if(result.status==='failed'||digest(result.evidence)!==digest(raw.evidence))throw new TypeError('Product image source replay differs');
   const expected=createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:[asin],records:[{id:asin,scope,data:{collection:'product-image',asin,imageUrl:result.imageUrl,sourceRef:raw.id}}]});
   if(digest(saved.snapshot)!==digest(expected))throw new TypeError('Product image input replay differs');
-  return {...base,status:result.status,imageUrl:result.imageUrl,sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt};
+  return {...base,status:result.status,imageUrl:result.imageUrl,sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt,marginObservation:parseSorftimeMarginObservation(raw.evidence.payload,asin)};
  }));
  return MarketShapeProductImagesPublicSchema.parse({provider:'sorftime',products});
 }

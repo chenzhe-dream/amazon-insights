@@ -48,11 +48,12 @@ test('pending image reader has no snapshot or network calls',async()=>{
 });
 
 test('image reader replays immutable product_detail evidence and source input',async()=>{
- const collected=await collect({asin,amz_site:'US',data:{main_image:[url]}});if(collected.status==='failed')throw Error('expected evidence');
+ const collected=await collect({asin,amz_site:'US',data:{asin,main_image:[url],gross_profit_rate:64.2,price:29.99}});if(collected.status==='failed')throw Error('expected evidence');
  const sourceRef=`market-source:${digest(collected.evidence)}`;
  const snapshot=createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:cutoff,expectedRecordIds:[asin],records:[{id:asin,scope,data:{collection:'product-image',asin,imageUrl:collected.imageUrl,sourceRef}}]},new Date(cutoff));
  let reads=0;
  const view={run:{id:scope.researchId,scope,status:'succeeded'},steps:[{stepKey:'image-step',kind:'collect-product-image',status:'succeeded',input:{asin,selectionInputSnapshotId:'market-input:'+'1'.repeat(64)},latestAttemptId:'attempt-1'}],attempts:[{id:'attempt-1',status:'succeeded',output:{sourceRef,inputSnapshotId:snapshot.snapshotId}}]};
  const result=await readMarketShapeImages({view,actor:{organizationId:'org-a',userId:'u'},current:new Set(['image-step']),snapshots:{findInput:async()=>{reads++;return {snapshot}},findSource:async()=>{reads++;return {id:sourceRef,evidence:collected.evidence}}},asins:[asin],selectionInputSnapshotId:'market-input:'+'1'.repeat(64)} as unknown as Parameters<typeof readMarketShapeImages>[0]);
  assert.equal(reads,2);assert.equal(result.products[0].imageUrl,url);assert.equal(result.products[0].sourceRef,sourceRef);
+ assert.deepEqual(result.products[0].marginObservation,{grossProfitMargin:64.2,price:29.99});
 });

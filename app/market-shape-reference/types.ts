@@ -41,6 +41,7 @@ export type SorftimeCategoryDashboardProduct = {
   sellerOrigin: string | null;
   onlineDate: string | null;
   grossProfitMargin: number | null;
+  marginSource?: {basis:'pool'|'detail'|'missing'|'price-mismatch';note:string};
   priceBand: string;
 };
 
