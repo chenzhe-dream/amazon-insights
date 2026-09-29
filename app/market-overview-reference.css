@@ -62,3 +62,8 @@
  .market-ui-reference .market-reference-overview .market-theme-actions { flex-wrap: wrap; }
  .market-ui-reference .market-reference-overview .market-reference-pending { align-items: stretch; flex-direction: column; }
 }
+.market-ui-reference .ss-market-synthesis-price-details { margin-top: 4px; font-size: 12px; }
+.market-ui-reference .ss-market-synthesis-price-details > summary { width: fit-content; cursor: pointer; color: #718095; }
+.market-ui-reference .ss-market-synthesis-price-details > summary:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; border-radius: 3px; }
+.market-ui-reference .ss-market-synthesis-price-details > p { margin-top: 6px; }
+.market-ui-reference .ss-market-synthesis-price-details > small { display: block; margin-top: 6px; color: #718095; }

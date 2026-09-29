@@ -8,7 +8,7 @@ test('partial numeric scores are labelled and never form a complete radar',()=>{
  const {niche,report}=completeScoreFixture();report.productDemand!.pageViews=[];
  const result=wrap(buildCheckedOverviewSynthesis(niche,report)),review=wrap(buildItemCheckedOverviewSynthesis(niche,report));
  const html=renderToStaticMarkup(<MarketOverviewOriginalSummary result={result} review={review}/>);
- assert.match(html,/新版逐项复算/);assert.match(html,/此前逐维校验/);assert.match(html,/已确认/);assert.match(html,/评分项明细/);
+ assert.match(html,/新版逐项复算/);assert.match(html,/此前逐维校验/);assert.match(html,/已确认/);assert.doesNotMatch(html,/评分项明细/);
  assert.doesNotMatch(html,/data-score-polygon=/);assert.equal((html.match(/data-score-point=/g)??[]).length,6);
  assert.match(html,/暂不评级/);
 });

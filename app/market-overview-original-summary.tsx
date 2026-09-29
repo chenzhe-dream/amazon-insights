@@ -2,6 +2,7 @@
 import React,{useId,useState} from 'react';
 import {MARKET_SYNTHESIS_DIMENSIONS} from '../server/domain/market-research/original-overview/sellersprite-market-overview-synthesis';
 import type {MarketOverviewOriginalSynthesis} from '../shared/market-overview-original-synthesis';
+import {MarketAdminContent} from './market-admin-tools';
 type MarketOverviewSynthesis=MarketOverviewOriginalSynthesis['summary'];
 // Preserve the original panel; unknown observations do not become plotted zero scores.
 const SYNTHESIS_SCORE_LABELS = MARKET_SYNTHESIS_DIMENSIONS;
@@ -207,6 +208,19 @@ function MarketSynthesisRadarChart({
   );
 }
 
+/** Present saved prose without changing its inputs, scoring or persisted text. */
+function PriceOpportunityConclusion({text}:{text:string}){
+  const hasEstimate=text.includes('广告前毛利');
+  const lines=text.replace(/(?:模型估算|估算)?广告前毛利(?:（非实际毛利）)*/g,'估算广告前毛利').split(/\n+/).map(line=>line.trim()).filter(Boolean);
+  return <><p>{lines[0]??text}</p>
+    {lines.length>1&&<details className="ss-market-synthesis-price-details"><summary>查看价格带依据</summary>
+      {lines.slice(1).map((line,index)=><p key={index}>{line}</p>)}
+      {hasEstimate&&<small>广告前毛利为模型估算，不等同于商品实际毛利。</small>}
+    </details>}
+    {hasEstimate&&lines.length<=1&&<small>广告前毛利为模型估算，不等同于商品实际毛利。</small>}
+  </>;
+}
+
 function MarketOverviewSynthesisPanel({ synthesis,evaluation }: { synthesis: MarketOverviewSynthesis;evaluation?:MarketOverviewOriginalSynthesis["evaluation"] }) {
   return (
     <div className="ss-market-synthesis">
@@ -239,8 +253,7 @@ function MarketOverviewSynthesisPanel({ synthesis,evaluation }: { synthesis: Mar
                 {synthesis.scores[dim.key]===null?'数据不足':`${evaluation?.dimensions[dim.key].status==='partial'?'已确认 ':''}${synthesis.scores[dim.key]}/${dim.max}`}
               </em>
             </b>
-            <p>{synthesis.sections[dim.sectionKey]}</p>
-            {evaluation?.dimensions[dim.key].items&&<details className="market-research-boundaries"><summary>评分项明细</summary><ul>{evaluation.dimensions[dim.key].items!.map(item=><li key={item.id}>{item.label}：{item.status==='known'?`${item.score!>0?'+':''}${Number(item.score!.toFixed(2))}${item.group?'（分组折算前）':''}`:`待补齐 · ${item.missing.join('；')}`}</li>)}</ul></details>}
+            {dim.key==='priceOpportunity'?<PriceOpportunityConclusion text={synthesis.sections[dim.sectionKey]}/>:<p>{synthesis.sections[dim.sectionKey]}</p>}
           </li>
         ))}
       </ol>
@@ -278,6 +291,12 @@ export function MarketOverviewOriginalSummary({result:baseline,review,onSuppleme
   {itemPolicy&&result.evaluation?.status!=='ready'&&<p className="market-research-note">当前仅有部分评分依据。{onSupplement&&<button type="button" className="ghost-btn" disabled={supplementBusy} onClick={onSupplement}>{supplementBusy?'正在采集':'按本报告条件补齐采集'}</button>}补齐会新建完整采集任务，旧报告保留。</p>}
   {result.inputGaps.length>0&&<details className="market-research-boundaries"><summary>本次总结有 {result.inputGaps.length} 项输入说明</summary><p>包含来源缺口与评分依赖说明，不代表失败接口数量。</p><ul>{result.inputGaps.map(gap=><li key={gap}>{gap}</li>)}</ul></details>}
   <MarketOverviewSynthesisPanel synthesis={result.summary} evaluation={result.evaluation}/>
-  <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；校验版本 {result.evaluation?.version??'原版'}；绑定来源 {result.sourceRefs.length} 份。</p></details>
+  <MarketAdminContent>
+    {result.evaluation?.version==='observed-items/2'&&<details className="market-research-boundaries"><summary>总览评分项明细</summary>
+      <p>对应当前展示的{previous?'此前逐维校验':review?'新版逐项复算':'报告'}，校验版本 {result.evaluation.version}。</p>
+      {MARKET_SYNTHESIS_DIMENSIONS.map(dim=><div key={dim.key}><h5>{dim.label}</h5><ul>{result.evaluation!.dimensions[dim.key].items?.map(item=><li key={item.id}>{item.label}：{item.status==='known'?`${item.score!>0?'+':''}${Number(item.score!.toFixed(2))}${item.group?'（分组折算前）':''}`:`待补齐 · ${item.missing.join('；')}`}</li>)}</ul></div>)}
+    </details>}
+    <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；校验版本 {result.evaluation?.version??'原版'}；绑定来源 {result.sourceRefs.length} 份。</p></details>
+  </MarketAdminContent>
  </section>;
 }
