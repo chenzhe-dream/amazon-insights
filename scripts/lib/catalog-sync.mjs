@@ -50,6 +50,14 @@ export function asinsNeedingCatalogSync(asins) {
   return asins.filter(asin => !catalogHasAsin(asin));
 }
 
+export function asinsNeedingPrimaryCatalogSync(asins, filePath = catalogPath) {
+  const catalog = readCachedArrayExport(filePath, "refreshedCatalog");
+  return asins.filter(asin => {
+    const entry = catalog.find(item => item.asin === asin);
+    return !entry || entry.catalogSource === "sorftime-fallback";
+  });
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -203,15 +211,20 @@ export function ensureCatalogProductFamilies(filePath = catalogPath) {
   return next;
 }
 
-export function appendCatalogEntry(entry) {
-  if (!fs.existsSync(catalogPath)) throw new Error(`missing ${catalogPath}`);
-  let source = fs.readFileSync(catalogPath, "utf8");
-  if (source.includes(`"asin": "${entry.asin}"`)) {
-    return false;
+export function appendCatalogEntry(entry, filePath = catalogPath) {
+  const source = fs.readFileSync(filePath, "utf8");
+  const literal = extractExportArrayLiteral(source, "refreshedCatalog");
+  if (!literal) throw new Error("Generated catalog export is missing");
+  const catalog = JSON.parse(literal);
+  const index = catalog.findIndex(item => item.asin === entry.asin);
+  if (index >= 0) {
+    // Upgrade an explicitly incomplete fallback, never overwrite a primary record.
+    if (catalog[index].catalogSource !== "sorftime-fallback" || entry.catalogSource !== "sellerSprite") return false;
+    catalog[index] = entry;
+  } else {
+    catalog.push(entry);
   }
-  const block = `,\n  ${JSON.stringify(entry, null, 2).replace(/^/gm, "  ").trim()}\n`;
-  source = source.replace(/\n\];\s*$/, `${block}];`);
-  fs.writeFileSync(catalogPath, source, "utf8");
+  fs.writeFileSync(filePath, source.replace(literal, () => JSON.stringify(catalog, null, 2)), "utf8");
   return true;
 }
 
@@ -253,7 +266,7 @@ export async function syncCatalogAsins(asins, marketplace = "US") {
     throw new Error("未找到卖家精灵 MCP secret-key，无法自动入库 catalog");
   }
 
-  const pending = asinsNeedingCatalogSync(asins);
+  const pending = asinsNeedingPrimaryCatalogSync(asins);
   if (!pending.length) {
     console.log("[catalog] all ASINs already in competitor-data.ts");
     return { added: [], skipped: asins };

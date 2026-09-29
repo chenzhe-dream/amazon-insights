@@ -16,8 +16,29 @@ import {
   createDetachedRunner,
   SyncJobWorkerHandler,
 } from "../../server/services/sync-job-worker-handler";
+import { SifTrafficSnapshotExecutionError } from '../../server/services/sif-traffic-snapshot-task';
 
 const NOW = "2026-08-27T08:00:00.000Z";
+
+test('canonical worker persists safe snapshot failure phase and continues other stages', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'snapshot-failure-context-'));
+  t.after(() => rm(directory, {recursive:true,force:true}));
+  const events: string[] = [];
+  const repository = repositoryForLifecycle({events});
+  let failure: unknown;
+  repository.ownsCanonicalTrafficRun = async () => true;
+  repository.beginCanonicalTrafficRun = async () => 'started';
+  repository.settleCanonicalTrafficRun = async input => {failure=input.error;return true;};
+  const lease = runningLease();
+  const handler = new SyncJobWorkerHandler({syncJobs:repository,mirrorDirectory:directory,
+    dynamicTrafficSnapshotAdapter:{async createForAuthorizedRun(){throw new SifTrafficSnapshotExecutionError(new Error('password-sentinel'),{phase:'persist'});}},
+    runner:async()=>({status:'completed'}),
+  });
+  await handler.handle({...lease,job:{...lease.job,projectId:'project',runId:'run',actorId:'actor'}});
+  assert.deepEqual(failure,{code:'SYNC_TRAFFIC_SNAPSHOT_FAILED',category:'infrastructure',phase:'persist',reasonCode:'SNAPSHOT_STORAGE_FAILED'});
+  assert.ok(events.includes('db:complete'));
+  assert.doesNotMatch(JSON.stringify(failure),/password-sentinel/);
+});
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

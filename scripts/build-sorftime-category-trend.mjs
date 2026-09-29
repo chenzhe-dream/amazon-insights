@@ -52,7 +52,7 @@ async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
   // trend to request. Missing/malformed envelopes still fail schema checks.
   if (data?.asin === asin && data.node_id === "") return null;
   const nodeId = data?.node_id != null ? String(data.node_id) : null;
-  if (!nodeId) {
+  if (!nodeId || (data?.asin != null && data.asin !== asin)) {
     throw Object.assign(new Error("category node unavailable"), {
       kind: "schema",
       providerDiagnostic: { operation: "product_detail", boundary: "consumer-shape" },
@@ -141,6 +141,7 @@ export type SorftimeCategoryTrendRecord = {
   source?: "Sorftime";
   provenance?: Record<string, string>;
   provenanceByAsin?: Record<string, Record<string, string>>;
+  associationFetchedAtByAsin?: Record<string, string>;
 };
 
 export const sorftimeCategoryTrendMeta = ${JSON.stringify(
@@ -185,7 +186,27 @@ export async function collectSorftimeCategoryRecords({
       emitDiagnostics: false,
       allowCategorySiblingDispatch: true,
     }));
-  const records = createRepairSafeRecordMap(jobId && !isRepairIncomplete() ? {} : existing);
+  const targeted = new Set(catalog.map(product => product.asin));
+  // This file is shared across jobs. Keep only untargeted siblings from older
+  // records; they must not become fresh evidence for a targeted ASIN.
+  const retained = Object.fromEntries(Object.entries(existing).flatMap(([nodeId, record]) => {
+    if (record.marketplace !== marketplace) return [];
+    const asins = (record.asins ?? []).filter(asin => !targeted.has(asin));
+    return asins.length ? [[nodeId, { ...record, asins }]] : [];
+  }));
+  const records = createRepairSafeRecordMap(jobId && !isRepairIncomplete() ? retained : existing);
+  const associations = plan => {
+    const cached = existing[plan.nodeId];
+    const siblings = cached?.marketplace === marketplace
+      ? (cached.asins ?? []).filter(asin => isRepairIncomplete() || !targeted.has(asin)) : [];
+    return {
+      asins: [...new Set([...siblings, ...plan.asins])],
+      associationFetchedAtByAsin: {
+        ...Object.fromEntries(siblings.map(asin => [asin, cached.associationFetchedAtByAsin?.[asin] ?? cached.fetchedAt])),
+        ...Object.fromEntries(plan.asins.map(asin => [asin, fetchedAt])),
+      },
+    };
+  };
   /** @type {Map<string, { nodeId: string; categoryName: string; topCategory: string; sourceAsin: string; asins: string[] }>} */
   const nodePlan = new Map();
   const fallbackRecords = new Map();
@@ -279,7 +300,7 @@ export async function collectSorftimeCategoryRecords({
       logCacheHit(plan.nodeId, cached);
       records[plan.nodeId] = {
         ...cached,
-        asins: [...new Set([...(isRepairIncomplete() ? cached?.asins ?? [] : []), ...plan.asins])],
+        ...associations(plan),
         categoryName: plan.categoryName || cached.categoryName,
         topCategory: plan.topCategory || cached.topCategory,
         sourceAsin: plan.sourceAsin || cached.sourceAsin,
@@ -323,7 +344,7 @@ export async function collectSorftimeCategoryRecords({
         categoryName: plan.categoryName,
         topCategory: plan.topCategory,
         sourceAsin: plan.sourceAsin,
-        asins: [...new Set([...(isRepairIncomplete() ? cached?.asins ?? [] : []), ...plan.asins])],
+        ...associations(plan),
         marketplace,
         fetchedAt,
         status: volume.length ? "ready" : "empty",

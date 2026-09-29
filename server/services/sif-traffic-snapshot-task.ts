@@ -307,6 +307,20 @@ export class SifTrafficSnapshotTask {
     subject: TrafficSubject,
     signal?: AbortSignal,
   ): Promise<TrafficDataSnapshotRecord> {
+    const context: TrafficSnapshotFailureContext = { phase: 'read-existing' };
+    try {
+      return await this.#createForRun(subject, context, signal);
+    } catch (error) {
+      if (error instanceof SifTrafficSnapshotTaskError) throw error;
+      throw new SifTrafficSnapshotExecutionError(error, context);
+    }
+  }
+
+  async #createForRun(
+    subject: TrafficSubject,
+    context: TrafficSnapshotFailureContext,
+    signal?: AbortSignal,
+  ): Promise<TrafficDataSnapshotRecord> {
     const existing = await this.#repository.listTrafficDataSnapshotsByRun({
       actorOrganizationId: subject.organizationId,
       runId: subject.runId,
@@ -318,88 +332,94 @@ export class SifTrafficSnapshotTask {
     const monthlyEvidence: RequestEvidence[] = [];
     const records: CollectedTrafficRecord[] = [];
     const listingRecords: Record<string, TrafficListingRecord> = {};
-    try {
-      for (const asin of subject.asins) {
-        const overviewResult = await this.#execute(
-          subject,
-          "ops_get_listing_traffic_overview",
-          {
-            asin,
-            country: subject.marketplace,
-            timePieceType: "latelyDay",
-            timePieceValue: "30",
-            isListingSearch: true,
-          },
-          signal,
-        );
-        const structureResult = await this.#execute(
-          subject,
-          "ops_get_listing_traffic_structure",
-          {
-            asin,
-            country: subject.marketplace,
-            timePieceType: "latelyDay",
-            timePieceValue: "30",
-            pageSize: 1000,
-          },
-          signal,
-        );
-        const monthlyResult = await this.#execute(
-          subject,
-          "ops_get_asin_traffic_trend",
-          {
-            asin,
-            country: subject.marketplace,
-            granularity: "month",
-            lastMonths: 6,
-            listingSearch: true,
-          },
-          signal,
-        );
-        const projectedMonthlyCandidate = projectMonthlyTrendCandidate(
-          monthlyResult.data,
-        );
-        const monthly = parseTrafficOperation(
+    for (const asin of subject.asins) {
+      context.phase = 'collect';
+      context.asin = asin;
+      context.operation = 'ops_get_listing_traffic_overview';
+      const overviewResult = await this.#execute(
+        subject,
+        "ops_get_listing_traffic_overview",
+        {
           asin,
-          "ops_get_asin_traffic_trend",
-          MonthlyTrendSchema,
-          projectedMonthlyCandidate,
-          monthlyResult.data,
-        );
-        const projectedOverviewCandidate = projectListingOverviewCandidate(
-          overviewResult.data,
-        );
-        const overview = parseTrafficOperation(
+          country: subject.marketplace,
+          timePieceType: "latelyDay",
+          timePieceValue: "30",
+          isListingSearch: true,
+        },
+        signal,
+      );
+      context.operation = 'ops_get_listing_traffic_structure';
+      const structureResult = await this.#execute(
+        subject,
+        "ops_get_listing_traffic_structure",
+        {
           asin,
-          "ops_get_listing_traffic_overview",
-          ListingOverviewSchema,
-          projectedOverviewCandidate,
-          overviewResult.data,
-        );
-        const record = normalizeTrafficRecord(
+          country: subject.marketplace,
+          timePieceType: "latelyDay",
+          timePieceValue: "30",
+          pageSize: 1000,
+        },
+        signal,
+      );
+      context.operation = 'ops_get_asin_traffic_trend';
+      const monthlyResult = await this.#execute(
+        subject,
+        "ops_get_asin_traffic_trend",
+        {
           asin,
-          overview,
-          structureResult.data,
-          monthly,
-        );
-        listingRecords[asin] = normalizeListingDetails(overviewResult.data, structureResult.data);
-        listingEvidence.push(
-          requestEvidence(
-            asin,
-            overviewResult,
-            canonicalListingOverviewEvidence(record),
-          ),
-          requestEvidence(asin, structureResult),
-        );
-        monthlyEvidence.push(
-          requestEvidence(asin, monthlyResult, monthly),
-        );
-        records.push(record);
-      }
-    } catch (error) {
-      throw safeTaskError(error);
+          country: subject.marketplace,
+          granularity: "month",
+          lastMonths: 6,
+          listingSearch: true,
+        },
+        signal,
+      );
+      context.phase = 'normalize';
+      const projectedMonthlyCandidate = projectMonthlyTrendCandidate(
+        monthlyResult.data,
+      );
+      const monthly = parseTrafficOperation(
+        asin,
+        "ops_get_asin_traffic_trend",
+        MonthlyTrendSchema,
+        projectedMonthlyCandidate,
+        monthlyResult.data,
+      );
+      const projectedOverviewCandidate = projectListingOverviewCandidate(
+        overviewResult.data,
+      );
+      const overview = parseTrafficOperation(
+        asin,
+        "ops_get_listing_traffic_overview",
+        ListingOverviewSchema,
+        projectedOverviewCandidate,
+        overviewResult.data,
+      );
+      const record = normalizeTrafficRecord(
+        asin,
+        overview,
+        structureResult.data,
+        monthly,
+      );
+      context.operation = undefined;
+      listingRecords[asin] = normalizeListingDetails(overviewResult.data, structureResult.data);
+      listingEvidence.push(
+        requestEvidence(
+          asin,
+          overviewResult,
+          canonicalListingOverviewEvidence(record),
+        ),
+        requestEvidence(asin, structureResult),
+      );
+      monthlyEvidence.push(
+        requestEvidence(asin, monthlyResult, monthly),
+      );
+      records.push(record);
     }
 
+    context.phase = 'build-candidate';
+    context.asin = undefined;
+    context.operation = undefined;
     const trafficInput = buildCollectedTrafficAnalysisInput({
       marketplace: subject.marketplace,
       records,
@@ -408,6 +428,11 @@ export class SifTrafficSnapshotTask {
     const sources = collectedSources(listingEvidence, monthlyEvidence);
     const createdAt = this.#now();
     const candidateId = this.#createId();
+    const candidate = buildTrafficSnapshotCandidate({
+      asins: subject.asins, trafficInput, sources,
+      listingCollection: TrafficListingCollectionSchema.parse({ id: listingContentId({ records: listingRecords, capturedAt: listingEvidence.map(item => item.fetchedAt) }), schemaVersion: '1', source: 'sif', marketplace: subject.marketplace, period: '近30天', collectedAt: listingEvidence.map(item => item.fetchedAt).sort().at(-1), asins: [...subject.asins], records: listingRecords }),
+    });
+    context.phase = 'persist';
     const created = await this.#repository.createTrafficDataSnapshotForRun({
       actorId: subject.actorId,
       actorOrganizationId: subject.organizationId,
@@ -418,13 +443,9 @@ export class SifTrafficSnapshotTask {
       expectedRunCutoffAt: subject.dataCutoffAt,
       candidateId,
       createdAt,
-      candidate: buildTrafficSnapshotCandidate({
-        asins: subject.asins,
-        trafficInput,
-        sources,
-        listingCollection: TrafficListingCollectionSchema.parse({ id: listingContentId({ records: listingRecords, capturedAt: listingEvidence.map(item => item.fetchedAt) }), schemaVersion: '1', source: 'sif', marketplace: subject.marketplace, period: '近30天', collectedAt: listingEvidence.map(item => item.fetchedAt).sort().at(-1), asins: [...subject.asins], records: listingRecords }),
-      }),
+      candidate,
     });
+    context.phase = 'read-back';
     const reopened = await this.#repository.findTrafficDataSnapshotById({
       actorOrganizationId: subject.organizationId,
       snapshotId: created.snapshot.id,
@@ -1267,6 +1288,33 @@ function latestFetchedAt(requests: readonly RequestEvidence[]) {
     .at(-1);
   if (!latest) throw new TypeError("SIF traffic source evidence is empty");
   return latest;
+}
+
+type TrafficSnapshotFailureContext = {
+  phase: 'read-existing' | 'collect' | 'normalize' | 'build-candidate' | 'persist' | 'read-back';
+  asin?: string;
+  operation?: RequestEvidence['operation'];
+};
+
+export class SifTrafficSnapshotExecutionError extends WorkerTaskError {
+  readonly phase: TrafficSnapshotFailureContext['phase'];
+  readonly asin?: string;
+  readonly operation?: RequestEvidence['operation'];
+  readonly reasonCode: string;
+
+  constructor(error: unknown, context: TrafficSnapshotFailureContext) {
+    const classified = safeTaskError(error);
+    super(classified.category, `SIF traffic snapshot failed during ${context.phase}`);
+    this.name = 'SifTrafficSnapshotExecutionError';
+    this.phase = context.phase;
+    this.asin = context.asin;
+    this.operation = context.operation;
+    this.reasonCode = error instanceof z.ZodError ? 'SNAPSHOT_VALIDATION_FAILED'
+      : error instanceof ConnectorError ? `CONNECTOR_${error.code.toUpperCase().replaceAll('-', '_')}`
+      : ['read-existing', 'persist', 'read-back'].includes(context.phase) ? 'SNAPSHOT_STORAGE_FAILED'
+      : context.phase === 'normalize' ? 'SNAPSHOT_NORMALIZATION_FAILED'
+      : 'SNAPSHOT_EXECUTION_FAILED';
+  }
 }
 
 function safeTaskError(error: unknown) {

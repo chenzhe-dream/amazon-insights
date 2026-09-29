@@ -26,6 +26,7 @@ import { WorkerTaskError } from "../runtime/retry-policy";
 import {
   copySifTrafficShapeDiagnostic,
   SifTrafficSnapshotTaskError,
+  SifTrafficSnapshotExecutionError,
 } from "./sif-traffic-snapshot-task";
 
 type RunnerResult = {
@@ -332,6 +333,10 @@ export class SyncJobWorkerHandler {
               ? { shapeDiagnostic }
               : {}),
           }
+        : snapshotError instanceof SifTrafficSnapshotExecutionError
+        ? { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category, phase: snapshotError.phase,
+            reasonCode: snapshotError.reasonCode, ...(snapshotError.asin ? {asin: snapshotError.asin} : {}),
+            ...(snapshotError.operation ? {operation: snapshotError.operation} : {}) }
         : { code: "SYNC_TRAFFIC_SNAPSHOT_FAILED", category };
     }
     const settled = await settle.call(this.#syncJobs, {

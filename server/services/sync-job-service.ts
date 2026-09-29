@@ -53,7 +53,7 @@ type StatusModule = {
   asinsNeedingListingSync(asins: string[]): AsinModuleStatus[];
   asinsNeedingImageRemarksSync(asins: string[]): AsinModuleStatus[];
   asinsNeedingTrafficSync(asins: string[]): AsinModuleStatus[];
-  asinsNeedingCatalogSync(asins: string[]): string[];
+  asinsNeedingCatalogSync(asins: string[], options?: {retryFallback?: boolean}): string[];
   countPendingImageRemarks(asins: string[]): number;
   estimateAutoSyncSeconds(
     count: number,
@@ -143,13 +143,14 @@ export class SyncJobService {
       if (!["completed", "failed"].includes(parent.status)) throw new SyncRepairScopeError("Repair parent must be terminal");
     } else if (input.parentJobId) throw new SyncRepairScopeError("Repair parent requires repair mode");
     const statusMod = await this.#loadStatusModule();
-    const catalogPending = statusMod.asinsNeedingCatalogSync(asins);
+    const catalogPending = statusMod.asinsNeedingCatalogSync(asins, {retryFallback: true});
     const needing = statusMod.asinsNeedingMcpSync(asins);
     const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
     const listingPending = statusMod.asinsNeedingListingSync(asins);
     const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
     const statuses = statusMod.getAsinDataStatus(asins);
-    const repairTargets = input.mode === "repair-incomplete" ? repairTargetsFor(statuses) : undefined;
+    const repairTargets: Record<string, string[]> | undefined = input.mode === "repair-incomplete"
+      ? {...repairTargetsFor(statuses), catalog: catalogPending} : undefined;
     if (repairTargets && input.imageAction) {
       for (const stage of Object.keys(repairTargets)) repairTargets[stage] = [];
       repairTargets.image_remarks = [input.imageAction.asin];
@@ -161,6 +162,7 @@ export class SyncJobService {
     }
     const vocPending = statuses.filter((item) => item.voc === "missing");
     const automaticStages = input.imageAction ? (input.imageAction.action === "refresh" ? ["listing"] : []) : automaticStagesNeedingSync(statuses);
+    if (!input.imageAction && catalogPending.length && !automaticStages.includes('catalog')) automaticStages.unshift('catalog');
     const readinessPlan = !this.#bypassProviderReadiness && this.#providerReadiness
       ? await this.#providerReadiness.plan({
         organizationId: input.organizationId,

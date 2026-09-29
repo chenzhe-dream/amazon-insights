@@ -20,6 +20,7 @@ import {
   SifTrafficSnapshotTaskError,
 } from "../../server/services/sif-traffic-snapshot-task";
 import { ScopedSifTrafficSnapshotAdapter } from "../../server/services/scoped-sif-traffic-snapshot-adapter";
+import { TrafficDataSnapshotRecordSchema } from '../../server/data/traffic-data-snapshot';
 
 const NOW = "2026-08-17T08:00:00.000Z";
 const CUTOFF = "2026-08-17T07:59:59.999Z";
@@ -30,6 +31,42 @@ const generatedTrafficFiles = [
   "app/sif-listing-traffic-raw-data.ts",
   "app/sif-monthly-traffic-trend-raw-data.ts",
 ] as const;
+
+test('snapshot storage failures retain safe phase context without raw database messages', async (t) => {
+  const repository = openSqliteAgentRepository({ path: ':memory:', busyTimeoutMs: 5000 });
+  t.after(() => repository.close());
+  const subject = await seedTrafficJob(repository);
+  t.mock.method(repository, 'listTrafficDataSnapshotsByRun', async () => {
+    throw Object.assign(new Error('postgres://secret-host private-password'), { name: 'TrafficDataSnapshotDataError' });
+  });
+  const connector = createSifConnector({ env: { SIF_MCP_SECRET: 'unused' } });
+  await assert.rejects(new SifTrafficSnapshotTask({repository, connector}).createForRun({ ...subject, marketplace: 'US', asins: ASINS, dataCutoffAt: CUTOFF }), (error: unknown) => {
+    assert.ok(error instanceof WorkerTaskError);
+    assert.equal((error as WorkerTaskError & {phase:string}).phase, 'read-existing');
+    assert.equal((error as WorkerTaskError & {reasonCode:string}).reasonCode, 'SNAPSHOT_STORAGE_FAILED');
+    assert.doesNotMatch(JSON.stringify(error) + error.message, /secret-host|private-password/);
+    return true;
+  });
+});
+
+test('traffic snapshot integrity survives PostgreSQL JSONB object-key reordering', async t => {
+  const repository = openSqliteAgentRepository({path: ':memory:', busyTimeoutMs: 5000});
+  t.after(() => repository.close());
+  const asins = [...ASINS].reverse();
+  const subject = await seedTrafficJob(repository, 'collect-missing', asins);
+  const connector = createSifConnector({env:{SIF_MCP_SECRET:'fixture'},fetchImpl:fakeSifFetch([]),clock:()=>new Date(NOW)});
+  const snapshot = await new SifTrafficSnapshotTask({repository,connector,clock:()=>new Date(NOW)})
+    .createForRun({...subject,asins,marketplace:'US',dataCutoffAt:CUTOFF});
+  const reorder = (value: unknown): unknown => Array.isArray(value) ? value.map(reorder)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,reorder(item)])) : value;
+  assert.doesNotThrow(() => TrafficDataSnapshotRecordSchema.parse(reorder(snapshot)));
+  const unsigned = {kind:snapshot.kind,schemaVersion:snapshot.schemaVersion,marketplace:snapshot.marketplace,asins:snapshot.asins,dataCutoffAt:snapshot.dataCutoffAt,sources:snapshot.sources,payload:snapshot.payload};
+  const legacy = {...snapshot,contentHash:createHash('sha256').update(JSON.stringify(unsigned)).digest('hex')};
+  assert.doesNotThrow(() => TrafficDataSnapshotRecordSchema.parse(legacy));
+  const tampered = structuredClone(snapshot);
+  tampered.payload.listingCollection!.records[asins[0]].children[0].label = 'tampered';
+  assert.throws(() => TrafficDataSnapshotRecordSchema.parse(tampered), /content hash mismatch/);
+});
 
 test("collect-missing traffic job persists fake SIF data without generating app TypeScript", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-sif-traffic-task-"));

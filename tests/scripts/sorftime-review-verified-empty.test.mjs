@@ -327,6 +327,7 @@ import { pathToFileURL } from "node:url";
 
 const root = ${JSON.stringify(root)};
 const mapped = new Map([
+  ["generated-app-data-path.mjs", "scripts/lib/generated-app-data-path.mjs"],
   ["sorftime-review-transform.mjs", "scripts/lib/sorftime-review-transform.mjs"],
   ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
   ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],

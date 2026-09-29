@@ -1086,7 +1086,10 @@ async function main() {
   markPreflightUnavailableStages(jobId, job);
   const { asins, marketplace } = job;
   const catalogProviderPlan = catalogProviderPlanForJob(job);
-  const catalogPending = asinsForSyncStage(job, "catalog", asinsNeedingCatalogSync(asins), asins);
+  const catalogCandidates = asinsNeedingCatalogSync(asins, {
+    retryFallback: catalogProviderPlan?.preferredConnectorId !== "sorftime",
+  });
+  const catalogPending = asinsForSyncStage(job, "catalog", catalogCandidates, asins);
   const providers = createJobProviderController(jobId, job);
 
   try {

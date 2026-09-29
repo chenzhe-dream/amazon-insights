@@ -1,4 +1,4 @@
-import { asinsNeedingCatalogSync, readCatalogAsins, syncCatalogAsins } from "./lib/catalog-sync.mjs";
+import { asinsNeedingPrimaryCatalogSync as asinsNeedingCatalogSync, readCatalogAsins, syncCatalogAsins } from "./lib/catalog-sync.mjs";
 
 async function main() {
   const marketplace = process.env.SELLERSPRITE_MARKETPLACE ?? process.env.MARKETPLACE ?? "US";

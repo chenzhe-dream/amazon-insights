@@ -1,6 +1,6 @@
 import type { TrafficDataSnapshotRecord } from "../data/traffic-data-snapshot";
 import type { RuntimeAgentRepository } from "../db/repository";
-import { SifTrafficSnapshotTask } from "./sif-traffic-snapshot-task";
+import { SifTrafficSnapshotTask, SifTrafficSnapshotExecutionError } from "./sif-traffic-snapshot-task";
 
 export class UnauthorizedScopedTrafficSnapshotError extends Error {
   constructor() {
@@ -49,7 +49,7 @@ export class ScopedSifTrafficSnapshotAdapter {
     const existing = await this.#repository.listTrafficDataSnapshotsByRun({
       actorOrganizationId: input.organizationId,
       runId: run.id,
-    });
+    }).catch(error => { throw new SifTrafficSnapshotExecutionError(error, {phase: 'read-existing'}); });
     const snapshot = await this.#task.createForRun({
       actorId: actor.id,
       organizationId: actor.organizationId,

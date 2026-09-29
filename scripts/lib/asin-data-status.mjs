@@ -214,8 +214,9 @@ export function readAsinStageReadiness(stageId, asins) {
   return evaluateAsinStageReadiness(stageId, getAsinDataStatus(asins));
 }
 
-export function asinsNeedingCatalogSync(asins) {
-  return getAsinDataStatus(asins).filter(item => !item.inCatalog).map(item => item.asin);
+export function asinsNeedingCatalogSync(asins, { retryFallback = false, sources = readAsinStatusSources() } = {}) {
+  return asins.filter(asin => !sources.catalogAsins.includes(asin) ||
+    (retryFallback && sources.catalogProducts?.some(item => item.asin === asin && item.catalogSource === "sorftime-fallback")));
 }
 
 export function asinsNeedingMcpSync(asins) {

@@ -8,6 +8,7 @@ import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-ca
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 import { positiveMoneyOrNull } from "./lib/commerce-data-validity.mjs";
+import { ProviderDiagnosticError, formatProviderDiagnosticLine } from "./lib/provider-diagnostics.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -33,6 +34,25 @@ function modePrice(values) {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || Number(b[0]) - Number(a[0]))[0]?.[0] ?? null;
+}
+
+export function parsePriceStrategyResponse({ asin, detailRaw, priceRaw }) {
+  const fail = operation => { throw new ProviderDiagnosticError({
+    connector: "sorftime", stage: "price_strategy", asin, operation,
+    failureKind: "schema", causeCode: "MCP_SCHEMA", boundary: "consumer-shape",
+  }); };
+  const detail = detailRaw?.data ?? detailRaw;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail) ||
+      (detail.asin != null && detail.asin !== asin) || !Object.hasOwn(detail, "price") ||
+      (detail.price != null && (typeof detail.price !== "number" && typeof detail.price !== "string" ||
+        String(detail.price).trim() === "" || !Number.isFinite(Number(detail.price)) || Number(detail.price) < 0))) fail("product_detail");
+  const raw = typeof priceRaw === "string" ? priceRaw : priceRaw?.data ?? priceRaw?.content ?? priceRaw;
+  if (!(typeof raw === "string" || Array.isArray(raw))) fail("product_trend");
+  const parts = (Array.isArray(raw) ? raw : raw.split(',')).filter(part => part !== "");
+  const prices = parseSorftimeTrend(priceRaw);
+  if (parts.some(part => typeof part !== "string") || prices.length !== parts.length ||
+      prices.some(point => !/^\d{4}-(0[1-9]|1[0-2])$/.test(point.month))) fail("product_trend");
+  return buildStrategy({price: detail.price, coupon: detail.coupon ?? 0, prices});
 }
 
 export function buildStrategy({ price, coupon, prices }) {
@@ -215,13 +235,8 @@ async function main() {
           product_trend_type: "Price",
         }),
       ];
-      const detail = detailRaw?.data ?? detailRaw;
       const prices = parseSorftimeTrend(priceRaw);
-      const strategy = buildStrategy({
-        price: detail?.price ?? null,
-        coupon: detail?.coupon ?? 0,
-        prices,
-      });
+      const strategy = parsePriceStrategyResponse({ asin, detailRaw, priceRaw });
       if (!strategy) {
         const result = fallback();
         if (result) records[asin] = result;
@@ -232,6 +247,10 @@ async function main() {
         console.log(`${prices.length} months · price ${strategy.currentPrice}`);
       }
     } catch (error) {
+      if (error instanceof ProviderDiagnosticError) {
+        process.stderr.write(`${formatProviderDiagnosticLine(error.diagnostic)}\n`);
+        process.exitCode = 1;
+      }
       const result = fallback();
       if (result) {
         records[asin] = result;

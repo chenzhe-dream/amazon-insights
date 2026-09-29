@@ -168,6 +168,26 @@ function createInput(
   };
 }
 
+test('PostgreSQL persists and reopens listing collections with unsorted ASIN keys', async () => {
+  const repository = await freshRepository();
+  const target = await seedTarget(repository);
+  const base = trafficCandidate();
+  const candidate = buildTrafficSnapshotCandidate({
+    asins: targetAsins, trafficInput: base.payload.input, sources: base.sources,
+    listingCollection: {
+      id: randomUUID(), schemaVersion:'1', source:'sif', marketplace:'US', period:'近30天', collectedAt:createdAt,
+      asins:[...targetAsins], records:Object.fromEntries(targetAsins.map(asin=>[asin,{
+        totalScore:100, naturalAd:[{label:'自然流量',score:60,ratio:60},{label:'广告流量',score:40,ratio:40}],
+        adChannels:[], recommendationSources:[], children:[], updatedThrough:'2026-08-14',
+      }])),
+    },
+  });
+  const result = await repository.trafficSnapshots.createTrafficDataSnapshotForRun(createInput(target,{candidate}));
+  const reopened = await repository.trafficSnapshots.findTrafficDataSnapshotById({actorOrganizationId:target.organizationId,snapshotId:result.snapshot.id});
+  assert.deepEqual(reopened?.payload.listingCollection,candidate.payload.listingCollection);
+  assert.equal(reopened?.contentHash,candidate.contentHash);
+});
+
 test("PostgreSQL traffic snapshots persist, freeze, and isolate by organization and kind", async () => {
   const repository = await freshRepository();
   const target = await seedTarget(repository);

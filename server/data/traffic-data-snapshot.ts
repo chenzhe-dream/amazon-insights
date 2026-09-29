@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalJsonSha256 } from '../runtime/model-request-accounting';
 
 import { z } from "zod";
 import { TrafficListingCollectionSchema, type TrafficListingCollection } from '../../shared/traffic-listing-contract';
@@ -88,7 +89,7 @@ export const TrafficDataSnapshotRecordSchema = TrafficSnapshotCandidateSchema
     if (snapshot.payload.input.dataCutoffAt !== snapshot.dataCutoffAt) {
       context.addIssue({ code: "custom", path: ["payload", "input", "dataCutoffAt"], message: "Traffic snapshot cutoff mismatch" });
     }
-    const expected = trafficSnapshotContentHash({
+    const unsigned = {
       kind: snapshot.kind,
       schemaVersion: snapshot.schemaVersion,
       marketplace: snapshot.marketplace,
@@ -96,8 +97,12 @@ export const TrafficDataSnapshotRecordSchema = TrafficSnapshotCandidateSchema
       dataCutoffAt: snapshot.dataCutoffAt,
       sources: snapshot.sources,
       payload: snapshot.payload,
-    });
-    if (snapshot.contentHash !== expected) {
+    };
+    // JSONB reorders object keys. New hashes cover canonical JSON; existing
+    // snapshots may still carry the original order-sensitive hash.
+    const expected = trafficSnapshotContentHash(unsigned);
+    const legacy = createHash('sha256').update(JSON.stringify(unsigned)).digest('hex');
+    if (snapshot.contentHash !== expected && snapshot.contentHash !== legacy) {
       context.addIssue({ code: "custom", path: ["contentHash"], message: "Traffic snapshot content hash mismatch" });
     }
   });
@@ -142,5 +147,5 @@ export function buildTrafficSnapshotCandidate(input: {
 }
 
 function trafficSnapshotContentHash(value: unknown) {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return canonicalJsonSha256(value);
 }
