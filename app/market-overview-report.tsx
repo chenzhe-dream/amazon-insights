@@ -10,7 +10,7 @@ type Entry=z.infer<typeof MarketOverviewReportEntrySchema>;
 type Details=z.infer<typeof MarketOverviewDetailsResponseSchema>;
 
 /** Request ownership stays here. The original-style view receives saved data only. */
-export function MarketOverviewReport({entry,headTopN,newProductMonths,categoryName,showAuditDetails=false,onBasicSnapshot}:{entry:Entry;headTopN?:number;newProductMonths?:number;categoryName?:string|null;showAuditDetails?:boolean;onBasicSnapshot?:(value:{key:string;report:Details['numbers']['basicOverview']})=>void}){
+export function MarketOverviewReport({entry,headTopN,newProductMonths,categoryName,onSupplement,supplementBusy,showAuditDetails=false,onBasicSnapshot}:{entry:Entry;headTopN?:number;newProductMonths?:number;categoryName?:string|null;onSupplement?:()=>void;supplementBusy?:boolean;showAuditDetails?:boolean;onBasicSnapshot?:(value:{key:string;report:Details['numbers']['basicOverview']})=>void}){
  const [response,setResponse]=useState<{key:string;detail:Details|null;error:string|null}|null>(null),[reload,setReload]=useState(0);
  const key=`${entry.report.moduleRunId}/${entry.attemptId}/${entry.report.reportHash}/${reload}`;
  useEffect(()=>{const owner=new AbortController();void readOverviewDetails(entry.report.moduleRunId,entry.attemptId,entry.report.reportHash,owner.signal).then(detail=>{if(!owner.signal.aborted)setResponse({key,detail,error:null});}).catch(e=>{if(!owner.signal.aborted)setResponse({key,detail:null,error:e instanceof Error?e.message:'报告读取失败'});});return()=>owner.abort();},[entry.attemptId,entry.report.moduleRunId,entry.report.reportHash,key]);
@@ -19,5 +19,5 @@ export function MarketOverviewReport({entry,headTopN,newProductMonths,categoryNa
  const frozen=owned?.numbers.basicOverview;
  const basic=frozen&&matchesFrozenOverviewBasicScope(frozen,entry.report.scope,headTopN,newProductMonths)?frozen:null;
  useEffect(()=>{onBasicSnapshot?.({key:`${entry.report.moduleRunId}/${entry.attemptId}/${entry.report.reportHash}`,report:basic});},[onBasicSnapshot,basic,entry.report.moduleRunId,entry.attemptId,entry.report.reportHash]);
- return <MarketOverviewReportView entry={entry} detail={owned} error={current?.error??null} onRetry={()=>setReload(n=>n+1)} headTopN={headTopN} newProductMonths={newProductMonths} categoryName={categoryName} showAuditDetails={showAuditDetails}/>;
+ return <MarketOverviewReportView entry={entry} detail={owned} error={current?.error??null} onRetry={()=>setReload(n=>n+1)} headTopN={headTopN} newProductMonths={newProductMonths} categoryName={categoryName} onSupplement={onSupplement} supplementBusy={supplementBusy} showAuditDetails={showAuditDetails}/>;
 }

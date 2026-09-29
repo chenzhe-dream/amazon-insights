@@ -8,6 +8,7 @@ import {MarketOverviewOriginalSynthesisSchema} from '../../../shared/market-over
 import {canonicalJsonSha256 as digest} from '../../runtime/model-request-accounting';
 import {mapNiche,distRows,parseProductDemand,crnRows} from './original-overview/original-mappers';
 import {buildCheckedOverviewSynthesis,type OverviewInputIssues} from './overview-score-readiness';
+import {buildItemCheckedOverviewSynthesis} from './overview-item-scoring';
 import type {SellerSpriteMarketReport} from './original-overview/sellersprite-market-niche';
 
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
@@ -20,7 +21,7 @@ const distributions=[
 const moneyKey=(key:string)=>/price|revenue|fba$/i.test(key)&&!/^fbaProportion$/i.test(key);
 
 /** Pure projection of receipts already verified by the frozen-catalog reader. No fetching or cross-module lookup. */
-export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalysisScope;parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12};sources:readonly MarketSourceEvidence[];industryDemand?:MarketOverviewIndustryDemand;externalData?:MarketOverviewExternalData}){
+export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalysisScope;parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12};sources:readonly MarketSourceEvidence[];industryDemand?:MarketOverviewIndustryDemand;externalData?:MarketOverviewExternalData;scoringVersion?:'observed-inputs/1'|'observed-items/2'}){
  const {scope,parameters}=input,month=scope.toMonth;
  const gaps=new Set<string>(),refs=new Set<string>();
  const inputIssues:OverviewInputIssues={};
@@ -79,6 +80,12 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
  if(demand&&demand.referenceMonth===month){
   if(demand.status!=='ready'||demand.series.some(s=>s.status!=='ready'))inputIssues.keywords=['选定关键词尚有未完成或缺失的来源'];
   report.keywordTrends=demand.series.filter(s=>s.status==='ready'&&s.sourceRef&&s.points.length).map(s=>({keyword:s.keyword,searches:s.searches,points:s.points.map(p=>({...p}))}));
+  if(input.scoringVersion==='observed-items/2'){
+   // The frozen keyword query can contain observed monthly searches even when
+   // its independent history fetch failed. Do not discard that observation.
+   report.keywordTrends=demand.series.map(s=>({keyword:s.keyword,searches:s.searches,points:s.status==='ready'&&s.sourceRef?s.points.map(p=>({...p})):[]}));
+   if(demand.status==='failed'||demand.issues.some(i=>i.operation==='keyword_research'))inputIssues.keywordSearches=['关键词查询来源未完整就绪'];
+  }
   for(const series of demand.series)if(series.status==='ready'&&series.sourceRef)refs.add(series.sourceRef);
  }
  if(!report.keywordTrends.length)gaps.add('行业关键词需求趋势缺失，保留原版空趋势判断。');
@@ -100,11 +107,11 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
   }else gaps.add('商品浏览量趋势类目不匹配，保留原版空趋势判断。');
  }else gaps.add('商品浏览量趋势未采集，保留原版空趋势判断。');
  if(!Object.values(report.asinProfits??{}).some(p=>p.profit!==null)&&!report.prices.some(r=>r.items?.some(p=>p.profit!=null)))gaps.add('价格带商品毛利率样本缺失，未使用平均毛利率或跨模块数据补齐。');
- const checked=buildCheckedOverviewSynthesis(niche,report,inputIssues);
+ const checked=input.scoringVersion==='observed-items/2'?buildItemCheckedOverviewSynthesis(niche,report,inputIssues):buildCheckedOverviewSynthesis(niche,report,inputIssues);
  for(const dimension of Object.values(checked.evaluation!.dimensions))for(const gap of dimension.missing)gaps.add(gap);
  return MarketOverviewOriginalSynthesisSchema.parse({version:6,...checked,inputGaps:[...gaps].map(g=>g.replace(/保留原版空(分布|排名|趋势)判断/g,'相关判断须以有效输入为依据')),sourceRefs:[...refs],originalAssumptions:[
   '沿用原版第6版评分权重、阈值和完整输入下的结论；缺失输入不补默认分，六维未齐全时不输出总分或准入等级。',
-  '缺失校验版本 observed-inputs/1：真实0保留；null、空字符串和无效数字不当作0。当前结果根据保存来源重新计算，不覆盖历史快照。',
+  `缺失校验版本 ${input.scoringVersion??'observed-inputs/1'}：真实0保留；null、空字符串和无效数字不当作0。当前结果根据保存来源重新计算，不覆盖历史快照。`,
   `集中度使用保存的 Top ${parameters.headTopN}，新品数据使用保存的 ${parameters.newProductMonths} 个月窗口；原版部分分析文案固定写作近6个月。`,
   '分布比例直接采用原始接口比例；价格毛利率仅使用该分布内商品的原始毛利率。',
   '来源未回显确认月份或类目时，按本报告保存的请求范围绑定使用，不代表响应已确认范围。',

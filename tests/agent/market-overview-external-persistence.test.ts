@@ -41,7 +41,7 @@ for(const rolling of [false,true])test(`external pages preserve reports, retries
   if(r.operation==='category_trend'&&r.input.trend_index==='AvgPrice'&&failPrice)throw new ConnectorError('sorftime','timeout',false);
   return {data:{data:r.operation==='category_keywords'?[]:r.input.trend_index==='SalesCount'?['2026-06=10','2026-07=11','2026-08=12','2026-09=999']:['2026-07=2.25','2026-08=2.75','2026-09=999']},source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
- const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{flow,headTopN:10,newProductMonths:6},versions:{source,rule,mapping:rule,planner:flow,model:null,prompt:null,configuration:null},collectionRevision:'external/v1',idempotencyKey:randomUUID()};
+ const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{...(rolling?{scoringVersion:'observed-items/2'}:{}),flow,headTopN:10,newProductMonths:6},versions:{source,rule,mapping:rule,planner:flow,model:null,prompt:null,configuration:null},collectionRevision:'external/v1',idempotencyKey:randomUUID()};
  const run=(await f.stores.steps.createModuleRun({...request,initialSteps:marketOverviewFlowInitialSteps(request)})).run;
  const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite,sorftime}}),rules:createMarketOverviewCatalogStep(f.context),report:createMarketOverviewReportStep(f.context)}});t.after(()=>worker.stop());
  const drain=async()=>{for(let i=0;i<120;i++){if(!await worker.tick())return;}assert.fail('Run did not drain');};
@@ -51,6 +51,9 @@ for(const rolling of [false,true])test(`external pages preserve reports, retries
  assert.equal(price.status,'failed');assert.equal(profit.status,'queued');assert.equal((view.attempts.find(a=>a.id===profit.latestAttemptId)!.error as any).code,'local-admission');
  const entry=(await reports.read({actor:f.actor,moduleRunId:run.id}))!.currentReport!;
  const detail=(await reports.details({actor:f.actor,moduleRunId:run.id,attemptId:entry.attemptId}))!;
+ assert.equal(detail.entry.report.scoringVersion,rolling?'observed-items/2':undefined);
+ assert.equal(detail.numbers.originalSynthesis!.evaluation!.version,rolling?'observed-items/2':'observed-inputs/1');
+ assert.equal(detail.numbers.scoreReview?.evaluation?.version,rolling?undefined:'observed-items/2');
  assert.ok(detail.numbers.basicOverview,'basic table is restored from the same frozen report');
  assert.equal(detail.numbers.basicOverview.nodeIdPath,f.scope.nodeIdPath);
  assert.equal(detail.numbers.basicOverview.scope.month,rolling?'last30':f.scope.toMonth);

@@ -5,7 +5,7 @@ import type {MarketOverviewOriginalSynthesis} from '../../../shared/market-overv
 
 type Dimension=typeof MARKET_SYNTHESIS_DIMENSIONS[number]['key'];
 type Evaluation=NonNullable<MarketOverviewOriginalSynthesis['evaluation']>;
-export type OverviewInputIssues=Partial<Record<'keywords'|'sales'|'amount'|'views'|'profits'|'prices'|'ratingCounts'|'ratingValues'|'listingAge'|'ebc',string[]>>;
+export type OverviewInputIssues=Partial<Record<'keywordSearches'|'keywords'|'sales'|'amount'|'views'|'profits'|'prices'|'ratingCounts'|'ratingValues'|'listingAge'|'ebc',string[]>>;
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const nonnegative=(v:unknown):v is number=>finite(v)&&v>=0;
 const pct=(v:unknown):v is number=>nonnegative(v)&&v<=100;
@@ -21,7 +21,7 @@ function validPoints(points:Point[]){
  return points.length>0&&points.every(p=>/^\d{4}-(0[1-9]|1[0-2])(?:-\d{2})?$/.test(p.month)&&nonnegative(p.value))&&new Set(points.map(p=>p.month.slice(0,7))).size===points.length&&points.every((p,i)=>i===0||points[i-1].month<p.month);
 }
 function consecutive(points:Point[]){return points.every((p,i)=>{if(!i)return true;const a=points[i-1].month.split('-').map(Number),b=p.month.split('-').map(Number);return b[0]*12+b[1]===a[0]*12+a[1]+1;});}
-function direction(points:Point[],preprocessed=false):'up'|'flat'|'down'|null{
+export function direction(points:Point[],preprocessed=false):'up'|'flat'|'down'|null{
  if(!validPoints(points))return null;
  const clean=drop(preprocessed?drop(points):points),prior=clean.slice(-12,-6),recent=clean.slice(-6);
  if(recent.length<6||prior.length<3||!consecutive(clean.slice(-12)))return null;
@@ -30,7 +30,7 @@ function direction(points:Point[],preprocessed=false):'up'|'flat'|'down'|null{
  const change=(recent.reduce((s,p)=>s+p.value,0)/6-baseline)/baseline;
  return change>.05?'up':change<-.05?'down':'flat';
 }
-function yoy(points:Point[],preprocessed=true){
+export function yoy(points:Point[],preprocessed=true){
  if(!validPoints(points))return null;
  const clean=preprocessed?drop(points):points,latest=clean.at(-1)!;
  const [year,month]=latest.month.split('-');

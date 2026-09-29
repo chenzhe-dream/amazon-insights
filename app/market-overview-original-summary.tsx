@@ -1,5 +1,5 @@
 "use client";
-import React,{useId} from 'react';
+import React,{useId,useState} from 'react';
 import {MARKET_SYNTHESIS_DIMENSIONS} from '../server/domain/market-research/original-overview/sellersprite-market-overview-synthesis';
 import type {MarketOverviewOriginalSynthesis} from '../shared/market-overview-original-synthesis';
 type MarketOverviewSynthesis=MarketOverviewOriginalSynthesis['summary'];
@@ -7,12 +7,12 @@ type MarketOverviewSynthesis=MarketOverviewOriginalSynthesis['summary'];
 const SYNTHESIS_SCORE_LABELS = MARKET_SYNTHESIS_DIMENSIONS;
 
 function MarketSynthesisRadarChart({
-  scores,
+  scores,evaluation,
 }: {
-  scores: MarketOverviewSynthesis["scores"];
+  scores: MarketOverviewSynthesis["scores"];evaluation?:MarketOverviewOriginalSynthesis["evaluation"];
 }) {
   const items = SYNTHESIS_SCORE_LABELS.map(item => ({
-    label: item.label,
+    label: item.label,partial:evaluation?.dimensions[item.key].status==='partial',
     value: scores[item.key],
     max: item.max,
     ratio: item.max > 0 && scores[item.key]!==null ? scores[item.key]! / item.max : 0,
@@ -77,7 +77,7 @@ function MarketSynthesisRadarChart({
   });
 
   const avgRatio = items.reduce((sum, item) => sum + item.ratio, 0) / Math.max(items.length, 1);
-  const complete=items.every(item=>item.value!==null);
+  const complete=items.every(item=>item.value!==null&&!item.partial);
 
   return (
     <div className="ss-market-synthesis-radar-card">
@@ -137,7 +137,7 @@ function MarketSynthesisRadarChart({
             const labelX = point.lx + placement.dx;
             const labelY = point.ly + placement.dy;
             const labelWidth = point.label.length * 12 + 16;
-            const valueText = point.value===null?'数据不足':`${point.value}/${point.max}`;
+            const valueText = point.value===null?'数据不足':`${point.partial?'已确认 ':''}${point.value}/${point.max}`;
             const valueWidth = valueText.length * 6.5 + 12;
             const boxWidth = Math.max(labelWidth, valueWidth);
             const boxHeight = 34;
@@ -198,7 +198,7 @@ function MarketSynthesisRadarChart({
               {item.value!==null&&<i style={{ width: `${Math.round(item.ratio * 100)}%` }} />}
             </div>
             <em>
-              {item.value===null?'数据不足':`${item.value}/${item.max}`}
+              {item.value===null?'数据不足':`${item.partial?'已确认 ':''}${item.value}/${item.max}`}
             </em>
           </li>
         ))}
@@ -207,7 +207,7 @@ function MarketSynthesisRadarChart({
   );
 }
 
-function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverviewSynthesis }) {
+function MarketOverviewSynthesisPanel({ synthesis,evaluation }: { synthesis: MarketOverviewSynthesis;evaluation?:MarketOverviewOriginalSynthesis["evaluation"] }) {
   return (
     <div className="ss-market-synthesis">
       <div className="ss-market-synthesis-head">
@@ -217,11 +217,11 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
             {synthesis.score??'—'}
             {synthesis.score!==null&&<em>/100</em>}
           </strong>
-          <b>{synthesis.gradeLabel??'数据不足，暂不评级'}</b>
+          <b>{synthesis.gradeLabel??(evaluation?.version==='observed-items/2'?'评分项待补齐，暂不评级':'数据不足，暂不评级')}</b>
           <small>{synthesis.grade}</small>
           <p className="ss-market-synthesis-grade-def">{synthesis.gradeDefinition}</p>
         </div>
-        <MarketSynthesisRadarChart scores={synthesis.scores} />
+        <MarketSynthesisRadarChart scores={synthesis.scores} evaluation={evaluation} />
       </div>
       {synthesis.crossSignals.length ? (
         <p className="ss-market-synthesis-cross">{synthesis.crossSignals.join(" · ")}</p>
@@ -236,10 +236,11 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
               {index + 1}. {dim.label}
               <em>
                 {" "}
-                {synthesis.scores[dim.key]===null?'数据不足':`${synthesis.scores[dim.key]}/${dim.max}`}
+                {synthesis.scores[dim.key]===null?'数据不足':`${evaluation?.dimensions[dim.key].status==='partial'?'已确认 ':''}${synthesis.scores[dim.key]}/${dim.max}`}
               </em>
             </b>
             <p>{synthesis.sections[dim.sectionKey]}</p>
+            {evaluation?.dimensions[dim.key].items&&<details className="market-research-boundaries"><summary>评分项明细</summary><ul>{evaluation.dimensions[dim.key].items!.map(item=><li key={item.id}>{item.label}：{item.status==='known'?`${item.score!>0?'+':''}${Number(item.score!.toFixed(2))}${item.group?'（分组折算前）':''}`:`待补齐 · ${item.missing.join('；')}`}</li>)}</ul></details>}
           </li>
         ))}
       </ol>
@@ -268,11 +269,15 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
   );
 }
 
-export function MarketOverviewOriginalSummary({result}:{result:MarketOverviewOriginalSynthesis}){
+export function MarketOverviewOriginalSummary({result:baseline,review,onSupplement,supplementBusy=false}:{result:MarketOverviewOriginalSynthesis;review?:MarketOverviewOriginalSynthesis;onSupplement?:()=>void;supplementBusy?:boolean}){
+ const [previous,setPrevious]=useState(false);
+ const result=previous?baseline:review??baseline,itemPolicy=result.evaluation?.version==='observed-items/2';
  return <section aria-label="原版市场概览总结">
-  <p className="market-research-note">原版规则总结 · 六维评分。{result.evaluation?'根据保存来源按当前缺失校验重新计算；有依据的维度继续展示，缺失项不补默认分，六维齐全后才生成总分和准入等级。历史快照未改写。':'历史规则结果，尚未应用缺失输入校验。'}分数不代表成功概率。</p>
-  {result.inputGaps.length>0&&<details className="market-research-boundaries"><summary>本次总结有 {result.inputGaps.length} 项输入缺口</summary><ul>{result.inputGaps.map(gap=><li key={gap}>{gap}</li>)}</ul></details>}
-  <MarketOverviewSynthesisPanel synthesis={result.summary}/>
-  <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；绑定来源 {result.sourceRefs.length} 份。</p></details>
+  <p className="market-research-note">原版规则总结 · 六维评分。{itemPolicy?`${review&&!previous?'已保存来源 · 新版逐项复算':'本报告固定采用逐项校验'}（v2）。有依据的评分项继续展示；缺失项不补默认分，六维齐全后才生成总分和准入等级。`:result.evaluation?'此前逐维校验（v1）；有依据的维度继续展示，缺失项不补默认分。':'历史规则结果，尚未应用缺失输入校验。'}历史快照未改写，分数不代表成功概率。</p>
+  {review&&<button type="button" className="ghost-btn" onClick={()=>setPrevious(v=>!v)}>{previous?'返回新版逐项复算':'查看此前逐维校验'}</button>}
+  {itemPolicy&&result.evaluation?.status!=='ready'&&<p className="market-research-note">当前仅有部分评分依据。{onSupplement&&<button type="button" className="ghost-btn" disabled={supplementBusy} onClick={onSupplement}>{supplementBusy?'正在采集':'按本报告条件补齐采集'}</button>}补齐会新建完整采集任务，旧报告保留。</p>}
+  {result.inputGaps.length>0&&<details className="market-research-boundaries"><summary>本次总结有 {result.inputGaps.length} 项输入说明</summary><p>包含来源缺口与评分依赖说明，不代表失败接口数量。</p><ul>{result.inputGaps.map(gap=><li key={gap}>{gap}</li>)}</ul></details>}
+  <MarketOverviewSynthesisPanel synthesis={result.summary} evaluation={result.evaluation}/>
+  <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；校验版本 {result.evaluation?.version??'原版'}；绑定来源 {result.sourceRefs.length} 份。</p></details>
  </section>;
 }

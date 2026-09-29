@@ -134,7 +134,7 @@ export class MarketModuleService {
     };
     const previous=await replay();if(previous)return previous;
     const {study}=await this.findStudy(actor,studyId);
-    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION},
+    const request={actor,scope:study.scope,moduleKind:'overview' as const,params:{...params,flow:MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION,scoringVersion:'observed-items/2' as const},
       versions:{source:MARKET_SOURCE_HANDLER_VERSION,rule:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,mapping:MARKET_OVERVIEW_PRODUCT_CATALOG_VERSION,planner:MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION,
         model:null,prompt:null,configuration:null},collectionRevision:'initial/v1',idempotencyKey};
     let result;
