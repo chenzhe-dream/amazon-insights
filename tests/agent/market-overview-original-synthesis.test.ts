@@ -34,28 +34,30 @@ test('v4 synthesis excludes exactly the same conflicting and future demand month
  const emptySeries={status:'not-collected' as const,points:[],sourceRefs:[],errorCode:null},externalData={referenceMonth:scope.toMonth,salesTrend:emptySeries,salesAmountTrend:emptySeries,asinProfits:{status:'not-collected' as const,items:{},requestedAsins:[],missingAsins:[],sourceRefs:[],errorCode:null}};
  const actual=projectMarketOverviewOriginalSynthesis({scope,parameters,sources:[source('market_product_demand_trend',{items,returnRatio:null})],externalData});
  const report=emptyReport();report.productDemand={asinCount:null,returnRatio:null,avgReturnRatio:null,searchToPurchaseRatio:null,avgSearchToPurchaseRatio:null,pageViews:items.slice(0,11).map(r=>({month:r.date,value:r.glanceViews})),updatedAt:'2025-11-01'};
- assert.deepEqual(actual.summary,buildMarketOverviewSynthesis(niche(),report));assert.ok(actual.inputGaps.some(g=>g.includes('conflicting-demand-month')));
+ assert.equal(actual.summary.score,null);assert.equal(actual.summary.scores.marketDemand,null);assert.ok(actual.inputGaps.some(g=>g.includes('conflicting-demand-month')));
+ assert.ok(actual.evaluation!.dimensions.productOpportunity.missing.some(g=>g.includes('conflicting-demand-month')));
 });
 
-test('no sources retains all original null-report defaults and declares gaps',()=>{
+test('no sources never publishes original default scores or entry recommendation',()=>{
  const result=project([]);
- assert.deepEqual(result.summary,buildMarketOverviewSynthesis(niche(),null));
- assert.deepEqual(result.summary,buildMarketOverviewSynthesis(niche(),emptyReport()));
+ assert.equal(result.summary.score,null);
+ assert.equal(result.summary.gradeLabel,null);
+ assert.deepEqual(Object.values(result.summary.scores),[null,null,null,null,null,null]);
  assert.ok(result.inputGaps.some(g=>g.includes('Sorftime')));
  assert.deepEqual(result.sourceRefs,[]);
 });
 
-test('full aggregate mapping retains original null, zero, fallback and selected-window semantics',()=>{
+test('aggregate mapping preserves real zero and selected windows while null remains unknown',()=>{
  const main={totalUnits:0,avgUnits:0,avgPrice:0,avgRating:0,ebcProportion:0,amazonSelfProportion:0,fbaProportion:0,returnRatio:0,avgReturnRatio:0,searchToPurchaseRatio:0,top10ProductCrn:0,top10BrandCrn:null,top10SellerCrn:.55,l6NewRatio:0,l6NewAvgSales:0,top10ProductSales:0};
  const stats={avgUnits:100,avgPrice:100,hlAvgUnits:100};
  const result=project([source('market_research',main),source('market_research_statistics',stats)]);
- assert.deepEqual(result.summary,buildMarketOverviewSynthesis(niche(main,stats),emptyReport()));
+ assert.equal(result.summary.score,null);assert.equal(result.summary.scores.marketCompetition,null);
  assert.equal(niche(main,stats).hlAvgUnits,0);
- assert.equal(niche(main,stats).brandCrn,0); // Original Number(null), intentionally not hardened away.
+ assert.equal(niche(main,stats).brandCrn,null); // Missing concentration cannot become observed zero.
  for(const topN of [5,10,20] as const)for(const months of [1,3,6,12] as const){
   const raw={top5ProductCrn:.2,top10ProductCrn:.4,top20ProductCrn:.6,l1NewRatio:.01,l3NewRatio:.03,l6NewRatio:.06,l12NewRatio:.12};
   const actual=projectMarketOverviewOriginalSynthesis({scope,parameters:{headTopN:topN,newProductMonths:months},sources:[source('market_research',raw)]});
-  assert.deepEqual(actual.summary,buildMarketOverviewSynthesis(mapNiche(raw,{}, {marketplace:'US',topN,newProductMonths:months,fetchedAt:''}),emptyReport()));
+  const mapped=mapNiche(raw,{}, {marketplace:'US',topN,newProductMonths:months,fetchedAt:''});assert.equal(mapped.productCrn,topN===5?20:topN===10?40:60);assert.equal(mapped.newRatio,months);assert.equal(actual.summary.scores.marketCompetition,null);
  }
 });
 
@@ -64,7 +66,7 @@ test('adapter uses original raw ratios rather than derived shares or aggregate p
  const report=emptyReport();report.prices=distRows(raw,r=>String(r.label));
  const main={totalUnits:10000,avgPrice:20,avgProfit:99};
  const actual=project([source('market_research',main),source('market_price_distribution',raw)]);
- assert.deepEqual(actual.summary,buildMarketOverviewSynthesis(niche(main),report));
+ assert.equal(actual.summary.score,null);assert.equal(actual.summary.scores.priceOpportunity,buildMarketOverviewSynthesis(niche(main),report).scores.priceOpportunity);
  assert.equal(report.prices[0].unitsShare,80);
  const noProfits=raw.map(r=>({...r,items:r.items.map(({profit,...p})=>p)}));
  const missing=project([source('market_research',main),source('market_price_distribution',noProfits)]);
@@ -96,7 +98,7 @@ test('saved product demand points and fallback retain original complete summary'
  const raw={items};
  const report=emptyReport();report.productDemand={asinCount:null,returnRatio:null,avgReturnRatio:null,searchToPurchaseRatio:null,avgSearchToPurchaseRatio:null,pageViews:items.map(r=>({month:r.month,value:r.glanceViews})),updatedAt:'2025-12'};
  const actual=project([source('market_product_demand_trend',raw)]);
- assert.deepEqual(actual.summary,buildMarketOverviewSynthesis(niche(),report));
+ assert.equal(actual.summary.score,null);assert.equal(actual.summary.scores.marketDemand,null);
  assert.ok(!actual.inputGaps.some(g=>g.includes('商品浏览量')));
  const empty=project([source('market_product_demand_trend',{items:[]})]);
  assert.ok(empty.inputGaps.some(g=>g.includes('商品浏览量趋势来源返回空数据')));
@@ -114,7 +116,7 @@ test('original request-bound currency keeps price rows without echoes, but rejec
 
 test('original brand and seller ranking labels and raw shares appear in complete competition prose',()=>{
  const brands=[{brand:'Brand One',totalUnitsRatio:.35,unitsRatio:.9}],sellers=[{sellerName:'Seller One',totalUnitsRatio:.25,unitsRatio:.8}];
- const actual=project([source('market_brand_concentration',brands),source('market_seller_concentration',sellers)]);
+ const actual=project([source('market_research',{top10ProductCrn:.3,top10BrandCrn:.35,top10SellerCrn:.25}),source('market_brand_concentration',brands),source('market_seller_concentration',sellers)]);
  assert.match(actual.summary.sections.competition,/Top 品牌 Brand One 占 35.0%/);
  assert.match(actual.summary.sections.competition,/头部卖家 Seller One 占 25.0%/);
 });

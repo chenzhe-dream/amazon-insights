@@ -1,8 +1,9 @@
 "use client";
 import React,{useId} from 'react';
-import {MARKET_SYNTHESIS_DIMENSIONS,type MarketOverviewSynthesis} from '../server/domain/market-research/original-overview/sellersprite-market-overview-synthesis';
+import {MARKET_SYNTHESIS_DIMENSIONS} from '../server/domain/market-research/original-overview/sellersprite-market-overview-synthesis';
 import type {MarketOverviewOriginalSynthesis} from '../shared/market-overview-original-synthesis';
-// Original archive panel and radar. Business text and dimensions are passed through unchanged.
+type MarketOverviewSynthesis=MarketOverviewOriginalSynthesis['summary'];
+// Preserve the original panel; unknown observations do not become plotted zero scores.
 const SYNTHESIS_SCORE_LABELS = MARKET_SYNTHESIS_DIMENSIONS;
 
 function MarketSynthesisRadarChart({
@@ -14,7 +15,7 @@ function MarketSynthesisRadarChart({
     label: item.label,
     value: scores[item.key],
     max: item.max,
-    ratio: item.max > 0 ? scores[item.key] / item.max : 0,
+    ratio: item.max > 0 && scores[item.key]!==null ? scores[item.key]! / item.max : 0,
   }));
   const size = 340;
   const cx = size / 2;
@@ -76,6 +77,7 @@ function MarketSynthesisRadarChart({
   });
 
   const avgRatio = items.reduce((sum, item) => sum + item.ratio, 0) / Math.max(items.length, 1);
+  const complete=items.every(item=>item.value!==null);
 
   return (
     <div className="ss-market-synthesis-radar-card">
@@ -121,20 +123,21 @@ function MarketSynthesisRadarChart({
               </text>
             );
           })}
-          <polygon
+          {complete&&<polygon
+            data-score-polygon="complete"
             points={dataPolygon}
             fill={`url(#${gradientId})`}
             stroke="#7c3aed"
             strokeWidth={2.2}
             strokeLinejoin="round"
             filter={`url(#${glowId})`}
-          />
+          />}
           {dataPoints.map(point => {
             const placement = labelPlacement(point.angle);
             const labelX = point.lx + placement.dx;
             const labelY = point.ly + placement.dy;
             const labelWidth = point.label.length * 12 + 16;
-            const valueText = `${point.value}/${point.max}`;
+            const valueText = point.value===null?'数据不足':`${point.value}/${point.max}`;
             const valueWidth = valueText.length * 6.5 + 12;
             const boxWidth = Math.max(labelWidth, valueWidth);
             const boxHeight = 34;
@@ -147,8 +150,8 @@ function MarketSynthesisRadarChart({
             const boxY = labelY - 12;
             return (
               <g key={point.label}>
-                <circle cx={point.x} cy={point.y} r={5} fill="#fff" stroke="#7c3aed" strokeWidth={2.2} />
-                <circle cx={point.x} cy={point.y} r={2.2} fill="#7c3aed" />
+                {point.value!==null&&<g data-score-point={point.label}><circle cx={point.x} cy={point.y} r={5} fill="#fff" stroke="#7c3aed" strokeWidth={2.2} />
+                <circle cx={point.x} cy={point.y} r={2.2} fill="#7c3aed" /></g>}
                 <rect
                   x={boxX}
                   y={boxY}
@@ -179,10 +182,10 @@ function MarketSynthesisRadarChart({
           <g className="ss-market-synthesis-radar-center">
             <circle cx={cx} cy={cy} r={28} fill="#fff" stroke="#ddd6fe" strokeWidth="1.2" />
             <text x={cx} y={cy - 2} textAnchor="middle" className="ss-market-synthesis-radar-center-label">
-              综合
+              {complete?'综合':'待补充'}
             </text>
             <text x={cx} y={cy + 14} textAnchor="middle" className="ss-market-synthesis-radar-center-value">
-              {Math.round(avgRatio * 100)}%
+              {complete?`${Math.round(avgRatio * 100)}%`:'—'}
             </text>
           </g>
         </svg>
@@ -192,10 +195,10 @@ function MarketSynthesisRadarChart({
           <li key={item.label}>
             <span>{item.label}</span>
             <div className="ss-market-synthesis-radar-legend-track">
-              <i style={{ width: `${Math.round(item.ratio * 100)}%` }} />
+              {item.value!==null&&<i style={{ width: `${Math.round(item.ratio * 100)}%` }} />}
             </div>
             <em>
-              {item.value}/{item.max}
+              {item.value===null?'数据不足':`${item.value}/${item.max}`}
             </em>
           </li>
         ))}
@@ -211,10 +214,10 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
         <div className="ss-market-synthesis-score">
           <span>市场机会指数</span>
           <strong>
-            {synthesis.score}
-            <em>/100</em>
+            {synthesis.score??'—'}
+            {synthesis.score!==null&&<em>/100</em>}
           </strong>
-          <b>{synthesis.gradeLabel}</b>
+          <b>{synthesis.gradeLabel??'数据不足，暂不评级'}</b>
           <small>{synthesis.grade}</small>
           <p className="ss-market-synthesis-grade-def">{synthesis.gradeDefinition}</p>
         </div>
@@ -233,7 +236,7 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
               {index + 1}. {dim.label}
               <em>
                 {" "}
-                {synthesis.scores[dim.key]}/{dim.max}
+                {synthesis.scores[dim.key]===null?'数据不足':`${synthesis.scores[dim.key]}/${dim.max}`}
               </em>
             </b>
             <p>{synthesis.sections[dim.sectionKey]}</p>
@@ -244,6 +247,7 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
         <div>
           <h5>最大机会</h5>
           <ul>
+            {!synthesis.topOpportunities.length&&<li>现有依据不足，暂不生成机会判断。</li>}
             {synthesis.topOpportunities.map(item => (
               <li key={item}>{item}</li>
             ))}
@@ -252,6 +256,7 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
         <div>
           <h5>最大风险</h5>
           <ul>
+            {!synthesis.topRisks.length&&<li>现有依据不足，暂不生成风险判断。</li>}
             {synthesis.topRisks.map(item => (
               <li key={item}>{item}</li>
             ))}
@@ -265,7 +270,7 @@ function MarketOverviewSynthesisPanel({ synthesis }: { synthesis: MarketOverview
 
 export function MarketOverviewOriginalSummary({result}:{result:MarketOverviewOriginalSynthesis}){
  return <section aria-label="原版市场概览总结">
-  <p className="market-research-note">原版规则总结 · 六维评分。根据本报告已保存的来源计算；缺失输入沿用原版默认规则，分数不表示数据完整或成功概率。</p>
+  <p className="market-research-note">原版规则总结 · 六维评分。{result.evaluation?'根据保存来源按当前缺失校验重新计算；有依据的维度继续展示，缺失项不补默认分，六维齐全后才生成总分和准入等级。历史快照未改写。':'历史规则结果，尚未应用缺失输入校验。'}分数不代表成功概率。</p>
   {result.inputGaps.length>0&&<details className="market-research-boundaries"><summary>本次总结有 {result.inputGaps.length} 项输入缺口</summary><ul>{result.inputGaps.map(gap=><li key={gap}>{gap}</li>)}</ul></details>}
   <MarketOverviewSynthesisPanel synthesis={result.summary}/>
   <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；绑定来源 {result.sourceRefs.length} 份。</p></details>

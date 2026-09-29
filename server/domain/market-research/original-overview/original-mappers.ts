@@ -1,5 +1,6 @@
 import {pickCrnKey,pickNewKey,type SellerSpriteMarketNiche,type SellerSpriteDistRow,type SellerSpriteDistProduct} from "./sellersprite-market-niche";
 function toNumber(value: unknown) {
+  if ((typeof value !== 'number' && typeof value !== 'string') || (typeof value === 'string' && !value.trim())) return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }

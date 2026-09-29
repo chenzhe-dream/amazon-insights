@@ -18,7 +18,7 @@ test('new original demand request omits newProduct and uses original top100 with
 test('live Sorftime and demand receipts parse at the report cutoff without inventing null values',()=>{
  const live=JSON.parse(readFileSync(new URL('./fixtures/overview-external-live.json',import.meta.url),'utf8'));
  const sales=parseOverviewCategoryTrend(live.sales,'2026-08'),prices=parseOverviewCategoryTrend(live.prices,'2026-08');assert.equal(sales.length,24);assert.equal(prices.length,24);assert.equal(sales.at(-1)!.month,'2026-08');
- const source:any={operation:'market_product_demand_trend',requestIdentity:{month:'2026-08'},payload:live['demand-original']};
+ const source:any={scope,operation:'market_product_demand_trend',requestIdentity:{month:'2026-08'},payload:live['demand-original']};
  const demand=projectOverviewProductDemand([source],'2026-08',[]);assert.equal(demand.points.length,13);assert.equal(demand.points[0].month,'2025-05-01');assert.equal(demand.status,'ready');
 });
 test('profit page matches exact requested ASIN only, keeps absent source fields unknown, and rejects conflicting page',()=>{
@@ -28,11 +28,16 @@ test('profit page matches exact requested ASIN only, keeps absent source fields 
  assert.throws(()=>projectOverviewExternal({...stage,page:1},raw,'2026-08'));
 });
 test('metric-only demand remains ready and conflicting duplicate months are not silently selected',()=>{
- const source:any={operation:'market_product_demand_trend',requestIdentity:{month:'2026-08'},payload:{data:{asinCount:12,returnRatio:0.1,items:[]}}};
+ const source:any={scope,operation:'market_product_demand_trend',requestIdentity:{month:'2026-08'},payload:{data:{asinCount:12,returnRatio:0.1,items:[]}}};
  assert.equal(projectOverviewProductDemand([source],'2026-08',[]).status,'ready');
  source.payload.data.items=[{date:'2026-08-01',glanceViews:4},{date:'2026-07-01',glanceViews:3},{date:'2026-07-01',glanceViews:3}];
  assert.deepEqual(projectOverviewProductDemand([source],'2026-08',[]).points,[{month:'2026-07-01',value:3},{month:'2026-08-01',value:4}]);
  source.payload.data.items.push({date:'2026-07-01',glanceViews:5});const partial=projectOverviewProductDemand([source],'2026-08',[]);assert.equal(partial.status,'partial');assert.equal(partial.errorCode,'conflicting-demand-month');assert.deepEqual(partial.points,[{month:'2026-08-01',value:4}]);
+});
+test('product demand numeric observations reject blank and boolean values while keeping real zero',()=>{
+ const source:any={scope,operation:'market_product_demand_trend',requestIdentity:{month:'2026-08'},payload:{data:{asinCount:false,returnRatio:' ',items:[{date:'2026-06-01',glanceViews:false},{date:'2026-07-01',glanceViews:' '},{date:'2026-08-01',glanceViews:0}]}}};
+ const result=projectOverviewProductDemand([source],'2026-08',[]);
+ assert.equal(result.asinCount,null);assert.equal(result.returnRatio,null);assert.deepEqual(result.points,[{month:'2026-08-01',value:0}]);
 });
 test('category parser preserves original content envelope and Chinese month format',()=>{
  assert.deepEqual(parseOverviewCategoryTrend({content:'2026年07月=10,2026年08月=20'},'2026-08'),[{month:'2026-07',value:10},{month:'2026-08',value:20}]);
