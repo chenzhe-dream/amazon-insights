@@ -11,6 +11,8 @@ export function MarketOverviewConcentrationChart({rows,kind,headTopN,currency}:{
  const [range,setRange]=useState<'head'|'half'|'all'>('all');
  const [selected,setSelected]=useState<string|null>(null);
  const revenueReady=currency!==null&&rows.length>0&&rows.every(row=>row.revenue!==null&&row.revenueSharePct!==null);
+ const missingRevenue=rows.filter(row=>row.revenue===null).length;
+ const revenueIssue=currency===null?'币种未确认':missingRevenue>0?`${missingRevenue} 行未取得销售额`:rows.some(row=>row.revenueSharePct===null)?'销售额占比无法计算':null;
  const shareReady=rows.length>0&&rows.every(row=>metric==='units'?row.unitsSharePct!==null:row.revenueSharePct!==null);
  const share=(row:Row)=>metric==='units'?row.unitsSharePct:row.revenueSharePct;
  const value=(row:Row)=>metric==='units'?row.units:row.revenue;
@@ -32,7 +34,8 @@ export function MarketOverviewConcentrationChart({rows,kind,headTopN,currency}:{
  if(segment.length)points.push(segment);
  if(!rows.some(row=>row.units!==null||row.unitsSharePct!==null))return <p className="ss-report-empty">该来源尚无可绘制的销量或占比，原始分组仍保留在下方明细中。</p>;
  return <div className="ss-crn">
-  <div className="ss-crn-tabs"><button type="button" className={metric==='units'?'selected':''} onClick={()=>setMetric('units')}>销量分布</button><button type="button" className={metric==='revenue'?'selected':''} disabled={!revenueReady} title={revenueReady?undefined:'销售额或币种未确认'} onClick={()=>{setMetric('revenue');setRange('all');}}>销售额分布</button></div>
+  <div className="ss-crn-tabs"><button type="button" className={metric==='units'?'selected':''} onClick={()=>setMetric('units')}>销量分布</button><button type="button" className={metric==='revenue'?'selected':''} title={revenueReady?undefined:`销售额视图：${revenueIssue}`} onClick={()=>{setMetric('revenue');setRange('all');}}>销售额分布</button></div>
+  {!revenueReady&&<p className="ss-crn-status" role="status">销售额视图：{revenueIssue}。缺失项保持未知。</p>}
   <div className="ss-crn-legend"><span><i style={{background:'#c4b5fd'}}/>{metric==='units'?'销量':'销售额'}</span><span><i className="ss-crn-line" style={{background:'#7c3aed'}}/>{metric==='units'?'销量占比':'销售额占比'}</span></div>
   <div className="ss-crn-layout"><div className="ss-crn-stage"><svg style={{height:260,minWidth:width}} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label}集中度`}>
    <text x={left} y={14} className="ss-dist-axis-title">{metric==='units'?'销量':'销售额'}</text><text x={width-right} y={14} textAnchor="end" className="ss-dist-axis-title">{metric==='units'?'销量占比':'销售额占比'}</text>

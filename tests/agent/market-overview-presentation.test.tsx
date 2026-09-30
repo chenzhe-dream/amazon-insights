@@ -11,6 +11,7 @@ import {MarketOverviewDetailsResponseSchema} from '../../shared/market-overview-
 import {synthesisDetails} from './helpers/market-overview-synthesis-page-fixture';
 import {overviewReportStartMonth} from '../../app/lib/market-overview-period';
 import {normalizeMarketOverviewDistribution} from '../../server/domain/market-research/overview-distributions';
+import {MarketOverviewConcentrationChart} from '../../app/market-overview-concentration-chart';
 
 test('opening a monthly result retains a chosen range or requests three completed months',()=>{
  assert.equal(overviewReportStartMonth('2026-08','2026-06'),'2026-06');
@@ -73,6 +74,14 @@ test('sales chart consumes saved monthly numeric facts without inventing missing
  const html=renderToStaticMarkup(<MarketOverviewReportView entry={missing.entry} detail={missing} error={null} onRetry={()=>{}}/>);
  assert.match(html,/来源没有确认月份/);assert.match(html,/已保存的分段解释/);
  assert.doesNotMatch(html,/NaN|Infinity/);
+});
+
+test('sales distribution remains actionable when the saved source has an honest revenue gap',()=>{
+ const distribution=normalizeMarketOverviewDistribution('market_brand_concentration',{data:[{brand:'Acme',asins:['B000000001'],products:1,totalUnits:30,totalRevenue:120}]});
+ const html=renderToStaticMarkup(<MarketOverviewConcentrationChart rows={distribution.rows} kind="brand" headTopN={10} currency={null}/>);
+ assert.match(html,/销售额分布/);
+ assert.doesNotMatch(html,/销售额分布[^<]*disabled/);
+ assert.match(html,/销售额视图：币种未确认/);
 });
 
 test('monthly chart uses saved numeric source values when the semantic layer is skipped',()=>{
