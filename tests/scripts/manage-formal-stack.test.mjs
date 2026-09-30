@@ -97,6 +97,21 @@ test("missing configuration fails closed", () => {
   assert.match(result.stderr, /正式配置文件不存在/);
 });
 
+test("PostgreSQL preflight retries while the container is still recovering", () => {
+  const result = invokePowerShell(`
+    $script:attempts=0
+    function Invoke-PostgresProbe {
+      $script:attempts++
+      if ($script:attempts -lt 3) { return @{ExitCode=2;Output='{"ok":false,"code":"57P03"}'} }
+      return @{ExitCode=0;Output='{"ok":true,"active":0}'}
+    }
+    $result=Invoke-PostgresPreflight 'C:\\formal-root'
+    @{attempts=$script:attempts;active=$result.active} | ConvertTo-Json -Compress
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), { attempts: 3, active: 0 });
+});
+
 test("ordinary formal restart requires the Web and Agent to report the same exact source", () => {
   const result = invokePowerShell(`
     $commit='${"c".repeat(40)}'; $hash='${"b".repeat(64)}'; $other='${"d".repeat(64)}'

@@ -143,6 +143,14 @@ function Set-FormalRootEnvironment([string]$ResolvedDataRoot, [string]$ResolvedR
   [Environment]::SetEnvironmentVariable('AGENT_RUNTIME_ROOT', $ResolvedRuntimeRoot, 'Process')
 }
 
+function Invoke-PostgresProbe([string]$Source) {
+  $output = $Source | & node --input-type=module - 2>$null
+  return [pscustomobject]@{
+    ExitCode = [int]$LASTEXITCODE
+    Output = @($output)
+  }
+}
+
 function Invoke-PostgresPreflight([string]$Root) {
   $source = @'
 import pg from "pg";
@@ -168,11 +176,19 @@ try {
   await client.end().catch(() => {});
 }
 '@
-  $output = $source | & node --input-type=module - 2>$null
-  if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL 连接或活动任务检查失败' }
-  $result = $output | ConvertFrom-Json
-  if (-not $result.ok -or [int]$result.active -lt 0) { throw 'PostgreSQL 连接或活动任务检查失败' }
-  return $result
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    $probe = Invoke-PostgresProbe $source
+    if ($probe.ExitCode -eq 0) {
+      try {
+        $result = @($probe.Output) | ConvertFrom-Json
+        if ($result.ok -and [int]$result.active -ge 0) { return $result }
+      } catch {}
+    }
+    if ([DateTime]::UtcNow -ge $deadline) { break }
+    Start-Sleep -Milliseconds 500
+  } while ($true)
+  throw 'PostgreSQL 连接或活动任务检查失败'
 }
 
 function Get-ListenerProcessIds([int]$Port) {
