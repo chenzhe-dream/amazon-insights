@@ -35,11 +35,20 @@ test('both market modules consolidate admin tools and omit them for members with
    const panel=page.getByRole('group',{name:'管理员工具',exact:true});
    if(role==='member'){
     assert.equal(await panel.count(),0);
+    if(view==='overview'){
+     await page.getByLabel('类目节点或路径').fill('999:888');
+     assert.equal(await page.getByText('查询条件已改变',{exact:true}).count(),0,'scope warning is admin-only');
+    }
     for(const text of ['分析设置与任务管理','本报告的分析规则','采集历史与状态','恢复已有形态任务','来源步骤详情','数据完整度与缺失说明'])assert.equal(await page.getByText(text,{exact:true}).count(),0,`${view}: member must not mount ${text}`);
     if(view==='shapes'){await page.getByLabel('B000000001 人工形态',{exact:true}).fill('落地灯');await page.getByText('草稿：已保存',{exact:true}).waitFor();assert.equal(draft.items.find(item=>item.asin==='B000000001')?.label,'落地灯');}
    }else{
     assert.equal(await panel.count(),1);assert.equal(await panel.getAttribute('open'),null);
-    await panel.locator(':scope > summary').click();
+    if(view==='overview'){
+     await panel.locator(':scope > summary').click();
+     await page.getByLabel('类目节点或路径').fill('999:888');
+     assert.equal(await page.getByText('查询条件已改变',{exact:true}).count(),1,'admin keeps scope warning');
+    }
+    if(view==='shapes')await panel.locator(':scope > summary').click();
     const label=view==='overview'?'分析设置与任务管理':'来源步骤详情';assert.equal(await panel.getByText(label,{exact:true}).isVisible(),true);
     await panel.getByText(label,{exact:true}).click();
     if(view==='shapes')await panel.getByText('恢复已有形态任务',{exact:true}).click();
