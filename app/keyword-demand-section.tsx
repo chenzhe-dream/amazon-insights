@@ -566,10 +566,12 @@ function KeywordComparisonMatrixTable({
 
   return (
     <>
-      {!snapshot && <div className="kw-matrix-toolbar">
+      <div className="kw-matrix-toolbar">
         <label>
           含义筛选
-          <select value={filter} onChange={event => setFilter(event.target.value as KeywordCategory | "all")}>
+          <select aria-label="含义筛选" value={filter} disabled={snapshot}
+            title={snapshot ? "导出快照固定为全部含义，筛选仅用于保留页面口径" : undefined}
+            onChange={event => setFilter(event.target.value as KeywordCategory | "all")}>
             <option value="all">全部含义</option>
             {activeCategories.map(item => (
               <option key={item.id} value={item.id}>
@@ -579,9 +581,9 @@ function KeywordComparisonMatrixTable({
           </select>
         </label>
         <span className="launch-muted">
-          展示 {rows.length} / {matrix.totalRows} 个去重词 · 默认按共享率降序 · 点击「月搜索量」按搜索量从高到低 · 悬停列头可看释义
+          {snapshot ? "导出快照固定展示全部含义；" : ""}展示 {rows.length} / {matrix.totalRows} 个去重词 · 默认按共享率降序 · 点击「月搜索量」按搜索量从高到低 · 悬停列头可看释义
         </span>
-      </div>}
+      </div>
       {!snapshot && <div className="kw-matrix-copy-toolbar">
         <button type="button" className="ghost-btn" disabled={!selectedWords.length} onClick={() => void copyWords(selectedWords)}>复制已选（{selectedWords.length}）</button>
         <button type="button" className="ghost-btn" disabled={!rows.length} onClick={() => void copyWords(rows.map(row => row.keyword))}>复制当前列表（{rows.length}）</button>

@@ -51,7 +51,9 @@ test("published analysis keeps over 200 words, all months, native full values, m
   assert.match(insight, /<h2>关键词洞察<\/h2>/);
   for (const phrase of ["标签分布概览","竞品关键词结构对比","流量词对比","关键词含义分类标准","近30天 · 站内搜索","2026-09-24"])
     assert.ok(html.includes(phrase),phrase);
-  assert.doesNotMatch(html,/private|选择关键词|复制当前列表|复制已选|含义筛选|2026-08-13|keywords:sync|<button/);
+  assert.match(html, /<select[^>]+aria-label="含义筛选"/);
+  assert.match(html, /<option[^>]+value="all"[^>]*>全部含义<\/option>/);
+  assert.doesNotMatch(html,/private|选择关键词|复制当前列表|复制已选|2026-08-13|keywords:sync|<button/);
 });
 
 test("absent published data and missing metrics remain missing without global keyword defaults", () => {
