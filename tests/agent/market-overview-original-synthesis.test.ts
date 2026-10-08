@@ -167,6 +167,17 @@ test('keyword trend normalization aggregates duplicate months before seasonal co
  assert.ok(phrase.includes('01月')&&phrase.indexOf('01月')<phrase.indexOf('02月'));
 });
 
+test('seasonal conclusions cap long month lists without repeating months',()=>{
+ const points=Array.from({length:18},(_,index)=>({
+  month:`${2025+Math.floor(index/12)}-${String(index%12+1).padStart(2,'0')}`,
+  value:index%3===0?100:10,
+ }));
+ const phrase=buildSeasonalPhrase(points,'搜索需求');
+ assert.ok(phrase.includes('等'));
+ assert.ok(phrase.length<90);
+ assert.doesNotMatch(phrase,/01月、01月/);
+});
+
 test('concentration conclusions rank by validated unit share instead of provider row order',()=>{
  const rows=[
   {label:'B',units:80,unitsShare:20,products:1,asinRatio:20},

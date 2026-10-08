@@ -74,7 +74,10 @@ export const buildSeasonalPhrase=(points:readonly SellerSpriteTrendPoint[],subje
  const peaks=clean.filter(point=>point.value>=middle*1.56).map(point=>point.month);
  const lows=clean.filter(point=>point.value<=middle*.82).map(point=>point.month);
  if(!peaks.length&&!lows.length)return `${subject}未形成明显旺淡季。`;
- const displayMonths=(months:string[])=>months.map(month=>clean.length>12?month:`${month.slice(5)}月`).join('、');
+ const displayMonths=(months:string[])=>{
+  const distinct=unique(months),shown=distinct.slice(0,4).map(month=>clean.length>12?month:`${month.slice(5)}月`);
+  return `${shown.join('、')}${distinct.length>shown.length?`等${distinct.length}个月`:''}`;
+ };
  return `${peaks.length?`旺季集中在 ${displayMonths(peaks)}`:'未识别明显旺季'}${lows.length?`，淡季集中在 ${displayMonths(lows)}`:'，未识别明显淡季'}；旺季前2–3个月需提前安排备货。`;
 };
 const mixConclusion=(rows:readonly SellerSpriteDistRow[],label:string)=>{
