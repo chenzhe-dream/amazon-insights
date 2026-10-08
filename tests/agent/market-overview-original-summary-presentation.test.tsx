@@ -21,5 +21,6 @@ test('radar center uses the additive six-dimension score shown by the summary',(
  const ready=buildCheckedOverviewSynthesis(niche,report);
  const html=renderToStaticMarkup(<MarketOverviewOriginalSummary result={{version:6,...ready,inputGaps:[],sourceRefs:[],originalAssumptions:[]}}/>);
  assert.match(html, new RegExp(`>${ready.summary.score}%<`));
- assert.match(html,/fill-opacity="0\.76"/);
+ assert.doesNotMatch(html,/fill-opacity="0\.76"/);
+ assert.match(html,/fill="#fff"/);
 });

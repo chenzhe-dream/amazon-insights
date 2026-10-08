@@ -180,7 +180,7 @@ function MarketSynthesisRadarChart({
             );
           })}
           <g className="ss-market-synthesis-radar-center">
-            <circle cx={cx} cy={cy} r={28} fill="#fff" fillOpacity="0.76" stroke="#ddd6fe" strokeWidth="1.2" />
+            <circle cx={cx} cy={cy} r={28} fill="#fff" stroke="#ddd6fe" strokeWidth="1.2" />
             <text x={cx} y={cy - 2} textAnchor="middle" className="ss-market-synthesis-radar-center-label">
               {complete?'综合':'待补充'}
             </text>
