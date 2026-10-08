@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { SellingTranslationResponse, type SellingTranslationResult } from "../shared/selling-point-translation-contracts";
 import { localAgentFetch, localAgentErrorMessage } from "./lib/local-agent-browser";
 
-export function SellingPointTranslation({ projectId, asin }: { projectId: string | null; asin: string }) {
+export function SellingPointTranslation({ projectId, versionId, asin }: { projectId: string | null; versionId?: string | null; asin: string }) {
   const [result, setResult] = useState<SellingTranslationResult | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -15,11 +15,12 @@ export function SellingPointTranslation({ projectId, asin }: { projectId: string
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = Date.now();
-    const path = `/v1/projects/${encodeURIComponent(projectId)}/selling-point-translations/${encodeURIComponent(asin)}`;
+    const basePath = `/v1/projects/${encodeURIComponent(projectId)}/selling-point-translations/${encodeURIComponent(asin)}`;
+    const readPath = `${basePath}${versionId ? `?versionId=${encodeURIComponent(versionId)}` : ""}`;
     async function request(method: "GET" | "POST") {
-      const response = await localAgentFetch(path, {
+      const response = await localAgentFetch(method === "GET" ? readPath : basePath, {
         method, signal: controller.signal, cache: "no-store",
-        ...(method === "POST" ? { body: "{}" } : {}),
+        ...(method === "POST" ? { body: JSON.stringify(versionId ? { versionId } : {}) } : {}),
       });
       const payload: unknown = await response.json();
       if (!response.ok) throw new Error(localAgentErrorMessage(payload, "中文翻译暂不可用，请重试。"));
@@ -41,7 +42,7 @@ export function SellingPointTranslation({ projectId, asin }: { projectId: string
     }
     void poll(true);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [projectId, asin, retry]);
+  }, [projectId, versionId, asin, retry]);
 
   if (!projectId) return <p className="muted">请先打开来源项目，查看中文卖点。</p>;
   return <div aria-live="polite">

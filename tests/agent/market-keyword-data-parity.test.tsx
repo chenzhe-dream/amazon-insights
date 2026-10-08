@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {MarketKeywordTable, keywordAnnualVolume} from '../../app/market-keyword-table';
+import {MarketKeywordTable, keywordAnnualVolume, keywordSearchMatches} from '../../app/market-keyword-table';
 import {MarketKeywordFactsSchema, type MarketKeywordFacts} from '../../shared/market-keyword-public-contracts';
 import {keywordPageRun} from './helpers/market-keyword-page-fixture';
 import {categoryMeta} from '../../app/keyword-meaning-taxonomy';
@@ -36,6 +36,16 @@ test('table shows real seasonality, category explanation and Listing usage witho
  const missing=renderToStaticMarkup(<MarketKeywordTable facts={facts} details={()=>null}/>);
  assert.doesNotMatch(missing,/>均衡</);assert.doesNotMatch(missing,/>--</);
 });
+test('keyword table exposes reference-month and undated source-page search volumes separately',()=>{
+ const facts=fixture(),member=facts.members[0];member.reference.searchVolume=321;member.pageMetrics.monthlySearchVolume.value=999;
+ const html=renderToStaticMarkup(<MarketKeywordTable facts={facts} details={()=>null}/>);
+ assert.match(html,/参考月搜索量/);assert.match(html,/来源页月搜索量/);assert.match(html,/>321</);assert.match(html,/>999</);
+});
+test('keyword search retains original substring, multi-token, and character-sequence matching',()=>{
+ assert.equal(keywordSearchMatches('floor lamp for bedroom','lamp bedroom'),true);
+ assert.equal(keywordSearchMatches('floor lamp for bedroom','flr lmp'),true);
+ assert.equal(keywordSearchMatches('floor lamp for bedroom','desk lamp'),false);
+});
 test('history drives chart, complete annual totals, and clearly labelled partial known totals',()=>{
  const facts=fixture(),member=facts.members[0];member.trend.months=[point('2026-08',30)];
  const history=[...Array.from({length:12},(_,i)=>point(`2025-${String(i+1).padStart(2,'0')}`,10)),point('2026-07',20),point('2026-08',30)];
@@ -45,6 +55,7 @@ test('history drives chart, complete annual totals, and clearly labelled partial
  assert.match(html,/2025 年搜索量/);assert.match(html,/>120</);assert.match(html,/>50</);
  assert.match(html,/已知合计[\s\S]*2\/12 月/);assert.match(html,/2025-01：10/);
  assert.match(html,/2026-07、2026-08/);
+ assert.match(html,/2026-07：搜索量 20/);assert.match(html,/2026-08：搜索量 30/);
 });
 test('all missing year remains unknown, observed zero is retained, and old facts use months',()=>{
  const facts=fixture(),member=facts.members[0];member.trend.months=[point('2026-08',null)];

@@ -97,6 +97,39 @@ function ClusterMiniTable({ rows }: { rows: KeywordDemandCluster[] }) {
   );
 }
 
+function BusinessOutputSection({ report }: { report: AmazonKeywordDemandReport }) {
+  const outputs = report.businessOutputs ?? [];
+  return (
+    <LaunchSection title="业务输出（14项）" description="按 ZIP 业务说明逐项展示；缺证项保留待验证原因">
+      {outputs.length !== 14 ? <div className="pending-box">历史报告未保存 14 项业务输出；原有 W1–W5 和评分结果仍可读取，重新生成报告后补齐。</div> : null}
+      {outputs.length === 14 ? <LaunchTable className="launch-conclusion-table kw-launch-section-table">
+        <thead>
+          <tr>
+            <th>业务项</th>
+            <th>状态</th>
+            <th>当前结论</th>
+            <th>证据 / 缺口</th>
+          </tr>
+        </thead>
+        <tbody>
+          {outputs.map(output => (
+            <tr key={output.id}>
+              <th>{output.label}</th>
+              <td>{output.status === "ready" ? "已有关键词证据" : "待验证"}</td>
+              <td>{output.conclusion}</td>
+              <td className="launch-muted">
+                {output.status === "ready"
+                  ? `来源：${output.sourceRefs.join("；")}`
+                  : `缺少：${output.missing.join("；")}`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </LaunchTable> : null}
+    </LaunchSection>
+  );
+}
+
 function ArchiveDemandSummary({ report }: { report: AmazonKeywordDemandReport }) {
   if (report.status === "insufficient_data") {
     return (
@@ -152,6 +185,8 @@ function ArchiveDemandSummary({ report }: { report: AmazonKeywordDemandReport })
       <DimensionSection dimension={dimensions.w3} />
       <DimensionSection dimension={dimensions.w4} />
       <DimensionSection dimension={dimensions.w5} />
+
+      <BusinessOutputSection report={report} />
 
       <LaunchSection title="需求簇合成" description="按原版归并 · 主流/细分判定">
         <ClusterMiniTable rows={synthesis.clusters} />

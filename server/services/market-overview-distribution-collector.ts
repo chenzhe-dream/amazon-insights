@@ -11,27 +11,31 @@ import {normalizeMarketOverviewDistribution} from '../domain/market-research/ove
 export const MarketOverviewDistributionStepInputSchema=z.object({month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
   operation:z.enum([...MARKET_OVERVIEW_DISTRIBUTION_OPERATIONS,MARKET_OVERVIEW_PRODUCT_OPERATION,'market_product_demand_trend']),
   headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]),
+  sampleSize:z.union([z.literal(50),z.literal(100),z.literal(200)]).optional(),
 }).strict();
 type Params=z.infer<typeof MarketOverviewDistributionStepInputSchema>;
 type Issue={code:string;retryable:boolean};
-export type MarketOverviewDistributionCollection={status:'ready'|'partial'|'empty'|'failed';month:string;operation:Params['operation'];parameters:{headTopN:Params['headTopN'];newProductMonths:Params['newProductMonths']};evidence:MarketSourceEvidence|null;distribution:MarketOverviewDistribution|null;issues:Issue[]};
+export type MarketOverviewDistributionCollection={status:'ready'|'partial'|'empty'|'failed';month:string;operation:Params['operation'];parameters:{headTopN:Params['headTopN'];newProductMonths:Params['newProductMonths'];sampleSize?:Params['sampleSize']};evidence:MarketSourceEvidence|null;distribution:MarketOverviewDistribution|null;issues:Issue[]};
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 class SourceFailure extends Error{constructor(readonly code:string){super(code);}}
 
 export async function collectMarketOverviewDistribution(input:Params&{originalDemand?:boolean;scope:MarketAnalysisScope;jobId:string;connector:RemoteMcpConnector;signal?:AbortSignal;timeoutMs?:number;now?:()=>Date}):Promise<MarketOverviewDistributionCollection>{
-  const scope=MarketAnalysisScopeSchema.parse(input.scope),{month,operation,headTopN,newProductMonths}=MarketOverviewDistributionStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths});
+  const scope=MarketAnalysisScopeSchema.parse(input.scope),hasSampleSize=Object.hasOwn(input,'sampleSize'),{month,operation,headTopN,newProductMonths,sampleSize}=MarketOverviewDistributionStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths,...(hasSampleSize?{sampleSize:input.sampleSize}: {})});
   const now=input.now??(()=>new Date()),started=now(),deadline=performance.now()+(input.timeoutMs??45000);
   if(month<scope.fromMonth||month>scope.toMonth||month>=started.toISOString().slice(0,7))throw new TypeError('Distribution requires a complete month within study scope');
-  const base:MarketOverviewDistributionCollection={status:'failed',month,operation,parameters:{headTopN,newProductMonths},evidence:null,distribution:null,issues:[]};
+  const normalizedSampleSize=sampleSize===50||sampleSize===100||sampleSize===200?sampleSize:undefined;
+  const effectiveSampleSize=normalizedSampleSize??headTopN;
+  const parameters={headTopN,newProductMonths,...(hasSampleSize?{sampleSize:normalizedSampleSize}: {})};
+  const base:MarketOverviewDistributionCollection={status:'failed',month,operation,parameters,evidence:null,distribution:null,issues:[]};
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,...(input.signal?[input.signal]:[])]),timer=setTimeout(()=>controller.abort(),Math.max(0,deadline-performance.now()));timer.unref();
   const check=()=>{if(performance.now()>=deadline)controller.abort();signal.throwIfAborted();};
   try{
-    check();const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month:month.replaceAll('-','')}),...(input.originalDemand&&operation==='market_product_demand_trend'?{topN:100}:{newProduct:newProductMonths,topN:headTopN})}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
+    check();const concentration=operation==='market_product_concentration'||operation==='market_brand_concentration'||operation==='market_seller_concentration';const request=input.connector.execute({operation,input:{request:{marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month:month.replaceAll('-','')}),...(input.originalDemand&&operation==='market_product_demand_trend'?{topN:100}:{newProduct:newProductMonths,topN:concentration?100:effectiveSampleSize})}},signal,governorScope:{organizationId:scope.organizationId,jobId:input.jobId}});
     let abortListener:()=>void=()=>{};
     const response=await Promise.race([request,new Promise<never>((_,reject)=>{abortListener=()=>reject(new SourceFailure(input.signal?.aborted?'interrupted':'timeout'));signal.addEventListener('abort',abortListener,{once:true});if(signal.aborted)abortListener();})]).finally(()=>signal.removeEventListener('abort',abortListener));check();
     const metadata=z.object({connectorId:z.literal('sellerSprite'),operation:z.literal(operation),fetchedAt:z.string().datetime(),attemptCount:z.number().int().positive()}).passthrough().safeParse(response.source);
     if(!metadata.success)throw new SourceFailure('source-mismatch');
-    const projected=projectMarketOverviewDistribution({scope,month,operation,headTopN,newProductMonths,payload:response.data,fetchedAt:metadata.data.fetchedAt,now:now()});check();return projected;
+    const projected=projectMarketOverviewDistribution({scope,month,operation,headTopN,newProductMonths,...(hasSampleSize?{sampleSize}:{}),payload:response.data,fetchedAt:metadata.data.fetchedAt,now:now()});check();return projected;
   }catch(error){
     if(performance.now()>=deadline)controller.abort();const failure:Issue=input.signal?.aborted?{code:'interrupted',retryable:false}:controller.signal.aborted?{code:'timeout',retryable:true}:error instanceof ConnectorError?{code:error.code,retryable:error.retryable}:error instanceof ResourceGovernorAdmissionError?{code:'local-admission',retryable:true}:{code:error instanceof SourceFailure?error.code:'malformed-response',retryable:false};
     return {...base,issues:[failure]};
@@ -40,9 +44,11 @@ export async function collectMarketOverviewDistribution(input:Params&{originalDe
 
 /** Replays the same source normalization without a connector or a network call. */
 export function projectMarketOverviewDistribution(input:Params&{scope:MarketAnalysisScope;payload:unknown;fetchedAt:string;now?:Date}):MarketOverviewDistributionCollection{
-  const scope=MarketAnalysisScopeSchema.parse(input.scope),{month,operation,headTopN,newProductMonths}=MarketOverviewDistributionStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths});
+  const scope=MarketAnalysisScopeSchema.parse(input.scope),hasSampleSize=Object.hasOwn(input,'sampleSize'),{month,operation,headTopN,newProductMonths,sampleSize}=MarketOverviewDistributionStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths,...(hasSampleSize?{sampleSize:input.sampleSize}: {})});
   if(month<scope.fromMonth||month>scope.toMonth||month>=(input.now??new Date()).toISOString().slice(0,7))throw new TypeError("Distribution requires a complete study month");
-  const base:MarketOverviewDistributionCollection={status:"failed",month,operation,parameters:{headTopN,newProductMonths},evidence:null,distribution:null,issues:[]};
+  const normalizedSampleSize=sampleSize===50||sampleSize===100||sampleSize===200?sampleSize:undefined;
+  const parameters={headTopN,newProductMonths,...(hasSampleSize?{sampleSize:normalizedSampleSize}: {})};
+  const base:MarketOverviewDistributionCollection={status:"failed",month,operation,parameters,evidence:null,distribution:null,issues:[]};
     const payload=MarketInputRecordSchema.shape.data.parse(input.payload),envelope=obj(payload);
     if(envelope.isError===true||envelope.code!==undefined&&envelope.code!=='OK')throw new SourceFailure('upstream-permanent');
     const data=envelope.data,rows=Array.isArray(data)?data:[],demand=operation==='market_product_demand_trend';

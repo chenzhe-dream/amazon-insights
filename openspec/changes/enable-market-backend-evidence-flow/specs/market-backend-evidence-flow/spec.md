@@ -64,6 +64,19 @@ The system SHALL retain source collection and numeric report generation when sem
 - **WHEN** validated synthesis model output is already saved and the service restarts without model configuration before saving the final report
 - **THEN** the system can still validate and persist that final report without executing the model again
 
+### Requirement: Overview distribution sampling is independent and versioned
+New overview commands MAY provide a distribution `sampleSize` of 50, 100 or 200. The system SHALL preserve `headTopN` (5, 10 or 20) as a separate basic/concentration parameter, SHALL use the original fixed Top100 for product, brand and seller concentration, and SHALL bind the sample size to the command, saved run parameters, source step identity and upstream request. Legacy runs without `sampleSize` SHALL replay their frozen step input and remain readable.
+
+#### Scenario: A new run selects a 200-item distribution sample
+- **WHEN** an operator starts a new overview with `headTopN=10` and `sampleSize=200`
+- **THEN** price, rating, listing and seller-type distributions request `topN=200`, while product, brand and seller concentration request `topN=100`
+- **AND** basic head metrics continue to use `headTopN=10`; changing either parameter changes the saved command identity and cannot reuse the other run
+
+#### Scenario: An old run has no sample-size field
+- **WHEN** a saved overview created before this parameter exists is replayed or read
+- **THEN** its original step payload and source semantics remain unchanged, with the compatibility default used only for lookup of an equivalent new UI request
+- **AND** the read performs no new collection
+
 ### Requirement: Existing commands and historical analyses keep frozen semantics
 The system SHALL preserve existing run versions and reports across the entrypoint upgrade. Repeating a creation command with the same organization, study, module and public parameters SHALL return its original run even after deployment or model identity changes; conflicting public parameters SHALL be rejected. Read-only history SHALL NOT trigger collection or model calls.
 
@@ -123,6 +136,15 @@ The system SHALL expose an optional independently versioned score-input audit bo
 - **THEN** the UI SHALL explain each missing field's required source and blocker, plus the version-bound mid-rank and PVS formulas
 - **AND** history reads SHALL NOT collect data, call models, regroup members or modify facts/report hashes
 - **AND** old responses without an audit SHALL remain readable, while an audit attached to foreign facts/report/classification members SHALL be rejected
+
+### Requirement: Keyword business output projection covers the ZIP 14-item document
+The system SHALL expose the ZIP business document's 14 outputs in a fixed order beside the preserved W1–W5/PVS report. Each output SHALL be marked `ready` only when its conclusion has saved keyword-fact references; otherwise it SHALL remain `pending` with explicit missing evidence. The projection SHALL NOT turn PVS estimates into formal competition, profit, price or opportunity conclusions.
+
+#### Scenario: Operator opens a keyword report with partial business evidence
+- **WHEN** the saved keyword estimate is rendered
+- **THEN** demand, audience, scenario, features, development and next-step outputs use the available keyword/trend evidence
+- **AND** purchase motivation, unmet needs, price, formal competition and other unsupported outputs show a concrete pending reason
+- **AND** reading the report does not collect a new source, call a model, or change the original W1–W5/PVS values
 
 ### Requirement: Shape source fields remain evidence-bound across public reads
 The system SHALL expose the already-collected reference product revenue, rating, rating count, seller name, seller type and valid listing date with frozen source provenance. Missing or invalid values SHALL remain null and revenue SHALL NOT be inferred from price and sales. No additional supplier or model requests SHALL be issued by reading these fields.

@@ -56,7 +56,14 @@ export function selectMarketThemeMembers(options: { snapshot: MarketInputSnapsho
     same(MarketSourceIdentityValueSchemas.asin.parse(obj(rawRows[index]).asin), record.id); same(product.asin, record.id);
     same(data.month, source.requestIdentity.month); if (Date.parse(source.fetchedAt) > Date.parse(s.collectedAt)) throw new TypeError('Selection cutoff differs');
     refs.add(ref); indices.add(index); months.add(z.string().parse(data.month)); return { record, index };
-  }).sort((a, b) => a.index - b.index);
+  }).sort((a, b) => {
+    if (sorftimeRows.size) {
+      const parsed = [...sorftimeRows.values()][0];
+      const order = (index: number) => parsed.products.findIndex(product => product.sourceIndex === index);
+      return order(a.index) - order(b.index);
+    }
+    return a.index - b.index;
+  });
   if (refs.size > 1 || months.size > 1) throw new TypeError('Selection must use one anchor source');
   const chosen = rows.slice(0, count), selectedAsins = chosen.map(r => r.record.id);
   const basisHash = digest({ version: MARKET_THEME_SELECTION_VERSION, sourceInputSnapshotId: s.snapshotId, count, selectionBasis: 'provider-row-order' });

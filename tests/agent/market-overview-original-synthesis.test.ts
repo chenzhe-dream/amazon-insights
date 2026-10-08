@@ -8,7 +8,7 @@ const hashes={
  'niche':'d3f0adf7646614007113fde71dd16ed5c13b7ab6fe8b6b123f1add1028b5fbfc',
 };
 test('pure original synthesis, price rules and niche types retain exact reference bytes',()=>{
- for(const [name,hash] of Object.entries(hashes)) assert.equal(createHash('sha256').update(readFileSync(new URL(`../../server/domain/market-research/original-overview/sellersprite-market-${name}.ts`,import.meta.url),'utf8').replace(/  \/\/ @ts-expect-error Original v6[^\n]*\n/,'')).digest('hex'),hash);
+ for(const [name,hash] of Object.entries(hashes)) assert.equal(createHash('sha256').update(readFileSync(new URL(`../../server/domain/market-research/original-overview/sellersprite-market-${name}.ts`,import.meta.url),'utf8').replace(/\r?\n/g,'\r\n').replace(/  \/\/ @ts-expect-error Original v6[^\r\n]*\r\n/,'')).digest('hex'),hash);
 });
 
 import {randomUUID} from 'node:crypto';
@@ -16,6 +16,7 @@ import {createMarketSourceEvidence} from '../../server/domain/market-research/so
 import {projectMarketOverviewOriginalSynthesis} from '../../server/domain/market-research/overview-original-synthesis';
 import {mapNiche,distRows} from '../../server/domain/market-research/original-overview/original-mappers';
 import {buildMarketOverviewSynthesis} from '../../server/domain/market-research/original-overview/sellersprite-market-overview-synthesis';
+import {normalizeTrendPoints,buildSeasonalPhrase,rankConcentrationRows} from '../../server/domain/market-research/overview-original-synthesis';
 import {analyzePriceBands,interpretProfitMargin} from '../../server/domain/market-research/original-overview/sellersprite-market-price-analysis';
 import type {SellerSpriteMarketReport} from '../../server/domain/market-research/original-overview/sellersprite-market-niche';
 const scope={organizationId:randomUUID(),researchId:randomUUID(),marketplace:'US' as const,nodeIdPath:'123:456',fromMonth:'2026-07',toMonth:'2026-08',currency:'USD' as const};
@@ -45,6 +46,9 @@ test('no sources never publishes original default scores or entry recommendation
  assert.deepEqual(Object.values(result.summary.scores),[null,null,null,null,null,null]);
  assert.ok(result.inputGaps.some(g=>g.includes('Sorftime')));
  assert.deepEqual(result.sourceRefs,[]);
+ assert.equal(result.chapters?.length,15);
+ assert.equal(result.chapters?.map(chapter=>chapter.id).join(','),'overview,demand-keywords,sales-trend,product-crn,brand-crn,seller-crn,seller-type,ebc,seller-country,product-demand,listing-age,listing-trend,rating-count,rating-value,price');
+ assert.ok(result.chapters?.every(chapter=>chapter.status==='insufficient'));
 });
 
 test('aggregate mapping preserves real zero and selected windows while null remains unknown',()=>{
@@ -119,4 +123,55 @@ test('original brand and seller ranking labels and raw shares appear in complete
  const actual=project([source('market_research',{top10ProductCrn:.3,top10BrandCrn:.35,top10SellerCrn:.25}),source('market_brand_concentration',brands),source('market_seller_concentration',sellers)]);
  assert.match(actual.summary.sections.competition,/Top 品牌 Brand One 占 35.0%/);
  assert.match(actual.summary.sections.competition,/头部卖家 Seller One 占 25.0%/);
+});
+
+test('chapter explanations follow original dynamic demand, maturity, rating and price rules',()=>{
+ const rising=Array.from({length:12},(_,i)=>({month:`2025-${String(i+1).padStart(2,'0')}`,value:i<6?100:180}));
+ const main={topProducts:100,totalUnits:120000,avgPrice:80,avgUnits:100,top10ProductCrn:.25,top10BrandCrn:.3,top10SellerCrn:.2,l6NewRatio:.2,l6NewAvgSales:90,ebcProportion:.2,fbaProportion:.7,amazonSelfProportion:.1};
+ const stats={avgUnits:100};
+ const prices=[{label:'50-100',products:100,unitsRatio:1,asinRatio:1,items:[{asin:'B000000001',price:80,profit:65}]}];
+ const ratingCounts=[{label:'1-50',products:40,unitsRatio:.4,asinRatio:.4},{label:'500+',products:60,unitsRatio:.6,asinRatio:.6}];
+ const ratingValues=[{label:'4.0-4.3',products:60,unitsRatio:.6,asinRatio:.6},{label:'4.4+',products:40,unitsRatio:.4,asinRatio:.4}];
+ const listingAge=[{label:'3年以上',products:60,unitsRatio:.6,asinRatio:.6},{label:'1年以内',products:40,unitsRatio:.4,asinRatio:.4}];
+ const listingTrend=[{label:'近6个月',products:40,unitsRatio:.4,asinRatio:.4},{label:'更早',products:60,unitsRatio:.6,asinRatio:.6}];
+ const sellerTypes=[{label:'品牌卖家',products:70,unitsRatio:.7,asinRatio:.7},{label:'个人卖家',products:30,unitsRatio:.3,asinRatio:.3}];
+ const ebc=[{label:'有A+有视频',products:20,unitsRatio:.2,asinRatio:.2},{label:'无A+无视频',products:80,unitsRatio:.8,asinRatio:.8}];
+ const countries=[{label:'美国',products:60,unitsRatio:.6,asinRatio:.6},{label:'中国',products:40,unitsRatio:.4,asinRatio:.4}];
+ const demand={seed:null,referenceMonth:scope.toMonth,status:'ready' as const,series:[{keyword:'scooter',searches:100000,points:rising,status:'ready' as const,sourceRef:'market-source:'+('a'.repeat(64)),errorCode:null}],issues:[]};
+ const ready={status:'ready' as const,points:rising,sourceRefs:['market-source:'+('b'.repeat(64))],errorCode:null};
+ const externalData={referenceMonth:scope.toMonth,salesTrend:ready,salesAmountTrend:ready,asinProfits:{status:'ready' as const,items:{B000000001:{profit:65,price:80,fba:null}},requestedAsins:['B000000001'],missingAsins:[],sourceRefs:['market-source:'+('c'.repeat(64))],errorCode:null}};
+ const actual=projectMarketOverviewOriginalSynthesis({scope,parameters,sources:[source('market_research',main),source('market_research_statistics',stats),source('market_price_distribution',prices),source('market_listing_date_distribution',listingAge),source('market_listing_trend_distribution',listingTrend),source('market_ratings_count_distribution',ratingCounts),source('market_rating_distribution',ratingValues),source('market_seller_type_concentration',sellerTypes),source('market_ebc_distribution',ebc),source('market_seller_country_distribution',countries)],industryDemand:demand,externalData});
+ const chapters=Object.fromEntries(actual.chapters!.map(chapter=>[chapter.id,chapter]));
+ assert.match(chapters['demand-keywords'].conclusion,/增长|强增长/);
+ assert.match(chapters['sales-trend'].conclusion,/增长|抬升/);
+ assert.match(chapters['listing-age'].conclusion,/老品|成熟|新品/);
+ assert.match(chapters['rating-count'].conclusion,/评论|Review/);
+ assert.match(chapters['seller-type'].conclusion,/经营效率|履约/);
+ assert.match(chapters.ebc.conclusion,/A\+|视频/);
+ assert.match(chapters['seller-country'].conclusion,/效率|集中|供应链/);
+ assert.match(chapters['listing-trend'].conclusion,/成长|竞争|吸引力/);
+ assert.match(chapters.price.conclusion,/市场均价/);
+});
+
+test('keyword trend normalization aggregates duplicate months before seasonal conclusions',()=>{
+ const points=[
+  {month:'2026-03',value:20},{month:'2026-01',value:100},{month:'2026-01',value:30},
+  {month:'2026-02',value:10},{month:'2026-04',value:80},{month:'2026-05',value:70},{month:'2026-06',value:60},
+ ];
+ assert.deepEqual(normalizeTrendPoints(points,'sum'),[
+  {month:'2026-01',value:130},{month:'2026-02',value:10},{month:'2026-03',value:20},
+  {month:'2026-04',value:80},{month:'2026-05',value:70},{month:'2026-06',value:60},
+ ]);
+ const phrase=buildSeasonalPhrase(normalizeTrendPoints(points,'sum'),'搜索需求');
+ assert.doesNotMatch(phrase,/01、01/);
+ assert.ok(phrase.includes('01月')&&phrase.indexOf('01月')<phrase.indexOf('02月'));
+});
+
+test('concentration conclusions rank by validated unit share instead of provider row order',()=>{
+ const rows=[
+  {label:'B',units:80,unitsShare:20,products:1,asinRatio:20},
+  {label:'A',units:100,unitsShare:60,products:1,asinRatio:60},
+  {label:'C',units:50,unitsShare:20,products:1,asinRatio:20},
+ ] as any;
+ assert.deepEqual(rankConcentrationRows(rows).map(row=>row.label),['A','B','C']);
 });

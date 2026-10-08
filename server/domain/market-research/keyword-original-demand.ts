@@ -2,6 +2,7 @@
 import { classifyKeywordDetailed } from "../../../app/keyword-classifier";
 import type { KeywordCategory } from "../../../app/keyword-meaning-taxonomy";
 import type { ProductKeywordRow, ProductKeywordSearchReport, ProductKeywordTrendPoint } from "../../../shared/market-keyword-original-input";
+type ManualDimensions = NonNullable<ProductKeywordSearchReport['manualDimensions']>;
 
 const SCENE_PATTERNS = [
   { label: "客厅", pattern: /living room|for sala|para sala/i },
@@ -302,9 +303,10 @@ function buildClusters(report: ProductKeywordSearchReport) {
     const manual = report.manualGroups?.[row.keyword];
     if (report.manualGroups && !manual) return;
 
-    const w1 = detectW1(row.keyword, report.productName);
-    const w3 = detectW3(row.keyword) ?? (classified.category === "scenario" ? "场景词" : null);
-    const w2 = detectW2Label(row.keyword, classified.category);
+    const manualDimensions=report.manualDimensions?.[row.keyword];
+    const w1 = manualDimensions ? (manualDimensions.W1[0] ?? report.productName) : detectW1(row.keyword, report.productName);
+    const w3 = manualDimensions ? (manualDimensions.W3[0] ?? null) : (detectW3(row.keyword) ?? (classified.category === "scenario" ? "场景词" : null));
+    const w2 = manualDimensions ? (manualDimensions.W2[0] ?? null) : detectW2Label(row.keyword, classified.category);
     const w4Tag = W4_LABELS[classified.category];
     const id = manual?.id ?? `${w1}::${w3 ?? "通用"}::${w2 ?? ""}`;
     const name = manual?.name ?? `${w1}${w3 ? ` · ${w3}` : " · 通用"}${w2 ? ` · ${w2}` : ""}`;
@@ -326,6 +328,7 @@ function buildClusters(report: ProductKeywordSearchReport) {
     existing.keywords.push(row.keyword);
     existing.monthlySearches += row.monthlySearchVolume ?? 0;
     if (manual) manual.features.forEach(feature=>existing.w4Features.add(feature));
+    if (manualDimensions) manualDimensions.W4.forEach(feature=>existing.w4Features.add(feature));
     else if (w4Tag) existing.w4Features.add(w4Tag);
 
     const yoy = growthFromTrend(row.trend ?? []).growth;
@@ -426,10 +429,15 @@ function detectW4Family(keyword: string) {
   return W4_FAMILIES.find(entry => entry.pattern.test(keyword))?.label ?? null;
 }
 
+function assignedDimensionLabels(manual: ManualDimensions | undefined, keyword: string, dimension: keyof ManualDimensions[string]): string[] | undefined {
+  const assignment = manual?.[keyword];
+  return assignment ? assignment[dimension] : undefined;
+}
+
 function aggregateDimensionRows(
   rows: ProductKeywordRow[],
   productSeed: string,
-  pickLabel: (keyword: string, classified: ReturnType<typeof classifyKeywordDetailed>) => string | null,
+  pickLabel: (keyword: string, classified: ReturnType<typeof classifyKeywordDetailed>) => string | readonly string[] | null,
   totalVolume: number,
 ) {
   const buckets = new Map<string, { keywords: string[]; monthlySearches: number }>();
@@ -437,12 +445,14 @@ function aggregateDimensionRows(
   rows.forEach(row => {
     const classified = classifyKeywordDetailed(row.keyword, { productNouns: [productSeed] });
     if (classified.category === "brand_competitor") return;
-    const label = pickLabel(row.keyword, classified);
-    if (!label) return;
-    const existing = buckets.get(label) ?? { keywords: [], monthlySearches: 0 };
-    existing.keywords.push(row.keyword);
-    existing.monthlySearches += row.monthlySearchVolume ?? 0;
-    buckets.set(label, existing);
+    const labels = pickLabel(row.keyword, classified);
+    if (!labels || (Array.isArray(labels) && !labels.length)) return;
+    for (const label of (Array.isArray(labels) ? labels : [labels])) {
+      const existing = buckets.get(label) ?? { keywords: [], monthlySearches: 0 };
+      existing.keywords.push(row.keyword);
+      existing.monthlySearches += row.monthlySearchVolume ?? 0;
+      buckets.set(label, existing);
+    }
   });
 
   return [...buckets.entries()]
@@ -455,8 +465,8 @@ function aggregateDimensionRows(
     .sort((left, right) => right.monthlySearches - left.monthlySearches);
 }
 
-function buildW1Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number): KeywordDemandDimensionSummary {
-  const dimensionRows = aggregateDimensionRows(rows, productSeed, keyword => detectW1(keyword, productSeed), totalVolume);
+function buildW1Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions): KeywordDemandDimensionSummary {
+  const dimensionRows = aggregateDimensionRows(rows, productSeed, keyword => assignedDimensionLabels(manual, keyword, 'W1') ?? detectW1(keyword, productSeed), totalVolume);
   const top = dimensionRows[0];
   const second = dimensionRows[1];
   const topShare = top?.sharePct ?? 0;
@@ -481,12 +491,14 @@ function buildW1Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
   };
 }
 
-function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number): KeywordDemandDimensionSummary {
+function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions): KeywordDemandDimensionSummary {
   let matchedKeywordCount = 0;
   const dimensionRows = aggregateDimensionRows(
     rows,
     productSeed,
     (keyword, classified) => {
+      const labels = assignedDimensionLabels(manual, keyword, 'W2');
+      if (labels !== undefined) { if (labels.length) matchedKeywordCount += 1; return labels; }
       const label = detectW2Label(keyword, classified.category);
       if (label) matchedKeywordCount += 1;
       return label;
@@ -515,11 +527,13 @@ function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
   };
 }
 
-function buildW3Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number): KeywordDemandDimensionSummary {
+function buildW3Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions): KeywordDemandDimensionSummary {
   const dimensionRows = aggregateDimensionRows(
     rows,
     productSeed,
     keyword => {
+      const labels = assignedDimensionLabels(manual, keyword, 'W3');
+      if (labels !== undefined) return labels;
       const w3 = detectW3(keyword);
       if (w3) return w3;
       const classified = classifyKeywordDetailed(keyword, { productNouns: [productSeed] });
@@ -548,22 +562,21 @@ function buildW3Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
   };
 }
 
-function buildW4Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number): KeywordDemandDimensionSummary {
+function buildW4Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions): KeywordDemandDimensionSummary {
   const buckets = new Map<string, { keywords: string[]; monthlySearches: number }>();
 
   rows.forEach(row => {
     const classified = classifyKeywordDetailed(row.keyword, { productNouns: [productSeed] });
     if (classified.category === "brand_competitor") return;
 
-    const family = detectW4Family(row.keyword);
-    const categoryTag = W4_LABELS[classified.category];
-    const label = family ?? categoryTag;
-    if (!label) return;
-
-    const existing = buckets.get(label) ?? { keywords: [], monthlySearches: 0 };
-    existing.keywords.push(row.keyword);
-    existing.monthlySearches += row.monthlySearchVolume ?? 0;
-    buckets.set(label, existing);
+    const assigned = assignedDimensionLabels(manual, row.keyword, 'W4');
+    const labels = assigned ?? [detectW4Family(row.keyword) ?? W4_LABELS[classified.category]].filter((label): label is string => Boolean(label));
+    for (const label of labels) {
+      const existing = buckets.get(label) ?? { keywords: [], monthlySearches: 0 };
+      existing.keywords.push(row.keyword);
+      existing.monthlySearches += row.monthlySearchVolume ?? 0;
+      buckets.set(label, existing);
+    }
   });
 
   const dimensionRows = [...buckets.entries()]
@@ -788,10 +801,10 @@ export function buildAmazonKeywordDemandReport(report: ProductKeywordSearchRepor
   const mainstream = scored.filter(cluster => cluster.computed.demandClass === "主流需求");
   const niche = scored.filter(cluster => cluster.computed.demandClass === "细分需求");
 
-  const w1 = buildW1Summary(rows, report.productName, totalVolume);
-  const w2 = buildW2Summary(rows, report.productName, totalVolume);
-  const w3 = buildW3Summary(rows, report.productName, totalVolume);
-  const w4 = buildW4Summary(rows, report.productName, totalVolume);
+  const w1 = buildW1Summary(rows, report.productName, totalVolume, report.manualDimensions);
+  const w2 = buildW2Summary(rows, report.productName, totalVolume, report.manualDimensions);
+  const w3 = buildW3Summary(rows, report.productName, totalVolume, report.manualDimensions);
+  const w4 = buildW4Summary(rows, report.productName, totalVolume, report.manualDimensions);
   const w5 = buildW5Summary(rows, totalVolume, trendEnrichedCount, scored);
   const synthesis = buildSynthesis(w1, w2, w3, w4, w5, scored);
 

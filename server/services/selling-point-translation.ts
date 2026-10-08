@@ -70,8 +70,8 @@ export class SellingPointTranslationService {
   async read(organizationId: string, projectId: string, asin: string, versionId?: string) {
     return (await this.context(organizationId, projectId, asin, versionId)).result;
   }
-  async start(organizationId: string, projectId: string, asin: string) {
-    const { source, result } = await this.context(organizationId, projectId, asin);
+  async start(organizationId: string, projectId: string, asin: string, versionId?: string) {
+    const { source, result } = await this.context(organizationId, projectId, asin, versionId);
     if (["ready", "pending", "unavailable"].includes(result.state) || this.jobs.has(result.sourceHash)) return result;
     if (source.original.length > 10 || source.original.some(point => point.length > 8000) || source.original.join("").length > 20000)
       return { ...result, state: "failed" as const, message: "卖点原文过长，需要核对后再翻译。" };

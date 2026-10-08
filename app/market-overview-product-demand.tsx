@@ -38,7 +38,5 @@ export function MarketOverviewProductDemand({demand,hasStage=false}:{demand?:Pro
     </svg>
    </div>
   </div>
-  <p className="market-research-note">按原版展示浏览量、退货率（%）与搜索购买比（‰）；来源最新数据月份可能早于研究截止月，缺失月份不补零。</p>
-  <details><summary>商品需求来源</summary><p>来源按报告请求范围绑定；未回显类目或月份不代表范围已确认。</p><p>{demand.sourceRef??'未取得来源'}</p></details>
  </div>;
 }

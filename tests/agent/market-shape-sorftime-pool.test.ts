@@ -10,6 +10,10 @@ test('Sorftime report products retain source numbers and margin; unknown is not 
  assert.deepEqual([null,0,49.9,50,60,70].map(resolveReferenceMarginEntry),['未知','不建议进入','不建议进入','谨慎进入','建议进入','优先进入']);
  assert.throws(()=>normalizeSorftimeShapePool({data:{top100_products:[row,{...row,price:'31'}]}},'category_report'));
 });
+test('non-positive Sorftime price is normalized to unknown',()=>{
+ const got=normalizeSorftimeShapePool({data:{category_stats_report:{},top100_products:[{...row,price:0}]}},'category_report');
+ assert.equal(got.products[0].price,null);
+});
 test('expansion filters other categories, handles duplicates, preserves source row positions',()=>{
  const got=normalizeSorftimeShapePool({data:[{...row,subcategory:'Desk Lamps (Rank: 101)'},{...row,subcategory:'Floor Lamps (Rank: 102)'},{...row,subcategory:'Floor Lamps (Rank: 102)'}]},'product_search','Floor Lamps');
  assert.equal(got.products.length,1);assert.equal(got.products[0].sourceIndex,1);assert.equal(got.products[0].sourceRank,102);

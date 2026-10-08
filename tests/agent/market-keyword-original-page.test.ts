@@ -34,7 +34,7 @@ test('automatic report and draft follow completed collection, preserve edits and
   return route.fulfill({status:404,json:{}});
  });
  await page.goto(origin+'/?keywordRun='+keywordRunId);await page.getByText('规则自动分类',{exact:true}).waitFor();
- await page.getByText('人工校对与分类编辑',{exact:true}).click();
+ await page.getByRole('button',{name:'人工校对与历史版本',exact:true}).click();await page.getByText('人工校对与分类编辑',{exact:true}).click();
  const assignment=page.getByLabel('floor lamp W1 产品',{exact:true});
  assert.equal(await assignment.locator('option:checked').textContent(),'floor lamp');
  // No edits: a completed facts projection must refresh the draft, not leave Save disabled.
@@ -42,13 +42,13 @@ test('automatic report and draft follow completed collection, preserve edits and
  await page.getByRole('button',{name:'刷新关键词状态'}).click();
  await page.waitForFunction(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='保存分类并重新计算');return b&&!b.disabled;});
  // Edited drafts are never replaced by subsequent source refreshes.
- await page.getByText('任务进度、重试与取消',{exact:true}).click();await page.getByLabel('修订备注').fill('保留人工校对');run.facts!.members[0].reference.searchVolume=234;recompute();
+ await page.getByRole('button',{name:'任务管理',exact:true}).click();await page.getByText('任务进度、重试与取消',{exact:true}).click();await page.getByLabel('修订备注').fill('保留人工校对');run.facts!.members[0].reference.searchVolume=234;recompute();
  await page.getByRole('button',{name:'刷新关键词状态'}).click();await page.getByText('词池或分析版本已更新，当前草稿已保留。').waitFor();
  assert.equal(await page.getByLabel('修订备注').inputValue(),'保留人工校对');assert.ok(await page.getByRole('button',{name:'保存分类并重新计算'}).isDisabled());
  await page.getByRole('button',{name:'按当前词池重新载入草稿'}).click();await page.getByText('编辑分类目录与需求簇',{exact:true}).click();
  await page.getByLabel('W1 标签 1 名称',{exact:true}).fill('人工校对灯具');await page.getByRole('button',{name:'保存分类并重新计算'}).click();
  await page.getByRole('region',{name:'关键词人工修订报告'}).waitFor();assert.equal(writes,1);
- await page.reload();await page.getByText('人工校对与分类编辑',{exact:true}).click();await page.getByText('编辑分类目录与需求簇',{exact:true}).click();
+ await page.reload();await page.getByRole('button',{name:'人工校对与历史版本',exact:true}).click();await page.getByText('人工校对与分类编辑',{exact:true}).click();await page.getByText('编辑分类目录与需求簇',{exact:true}).click();
  assert.equal(await page.getByLabel('W1 标签 1 名称',{exact:true}).inputValue(),'人工校对灯具');assert.equal(writes,1);
  await mkdir('test-results/keyword-original-page',{recursive:true});await page.getByRole('heading',{name:'五维综合结论',exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/keyword-original-page/desktop.png'});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'test-results/keyword-original-page/mobile.png'});assert.deepEqual(errors,[]);

@@ -3,12 +3,13 @@ import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from './
 import {MarketShapeDraftResponseSchema,MarketShapeDraftSaveRequestSchema} from './market-shape-draft-contracts';
 import {MarketShapeReferenceRevisionRequestSchema,MarketShapeReferenceRevisionResponseSchema} from './market-shape-reference-revision-contracts';
 import {MarketShapeExplanationRunResponseSchema} from './market-shape-explanation-public-contracts';
-import { SellingTranslationParams, SellingTranslationEmpty, SellingTranslationResponse } from "./selling-point-translation-contracts";
+import { SellingTranslationParams, SellingTranslationEmpty, SellingTranslationReadQuery, SellingTranslationResponse, SellingTranslationStartRequest } from "./selling-point-translation-contracts";
 import {MarketShapeStartRequestSchema,MarketShapeRevisionRequestSchema} from './market-shape-price-contracts';
 import {MarketShapeRunResponseSchema,MarketShapeRevisionResponseSchema,MarketShapeRevisionIdSchema} from './market-shape-public-contracts';
 import { MarketResearchScopeSchema, MarketResearchJobResponseSchema, MarketResearchListResponseSchema } from "./market-research-contracts";
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from './market-theme-detail-contracts';
 import { MarketThemeEvidenceQuerySchema, MarketThemeEvidenceResponseSchema } from './market-theme-evidence-contracts';
+import { MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema,MarketThemeTranslationResponseSchema } from './market-theme-translation-contracts';
 import {MarketOverviewStartRequestSchema,MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema,MarketOverviewSavedRunQuerySchema,MarketOverviewSavedRunResponseSchema} from './market-overview-report-contracts';
 import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema, MarketThemeStartRequestSchema, MarketThemeRunResponseSchema,
   MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from './market-module-contracts';
@@ -1724,8 +1725,8 @@ export type ContractDefinition = Readonly<{
 }>;
 
 export const v1Contracts = [
-  { method: "GET", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
-  { method: "POST", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, request: SellingTranslationEmpty, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
+  { method: "GET", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationReadQuery, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
+  { method: "POST", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, request: SellingTranslationStartRequest, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
   {method:'POST',path:'/v1/market-analysis/studies/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordStartRequestSchema,response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/runs/:id/keywords/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordRevisionRequestSchema,response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
@@ -1754,6 +1755,8 @@ export const v1Contracts = [
   { method: 'GET', path: '/v1/market-analysis/runs/:id', params: z.object({ id: MarketModuleIdSchema }).strict(), response: MarketThemeRunResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/details', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeDetailQuerySchema, response: MarketThemeDetailResponseSchema, error: ApiErrorResponseSchema },
   { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/evidence', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeEvidenceQuerySchema, response: MarketThemeEvidenceResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'GET', path: '/v1/market-analysis/runs/:id/reports/:attemptId/translations', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: MarketThemeTranslationQuerySchema, response: MarketThemeTranslationResponseSchema, error: ApiErrorResponseSchema },
+  { method: 'POST', path: '/v1/market-analysis/runs/:id/reports/:attemptId/translations', params: z.object({ id: MarketModuleIdSchema, attemptId: MarketModuleIdSchema }).strict(), query: z.object({}).strict(), request: MarketThemeTranslationStartSchema, response: MarketThemeTranslationResponseSchema, error: ApiErrorResponseSchema },
   {method:'GET',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict(),response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict(),request:MarketThemeSelectionRequestSchema,response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/reports/:attemptId/theme-selection/:revisionId',params:z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema,revisionId:MarketThemeSelectionRevisionIdSchema}).strict(),response:MarketThemeSelectionResponseSchema,error:ApiErrorResponseSchema},

@@ -42,6 +42,15 @@ test('overview entry freezes local rules identity and replays commands by public
     assert.equal(saved.steps.filter(step=>step.kind==='collect-overview-month'&&(step.input as {operation:string}).operation==='market_product_concentration').length,1);
   });
 
+  await t.test('new runs freeze distribution sample size separately from head topN',async()=>{
+    const key=randomUUID(),started=await service.startOverview(first.actor,first.scope.researchId,{...PARAMS,sampleSize:200},key);
+    const saved=await new PostgresMarketModuleExecutionStore(first.context).findModuleRun({actor:first.actor,moduleRunId:started.run.id});assert.ok(saved);
+    assert.equal((saved.run.params as {sampleSize:number}).sampleSize,200);
+    const distribution=saved.steps.find(step=>step.kind==='collect-overview-month'&&(step.input as {operation:string}).operation==='market_price_distribution');
+    assert.equal((distribution?.input as {sampleSize:number}).sampleSize,200);
+    assert.equal((distribution?.input as {headTopN:number}).headTopN,10);
+  });
+
   await t.test('missing model identity does not block a rules-only start',async()=>{
     const withoutSynthesis=new MarketModuleService({context:first.context,modelIdentity:()=>({configurationVersion:'legacy-config/v9',promptVersion:'legacy-prompt/v9'}),now:()=>new Date(NOW)});
     const started=await withoutSynthesis.startOverview(first.actor,first.scope.researchId,PARAMS,randomUUID());

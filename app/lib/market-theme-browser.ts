@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema, MarketThemeStartRequestSchema, MarketThemeRunResponseSchema, MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from '../../shared/market-module-contracts';
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from '../../shared/market-theme-detail-contracts';
 import { MarketThemeEvidenceQuerySchema, MarketThemeEvidenceResponseSchema } from '../../shared/market-theme-evidence-contracts';
+import { MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema,MarketThemeTranslationResponseSchema } from '../../shared/market-theme-translation-contracts';
 import { localAgentFetch, localAgentErrorMessage } from './local-agent-browser';
 
 async function request<T>(path:string,schema:z.ZodType<T>,init:RequestInit={}) {
@@ -44,4 +45,14 @@ export async function readThemeEvidence(id:string,attemptId:string,reportHash:st
   const runId=MarketModuleIdSchema.parse(id),attempt=MarketModuleIdSchema.parse(attemptId),query=MarketThemeEvidenceQuerySchema.parse({sourceThemeId});
   const result=await request(`runs/${runId}/reports/${attempt}/evidence?${new URLSearchParams(query)}`,MarketThemeEvidenceResponseSchema,{signal});
   if(result.report.attemptId!==attempt||result.report.report.moduleRunId!==runId||result.report.report.reportHash!==reportHash||result.evidence.sourceThemeId!==sourceThemeId)throw new Error('报告版本或主题身份不一致，未加载该证据。');return result.evidence;
+}
+export async function readThemeTranslations(id:string,attemptId:string,reportHash:string,signal?:AbortSignal) {
+ const runId=MarketModuleIdSchema.parse(id),attempt=MarketModuleIdSchema.parse(attemptId),query=MarketThemeTranslationQuerySchema.parse({reportHash});
+ const result=await request(`runs/${runId}/reports/${attempt}/translations?${new URLSearchParams(query)}`,MarketThemeTranslationResponseSchema,{signal});
+ if(result.report.attemptId!==attempt||result.report.report.moduleRunId!==runId||result.report.report.reportHash!==reportHash)throw new Error('报告版本或翻译身份不一致，未加载翻译。');return result;
+}
+export async function startThemeTranslations(id:string,attemptId:string,reportHash:string,itemIds:string[]|undefined,signal?:AbortSignal) {
+ const runId=MarketModuleIdSchema.parse(id),attempt=MarketModuleIdSchema.parse(attemptId),body=MarketThemeTranslationStartSchema.parse({reportHash,...(itemIds?{itemIds}: {})});
+ const result=await request(`runs/${runId}/reports/${attempt}/translations`,MarketThemeTranslationResponseSchema,post(body,runId,signal));
+ if(result.report.attemptId!==attempt||result.report.report.moduleRunId!==runId||result.report.report.reportHash!==reportHash)throw new Error('报告版本或翻译身份不一致，未启动翻译。');return result;
 }

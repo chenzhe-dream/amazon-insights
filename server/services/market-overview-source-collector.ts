@@ -8,24 +8,24 @@ import {createMarketSourceEvidence} from '../domain/market-research/source-evide
 import {marketOverviewSourceFields} from '../domain/market-research/overview-source-catalog';
 
 export const MarketOverviewSourceStepInputSchema=z.object({month:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),operation:z.enum(['market_research','market_research_statistics']),
-  headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)])}).strict();
+  headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]),sampleSize:z.union([z.literal(50),z.literal(100),z.literal(200)]).optional()}).strict();
 type Params=z.infer<typeof MarketOverviewSourceStepInputSchema>;
 type Issue={code:string;retryable:boolean};
-export type MarketOverviewSourceCollection={status:'ready'|'partial'|'empty'|'failed';month:string;operation:Params['operation'];parameters:{headTopN:Params['headTopN'];newProductMonths:Params['newProductMonths']};evidence:MarketSourceEvidence|null;issues:Issue[]};
+export type MarketOverviewSourceCollection={status:'ready'|'partial'|'empty'|'failed';month:string;operation:Params['operation'];parameters:{headTopN:Params['headTopN'];newProductMonths:Params['newProductMonths'];sampleSize?:Params['sampleSize']};evidence:MarketSourceEvidence|null;issues:Issue[]};
 const object=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 class SourceFailure extends Error{constructor(readonly code:string){super(code);}}
 export async function collectMarketOverviewSource(input:Params&{scope:MarketAnalysisScope;jobId:string;connector:RemoteMcpConnector;signal?:AbortSignal;timeoutMs?:number;now?:()=>Date}):Promise<MarketOverviewSourceCollection>{
-  const {month,operation,headTopN,newProductMonths}=MarketOverviewSourceStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths}),scope=MarketAnalysisScopeSchema.parse(input.scope);
+  const hasSampleSize=Object.hasOwn(input,'sampleSize'),{month,operation,headTopN,newProductMonths,sampleSize}=MarketOverviewSourceStepInputSchema.parse({month:input.month,operation:input.operation,headTopN:input.headTopN,newProductMonths:input.newProductMonths,...(hasSampleSize?{sampleSize:input.sampleSize}: {})}),scope=MarketAnalysisScopeSchema.parse(input.scope);
   const jobId=z.string().trim().min(1).max(160).parse(input.jobId),timeout=z.number().int().min(1).max(120000).parse(input.timeoutMs??60000),now=input.now??(()=>new Date());
   if(month<scope.fromMonth||month>scope.toMonth||month>=now().toISOString().slice(0,7))throw new TypeError('Overview source requires an in-scope complete month');
-  const base:MarketOverviewSourceCollection={status:'failed',month,operation,parameters:{headTopN,newProductMonths},evidence:null,issues:[]};
+  const base:MarketOverviewSourceCollection={status:'failed',month,operation,parameters:{headTopN,newProductMonths,...(hasSampleSize?{sampleSize}: {})},evidence:null,issues:[]};
   const controller=new AbortController(),signal=AbortSignal.any([controller.signal,...(input.signal?[input.signal]:[])]),deadline=performance.now()+timeout;
   const timer=setTimeout(()=>controller.abort(),timeout);timer.unref();
   const check=()=>{if(performance.now()>=deadline)controller.abort();signal.throwIfAborted();};
   try{
     check();if(input.connector.id!=='sellerSprite')throw new SourceFailure('source-mismatch');
     const request={marketplace:scope.marketplace,nodeIdPath:scope.nodeIdPath,...(scope.overviewPeriod?{}:{month:month.replaceAll('-','')}),newProduct:newProductMonths,
-      ...(operation==='market_research'?{topNum:headTopN,page:1,size:10}:{topN:headTopN})};
+      ...(operation==='market_research'?{topNum:headTopN,page:1,size:10}:{topN:hasSampleSize?100:headTopN})};
     const response=await new Promise<Awaited<ReturnType<RemoteMcpConnector['execute']>>>((resolve,reject)=>{
       const abort=()=>reject(new SourceFailure(input.signal?.aborted?'interrupted':'timeout'));signal.addEventListener('abort',abort,{once:true});
       Promise.resolve().then(()=>{check();return input.connector.execute({operation,input:{request},governorScope:{organizationId:scope.organizationId,jobId},signal});})

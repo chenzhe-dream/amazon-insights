@@ -232,6 +232,7 @@ export function buildReferenceShapeAnalysis(
   report: SorftimeCategoryDashboardReport,
   assignments: Readonly<Record<string, string>>,
   selectedAsins?: readonly string[],
+  allowedShapes?: readonly string[],
 ): ReferenceShapeAnalysis {
   const calculationVersion = report.calculationVersion ?? CURRENT_SHAPE_CALCULATION_VERSION;
   const selected = selectedAsins ? new Set(selectedAsins) : null;
@@ -239,8 +240,11 @@ export function buildReferenceShapeAnalysis(
   const totals = getReferencePeriodTotals(products, calculationVersion);
   const coverage = getReferencePeriodCoverage(products,calculationVersion);
   const divisor = resolveY2025MonthDivisor(report.fetchedAt);
-  const shape = (product: SorftimeCategoryDashboardProduct) => calculationVersion==='shape-reference/1'
-    ? assignments[product.asin]?.trim()||product.productShape?.trim()||'—' : resolveReferenceProductShape(product, assignments);
+  const shape = (product: SorftimeCategoryDashboardProduct) => {
+    const value = calculationVersion==='shape-reference/1'
+      ? assignments[product.asin]?.trim()||product.productShape?.trim()||'—' : resolveReferenceProductShape(product, assignments);
+    return allowedShapes?.length && value !== '—' && value !== '未分类' && !allowedShapes.includes(value) ? '未分类' : value;
+  };
   const priceBand = (product: SorftimeCategoryDashboardProduct) => resolveProductPriceBand(product);
   const listingYears = groupRows(products, product => calculationVersion === 'shape-reference/1'
     ? product.onlineDate?.trim().match(/^(\d{4})[-/]/)?.[1] ?? '—'

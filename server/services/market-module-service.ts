@@ -45,6 +45,7 @@ import {canonicalJsonSha256} from '../runtime/model-request-accounting';
 import { MarketNodePathResolutionError, type MarketNodePathResolutionInput } from './market-node-path-resolver';
 import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from '../../shared/market-shape-category-name-contracts';
 import {ShapeCategoryNameError} from './market-shape-category-name';
+import type { MarketThemeTranslationService } from './market-theme-translation';
 
 export class MarketModuleServiceError extends Error {
   constructor(readonly statusCode: 400 | 403 | 404 | 503, message: string) { super(message); }
@@ -56,7 +57,7 @@ const unavailable = () => new MarketModuleServiceError(404, '未找到该组织�
 export class MarketModuleService {
   private readonly snapshots: PostgresMarketAnalysisSnapshotStore;
   private readonly steps: PostgresMarketModuleExecutionStore;
-  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string>; resolveShapeCategoryName?: (input:{marketplace:string;name:string;organizationId:string;jobId:string})=>Promise<string> }) {
+  constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; themeTranslation?: MarketThemeTranslationService; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string>; resolveShapeCategoryName?: (input:{marketplace:string;name:string;organizationId:string;jobId:string})=>Promise<string> }) {
     this.snapshots = new PostgresMarketAnalysisSnapshotStore(deps.context); this.steps = new PostgresMarketModuleExecutionStore(deps.context);
   }
   private now() { return (this.deps.now?.() ?? new Date()).toISOString(); }
@@ -115,13 +116,14 @@ export class MarketModuleService {
       WHERE r.organization_id=$1 AND r.request_json->>'moduleKind'='overview'
         AND r.request_json->'scope'=s.scope_json
         AND s.scope_json->>'marketplace'=$3 AND s.scope_json->>'nodeIdPath'=$4 AND s.scope_json->>'toMonth'=$5
-        AND COALESCE(s.scope_json->>'overviewPeriod','')=$8
-        AND (r.status IN ('queued','running') OR r.created_at >= $9::timestamptz)
+        AND COALESCE(s.scope_json->>'overviewPeriod','')=$9
+        AND (r.status IN ('queued','running') OR r.created_at >= $10::timestamptz)
         AND r.request_json->'params'->>'headTopN'=$6 AND r.request_json->'params'->>'newProductMonths'=$7
+        AND COALESCE(r.request_json->'params'->>'sampleSize','100')=$8
         AND EXISTS(SELECT 1 FROM users u WHERE u.id=$2 AND u.organization_id=$1 AND u.status='active')
       ORDER BY (r.latest_report_attempt_id IS NOT NULL) DESC,
         (r.status IN ('queued','running','partial')) DESC,r.created_at DESC,r.id DESC LIMIT 1`,
-      [actor.organizationId,actor.userId,input.marketplace,input.nodeIdPath,input.toMonth,String(input.headTopN),String(input.newProductMonths),input.overviewPeriod??'',new Date(Date.parse(this.now())-MARKET_OVERVIEW_CACHE_TTL_MS).toISOString()]);
+      [actor.organizationId,actor.userId,input.marketplace,input.nodeIdPath,input.toMonth,String(input.headTopN),String(input.newProductMonths),String(input.sampleSize??100),input.overviewPeriod??'',new Date(Date.parse(this.now())-MARKET_OVERVIEW_CACHE_TTL_MS).toISOString()]);
     return MarketOverviewSavedRunResponseSchema.parse({runId:result.rows[0]?.id??null,fromMonth:result.rows[0]?.from_month??null});
   }
   async startOverview(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
@@ -129,7 +131,7 @@ export class MarketModuleService {
     const replay=async()=>{
       const previous=await this.steps.findCreatedModuleRunByCommand({actor,idempotencyKey});if(!previous)return null;
       const frozen=obj(previous.params);
-      if(previous.scope.researchId!==studyId||previous.moduleKind!=='overview'||frozen.headTopN!==params.headTopN||frozen.newProductMonths!==params.newProductMonths)throw new MarketExecutionConflictError();
+      if(previous.scope.researchId!==studyId||previous.moduleKind!=='overview'||frozen.headTopN!==params.headTopN||frozen.newProductMonths!==params.newProductMonths||frozen.sampleSize!==params.sampleSize)throw new MarketExecutionConflictError();
       return {created:false,...await this.findOverview(actor,previous.id)};
     };
     const previous=await replay();if(previous)return previous;
@@ -150,7 +152,7 @@ export class MarketModuleService {
       const reports=await new MarketOverviewReportService(this.deps.context).read({actor,moduleRunId:id});if(!reports)throw unavailable();
       const current=new Set(inspectMarketOverviewContinuation(view,this.now()).currentStepKeys),p=obj(view.run.params);
       return MarketOverviewRunResponseSchema.parse({run:{id,scope:view.run.scope,status:view.run.status,createdAt:view.run.createdAt,planRevision:view.run.planRevision,
-        params:{headTopN:p.headTopN,newProductMonths:p.newProductMonths},currentReport:reports.currentReport,latestSavedReport:reports.latestSavedReport,history:reports.history,
+        params:{headTopN:p.headTopN,newProductMonths:p.newProductMonths,...(p.sampleSize!==undefined?{sampleSize:p.sampleSize}: {})},currentReport:reports.currentReport,latestSavedReport:reports.latestSavedReport,history:reports.history,
         steps:view.steps.map(s=>{const a=view.attempts.find(a=>a.id===s.latestAttemptId);return {id:s.id,kind:s.kind,status:s.status,latestAttemptId:s.latestAttemptId,attemptCount:s.attemptCount,nextAttemptAt:s.nextAttemptAt??null,current:current.has(s.stepKey),...(obj(s.input).phase==='overview-industry-demand'?{industryDemand:true}:{}),...(obj(s.input).phase==='overview-external'?{externalStage:obj(s.input).kind}:{}),...(s.kind==='collect-overview-month'&&!['overview-industry-demand','overview-external'].includes(String(obj(s.input).phase))?{source:{month:obj(s.input).month,operation:obj(s.input).operation}}:{}),
           canRetry:current.has(s.stepKey)&&s.status==='failed'&&view.run.status!=='cancelled',asin:null,errorCode:['failed','interrupted'].includes(a?.status??'')?obj(a?.error).code??'internal':null};})}});
     });
@@ -318,6 +320,14 @@ export class MarketModuleService {
   async evidence(actor:MarketExecutionActor,id:string,attemptId:string,query:unknown) {
     try{const result=await new MarketThemeReportService(this.deps.context).readEvidence({actor,moduleRunId:id,attemptId,query});if(!result)throw unavailable();return result;}
     catch(e){if(e instanceof MarketThemeDetailQueryError)throw unavailable();throw e;}
+  }
+  async themeTranslations(actor:MarketExecutionActor,id:string,attemptId:string,query:unknown) {
+    if(!this.deps.themeTranslation)throw new MarketModuleServiceError(503,'主题翻译服务尚未就绪，请稍后重试');
+    const result=await this.deps.themeTranslation.read(actor,id,attemptId,query);if(!result)throw unavailable();return result;
+  }
+  async startThemeTranslations(actor:MarketExecutionActor,id:string,attemptId:string,body:unknown) {
+    if(!this.deps.themeTranslation)throw new MarketModuleServiceError(503,'主题翻译服务尚未就绪，请稍后重试');
+    const result=await this.deps.themeTranslation.start(actor,id,attemptId,body);if(!result)throw unavailable();return result;
   }
   async details(actor: MarketExecutionActor, id: string, attemptId: string, query: unknown) {
     try {

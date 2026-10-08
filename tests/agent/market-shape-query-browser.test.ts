@@ -21,7 +21,7 @@ test('query entry uses reuse API and polling recovers, stops after five failures
  await page.goto(origin);await page.getByRole('button',{name:'筛选市场',exact:true}).click();await page.getByText(/4秒后自动重试/).waitFor();assert.equal(reads,1);
  mode=200;await page.clock.fastForward(4000);await page.waitForFunction(()=>!document.body.textContent?.includes('4秒后自动重试'));assert.equal(reads,2);
  await page.getByRole('button',{name:'筛选市场',exact:true}).click();await page.waitForFunction(()=>document.body.textContent?.includes('保存'));assert.equal((commands[0] as any).forceRefresh,false);assert.equal((commands[1] as any).forceRefresh,false);
- await page.getByRole('button',{name:'重新采集',exact:true}).click();await page.waitForTimeout(50);assert.equal((commands[2] as any).forceRefresh,true);
+ await page.getByRole('button',{name:'重新采集',exact:true}).click();await page.getByRole('button',{name:'确认重新采集 100 件',exact:true}).click();await page.waitForTimeout(50);assert.equal((commands[2] as any).forceRefresh,true);
  mode=503;await openShapeTaskRecovery(page);await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();await page.getByText(/4秒后自动重试/).waitFor();const before=reads;
  for(const delay of [4000,8000,16000,30000]){await page.clock.fastForward(delay);await page.waitForTimeout(50);}
  await page.getByText(/自动重试已停止/).waitFor();assert.equal(reads-before,4);await page.clock.fastForward(120000);assert.equal(reads-before,4);

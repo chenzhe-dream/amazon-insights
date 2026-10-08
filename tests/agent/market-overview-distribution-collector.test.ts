@@ -16,6 +16,17 @@ test('real array shape remains request-bound without fabricated echoes or guesse
   assert.equal(result.distribution!.groups[0].units,10);assert.equal(result.distribution!.rows[0].unitsSharePct,100);assert.equal(result.distribution!.rows[0].revenue,null);
   assert.deepEqual(request!.input,{request:{marketplace:'US',nodeIdPath:'123:456',month:'202608',newProduct:6,topN:10}});assert.equal(request!.governorScope?.organizationId,scope.organizationId);
 });
+test('distribution sample size is independent from head topN and concentration stays at the original fixed 100',async()=>{
+  let priceRequest:ConnectorRequest|undefined,brandRequest:ConnectorRequest|undefined;
+  const price=await collectMarketOverviewDistribution({...base,sampleSize:200,connector:connector(r=>{priceRequest=r;return payload();})} as any);
+  await collectMarketOverviewDistribution({...base,operation:'market_brand_concentration',sampleSize:50,connector:connector(r=>{brandRequest=r;return payload();})} as any);
+  const priceBody=priceRequest!.input.request as any,brandBody=brandRequest!.input.request as any;
+  assert.equal(priceBody.topN,200);
+  assert.equal(brandBody.topN,100);
+  assert.equal(priceBody.newProduct,6);
+  assert.equal(priceBody.marketplace,'US');
+  assert.equal(price.parameters.sampleSize,200);
+});
 test('conflicting node/month/market/currency echoes are rejected at root or individual row',async()=>{
   for(const extra of [{month:'202607'},{nodeIdPath:'999:888'},{marketplace:'UK'},{currency:'GBP'},{nodeId:'777'}]){
     for(const nested of [false,true]){const body=payload();const response=nested?{...body,data:body.data.map(r=>({...r,...extra}))}:{...body,...extra};

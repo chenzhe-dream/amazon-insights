@@ -2202,7 +2202,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
             gapItems={stageOutputSnapshot.fba && "gap" in stageOutputSnapshot.fba ? stageOutputSnapshot.fba.gap.items : []}
           />
         ) : null}
-        <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
+        <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationVersionId={authSession.logoutPending ? null : currentDisplayVersion?.versionId ?? null} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
 
         <CompetitorOverviewHistory products={products} salesTrendByAsin={salesTrendByAsin} metric={salesView} onMetricChange={setSalesView} />
 

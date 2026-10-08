@@ -66,9 +66,9 @@ test('overview page restores fixed reports, keeps module selection independent a
   await page.getByRole('button',{name:'重新采集',exact:true}).click();await page.locator('.market-reference-run-status').getByText('总览分析进行中',{exact:true}).waitFor();assert.equal(writes.length,10);assert.equal(new Set(writes.filter(w=>w.path.endsWith('/overview')).map(w=>w.key)).size,3,'completed runs must not block a fresh same-condition collection');
   failReads=true;await page.reload();await page.getByText('未能读取任务，请刷新状态或检查任务编号。',{exact:true}).waitFor();assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);assert.equal(writes.length,10);
   failReads=false;current=overviewRun(true);current.run.status='partial';current.run.currentReport=null;current.run.latestSavedReport=null;current.run.history=[];
-  current.run.steps=[{...current.run.steps[0],kind:'rules',status:'failed',current:true,canRetry:true,errorCode:'internal'}];
+  current.run.steps=[{...current.run.steps[0],kind:'rules',status:'failed',current:true,canRetry:true,errorCode:'invalid-data'}];
   await page.reload();await page.locator('.market-reference-run-status').getByText('总览分析失败，可重试',{exact:true}).waitFor();
-  await page.getByText('整理数字失败：内部处理失败',{exact:true}).waitFor();
+  await page.getByText('整理数字失败：来源回执或任务绑定校验未通过',{exact:true}).waitFor();
   assert.equal(await page.getByText('正在读取总览任务…',{exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'重试整理数字'}).count(),1);
   await page.screenshot({path:'test-results/market-overview-page/terminal-failure.png'});

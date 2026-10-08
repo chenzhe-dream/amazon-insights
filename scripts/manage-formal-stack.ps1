@@ -273,22 +273,38 @@ function Test-ManagedStackIdentity($State, [string]$Root, [string]$ExpectedDataR
   return $true
 }
 
-function Stop-OwnedStack($State, [string]$Root, [string]$ExpectedDataRoot, [string]$ExpectedRuntimeRoot, [string]$StatePath) {
+function Invoke-StackTreeTermination([int]$ProcessId) {
+  # Windows PowerShell 5 turns native stderr into errors even when redirected.
+  # A child may already have exited while taskkill walks the process tree.
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $PSNativeCommandUseErrorActionPreference = $false
+  try {
+    & taskkill.exe /PID $ProcessId /T /F 1>$null 2>$null
+    return [int]$LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+}
+
+function Stop-OwnedStack($State, [string]$Root, [string]$ExpectedDataRoot, [string]$ExpectedRuntimeRoot, [string]$StatePath, [ValidateRange(0, 60)][int]$StopTimeoutSeconds = 15) {
   if (-not (Test-ManagedStackIdentity $State $Root $ExpectedDataRoot $ExpectedRuntimeRoot)) {
     throw '现有服务不属于本启动器，已拒绝停止'
   }
-  & taskkill /PID ([int]$State.supervisorPid) /T /F 1>$null 2>$null
-  if ($LASTEXITCODE -ne 0) { throw '无法停止受管服务' }
-
-  $deadline = [DateTime]::UtcNow.AddSeconds(15)
-  while ([DateTime]::UtcNow -lt $deadline) {
-    if ((Get-ListenerProcessIds 31900).Count -eq 0 -and (Get-ListenerProcessIds 31901).Count -eq 0) { break }
+  $stopExitCode = Invoke-StackTreeTermination ([int]$State.supervisorPid)
+  $deadline = [DateTime]::UtcNow.AddSeconds($StopTimeoutSeconds)
+  do {
+    $supervisor = Get-Process -Id ([int]$State.supervisorPid) -ErrorAction SilentlyContinue
+    $portsReleased = (Get-ListenerProcessIds 31900).Count -eq 0 -and (Get-ListenerProcessIds 31901).Count -eq 0
+    if (-not $supervisor -and $portsReleased) {
+      Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+      return
+    }
+    if ([DateTime]::UtcNow -ge $deadline) { break }
     Start-Sleep -Milliseconds 250
-  }
-  if ((Get-ListenerProcessIds 31900).Count -gt 0 -or (Get-ListenerProcessIds 31901).Count -gt 0) {
-    throw '旧服务端口未释放'
-  }
-  Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+  } while ($true)
+  if ($supervisor) { throw "旧服务主进程未退出（taskkill 返回码：$stopExitCode），已保留状态记录" }
+  throw "旧服务端口未释放（taskkill 返回码：$stopExitCode），已保留状态记录"
 }
 
 function Write-ManagerState([string]$StatePath, $State) {
@@ -361,7 +377,7 @@ function Start-FormalStack([string]$Root, [string]$TargetDataRoot, [string]$Targ
     $process.Refresh()
   } while ([DateTime]::UtcNow -lt $deadline)
 
-  if (-not $process.HasExited) { & taskkill /PID $process.Id /T /F 1>$null 2>$null }
+  if (-not $process.HasExited) { Invoke-StackTreeTermination $process.Id | Out-Null }
   Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
   throw "正式服务启动失败，请查看脱敏日志目录：$logs"
 }

@@ -25,7 +25,7 @@ test('market module browser proxy contracts require sessions on all entry points
   for (const [method, path] of [['POST', '/v1/market-analysis/studies'], ['GET', `/v1/market-analysis/studies/${id}`],
     ['POST', `/v1/market-analysis/studies/${id}/customer-themes`], ['GET', `/v1/market-analysis/runs/${id}`],
     ['POST', `/v1/market-analysis/studies/${id}/overview`],['GET', `/v1/market-analysis/runs/${id}/overview`],['GET', `/v1/market-analysis/runs/${id}/reports/${id}/overview`],
-    ['POST', `/v1/market-analysis/runs/${id}/retry`], ['POST', `/v1/market-analysis/runs/${id}/cancel`], ['GET', `/v1/market-analysis/runs/${id}/reports/${id}/details`], ['GET', `/v1/market-analysis/runs/${id}/reports/${id}/evidence`]]) {
+    ['POST', `/v1/market-analysis/runs/${id}/retry`], ['POST', `/v1/market-analysis/runs/${id}/cancel`], ['GET', `/v1/market-analysis/runs/${id}/reports/${id}/details`], ['GET', `/v1/market-analysis/runs/${id}/reports/${id}/evidence`], ['GET', `/v1/market-analysis/runs/${id}/reports/${id}/translations`], ['POST', `/v1/market-analysis/runs/${id}/reports/${id}/translations`]]) {
     assert.ok(findHttpContract(method, path), path); assert.equal(classifyRoute(method, path).kind, 'session');
   }
 });

@@ -37,6 +37,14 @@ test('manual classification remains authoritative and estimate binds its identit
  assert.ok(result.report.synthesis.clusters.every(c=>c.name==='人工灯具组'));
  assert.throws(()=>buildKeywordOriginalEstimate({facts:fixture(),productSeed:'lamp',revision:revision.catalog}),/facts/i);
 });
+test('manual W1 labels feed the full estimate dimensions and synthesis',()=>{
+ const facts=fixture();facts.members.forEach(member=>member.pageMetrics.monthlySearchVolume={value:100,reason:null});const {factsId:_,...basis}=facts;facts.factsId=`market-keyword-facts:${digest(basis)}`;
+ const labels={W1:[{labelId:'shape-a',label:'形态甲',definition:'人工确认形态甲'},{labelId:'shape-b',label:'形态乙',definition:'人工确认形态乙'}],W2:[],W3:[],W4:[]};
+ const revision=buildMarketKeywordRevision({facts,request:{factsId:facts.factsId,expectedParentRevisionId:null,labels,clusters:[],assignments:facts.members.map((member,index)=>({keywordId:member.keywordId,W1:[index?'shape-b':'shape-a'],W2:[],W3:[],W4:[],clusterId:null})),note:'人工形态校对'},authorId:keywordRuleFixture().revision.catalog.revision.authorId,createdAt:'2026-09-29T00:00:00.000Z'});
+ const report=buildKeywordOriginalEstimate({facts,productSeed:'lamp',revision}).report;
+ assert.deepEqual(report.dimensions.w1.rows.map(row=>row.label),['形态甲','形态乙']);
+ assert.match(report.synthesis.headline,/形态甲/);
+});
 test('original engine matches supplied archive across missing inputs, merging and validation recommendations',async t=>{
  const path='C:/Users/EDY/.codex/project-notes/amazon-insights/ui-parity-20260914/reference/app/lib/product-keyword-demand-analysis.ts';
  if(!existsSync(path)){t.skip('Archive comparison requires the supplied reference checkout');return;}

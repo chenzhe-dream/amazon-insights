@@ -27,11 +27,25 @@ export function normalizeMarketOverviewDistribution(operation:MarketOverviewDist
     const revenue=options.currency?reportedRevenue:null;
     if(r[revenueField]!==undefined&&r[revenueField]!==null&&(reportedRevenue===null||!options.currency))issues.push(reportedRevenue===null?'invalid-revenue':'revenue-currency-unverified');
     let asins:string[]=[];
+    let productItems: Array<{asin:string;title:string|null;units:number|null;imageUrl:string|null}>|undefined;
     if(!content&&!type){if(product){if(!/^[A-Z0-9]{10}$/.test(label))issues.push('invalid-membership');else asins=[label];}
       else if(!Array.isArray(r.asins)||r.asins.some(a=>typeof a!=='string'||!/^[A-Z0-9]{10}$/.test(a)))issues.push('invalid-membership');else asins=r.asins;
       if(new Set(asins).size!==asins.length||products!==asins.length)issues.push('membership-count-mismatch');}
+    if(!content&&!type&&asins.length){
+      const rawItems=Array.isArray(r.items)?r.items:Array.isArray(r.productList)?r.productList:Array.isArray(r.asins)?r.asins:product?[r]:[];
+      productItems=asins.map((asin,index)=>{
+        const raw=typeof rawItems[index]==='object'&&rawItems[index]!==null?obj(rawItems[index]):{};
+        const itemAsin=typeof raw.asin==='string'&&/^[A-Z0-9]{10}$/.test(raw.asin)?raw.asin:asin;
+        return {
+          asin:itemAsin,
+          title:typeof raw.title==='string'&&raw.title.trim()?raw.title.trim():(product&&typeof r.title==='string'&&r.title.trim()?r.title.trim():null),
+          units:number(raw.totalUnits??raw.units,true)??(product?units:null),
+          imageUrl:typeof raw.imageUrl==='string'&&raw.imageUrl.trim()?raw.imageUrl.trim():(product&&typeof r.imageUrl==='string'&&r.imageUrl.trim()?r.imageUrl.trim():null),
+        };
+      });
+    }
     const reportedRates=Object.fromEntries(Object.entries(r).filter(([key])=>key.endsWith('Ratio')).map(([key,v])=>{const parsed=MarketInputRecordSchema.shape.data.safeParse(v);return [key,parsed.success?parsed.data:null];}));
-    return {id:`row-${index}`,sourceIndex:index,label:label||`来源行 ${index+1}`,group,asins,products,units,revenue,reportedRevenue,reportedRates,productsSharePct:null,unitsSharePct:null,revenueSharePct:null,issues};
+    return {id:`row-${index}`,sourceIndex:index,label:label||`来源行 ${index+1}`,group,asins,...(productItems?{productItems}:{}),products,units,revenue,reportedRevenue,reportedRates,productsSharePct:null,unitsSharePct:null,revenueSharePct:null,issues};
   });
   const groups:MarketOverviewDistribution['groups']=[];
   for(const id of (content?['sample','new-products']:['sample']) as Array<'sample'|'new-products'>){

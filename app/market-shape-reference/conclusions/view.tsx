@@ -70,11 +70,12 @@ export function ReferenceBrandPriceConclusion({ result, embedded = false }: { re
   return embedded ? body : <LaunchSection title="品牌 × 价格带 · 机会结论" description="按需求、竞争和品牌布局筛选价格带" badge={<span className="source-badge">{result.analysisScope.validLinkCount} 条有效链接 · 置信度 {confidence[result.analysisScope.confidence]}</span>}>{body}</LaunchSection>;
 }
 
-export function ReferenceSynthesisConclusion({ result, embedded = false }: { result: Ready["synthesis"]; embedded?: boolean }) {
+export function ReferenceSynthesisConclusion({ result, warnings = [], embedded = false }: { result: Ready["synthesis"]; warnings?: readonly string[]; embedded?: boolean }) {
   const body = <div className={`listing-age-conclusion market-structure-synthesis ${tone[result.verdictColor]}`} id="market-structure-synthesis-conclusion">
       <div className="market-structure-synthesis-top"><div className="market-structure-synthesis-verdict-card"><p className="listing-age-conclusion-eyebrow">五维结构综合</p><h4 className="listing-age-conclusion-title">{marketStructureVerdictLabel(result.verdict)}<span className="listing-age-conclusion-badge">{result.score}/100</span></h4><p className="market-structure-synthesis-def">{result.verdictDefinition}</p></div>
         <div className="market-structure-synthesis-meta-grid"><div><span>样本链接</span><b>{result.topLinkCount}</b></div><div><span>主销价格带</span><b>{result.highlights.primaryPriceBand ?? "待验证"}</b></div><div><span>可进入毛利链接</span><b>{result.highlights.marginGreenSharePct.toFixed(1)}%</b></div><div><span>Top3 Listing</span><b>{result.highlights.top3ListingSharePct == null ? "—" : `${result.highlights.top3ListingSharePct.toFixed(1)}%`}</b></div></div>
       </div>
+      {warnings.length > 0 && <div className="shape-summary-warning"><strong>数据缺口提示</strong><ul>{warnings.map((warning, index) => <li key={index}>{warning}；该项不参与完整证据判断。</li>)}</ul></div>}
       <p>{result.summary}</p><p>{result.finalVerdict}</p>
       <div className="market-structure-dimension-grid">{result.moduleSections.map(section => <article className="market-structure-dimension-card" key={section.key}><header className="market-structure-dimension-head"><h5>{section.title}</h5><span className="market-structure-dimension-score">{section.score}/{section.maxScore}</span></header><div className="market-structure-dimension-bar" aria-hidden="true"><i style={{ width: `${Math.round(section.score / section.maxScore * 100)}%` }} /></div>{section.marginAccessDetail ? <p>{section.marginAccessDetail.headline}</p> : <ul>{sentences(section.text).map((item, i) => <li key={i}>{item}。</li>)}</ul>}</article>)}</div>
       <div className="market-structure-synthesis-extra"><p className="market-structure-synthesis-extra-title">机会与风险</p><div className="market-structure-synthesis-extra-body market-structure-synthesis-extra-split"><div className="market-structure-synthesis-extra-column"><p className="listing-age-conclusion-block-title">机会方向</p><ul>{result.opportunities.map((item, i) => <li key={i}>{item}</li>)}</ul></div><div className="market-structure-synthesis-extra-column"><p className="listing-age-conclusion-block-title">主要风险</p><ul>{result.risks.map((item, i) => <li key={i}>{item}</li>)}</ul></div></div></div>
@@ -89,6 +90,6 @@ export function ReferenceConclusionsView({ result }: { result: ReferenceConclusi
     {result.shapeSales.status === "ready" ? <ReferenceShapeSalesConclusion result={result.shapeSales.result} /> : missing("商品形态 · 销量份额结论", result.shapeSales.reason)}
     {result.shapePrice.status === "ready" ? <ReferenceShapePriceConclusion result={result.shapePrice.result} /> : missing("商品形态 × 价格带 · 结构结论", result.shapePrice.reason)}
     {result.brandPrice.status === "ready" ? <ReferenceBrandPriceConclusion result={result.brandPrice.result} /> : missing("品牌 × 价格带 · 机会结论", result.brandPrice.reason)}
-    {result.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={result.synthesis.result} /> : missing("类目商品链接调研 · 最终结论", result.synthesis.reason)}
+    {result.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={result.synthesis.result} warnings={result.synthesis.warnings} /> : missing("类目商品链接调研 · 最终结论", result.synthesis.reason)}
   </div>;
 }

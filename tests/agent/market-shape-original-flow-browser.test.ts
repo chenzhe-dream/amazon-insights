@@ -25,7 +25,7 @@ test('original shape flow collects by category before any manual shape name and 
   if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<!doctype html><html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-shape-browser-harness.tsx"></script></body></html>`)});
   if(!url.pathname.startsWith('/api/'))return route.continue();
   if(request.method()==='POST'&&url.pathname.endsWith('/shape-price/query')){
-   const body=request.postDataJSON();starts.push(body.params);current.run.params=body.params;
+   const body=request.postDataJSON();starts.push(body);current.run.params=body.params;
    current.run.scope={...current.run.scope,...body.scope};
    return route.fulfill({json:current});
   }
@@ -42,7 +42,14 @@ test('original shape flow collects by category before any manual shape name and 
  assert.equal(await page.getByLabel('本次形态目录（每行：名称|判断依据）').count(),0);
  await page.getByRole('button',{name:'筛选市场',exact:true}).click();
  const row=page.getByLabel('B000000001 人工形态');await row.waitFor();
- assert.equal(studies,0);assert.equal(starts.length,1);assert.deepEqual((starts[0] as {catalog:{allowedLabels:unknown[]}}).catalog.allowedLabels,[]);
+ assert.equal(studies,0);assert.equal(starts.length,1);assert.deepEqual((starts[0] as {params:{catalog:{allowedLabels:unknown[]}}}).params.catalog.allowedLabels,[]);
+ assert.equal(await page.getByLabel('下次采集商品池上限',{exact:true}).count(),0);
+ assert.equal(await page.getByText('采集选项',{exact:true}).count(),0);
+ // Explicit recollection must show the exact target first and wait for confirmation.
+ await page.getByRole('button',{name:'重新采集',exact:true}).click();
+ await page.getByText('将按 100 件商品重新采集，确认后才会启动 Sorftime 任务。',{exact:true}).waitFor();
+ assert.equal(starts.length,1);
+ await page.getByRole('button',{name:'取消',exact:true}).click();
  await page.getByText('123.45',{exact:true}).waitFor();
  assert.equal(await page.getByText('等待人工确认并保存',{exact:true}).count(),0);
  await page.getByRole('img',{name:'B000000001 商品图片',exact:true}).scrollIntoViewIfNeeded();

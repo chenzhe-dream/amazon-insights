@@ -17,6 +17,7 @@ export const MarketOverviewDistributionSchema=z.object({
   version:z.literal(MARKET_OVERVIEW_DISTRIBUTION_VERSION),operation:MarketOverviewDistributionOperationSchema,
   scopeBasis:z.literal('request-bound'),status:z.enum(['available','partial','empty']),currency:MarketCurrencySchema.nullable(),
   rows:z.array(z.object({id:z.string(),sourceIndex:count,label:z.string(),group,asins:z.array(z.string()),
+    productItems:z.array(z.object({asin:z.string(),title:z.string().nullable(),units:count.nullable(),imageUrl:z.string().nullable()}).strict()).max(2000).optional(),
     products:count.nullable(),units:count.nullable(),revenue:number.nullable(),reportedRevenue:number.nullable(),
     productsSharePct:percent,unitsSharePct:percent,revenueSharePct:percent,
     reportedRates:z.record(z.string(),MarketInputRecordSchema.shape.data),issues:z.array(z.string()),

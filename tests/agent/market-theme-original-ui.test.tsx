@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {MarketThemeSampleTable,MarketThemeTopicTable,selectThemeSentiment,type Group} from '../../app/market-theme-result-view';
+import {MarketThemeSampleTable,MarketThemeTopicTable,selectThemeSentiment,type Evidence,type Group,type Member} from '../../app/market-theme-result-view';
 import {themeDetails,themeRuleEntry} from './helpers/market-theme-page-fixture';
 import type {MarketThemeSampleMetadata} from '../../shared/market-theme-selection-contracts';
 import {MarketThemeReport} from '../../app/market-theme-report';
@@ -36,7 +36,22 @@ test('new saved planner localizes labels without changing legacy source labels o
  const old=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={themeRuleEntry()} evidence={{}}/>);
  assert.doesNotMatch(old,/亮度/);assert.match(old,/Brightness/);
  group.sourceLabel={text:'Unlisted original theme',totalLength:23,truncated:false};
- assert.match(renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={{}}/>),/Unlisted original theme/);
+ const unknownLabel=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={{}}/>);
+ assert.match(unknownLabel,/Unlisted original theme/);
+ assert.match(unknownLabel,/原文保留，中文翻译未完成/);
+});
+
+test('original theme summary marks unknown source wording as retained original text',()=>{
+ const entry=themeRuleEntry();
+ entry.report.versions.planner='market-theme-flow/rules-v3';
+ const group=themeDetails(new URL('https://test.invalid/details?section=groups')).page.items[0] as Group;
+ group.sourceLabel={text:'Assembly',totalLength:8,truncated:false};
+ const sourceMember=themeDetails(new URL('https://test.invalid/details?section=members')).page.items.find(item=>item.kind==='member') as Member;
+ const member={...sourceMember,keyword:{...sourceMember.keyword,text:'Assembly'},content:{...sourceMember.content,text:'Unknown source wording'}};
+ const evidence:Record<number,Evidence>={[group.index]:{members:[member]}};
+ const html=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={evidence}/>);
+ assert.match(html,/Unknown source wording/);
+ assert.match(html,/部分摘要保留原文，中文翻译未完成/);
 });
 
 test('saved category name identifies the report while the node path remains available',()=>{

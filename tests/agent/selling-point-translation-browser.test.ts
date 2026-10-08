@@ -15,18 +15,30 @@ test("Chinese selling points load once, show failure retry, and reuse successful
   const origin = server.resolvedUrls!.local[0];
   let state = "missing";
   let posts = 0;
+  const versionId = "20000000-0000-4000-8000-000000000001";
+  const getVersionIds: string[] = [];
+  const postVersionIds: string[] = [];
   await page.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== new URL(origin).origin) return route.abort();
-    if (request.isNavigationRequest()) return route.fulfill({ contentType: "text/html", body: await server.transformIndexHtml("/", `<div id="root"></div><script type="module">import React from 'react';import {createRoot} from 'react-dom/client';import {SellingPointTranslation} from '/app/selling-point-translation.tsx';createRoot(document.getElementById('root')).render(React.createElement(SellingPointTranslation,{projectId:'10000000-0000-4000-8000-000000000001',asin:'B000000001'}));</script>`) });
+    if (request.isNavigationRequest()) return route.fulfill({ contentType: "text/html", body: await server.transformIndexHtml("/", `<div id="root"></div><script type="module">import React from 'react';import {createRoot} from 'react-dom/client';import {SellingPointTranslation} from '/app/selling-point-translation.tsx';createRoot(document.getElementById('root')).render(React.createElement(SellingPointTranslation,{projectId:'10000000-0000-4000-8000-000000000001',versionId:'${versionId}',asin:'B000000001'}));</script>`) });
     if (!url.pathname.startsWith("/api/")) return route.continue();
-    if (request.method() === "POST") { posts++; state = posts === 1 ? "failed" : "ready"; }
+    if (request.method() === "GET") getVersionIds.push(url.searchParams.get("versionId") ?? "");
+    if (request.method() === "POST") {
+      assert.equal(url.search, "");
+      const payload = request.postDataJSON() as { versionId?: string };
+      postVersionIds.push(payload.versionId ?? "");
+      posts++;
+      state = posts === 1 ? "failed" : "ready";
+    }
     return route.fulfill({ json: { asin: "B000000001", sourceHash: "hash", state, points: state === "ready" ? ["支持 2、4、8 小时定时"] : [],
       original: ["Timer supports 2/4/8 hours"], sourceComplete: false, message: state === "failed" ? "翻译未完成，请重试。" : null } });
   });
   await page.goto(origin);
   await page.getByRole("button", { name: "重新翻译" }).waitFor();
   assert.equal(posts, 1);
+  assert.deepEqual(getVersionIds, [versionId]);
+  assert.deepEqual(postVersionIds, [versionId]);
   assert.equal(await page.getByText("Timer supports", { exact: false }).count(), 0);
   await page.getByRole("button", { name: "重新翻译" }).click();
   await page.getByText("支持 2、4、8 小时定时", { exact: true }).waitFor();
@@ -37,4 +49,7 @@ test("Chinese selling points load once, show failure retry, and reuse successful
   await page.reload();
   await page.getByText("支持 2、4、8 小时定时", { exact: true }).waitFor();
   assert.equal(posts, 2);
+  assert.deepEqual(postVersionIds, [versionId, versionId]);
+  assert.ok(getVersionIds.length >= 2);
+  assert.ok(getVersionIds.every(value => value === versionId));
 });

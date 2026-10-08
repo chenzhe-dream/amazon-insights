@@ -19,6 +19,8 @@ export type ProductKeywordRow = {
 export type ProductKeywordSearchReport = {
   /** Explicit saved user grouping overrides automatic regrouping. */
   manualGroups?: Record<string, {id:string;name:string;features:string[]}|null>;
+  /** Saved W1–W4 labels are authoritative for the corresponding dimension summaries. */
+  manualDimensions?: Record<string, {W1:string[];W2:string[];W3:string[];W4:string[]}>;
   productName: string;
   marketplace: string;
   queryMode: "keyword_extends";

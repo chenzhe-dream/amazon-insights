@@ -17,7 +17,7 @@ export function MarketOverviewDemandTrend({demand,hasDemandStage=false}:{demand?
  const max=Math.max(1,...series.flatMap(row=>row.points.map(p=>p.value))),x=(i:number)=>left+(i*plotWidth)/Math.max(months.length-1,1),y=(value:number)=>top+(1-value/max)*plotHeight;
  const ticks=months.length<=8?months.map((_,i)=>i):Array.from({length:8},(_,i)=>Math.round(i*(months.length-1)/7));
  return <div className="overview-demand-trend">
-  <p className="market-research-note">{demand.seed?`${demand.seed} · `:''}关键词月搜索量，参考截止 {demand.referenceMonth}。按原版选取最多5个类目关键词，来源为卖家精灵 ABA 月度趋势；不代表全类目总需求。</p>
+  {demand.seed&&<p className="market-research-note">{demand.seed} · 关键词趋势</p>}
   {demand.status==='partial'&&<p className="market-research-note">部分趋势可用，已保留成功数据；未取得的词和月份不补零。</p>}
   {!months.length?<p className="ss-report-empty">{demand.status==='failed'?'行业关键词趋势采集失败，已有市场基础报告继续保留。':'本次来源未返回可用的关键词月搜索趋势。'}</p>:<>
    <div className="ss-report-trend-legend">{series.map((row,index)=><span key={row.keyword}><i style={{background:colors[index%colors.length]}}/>{row.keyword} · {row.points.at(-1)!.month}：{format(row.points.at(-1)!.value)} 次</span>)}</div>

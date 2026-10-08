@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarketShapeReferenceView, type SorftimeCategoryDashboardReport } from "../../app/market-shape-reference/view";
+import { buildReferenceShapeAnalysis } from "../../app/market-shape-reference/rules";
+import { buildReferenceConclusions } from "../../app/market-shape-reference/conclusions";
 
 const report: SorftimeCategoryDashboardReport = {
   marketplace: "US", sorftimeSite: "US", nodeId: "123", categoryName: "Desk lamps", fetchedAt: "2026-09-24T00:00:00.000Z",
@@ -61,6 +63,41 @@ test("summary status distinguishes computed conclusions from missing evidence", 
 
 });
 
+test("summary keeps a usable conclusion when one product lacks price evidence and shows the warning", () => {
+  const missingPrice = structuredClone(report);
+  missingPrice.products[0].price = null;
+  missingPrice.products[0].priceBand = "—";
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={missingPrice} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.match(html, /规则结论已生成/);
+  assert.match(html, /数据缺口提示/);
+  assert.match(html, /缺少价格及价格带/);
+  assert.match(html, /价格\/价格带：可用0\/1件，待补1件/);
+  assert.doesNotMatch(html, /综合判断尚缺数据/);
+});
+
+test("non-positive source price is shown as unknown instead of a real zero price", () => {
+  const invalidPrice = structuredClone(report);
+  invalidPrice.products[0].price = null;
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={invalidPrice} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.match(html, />未知<\/td>/);
+  assert.match(html, /价格\/价格带：可用0\/1件，待补1件/);
+});
+
+test("unknown data summary explains persisted source gaps without treating them as zero", () => {
+  const value = structuredClone(report);
+  value.products[0].monthlySalesVolume = null;
+  value.products[0].monthlySalesAmount = null;
+  value.products[0].price = null;
+  value.products[0].grossProfitMargin = null;
+  value.products[0].sales.last6Months = null;
+  value.products[0].salesHistory = { status: "failed", errorCode: "upstream-temporary" };
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
+  assert.match(html, /未知数据原因（/);
+  assert.match(html, /商品池未返回有效正数价格/);
+  assert.match(html, /近6个月历史销量：1 条<\/strong> · 历史销量请求失败（上游暂不可用）/);
+  assert.match(html, /缺失不会补成 0，也不代表连接失败/);
+});
+
 test("margin cards keep missing margins unknown and explain both denominators", () => {
   const value = structuredClone(report);
   value.products.push({ ...structuredClone(value.products[0]), asin: "B000000002", grossProfitMargin: null });
@@ -86,6 +123,15 @@ test("reference view renders the seven original regions from supplied evidence",
   assert.ok(html.includes("4,000"));
   assert.ok(html.includes("调整product列宽"));
   assert.ok(html.includes("月销售额估算"));
+});
+
+test("pool control describes current capacity and cache reuse", () => {
+  const html = renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={[]} onAssignment={() => {}} onSelected={() => {}} requestedPoolSize={200} onPoolSizeChange={() => {}} />);
+  assert.match(html, /当前报告商品池容量（优先复用缓存）/);
+  assert.match(html, /aria-label="当前报告商品池采集上限"/);
+  assert.match(html, /<option value="150">150<\/option>/);
+  assert.match(html, /<option value="200"[^>]*>200<\/option>/);
+  assert.match(html, /<option value="300">300<\/option>/);
 });
 
 test("missing current and historical values remain unknown", () => {
@@ -152,4 +198,14 @@ test('fixed scooter names keep an old label visible without allowing new arbitra
  const value=structuredClone(report);value.categoryName='Kick Scooters';
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{B000000001:'旧分类'}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
  assert.match(html,/<select[^>]*aria-label="B000000001 人工形态"/);assert.match(html,/三轮滑板车/);assert.match(html,/旧标签待确认：旧分类/);
+});
+
+test('fixed-shape legacy labels remain visible but do not enter shape statistics',()=>{
+ const value=structuredClone(report);value.categoryName='Kick Scooters';
+ const assignments={B000000001:'旧分类'};
+ const allowed=['三轮滑板车','小两轮滑板车','大两轮滑板车'];
+ const analysis=buildReferenceShapeAnalysis(value,assignments,['B000000001'],allowed);
+ assert.equal(analysis.shapes[0]?.label,'未分类');
+ const conclusions=buildReferenceConclusions(value,assignments,['B000000001'],allowed);
+ assert.doesNotMatch(JSON.stringify(conclusions),/旧分类/);
 });

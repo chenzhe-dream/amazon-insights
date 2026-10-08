@@ -3,6 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { selectMarketThemeMembers, assembleMarketThemePool } from '../../server/domain/market-research/customer-theme-source-pool';
 import { collectMarketProductPool } from '../../server/services/market-product-pool-collector';
+import { collectSorftimeShapePoolPage } from '../../server/services/market-shape-sorftime-pool';
 import { collectMarketCustomerThemes } from '../../server/services/market-customer-themes-collector';
 import { createMarketInputSnapshot } from '../../server/domain/market-research/snapshot';
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../shared/market-source-contracts';
@@ -35,6 +36,20 @@ test('fixed first 20 follow original source order, not ASIN sort or an invented 
   assert.equal(selected.manifest.selectedAsins.at(-1), asin(3)); assert.equal(selected.manifest.bsrTopVerified, false);
   assert.equal(selected.manifest.selectionBasis, 'provider-row-order'); assert.equal(selected.snapshot.records.length, 20);
   assert.equal(selected.manifest.omittedAsins.length, 2);
+});
+
+test('Sorftime category pool keeps normalized category-rank order when raw rows arrive reversed', async () => {
+ const rawRows=[
+  {asin:asin(3),title:'Third',category_rank:'Floor Lamps (Rank: 3)',monthly_sales_volume:300},
+  {asin:asin(1),title:'First',category_rank:'Floor Lamps (Rank: 1)',monthly_sales_volume:100},
+  {asin:asin(2),title:'Second',category_rank:'Floor Lamps (Rank: 2)',monthly_sales_volume:200},
+ ];
+ const collected=await collectSorftimeShapePoolPage({scope,jobId:'synthetic',connector:{id:'sorftime',probe:async()=>{throw new Error('unused');},execute:async()=>({data:{code:'OK',data:{top100_products:rawRows}},source:{connectorId:'sorftime',operation:'category_report',fetchedAt:at,attemptCount:1}})}});
+ assert.equal(collected.status,'ready');
+ const sourceRef=`market-source:${digest(collected.evidence)}`;
+ const snapshot=createMarketInputSnapshot({scope,kind:'products',sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'source-normalization/v1',collectedAt:at,expectedRecordIds:collected.products.map(p=>p.asin),records:collected.products.map(product=>({id:product.asin,scope,data:{collection:'sorftime-shape-pool',product,sourceRef}}))});
+ const selected=selectMarketThemeMembers({snapshot,sources:{[sourceRef]:collected.evidence},count:2});
+ assert.deepEqual(selected.manifest.selectedAsins,[asin(1),asin(2)]);
 });
 test('17/20 keeps empty, failed and missing separate; repeated payloads never become unique review counts', async () => {
   const selected = selectMarketThemeMembers({ ...await products(20), count: 20 }), ids = selected.manifest.selectedAsins;

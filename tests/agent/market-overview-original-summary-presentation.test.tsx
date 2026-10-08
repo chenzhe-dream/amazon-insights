@@ -15,3 +15,11 @@ test('complete inputs keep score, radar and original conclusion; partial inputs 
  const full=render(ready);assert.match(full,/data-score-polygon=/);assert.equal((full.match(/data-score-point=/g)??[]).length,6);assert.ok(full.includes(ready.summary.gradeLabel!));
  niche.brandCrn=null;const partial=render(buildCheckedOverviewSynthesis(niche,report));assert.doesNotMatch(partial,/data-score-polygon=/);assert.equal((partial.match(/data-score-point=/g)??[]).length,5);assert.match(partial,/品牌集中度/);
 });
+
+test('radar center uses the additive six-dimension score shown by the summary',()=>{
+ const {niche,report}=completeScoreFixture();
+ const ready=buildCheckedOverviewSynthesis(niche,report);
+ const html=renderToStaticMarkup(<MarketOverviewOriginalSummary result={{version:6,...ready,inputGaps:[],sourceRefs:[],originalAssumptions:[]}}/>);
+ assert.match(html, new RegExp(`>${ready.summary.score}%<`));
+ assert.match(html,/fill-opacity="0\.76"/);
+});

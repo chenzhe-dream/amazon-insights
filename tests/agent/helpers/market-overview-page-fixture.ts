@@ -1,7 +1,8 @@
 import {MarketOverviewRunResponseSchema,MarketOverviewDetailsResponseSchema} from '../../../shared/market-overview-report-contracts';
+import type {MarketAnalysisScope} from '../../../shared/market-analysis-contracts';
 import {normalizeMarketOverviewDistribution} from '../../../server/domain/market-research/overview-distributions';
 export const overviewRunId='70000000-0000-4000-8000-000000000001',overviewStudyId='70000000-0000-4000-8000-000000000002';
-export const overviewScope={organizationId:'70000000-0000-4000-8000-000000000003',researchId:overviewStudyId,marketplace:'US',currency:'USD',nodeIdPath:'123:456',fromMonth:'2026-07',toMonth:'2026-08'};
+export const overviewScope:MarketAnalysisScope={organizationId:'70000000-0000-4000-8000-000000000003',researchId:overviewStudyId,marketplace:'US',currency:'USD',nodeIdPath:'123:456',fromMonth:'2026-07',toMonth:'2026-08'};
 const sourceRef=`market-source:${'a'.repeat(64)}`,inputId=`market-input:${'b'.repeat(64)}`,metricId='2026-08/totalUnits';
 export function overviewEntry(old=false){return {attemptId:old?'70000000-0000-4000-8000-000000000004':'70000000-0000-4000-8000-000000000005',current:!old,report:{
   reportVersion:'market-overview-report/v1',moduleRunId:overviewRunId,scope:overviewScope,versions:{source:'source/v1',rule:'rule/v3',mapping:'rule/v3',planner:'market-overview-flow/v2',model:'model/v1',prompt:'prompt/v1',configuration:'config/v1'},

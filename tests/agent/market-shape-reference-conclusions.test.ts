@@ -133,10 +133,15 @@ test("missing margin is excluded from observed margin evidence", () => {
   assert.equal(result.synthesis.status, "insufficient");
 });
 
-test('current synthesis guards missing date, price and partial margin without inventing zero scores', () => {
+test('current synthesis guards missing date but keeps partial price and margin evidence visible', () => {
   for (const patch of [{onlineDate:null},{price:null,priceBand:'—'},{grossProfitMargin:null}]) {
     const source = structuredClone(report); Object.assign(source.products[0],patch);
-    assert.equal(buildReferenceConclusions(source,{}).synthesis.status,'insufficient',JSON.stringify(patch));
+    const synthesis = buildReferenceConclusions(source,{}).synthesis;
+    if (patch.onlineDate === null) assert.equal(synthesis.status,'insufficient',JSON.stringify(patch));
+    else {
+      assert.equal(synthesis.status,'ready',JSON.stringify(patch));
+      assert.match((synthesis.warnings ?? []).join(' '), patch.price === null ? /缺少价格及价格带/ : /缺少毛利润率/);
+    }
   }
   const partial=structuredClone(report);partial.products[0].grossProfitMargin=null;
   assert.equal(buildReferenceConclusions(partial,{}).margin.status,'ready','original margin analyzer explains observed subset');

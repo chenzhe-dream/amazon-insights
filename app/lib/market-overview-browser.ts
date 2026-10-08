@@ -24,7 +24,7 @@ async function request<T>(path:string,schema:z.ZodType<T>,init:RequestInit={}){
 }
 export async function startOverviewRun(studyId:string,params:z.input<typeof MarketOverviewStartRequestSchema>,key:string,signal?:AbortSignal){
   const study=MarketModuleIdSchema.parse(studyId),result=await request(`studies/${study}/overview`,MarketOverviewRunResponseSchema,{method:'POST',signal,headers:{'idempotency-key':MarketModuleIdSchema.parse(key)},body:JSON.stringify(MarketOverviewStartRequestSchema.parse(params))});
-  const expected=MarketOverviewStartRequestSchema.parse(params);if(result.run.scope.researchId!==study||result.run.params.headTopN!==expected.headTopN||result.run.params.newProductMonths!==expected.newProductMonths)throw new Error('研究身份或参数不一致，未加载该结果。');return validateRun(result.run);
+  const expected=MarketOverviewStartRequestSchema.parse(params);if(result.run.scope.researchId!==study||result.run.params.headTopN!==expected.headTopN||result.run.params.newProductMonths!==expected.newProductMonths||result.run.params.sampleSize!==expected.sampleSize)throw new Error('研究身份或参数不一致，未加载该结果。');return validateRun(result.run);
 }
 export async function readOverviewRun(id:string,signal?:AbortSignal){
   const runId=MarketModuleIdSchema.parse(id),result=await request(`runs/${runId}/overview`,MarketOverviewRunResponseSchema,{signal});

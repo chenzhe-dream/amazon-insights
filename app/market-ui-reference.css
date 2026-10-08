@@ -2743,6 +2743,15 @@
 .market-ui-reference .ss-report-analysis b{color:#5b21b6;font-size:12px}
 .market-ui-reference .ss-report-analysis-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
 .market-ui-reference .ss-report-analysis-list li::marker{color:#a78bfa}
+.market-ui-reference .market-overview-business-explanation{margin:14px 0 0;padding:14px 16px;border:1px solid #ddd6fe;border-radius:10px;background:linear-gradient(180deg,#faf5ff 0%,#fff 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.9)}
+.market-ui-reference .market-overview-business-explanation h5{margin:0 0 10px;color:#5b21b6;font-size:13px;font-weight:700}
+.market-ui-reference .market-overview-business-explanation dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+.market-ui-reference .market-overview-business-explanation dl>div{min-width:0;padding:9px 10px;border:1px solid #ede9fe;border-radius:8px;background:#fff}
+.market-ui-reference .market-overview-business-explanation dt{margin:0 0 4px;color:#7c3aed;font-size:12px;font-weight:700}
+.market-ui-reference .market-overview-business-explanation dd{margin:0;color:#34465d;font-size:12px;line-height:1.65;overflow-wrap:anywhere}
+.market-ui-reference .market-overview-business-explanation .market-research-note{margin:10px 0 0}
+.market-ui-reference .market-overview-business-explanation[data-explanation-status="missing"]{background:#fff;border-color:#e5e7eb}
+@media (max-width:760px){.market-ui-reference .market-overview-business-explanation dl{grid-template-columns:1fr}}
 .market-ui-reference .ss-report-opportunity{padding:8px 10px;border:1px solid #ddd6fe;border-radius:8px;background:#f5f3ff}
 .market-ui-reference .ss-report-opportunity b{color:#6d28d9}
 .market-ui-reference .ss-report-empty{margin:0;font-size:12px;color:#8a97a6}

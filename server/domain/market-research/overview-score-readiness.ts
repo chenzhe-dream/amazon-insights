@@ -2,6 +2,7 @@ import {buildMarketOverviewSynthesis,MARKET_SYNTHESIS_DIMENSIONS} from './origin
 import {analyzePriceBands} from './original-overview/sellersprite-market-price-analysis';
 import type {SellerSpriteMarketNiche as Niche,SellerSpriteMarketReport as Report,SellerSpriteTrendPoint as Point,SellerSpriteDistRow as Row} from './original-overview/sellersprite-market-niche';
 import type {MarketOverviewOriginalSynthesis} from '../../../shared/market-overview-original-synthesis';
+import {MARKET_OVERVIEW_ZIP_RULE_VERSION} from '../../../shared/market-overview-zip-baseline';
 
 type Dimension=typeof MARKET_SYNTHESIS_DIMENSIONS[number]['key'];
 type Evaluation=NonNullable<MarketOverviewOriginalSynthesis['evaluation']>;
@@ -104,7 +105,7 @@ export function buildCheckedOverviewSynthesis(niche:Niche,report:Report,issues:O
   if(text.startsWith('搜索或成交'))return keywordReady&&keywordDir==='down'||salesReady&&salesDir==='down';
   return count===6;
  });
- const summary:MarketOverviewOriginalSynthesis['summary']={...raw,version:6,scores,sections,crossSignals,topOpportunities,topRisks};
+ const summary:MarketOverviewOriginalSynthesis['summary']={...raw,version:6,ruleVersion:MARKET_OVERVIEW_ZIP_RULE_VERSION,scores,sections,crossSignals,topOpportunities,topRisks};
  if(count===6&&(topRisks.length!==raw.topRisks.length||topOpportunities.length!==raw.topOpportunities.length))summary.finalVerdict=`${raw.gradeLabel}：${raw.gradeDefinition} 部分辅助依据不足，具体机会与风险仅按已验证项展示。`;
  if(count!==6){summary.score=null;summary.grade=null;summary.gradeLabel=null;summary.gradeDefinition='必要输入尚未齐全，暂不计算市场机会总分及准入等级。';summary.finalVerdict=`已完成 ${count}/6 个维度的评分。缺少依据的维度保留待补充，不折算总分，也不据此判断是否进入市场。`;}
  return {summary,evaluation};

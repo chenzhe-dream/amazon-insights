@@ -48,6 +48,31 @@ const year = resolveListingYear;
 const shape = (assignments: Record<string, string>, p: SorftimeCategoryDashboardProduct) => Object.hasOwn(assignments,p.asin)?assignments[p.asin].trim()||"未分类":p.productShape?.trim()||"未分类";
 const periodValue = (p: SorftimeCategoryDashboardProduct, key: Period) => known(p.sales[key]);
 
+function DataQualitySummary({ report }: { report: SorftimeCategoryDashboardReport }) {
+  const grouped = new Map<string, { label: string; reason: string; count: number }>();
+  const add = (label: string, reason: string) => {
+    const key = `${label}\u0000${reason}`;
+    const current = grouped.get(key);
+    if (current) current.count += 1;
+    else grouped.set(key, { label, reason, count: 1 });
+  };
+  for (const product of report.products) {
+    if (product.monthlySalesVolume == null) add("近30天销量", "商品池未返回有效销量");
+    if (product.monthlySalesAmount == null) add("近30天销售额", "商品池未返回有效销售额");
+    if (product.price == null) add("价格/价格带", "商品池未返回有效正数价格");
+    if (product.grossProfitMargin == null) add("毛利润率", product.marginSource?.note ?? "报告没有可采用的毛利润率");
+    if (!product.imageUrl) add("商品图片", "报告未保存可用图片地址");
+    const listing = parseReferenceListingDate(product.onlineDate);
+    if (listing.status === "missing") add("上架日期", "来源未返回上架日期");
+    else if (listing.status === "uncertain") add("上架日期", "来源日期格式无法确认，保留原值待核实");
+    if (product.sales.last6Months == null) add("近6个月历史销量", referenceSalesGapReason(product, "last6Months", report.calculationVersion) ?? "来源未返回该期间历史销量");
+  }
+  const gaps = [...grouped.values()];
+  if (!gaps.length) return null;
+  const total = gaps.reduce((sum, item) => sum + item.count, 0);
+  return <details className="shape-data-quality"><summary>未知数据原因（{total} 个字段）</summary><p className="shape-summary-note">“未知”表示保存的来源没有可采用的值；缺失不会补成 0，也不代表连接失败。</p><ul>{gaps.map(item => <li key={`${item.label}/${item.reason}`}><strong>{item.label}：{item.count} 条</strong> · {item.reason}</li>)}</ul></details>;
+}
+
 
 function MetricBars({ rows }: { rows: { label: string; value: number | null }[] }) {
   const max = Math.max(1, ...rows.map(row => row.value ?? 0));
@@ -72,8 +97,9 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const [editingAsin,setEditingAsin]=useState<string|null>(null);
   const { widths, setWidth } = useReferenceColumnWidths();
   const selected = new Set(selectedAsins);
-  const analysis = useMemo(() => buildReferenceShapeAnalysis(report, assignments, selectedAsins), [report, assignments, selectedAsins]);
-  const conclusions = useMemo(() => buildReferenceConclusions(report, assignments, selectedAsins), [report, assignments, selectedAsins]);
+  const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId);
+  const analysis = useMemo(() => buildReferenceShapeAnalysis(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
+  const conclusions = useMemo(() => buildReferenceConclusions(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
   const active = analysis.products;
   const brands = [...new Set(report.products.map(p => p.brand || "未知"))].sort();
   const years = [...new Set(report.products.map(p => year(p.onlineDate)))].sort().reverse();
@@ -98,10 +124,9 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const toggleSort = (key: typeof sort) => { setDescending(sort === key ? !descending : true); setSort(key); };
   const localIds=(filter:TopSalesMultiSelectFilterState,get:(p:SorftimeCategoryDashboardProduct)=>string)=>active.filter(p=>!filter?.length||filter.includes(get(p))).map(p=>p.asin);
   const shapeIds=localIds(localShape,p=>shape(assignments,p)),bandIds=localIds(localBandShape,p=>shape(assignments,p)),brandIds=localIds(localBrand,p=>p.brand||'未知');
-  const shapeAnalysis=buildReferenceShapeAnalysis(report,assignments,shapeIds),bandAnalysis=buildReferenceShapeAnalysis(report,assignments,bandIds),brandAnalysis=buildReferenceShapeAnalysis(report,assignments,brandIds);
+  const shapeAnalysis=buildReferenceShapeAnalysis(report,assignments,shapeIds,fixedLabels),bandAnalysis=buildReferenceShapeAnalysis(report,assignments,bandIds,fixedLabels),brandAnalysis=buildReferenceShapeAnalysis(report,assignments,brandIds,fixedLabels);
   const shapeConclusion=buildReferenceConclusions(report,assignments,shapeIds).shapeSales,bandConclusion=buildReferenceConclusions(report,assignments,bandIds).shapePrice,brandConclusion=buildReferenceConclusions(report,assignments,brandIds).brandPrice;
   const yearly=analysis.listingYears,byShape=sortSectionRows(shapeAnalysis.shapes,shapeSort),shapeBands=sortGroupedPriceBands(bandAnalysis.shapePriceBands,bandAnalysis.shapes,bandSort,'shape'),brandBands=sortGroupedPriceBands(brandAnalysis.brandPriceBands,brandAnalysis.brands,brandSort,'brand');
-  const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId);
   const labelOptions=[...new Set([...fixedLabels,...catalogLabels,...localLabels,...Object.values(assignments).map(v=>v.trim())])].filter(v=>v&&v!=='未分类');
   const setLabels=(labels:string[])=>{setLocalLabels(labels);onCatalogLabels?.(labels)};
   const currentUnits = analysis.synthesis.currentMonthlyVolume, currentAmount = analysis.synthesis.currentMonthlyAmount;
@@ -124,6 +149,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     <style>{`.market-shape-reference-view{display:grid;gap:18px}.market-shape-reference-view .top-sales-table{width:${TOP_SALES_COLUMNS.reduce((sum,[id])=>sum+widths[id],0)}px;min-width:0;table-layout:fixed}.market-shape-reference-view .top-sales-table th,.market-shape-reference-view .top-sales-table td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.market-shape-reference-view .top-sales-table th button{border:0;background:transparent;color:inherit;cursor:pointer;font:inherit;font-weight:inherit}.market-shape-reference-view .top-sales-product-cell{min-width:220px;max-width:300px}.market-shape-reference-view .top-sales-product-cell small{display:block;white-space:normal}.market-shape-reference-view .top-sales-product-cell img{object-fit:contain;flex:none}.market-shape-reference-view input[aria-label$=" 人工形态"]{width:100%;min-width:0;box-sizing:border-box}.market-shape-reference-view .top-sales-table-toolbar{margin-bottom:12px}.shape-ref-metric-bars{display:grid;gap:6px;margin:12px 0}.shape-ref-bar-row{display:grid;grid-template-columns:minmax(80px,160px) minmax(80px,1fr) 70px;gap:10px;align-items:center;font-size:.88rem}.shape-ref-bar-row>div{height:10px;border-radius:8px;background:#edf2f7;overflow:hidden}.shape-ref-bar-row>div>span{display:block;height:100%;background:#2f80ed;border-radius:inherit}.shape-ref-bar-row b{text-align:right}`}</style>
     <LaunchSection title={`${report.categoryName} · 类目销量看板`} description={`${report.marketplace} · Node ${report.nodeId} · 来源获取于 ${report.fetchedAt}`} badge={<span className="source-badge">已保存商品来源</span>}>
       <p className="market-research-note">{report.note || "商品当前销量与销售额为来源近30天观测；历史销量和金额按实际日历月显示。"}</p>
+      <DataQualitySummary report={report} />
       <div className="market-overview-kpis">{[
         ["来源 TOP100 近30天销量", n(report.stats.top100MonthlyVolume)], ["来源 TOP100 近30天销售额", n(report.stats.top100MonthlyAmount, 2)],
         ["最近完整月销量", `${n(latest?.value)}${latest?.month ? ` · ${latest.month}` : ""}`], ["月环比", mom === null ? "未知" : `${mom.toFixed(1)}%`],
@@ -141,7 +167,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     <LaunchSection title="TOP 销售商品 · 形态与毛利准入" description="人工形态立即影响下方草稿统计；销量与金额为来源近30天观测" badge={<span className="source-badge">已选 {active.length} / 来源 {report.products.length} 链接</span>}>
       <div className="top-sales-table-toolbar"><div className="top-sales-table-filters">
         <span>来源 TOP {report.topLinkCount} · 共 {report.products.length} 链接</span>
-        {onPoolSizeChange&&<label>商品池上限（更改后重新采集） <select aria-label="商品池采集上限" disabled={disabled||poolSizeDisabled} value={requestedPoolSize} onChange={e => onPoolSizeChange(Number(e.target.value))}>{[...new Set([requestedPoolSize,50,100,150,200,250,300])].sort((a,b)=>a-b).map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
+        {onPoolSizeChange&&<label>当前报告商品池容量（优先复用缓存） <select aria-label="当前报告商品池采集上限" disabled={disabled||poolSizeDisabled} value={requestedPoolSize} onChange={e => onPoolSizeChange(Number(e.target.value))}>{[...new Set([requestedPoolSize,50,100,150,200,250,300])].sort((a,b)=>a-b).map(v => <option key={v} value={v}>{v}</option>)}</select></label>}
         <TopSalesMultiSelectFilter prefix="品牌" ariaLabel="筛选品牌" options={brands} optionCounts={counts(p => p.brand || "未知")} filter={brand} onChange={setBrand} searchable />
         <TopSalesMultiSelectFilter prefix="上架年份" ariaLabel="筛选上架年份" options={years} optionCounts={counts(p => year(p.onlineDate))} filter={listingYear} onChange={setListingYear} />
         <TopSalesMultiSelectFilter prefix="价格带" ariaLabel="筛选价格带" options={bands} optionCounts={counts(band)} filter={priceBand} onChange={setPriceBand} />
@@ -191,7 +217,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       <div className="shape-summary-panel shape-summary-overview">
         <ReferenceSummaryMetrics items={[["所选商品链接", n(active.length)], ["近30天销量", n(currentUnits)], ["近30天销售额（来源值）", n(currentAmount, 2)], ["近6个月历史销量", n(periodTotal("last6Months"))], ["形态分组（含未分类）", n(analysis.shapes.length)], ["品牌 × 价格带组合", n(analysis.brandPriceBands.length)]]} />
         <div className="shape-summary-selection"><strong>毛利准入分布</strong>{marginGroups.length ? marginGroups.map(([label, count]) => <span key={label}>{label.replace("—", "未知")} <b>{count} 条</b></span>) : <span>暂无所选样本</span>}</div>
-        {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} embedded /> : <div className="shape-summary-gap"><strong>综合判断尚缺数据</strong><p>{conclusions.synthesis.reason}。上方已获取的指标仍可查看。</p></div>}
+        {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} warnings={conclusions.synthesis.warnings} embedded /> : <div className="shape-summary-gap"><strong>综合判断尚缺数据</strong><p>{conclusions.synthesis.reason}。上方已获取的指标仍可查看。</p></div>}
         <MarketAdminContent><details className="shape-summary-source"><summary>数据范围与口径</summary><p className="shape-summary-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p></details></MarketAdminContent>
       </div>
     </LaunchSection>

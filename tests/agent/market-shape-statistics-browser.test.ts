@@ -20,7 +20,9 @@ test('shape statistics render complete and missing states without changing the s
    const sample=structuredClone(report);if(mode==='partial')sample.products[1].sales.last6Months=null;if(mode==='missing-margin')sample.products[1].grossProfitMargin=null;
    await writeFile(`${out}/${mode}.jsx`,`import React from 'react';import {createRoot} from 'react-dom/client';import {MarketShapeReferenceView} from '/app/market-shape-reference/view';import '/app/globals.css';import '/app/market-research.css';import '/app/market-shape-reference.css';const report=${JSON.stringify(sample)};createRoot(document.getElementById('root')).render(<MarketShapeReferenceView report={report} assignments={Object.fromEntries(report.products.map(p=>[p.asin,'落地灯']))} selectedAsins={report.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);`);
    await page.goto(origin+'/?case='+mode);const tables=page.locator('.shape-price-table');await tables.first().waitFor();assert.equal(await tables.count(),4);
-   const body=await page.locator('body').innerText();assert.match(body,mode==='full'?/规则结论已生成/:/综合结论待补数据/);
+   const body=await page.locator('body').innerText();
+   assert.match(body,mode==='partial'?/综合结论待补数据/:/规则结论已生成/);
+   if(mode==='missing-margin')assert.match(body,/数据缺口提示/);
    if(mode==='partial'){const total=tables.first().locator('.shape-price-total-row');assert.match(await total.innerText(),/已知 600/);assert.equal(await total.locator('td').nth(5).innerText(),'未知');}
    await tables.first().scrollIntoViewIfNeeded();await page.screenshot({path:`${out}/${mode}.png`});
  }

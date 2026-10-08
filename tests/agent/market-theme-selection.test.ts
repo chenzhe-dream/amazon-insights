@@ -23,6 +23,16 @@ test('display truncation never drops denominator facts or unresolved mapping lim
  assert.equal(result.totals!.mention,10);assert.equal(result.groups.length,0);assert.equal(result.reconciliationRequired,true);assert.equal(result.status,'partial');
 });
 
+test('theme evidence takes three unique summaries from the full member set',()=>{
+ const themes=[
+  ['t1','重复摘要'],['t2','重复摘要'],['t3','重复摘要'],['t4','第二条摘要'],['t5','第三条摘要'],
+ ].map(([sourceThemeId,content],i)=>({sourceThemeId,keyword:`主题 ${i+1}`,content,mention:10,positive:10,negative:0}));
+ const mappings=themes.map(theme=>({sourceThemeId:theme.sourceThemeId,groupId:'same-group'}));
+ const facts={aggregation:aggregateCustomerThemes({selectedAsins:[a],results:[{asin:a,status:'success' as const,source:{sourceRecordId:'source',fetchedAt:'2026-09-01T00:00:00.000Z',sourceUpdatedAt:null},themes}],mappings}),labels:[],decisions:themes.map(theme=>({sourceThemeId:theme.sourceThemeId,status:'unknown' as const,groupId:null,reason:'unconfirmed',batchId:null}))};
+ const result=deriveThemeSelection(facts,[],false);
+ assert.deepEqual(result.evidence[0].members.map(member=>member.content.text),['重复摘要','第二条摘要','第三条摘要']);
+});
+
 test('rules-only sample revision reports source coverage without treating skipped mapping as incomplete',()=>{
  const results=[a,b].map((asin,i)=>({asin,status:'success' as const,source:{sourceRecordId:`source-${i}`,fetchedAt:'2026-09-01T00:00:00.000Z',sourceUpdatedAt:null},themes:[{sourceThemeId:`raw-${i}`,keyword:'Assembly',content:'Saved summary',mention:i+1,positive:i+1,negative:0}]}));
  const aggregation=aggregateCustomerThemes({selectedAsins:[a,b],results,mappings:[]});

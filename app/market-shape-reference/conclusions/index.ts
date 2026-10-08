@@ -14,7 +14,9 @@ import { buildMarketStructureSynthesis } from "./market-structure-synthesis-anal
 import { buildTopSalesMarginEntryConclusion, formatOnlineDateYear, formatPriceBand, isProductSalesTrendMissing } from "./sorftime-category-dashboard";
 import type { SorftimeCategoryDashboardReport as OriginalReport } from "./sorftime-category-dashboard";
 
-export type ReferenceConclusionSlot<T> = { status: "ready"; result: T } | { status: "insufficient"; reason: string };
+export type ReferenceConclusionSlot<T> =
+  | { status: "ready"; result: T; warnings?: readonly string[] }
+  | { status: "insufficient"; reason: string };
 export type ReferenceConclusions = {
   listingYear: ReferenceConclusionSlot<ReturnType<typeof analyzeListingAgeSalesShare>>;
   listingYearRows: ReferenceConclusionSlot<ReturnType<typeof buildListingYearAnalysis>>;
@@ -49,6 +51,7 @@ export function buildReferenceConclusions(
   report: SavedReport,
   assignments: Readonly<Record<string, string>>,
   selectedAsins?: readonly string[],
+  allowedShapes?: readonly string[],
 ): ReferenceConclusions {
   const current = (report.calculationVersion ?? CURRENT_SHAPE_CALCULATION_VERSION) === CURRENT_SHAPE_CALCULATION_VERSION;
   const selected = selectedAsins ? new Set(selectedAsins) : null;
@@ -64,7 +67,8 @@ export function buildReferenceConclusions(
   const sampleScope = `${scoped.marketplace} · ${scoped.categoryName} · TOP${scoped.topLinkCount}`;
   const shape = (asin: string) => {
     const product = products.find(item => item.asin === asin);
-    return report.calculationVersion==='shape-reference/1'?assignments[asin]?.trim()||product?.productShape?.trim()||'—':product ? resolveReferenceProductShape(product, assignments) : '—';
+    const value = report.calculationVersion==='shape-reference/1'?assignments[asin]?.trim()||product?.productShape?.trim()||'—':product ? resolveReferenceProductShape(product, assignments) : '—';
+    return allowedShapes?.length && value !== '—' && value !== '未分类' && !allowedShapes.includes(value) ? '未分类' : value;
   };
   const sixMonthGap = missingSales(products, ["last6Months"]);
   const recentGap = missingSales(products, ["last3Months", "last6Months"]);
@@ -119,7 +123,10 @@ export function buildReferenceConclusions(
     rows: shapeRows, shapeAggregates, sampleScope,
     structuralPeriod: "2024 / 2025 / 近6个月 / 近3个月",
   }));
-  const synthesisGap = (current ? recentGap ?? priceGap ?? marginGap : fullGap) ?? listingDateGap;
-  const synthesis = synthesisGap ? insufficient(synthesisGap) : ready(buildMarketStructureSynthesis(scoped, { getProductShape: shape }));
+  const synthesisGap = (current ? recentGap ?? (allMarginsMissing ? marginGap : null) : fullGap) ?? listingDateGap;
+  const synthesisWarnings = current ? [priceGap, !allMarginsMissing ? marginGap : null].filter((value): value is string => Boolean(value)) : [];
+  const synthesis = synthesisGap
+    ? insufficient(synthesisGap)
+    : { status: "ready" as const, result: buildMarketStructureSynthesis(scoped, { getProductShape: shape }), ...(synthesisWarnings.length ? { warnings: synthesisWarnings } : {}) };
   return { listingYear, listingYearRows, margin, shapeSales, shapePrice, brandPrice, synthesis };
 }

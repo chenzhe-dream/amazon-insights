@@ -42,6 +42,7 @@ type AgentServiceRouteRequest =
   | { method: "POST"; path: "/v1/auth/password" | "/v1/feedback" }
   | { method: "POST"; path: "/v1/projects" }
   | { method: "POST"; path: `/v1/projects/${string}/selling-point-translations/${string}` }
+  | { method: "GET"; path: `/v1/projects/${string}/selling-point-translations/${string}` | `/v1/projects/${string}/selling-point-translations/${string}?${string}` }
   | { method: "GET"; path: `/v1/projects/${string}` }
   | { method: "POST"; path: `/v1/projects/${string}/runs` }
   | { method: "GET"; path: `/v1/runs/${string}` }

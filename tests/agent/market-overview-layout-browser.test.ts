@@ -27,6 +27,7 @@ test('overview concentration charts remain readable and product details collapse
  }
  const table=section.getByRole('region',{name:'商品集中度明细'});assert.equal(await table.locator('tbody').isVisible(),false);
  const expand=table.getByRole('button',{name:'展开商品明细'});await expand.click();assert.equal(await table.locator('tbody tr').count(),10);assert.equal(await expand.count(),0);
+ const firstAsin=table.locator('tbody tr').first().getByRole('link',{name:'B000000000'});assert.equal(await firstAsin.getAttribute('href'),'https://www.amazon.com/dp/B000000000');
  const firstRow=await table.locator('tbody tr').first().boundingBox();assert.ok(firstRow&&firstRow.height<=36);
  await table.getByRole('button',{name:'收起商品明细'}).click();assert.equal(await table.locator('tbody').isVisible(),false);
  await section.getByRole('button',{name:'返回前10商品',exact:true}).click();assert.equal(await section.locator('rect[fill="#c4b5fd"]').count(),10);

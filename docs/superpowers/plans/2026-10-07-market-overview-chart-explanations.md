@@ -27,7 +27,7 @@
 - Consumes `overviewDistributionDetails()` and `MarketOverviewReferenceSections`.
 - Produces assertions for the visible business explanation and removed technical notes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add a test that renders a detail fixture with `chapterSynthesis` containing `sales-trend`, `brand-crn`, and `price` chapters, then asserts:
 
@@ -45,7 +45,7 @@ assert.match(html, /价格分布业务结论/);
 
 Add a second render with `chapterSynthesis` and `originalSynthesis` absent and assert `当前报告暂无可用业务总结` is present.
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run from the formal worktree:
 
@@ -71,19 +71,19 @@ Expected: FAIL because the current report still renders the Sorftime note and co
 - `ChapterExplanation` accepts an optional chapter and always returns a visible business-explanation card.
 - Existing error and empty-state strings remain the source of actionable collection status.
 
-- [ ] **Step 1: Implement the minimal visible explanation card**
+- [x] **Step 1: Implement the minimal visible explanation card**
 
 Replace the `<details>` wrapper in `ChapterExplanation` with a visible `<section className="market-overview-business-explanation">`. Render the existing three fields directly. When no chapter exists, render the exact fallback `当前报告暂无可用业务总结`.
 
-- [ ] **Step 2: Remove only technical chart notes**
+- [x] **Step 2: Remove only technical chart notes**
 
 Remove the SalesCount/AvgPrice paragraph, month metric-reference `<details>`, source/denominator notes, request-bound explanatory notes, distribution formula notes, and product-demand source note. Keep all failed, not-collected, empty, partial, and trend-gap messages.
 
-- [ ] **Step 3: Add scoped UI styling**
+- [x] **Step 3: Add scoped UI styling**
 
 Add compact styling under `.market-ui-reference` for the visible explanation card: purple-tinted border/background matching the existing report analysis card, a clear heading, three labeled rows, and readable line height on narrow screens.
 
-- [ ] **Step 4: Run the focused test and verify it passes**
+- [x] **Step 4: Run the focused test and verify it passes**
 
 ```powershell
 node --test --import tsx tests/agent/market-overview-original-charts.test.tsx
@@ -102,7 +102,7 @@ Expected: PASS with the technical notes absent, visible business explanation pre
 **Interfaces:**
 - Uses the same rendered components and saved report fixture; no API or database changes.
 
-- [ ] **Step 1: Run the layout browser test**
+- [x] **Step 1: Run the layout browser test**
 
 ```powershell
 node --test --import tsx tests/agent/market-overview-layout-browser.test.ts
@@ -110,7 +110,7 @@ node --test --import tsx tests/agent/market-overview-layout-browser.test.ts
 
 Expected: PASS with all existing chart dimensions, drilldowns, and actionable status behavior intact.
 
-- [ ] **Step 2: Run the project build**
+- [x] **Step 2: Run the project build**
 
 ```powershell
 npm run build
@@ -118,7 +118,7 @@ npm run build
 
 Expected: exit code 0 with no TypeScript or bundler errors.
 
-- [ ] **Step 3: Review the diff**
+- [x] **Step 3: Review the diff**
 
 ```powershell
 git diff --check
@@ -126,3 +126,10 @@ git status --short
 ```
 
 Expected: only the planned report presentation, styles, tests, and documentation files are changed in the formal worktree; no data, API, collector, or scoring files are modified.
+
+## Verification record
+
+- `node --test --import tsx tests/agent/market-overview-original-charts.test.tsx` — 8 passed.
+- `node --test --import tsx tests/agent/market-overview-layout-browser.test.ts` — 1 passed.
+- `npm run build` — passed; only the existing proxy and chunk-size warnings were emitted.
+- `git diff --check` — passed; the repository also contains pre-existing line-ending warnings from unrelated files.

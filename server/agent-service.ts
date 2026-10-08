@@ -23,6 +23,7 @@ import type { FastifyListenOptions, FastifyServerOptions } from "fastify";
 import path from "node:path";
 import { VocAutomationService } from "./services/voc-automation-service";
 import { TrafficDetailRecoveryService } from './services/traffic-detail-recovery-service';
+import { createMarketThemeTranslationService } from './routes/market-theme-translations';
 
 import { buildAgentApp, createConcurrencyAdminService } from "./app";
 import {
@@ -437,6 +438,7 @@ export async function createAgentService(
     const app = buildAgentApp({
       marketResearchService,
       marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
+          themeTranslation: createMarketThemeTranslationService(repository, env) ?? undefined,
           resolveShapeCategoryName: input => resolveShapeCategoryName({ ...input, connector: connectors.sorftime }),
         resolveNodePath: input => resolveMarketNodePath({ ...input, connector: connectors.sellerSprite }),
         modelIdentity: () => marketModelRuntime ? { configurationVersion: marketModelRuntime.configurationVersion, promptVersion: marketModelRuntime.promptVersion } : null,

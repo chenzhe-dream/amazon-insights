@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { SellingTranslationEmpty, SellingTranslationParams, SellingTranslationReadQuery, SellingTranslationResponse } from "../../shared/selling-point-translation-contracts";
+import { SellingTranslationEmpty, SellingTranslationParams, SellingTranslationReadQuery, SellingTranslationResponse, SellingTranslationStartRequest } from "../../shared/selling-point-translation-contracts";
 import { getProjectRoot } from "../../scripts/lib/project-root.mjs";
 import { resolveRuntimeRoots } from "../../scripts/lib/runtime-roots.mjs";
 import { resolveVocPositioningRuntimeConfig } from "../config";
@@ -88,13 +88,15 @@ export function registerSellingTranslationRoutes(app: FastifyInstance, service: 
       if (request.authPrincipal?.kind !== "user") throw new ContractRouteError(401, "AUTHENTICATION_REQUIRED", "请先登录");
       const parsed = SellingTranslationParams.safeParse(request.params);
       const query = SellingTranslationReadQuery.safeParse(request.query);
-      if (!parsed.success || !query.success || (method === "POST" && !SellingTranslationEmpty.safeParse(request.query).success) || !SellingTranslationEmpty.safeParse(request.body ?? {}).success) throw new ContractRouteError(400, "VALIDATION_ERROR", "翻译请求参数无效");
+      const body = (method === "POST" ? SellingTranslationStartRequest : SellingTranslationEmpty).safeParse(request.body ?? {});
+      if (!parsed.success || !query.success || (method === "POST" && !SellingTranslationEmpty.safeParse(request.query).success) || !body.success) throw new ContractRouteError(400, "VALIDATION_ERROR", "翻译请求参数无效");
       if (!service) throw new ContractRouteError(503, "CONFIGURATION_ERROR", "翻译服务尚未就绪，请稍后重试");
       const { projectId, asin } = parsed.data;
+      const startVersionId = method === "POST" && "versionId" in body.data ? body.data.versionId : undefined;
       try {
         const result = method === "GET"
           ? await service.read(request.authPrincipal.organizationId, projectId, asin, query.data.versionId)
-          : await service.start(request.authPrincipal.organizationId, projectId, asin);
+          : await service.start(request.authPrincipal.organizationId, projectId, asin, startVersionId);
         reply.header("Cache-Control", "no-store");
         if (method === "POST" && result.state === "pending") reply.status(202);
         return SellingTranslationResponse.parse(result);

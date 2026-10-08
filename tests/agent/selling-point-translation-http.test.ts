@@ -17,6 +17,8 @@ test("translation requires a session, uses server organization, and rejects clie
   const root = mkdtempSync(join(tmpdir(), "selling-http-"));
   t.after(() => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   let requestedVersion: string | undefined;
+  let releaseTranslation!: () => void;
+  const translationGate = new Promise<void>(resolveGate => { releaseTranslation = resolveGate; });
   const service = new SellingPointTranslationService({ root, modelIdentity: "test",
     resolveSource: async (org, project, item, versionId) => {
       requestedVersion = versionId;
@@ -24,7 +26,7 @@ test("translation requires a session, uses server organization, and rejects clie
       assert.equal(project, projectId);
       assert.equal(item, asin);
       return { organizationId: org, projectId: project, runId: "run", asin: item, original: ["Timer 2 hours"], sourceComplete: true };
-    }, translate: async () => ["定时 2 小时"] });
+    }, translate: async () => { await translationGate; return ["定时 2 小时"]; } });
   const app = Fastify();
   t.after(() => app.close());
   let signedIn = false;
@@ -42,7 +44,11 @@ test("translation requires a session, uses server organization, and rejects clie
   assert.equal(requestedVersion, projectId);
   assert.equal((await app.inject(path + "?versionId=invalid")).statusCode, 400);
   assert.equal((await app.inject({ method: "POST", url: path + "?versionId=" + projectId, payload: {} })).statusCode, 400);
-  assert.equal((await app.inject({ method: "POST", url: path, payload: {} })).statusCode, 202);
+  assert.equal((await app.inject({ method: "POST", url: path, payload: { versionId: projectId } })).statusCode, 202);
+  assert.equal(requestedVersion, projectId);
+  assert.equal((await app.inject({ method: "POST", url: path, payload: { versionId: projectId } })).statusCode, 202);
+  assert.equal(requestedVersion, projectId);
+  releaseTranslation();
   await service.drain();
   const response = await app.inject(path);
   assert.equal(response.headers["cache-control"], "no-store");
@@ -52,17 +58,18 @@ test("translation requires a session, uses server organization, and rejects clie
 
 test("web proxy and agent client preserve pending and ready translation responses", async () => {
   for (const method of ["GET", "POST"] as const) {
+    const requestPath = method === "GET" ? `${path}?versionId=${projectId}` : path;
     const result = { asin, sourceHash: "hash", state: method === "POST" ? "pending" : "ready", points: method === "POST" ? [] : ["中文卖点"], original: ["Original"], sourceComplete: true, message: null };
     const status = method === "POST" ? 202 : 200;
     const client = createAgentServiceClient({
       env: { AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:39999", AGENT_SERVICE_PROXY_TOKEN: "fixture" },
       fetchImplementation: async (url, init) => {
-        assert.equal(String(url), "http://127.0.0.1:39999" + path);
+        assert.equal(String(url), "http://127.0.0.1:39999" + requestPath);
         assert.equal(init?.method, method);
         return Response.json(result, { status, headers: { "Cache-Control": "no-store" } });
       },
     });
-    const response = await proxyAgentRequest(new Request("http://localhost/api/agent" + path, {
+    const response = await proxyAgentRequest(new Request("http://localhost/api/agent" + requestPath, {
       method, ...(method === "POST" ? { headers: { "Content-Type": "application/json" }, body: "{}" } : {}),
     }), { params: Promise.resolve({ path: path.slice(1).split("/") }) }, client);
     assert.equal(response.status, status);

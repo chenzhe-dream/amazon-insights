@@ -57,13 +57,20 @@ async function computeMarketOverviewCatalog(context:PostgresQueryContext,view:Ma
     const sources:MarketSourceEvidence[]=[],failures:MarketOverviewExpandedSourceFailureV2[]=[],receipts:unknown[]=[];
     for(const sourceStep of sourceSteps){
       signal.throwIfAborted();const a=view.attempts.find(a=>a.id===sourceStep.latestAttemptId&&a.stepId===sourceStep.id);if(!a)invalid();
-      const {month,operation,headTopN,newProductMonths}=z.union([MarketOverviewSourceStepInputSchema,MarketOverviewDistributionStepInputSchema]).parse(sourceStep.input);
+      const parsed=z.union([MarketOverviewSourceStepInputSchema,MarketOverviewDistributionStepInputSchema]).parse(sourceStep.input),{month,operation,headTopN,newProductMonths}=parsed;
       if(sourceStep.status==='failed'&&['failed','interrupted'].includes(a.status)){
         failures.push({month,operation,attemptId:a.id,code:z.string().min(1).max(100).parse(obj(a.error).code)});receipts.push({month,operation,attemptId:a.id,status:'failed'});continue;
       }
       if(!['succeeded','empty'].includes(a.status)||a.status!==sourceStep.status)invalid();
-      const output=obj(a.output),parameters={headTopN,newProductMonths};
-      if(output.handlerVersion!==MARKET_SOURCE_HANDLER_VERSION||output.month!==month||output.operation!==operation||digest(output.parameters)!==digest(parameters)||!['ready','partial','empty'].includes(String(output.collectionStatus))||(a.status==='empty')!==(output.collectionStatus==='empty'))invalid();
+      const output=obj(a.output),requestedParameters={headTopN,newProductMonths,...(Object.hasOwn(parsed,'sampleSize')?{sampleSize:parsed.sampleSize}: {})};
+      // A short-lived v4 collector bug omitted sampleSize from distribution
+      // receipts after projection. Accept only that exact legacy shape so an
+      // existing failed run can be retried without recollecting all sources.
+      const observedParameters=z.object({headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]),sampleSize:z.union([z.literal(50),z.literal(100),z.literal(200)]).optional()}).strict().safeParse(output.parameters);
+      const legacyParameters={headTopN,newProductMonths};
+      const parameters=observedParameters.success&&digest(observedParameters.data)===digest(requestedParameters)?requestedParameters:
+        observedParameters.success&&Object.hasOwn(parsed,'sampleSize')&&digest(observedParameters.data)===digest(legacyParameters)?legacyParameters:invalid();
+      if(output.handlerVersion!==MARKET_SOURCE_HANDLER_VERSION||output.month!==month||output.operation!==operation||!['ready','partial','empty'].includes(String(output.collectionStatus))||(a.status==='empty')!==(output.collectionStatus==='empty'))invalid();
       const ref=sourceRef.parse(output.sourceRef),id=inputRef.parse(output.inputSnapshotId);
       const source=await snapshots.findSource({actor,studyId,id:ref}),saved=await snapshots.findInput({actor,studyId,id});
       if(!source||!saved||digest(saved.snapshot.scope)!==digest(view.run.scope)||saved.snapshot.kind!=='overview'||saved.snapshot.sourceVersion!==MARKET_SOURCE_HANDLER_VERSION||saved.snapshot.collectedAt!==source.evidence.fetchedAt||saved.snapshot.records.length!==1)invalid();

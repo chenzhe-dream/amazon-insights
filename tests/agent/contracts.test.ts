@@ -815,6 +815,23 @@ test("traffic snapshot reads use a bounded normalized contract", async () => {
   assert.equal(TrafficSnapshotReadResponseSchema.safeParse({ ...payload, payload: {} }).success, false);
 });
 
+test("selling-point translation GET pins the authorized report version in its query contract", () => {
+  const contract = findHttpContract("GET", `/v1/projects/${projectId}/selling-point-translations/B000000001`);
+  assert.ok(contract);
+  assert.equal(contract.query?.safeParse({ versionId: projectId }).success, true);
+  assert.equal(contract.query?.safeParse({ versionId: "not-a-uuid" }).success, false);
+  assert.equal(contract.query?.safeParse({ versionId: projectId, source: "client" }).success, false);
+});
+
+test("selling-point translation POST pins the authorized report version in its request body", () => {
+  const contract = findHttpContract("POST", `/v1/projects/${projectId}/selling-point-translations/B000000001`);
+  assert.ok(contract);
+  assert.equal(contract.request?.safeParse({}).success, true);
+  assert.equal(contract.request?.safeParse({ versionId: projectId }).success, true);
+  assert.equal(contract.request?.safeParse({ versionId: "not-a-uuid" }).success, false);
+  assert.equal(contract.request?.safeParse({ versionId: projectId, source: "client" }).success, false);
+});
+
 test("the versioned contract registry covers the complete declared HTTP surface", () => {
   // This snapshot checks declarations only; it does not prove route reachability.
   const declaredRoutes = v1Contracts.map(({ method, path }) => `${method} ${path}`);
@@ -829,6 +846,7 @@ test("the versioned contract registry covers the complete declared HTTP surface"
       "POST /v1/market-analysis/runs/:id/keywords/revisions",
       "GET /v1/market-analysis/runs/:id/keywords/revisions/:revisionId",
       "POST /v1/market-analysis/shape-price/query",
+      "POST /v1/market-analysis/shape-price/resolve-category",
       "POST /v1/market-analysis/studies/:id/shape-price",
       "GET /v1/market-analysis/runs/:id/shape-price",
       "GET /v1/market-analysis/runs/:id/shape-price/draft",

@@ -7,6 +7,7 @@ import { MarketAnalysisStorageError } from '../db/postgres/market-analysis-snaps
 import { ContractRouteError } from './analysis-runs';
 import {MarketShapeRevisionIdSchema} from '../../shared/market-shape-public-contracts';
 import {MarketKeywordRevisionIdSchema} from '../../shared/market-keyword-revision-contracts';
+import {MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema} from '../../shared/market-theme-translation-contracts';
 
 const id = (r: FastifyRequest) => z.object({ id: MarketModuleIdSchema }).strict().parse(r.params).id;
 export function registerMarketModuleRoutes(app: FastifyInstance, service: MarketModuleService | null) {
@@ -55,6 +56,14 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
   }));
   app.get('/v1/market-analysis/runs/:id/reports/:attemptId/evidence', async req => execute(req,(s,actor)=>{
     const params=z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict().parse(req.params);return s.evidence(actor,params.id,params.attemptId,req.query);
+  }));
+  app.get('/v1/market-analysis/runs/:id/reports/:attemptId/translations', async req => execute(req,(s,actor)=>{
+    const params=z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict().parse(req.params);
+    return s.themeTranslations(actor,params.id,params.attemptId,MarketThemeTranslationQuerySchema.parse(req.query));
+  }));
+  app.post('/v1/market-analysis/runs/:id/reports/:attemptId/translations', async req => execute(req,(s,actor)=>{
+    const params=z.object({id:MarketModuleIdSchema,attemptId:MarketModuleIdSchema}).strict().parse(req.params);
+    return s.startThemeTranslations(actor,params.id,params.attemptId,MarketThemeTranslationStartSchema.parse(req.body));
   }));
   app.post('/v1/market-analysis/runs/:id/retry', async req => execute(req, async (s, actor) => MarketModuleRetryResponseSchema.parse(await s.retry(actor, id(req), req.body, req.headers['idempotency-key']))));
   app.post('/v1/market-analysis/runs/:id/cancel', async req => execute(req, async (s, actor) => MarketModuleCancelResponseSchema.parse(await s.cancel(actor, id(req), req.body, req.headers['idempotency-key']))));

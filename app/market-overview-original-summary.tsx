@@ -8,9 +8,9 @@ type MarketOverviewSynthesis=MarketOverviewOriginalSynthesis['summary'];
 const SYNTHESIS_SCORE_LABELS = MARKET_SYNTHESIS_DIMENSIONS;
 
 function MarketSynthesisRadarChart({
-  scores,evaluation,
+  scores,score,evaluation,
 }: {
-  scores: MarketOverviewSynthesis["scores"];evaluation?:MarketOverviewOriginalSynthesis["evaluation"];
+  scores: MarketOverviewSynthesis["scores"];score: MarketOverviewSynthesis["score"];evaluation?:MarketOverviewOriginalSynthesis["evaluation"];
 }) {
   const items = SYNTHESIS_SCORE_LABELS.map(item => ({
     label: item.label,partial:evaluation?.dimensions[item.key].status==='partial',
@@ -77,7 +77,6 @@ function MarketSynthesisRadarChart({
     return { x1: cx, y1: cy, x2: outer.x, y2: outer.y };
   });
 
-  const avgRatio = items.reduce((sum, item) => sum + item.ratio, 0) / Math.max(items.length, 1);
   const complete=items.every(item=>item.value!==null&&!item.partial);
 
   return (
@@ -181,12 +180,12 @@ function MarketSynthesisRadarChart({
             );
           })}
           <g className="ss-market-synthesis-radar-center">
-            <circle cx={cx} cy={cy} r={28} fill="#fff" stroke="#ddd6fe" strokeWidth="1.2" />
+            <circle cx={cx} cy={cy} r={28} fill="#fff" fillOpacity="0.76" stroke="#ddd6fe" strokeWidth="1.2" />
             <text x={cx} y={cy - 2} textAnchor="middle" className="ss-market-synthesis-radar-center-label">
               {complete?'综合':'待补充'}
             </text>
             <text x={cx} y={cy + 14} textAnchor="middle" className="ss-market-synthesis-radar-center-value">
-              {complete?`${Math.round(avgRatio * 100)}%`:'—'}
+              {complete&&score!==null?`${score}%`:'—'}
             </text>
           </g>
         </svg>
@@ -235,7 +234,7 @@ function MarketOverviewSynthesisPanel({ synthesis,evaluation }: { synthesis: Mar
           <small>{synthesis.grade}</small>
           <p className="ss-market-synthesis-grade-def">{synthesis.gradeDefinition}</p>
         </div>
-        <MarketSynthesisRadarChart scores={synthesis.scores} evaluation={evaluation} />
+        <MarketSynthesisRadarChart scores={synthesis.scores} score={synthesis.score} evaluation={evaluation} />
       </div>
       {synthesis.crossSignals.length ? (
         <p className="ss-market-synthesis-cross">{synthesis.crossSignals.join(" · ")}</p>
@@ -296,7 +295,7 @@ export function MarketOverviewOriginalSummary({result:baseline,review,onSuppleme
       <p>对应当前展示的{previous?'此前逐维校验':review?'新版逐项复算':'报告'}，校验版本 {result.evaluation.version}。</p>
       {MARKET_SYNTHESIS_DIMENSIONS.map(dim=><div key={dim.key}><h5>{dim.label}</h5><ul>{result.evaluation!.dimensions[dim.key].items?.map(item=><li key={item.id}>{item.label}：{item.status==='known'?`${item.score!>0?'+':''}${Number(item.score!.toFixed(2))}${item.group?'（分组折算前）':''}`:`待补齐 · ${item.missing.join('；')}`}</li>)}</ul></div>)}
     </details>}
-    <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>原版规则版本 {result.version}；校验版本 {result.evaluation?.version??'原版'}；绑定来源 {result.sourceRefs.length} 份。</p></details>
+    <details className="market-research-boundaries"><summary>原版规则与来源说明</summary><ul>{result.originalAssumptions.map(item=><li key={item}>{item}</li>)}</ul><p>ZIP业务规则版本 {result.summary.ruleVersion}；原版规则版本 {result.version}；校验版本 {result.evaluation?.version??'原版'}；绑定来源 {result.sourceRefs.length} 份。</p></details>
   </MarketAdminContent>
  </section>;
 }
