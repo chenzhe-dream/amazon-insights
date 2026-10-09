@@ -48,7 +48,25 @@ export function rankConcentrationRows<T extends {label?:string;unitsShare?:numbe
   return b-a;
  });
 }
-function consecutive(points:readonly SellerSpriteTrendPoint[]){
+type NormalizedTrendPoint={month:string;value:number};
+function monthSerial(month:string){
+ const [year,monthNumber]=month.split('-').map(Number);
+ return year*12+(monthNumber-1);
+}
+function serialMonth(serial:number){
+ const year=Math.floor(serial/12),month=serial%12+1;
+ return `${year}-${String(month).padStart(2,'0')}`;
+}
+function missingMonths(points:readonly NormalizedTrendPoint[]){
+ if(points.length<2)return [] as string[];
+ const known=new Set(points.map(point=>point.month)),first=monthSerial(points[0].month),last=monthSerial(points.at(-1)!.month),missing:string[]=[];
+ for(let serial=first+1;serial<last;serial++){
+  const month=serialMonth(serial);
+  if(!known.has(month))missing.push(month);
+ }
+ return missing;
+}
+function consecutive(points:readonly {month:string}[]){
  return points.every((point,index)=>{
   if(index===0)return true;
   const [ay,am]=points[index-1].month.split('-').map(Number),[by,bm]=point.month.split('-').map(Number);
@@ -69,13 +87,18 @@ const trendPhrase=(direction:ReturnType<typeof trend>,subject:string)=>direction
 export const buildSeasonalPhrase=(points:readonly SellerSpriteTrendPoint[],subject:string,aggregation:TrendAggregation='last')=>{
  const clean=normalizeTrendPoints(points,aggregation);
  if(clean.length<6)return `${subject}有效月份不足6个月，暂不能判断旺淡季。`;
+ if(!consecutive(clean))return `${subject}有效月份不连续，暂不能判断旺淡季。`;
  const sorted=[...clean].sort((a,b)=>a.value-b.value),middle=sorted[Math.floor(sorted.length/2)]?.value??0;
  if(middle<=0)return `${subject}基准值无效，暂不能判断旺淡季。`;
  const peaks=clean.filter(point=>point.value>=middle*1.56).map(point=>point.month);
  const lows=clean.filter(point=>point.value<=middle*.82).map(point=>point.month);
  if(!peaks.length&&!lows.length)return `${subject}未形成明显旺淡季。`;
  const displayMonths=(months:string[])=>{
-  const distinct=unique(months),shown=distinct.slice(0,4).map(month=>clean.length>12?month:`${month.slice(5)}月`);
+  const distinct=unique(months.map(month=>month.slice(5))),shown=distinct.slice(0,4).map(month=>{
+   if(clean.length<=12)return `${month}月`;
+   const years=new Set(clean.filter(point=>point.month.slice(5)===month).map(point=>point.month.slice(0,4))).size;
+   return `${month}月${years>1?`（${years}年）`:''}`;
+  });
   return `${shown.join('、')}${distinct.length>shown.length?`等${distinct.length}个月`:''}`;
  };
  return `${peaks.length?`旺季集中在 ${displayMonths(peaks)}`:'未识别明显旺季'}${lows.length?`，淡季集中在 ${displayMonths(lows)}`:'，未识别明显淡季'}；旺季前2–3个月需提前安排备货。`;
@@ -123,6 +146,8 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
  const salesTrend=normalizeTrendPoints(report.salesTrend,'last');
  const amountTrend=normalizeTrendPoints(report.salesAmountTrend,'last');
  const demandPoints=keywordPoints.length;
+ const keywordMissingMonths=missingMonths(keywordPoints);
+ const partiallyCoveredKeywords=report.keywordTrends.filter(series=>normalizeTrendPoints(series.points).length<demandPoints).length;
  const salesPoints=salesTrend.length;
  const amountPoints=amountTrend.length;
  const commonMonths=new Set(salesTrend.map(point=>point.month).filter(month=>amountTrend.some(point=>point.month===month)));
@@ -136,7 +161,7 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
  const overviewReady=coreScaleReady&&coreCrnReady&&niche.newRatio!==null&&niche.avgUnits!==null&&niche.newAvgUnits!==null&&report.keywordTrends.length>0&&report.salesTrend.length>0&&(report.productDemand?.pageViews.length??0)>0&&report.prices.length>0&&report.listingAge.length>0&&report.ratingCounts.length>0&&report.ratingValues.length>0&&report.ebc.length>0;
  const keywordDirection=trend(keywordPoints),salesDirection=trend(salesTrend),amountDirection=trend(amountTrend);
  const dynamicDemand=coreScaleReady&&demandPoints>=6
-   ?`${trendPhrase(keywordDirection,'搜索需求')}；${buildSeasonalPhrase(keywordPoints,'搜索需求')}${keywordDirection==='up'?' 市场需求旺盛，且需求仍在扩张。':keywordDirection==='down'?' 市场需求正在收缩，应谨慎进入。':' 市场需求稳定，属于成熟型需求市场。'}`
+   ?`${trendPhrase(keywordDirection,'搜索需求')}；${buildSeasonalPhrase(keywordPoints,'搜索需求')}${keywordDirection==='up'?' 市场需求旺盛，且需求仍在扩张。':keywordDirection==='down'?' 市场需求正在收缩，应谨慎进入。':keywordDirection==='flat'?' 搜索需求相对稳定；市场成熟度需结合上架年龄、新品占比和内容覆盖判断。':' 搜索需求方向依据不足；市场成熟度需结合上架年龄、新品占比和内容覆盖判断。'}`
    :null;
  const dynamicSales=coreScaleReady&&salesPoints>=6
    ?`${trendPhrase(salesDirection,'行业销量')}；${commonMonths.size>=6&&alignedSales.length>=6&&alignedAmount.length>=6&&amountDirection!=='unknown'&&salesDirection!=='unknown'?(amountDirection==='up'&&salesDirection!=='up'?'销售额增长快于销量，可能存在客单价提升或产品升级。':salesDirection==='up'&&amountDirection!=='up'?'销量增长快于销售额，可能存在低价带增长或价格竞争。':salesDirection==='up'&&amountDirection==='up'?'销量与销售额同步增长，市场处于真实增长阶段。':'销量与销售额联动相对稳定。'):'销量与销售额共同月份不足，暂不判断客单价变化。'} ${buildSeasonalPhrase(salesTrend,'销售')}`
@@ -173,11 +198,16 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
   ...(amountPoints===0?['销售额趋势缺失']:[]),
   ...(amountPoints>0&&commonMonths.size<6?['销量与销售额共同月份不足6个月']:[]),
  ]);
- const keywordMissing=keywordPoints.length<6||keywordDirection==='unknown'?['关键词有效月份不足或月份不连续']:[];
+ const keywordMissing=unique([
+  ...(keywordPoints.length<6?['关键词有效月份不足']:[]),
+  ...(keywordDirection==='unknown'&&keywordPoints.length>=6?['关键词有效月份不足或月份不连续']:[]),
+  ...(keywordMissingMonths.length?[`关键词趋势缺少月份：${keywordMissingMonths.slice(0,6).join('、')}${keywordMissingMonths.length>6?'等':''}`]:[]),
+  ...(partiallyCoveredKeywords?[`${partiallyCoveredKeywords} 个关键词的月份覆盖少于汇总区间`]:[]),
+ ]);
  const dist=(key:keyof SellerSpriteMarketReport,label:string,id=String(key))=>{const count=rows(key).length;return withData(id,count>0,`${label}已保存 ${count} 个分组。`,`分组反映本次返回样本的构成，不能直接外推全市场。`,count?`${label}可用于比较各组占比；需结合来源范围和缺失项判断。`:`暂无可用分组，不能形成该章节结论。`,count?[]:[`${label}来源未返回有效分组`]);};
  return [
   withData('overview',niche.totalUnits!==null||niche.sampleProducts!==null,`样本商品 ${value(niche.sampleProducts)}，销量 ${value(niche.totalUnits)}，品牌 ${value(niche.brands)}，卖家 ${value(niche.sellers)}。`,'基础指标描述当前保存样本的规模与结构，不等于全类目总量。',overviewReady?original.finalVerdict:'规模、集中度和新品指标需在输入齐全时联合判断。',Object.entries({totalUnits:niche.totalUnits,sampleProducts:niche.sampleProducts,brands:niche.brands,sellers:niche.sellers}).filter(([,v])=>v===null).map(([k])=>`${k}缺失`)),
-  withData('demand-keywords',demandPoints>0,`关键词趋势汇总覆盖 ${demandPoints} 个有效月份（原始观测点 ${rawKeywordPoints.length} 个）。`,'先按月份汇总关键词搜索量，再判断需求方向和季节性；重复、缺失或不连续月份不作为完整季节性依据。',dynamicDemand??(demandPoints>=6?'可结合窗口趋势判断需求方向；旺季月份和备货提前期仍需完整月序列。':'当前观测不足，先补齐关键词趋势再判断旺淡季。'),keywordMissing),
+  withData('demand-keywords',demandPoints>0,`关键词 ${report.keywordTrends.length} 个；趋势汇总覆盖 ${demandPoints} 个有效月份（原始观测点 ${rawKeywordPoints.length} 个）${keywordMissingMonths.length?`；区间内缺少 ${keywordMissingMonths.length} 个月`:''}。`,'先按月份汇总关键词搜索量，再判断需求方向和季节性；重复、缺失或不连续月份不作为完整季节性依据。',dynamicDemand??(demandPoints>=6?'可结合窗口趋势判断需求方向；旺季月份和备货提前期仍需完整月序列。':'当前观测不足，先补齐关键词趋势再判断旺淡季。'),keywordMissing),
   withData('sales-trend',salesPoints>0,`行业销量趋势覆盖 ${salesPoints} 个有效月份；销售额趋势覆盖 ${amountPoints} 个有效月份，共同月份 ${commonMonths.size} 个。`,'销量与销售额必须按相同月份和相同类目范围对齐；销售额由已保存的同月数据推算时必须注明来源。',dynamicSales??(salesPoints>=2?'可比较最近与前段变化；缺月不补零。':'只有一个或没有月份，不能判断升降趋势。'),salesMissing),
   withData('product-crn',productRows.length>0,`商品集中度返回 ${productRows.length} 条排名明细；Top1-3销量份额合计 ${pct(top3)}。`,'头部份额反映本次保存样本内商品集中程度，先按销量份额排序；TopN必须与请求参数一致。',productRows.length?concentrationConclusion(productRows,'商品集中度'):'缺少商品排名，无法判断商品集中度。',productRows.length?[]:['商品集中度排名缺失']),
   withData('brand-crn',brandRows.length>0,`品牌集中度返回 ${brandRows.length} 条排名明细；头部品牌销量占比 ${pct(brandRows[0]?.unitsShare)}。`,'品牌份额反映本次保存样本内品牌结构和潜在品牌壁垒，不能替代商品集中度。',brandRows.length?concentrationConclusion(brandRows,'品牌集中度'):'缺少品牌排名，无法判断品牌壁垒。',brandRows.length?[]:['品牌集中度排名缺失']),

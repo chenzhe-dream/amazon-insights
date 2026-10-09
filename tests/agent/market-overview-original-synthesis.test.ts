@@ -151,6 +151,17 @@ test('chapter explanations follow original dynamic demand, maturity, rating and 
  assert.match(chapters['seller-country'].conclusion,/效率|集中|供应链/);
  assert.match(chapters['listing-trend'].conclusion,/成长|竞争|吸引力/);
  assert.match(chapters.price.conclusion,/市场均价/);
+ assert.doesNotMatch(chapters['demand-keywords'].conclusion,/成熟型需求市场/);
+ assert.match(chapters['demand-keywords'].performance,/关键词 1 个/);
+});
+
+test('stable keyword demand does not infer market maturity',()=>{
+ const points=Array.from({length:6},(_,index)=>({month:`2026-${String(index+1).padStart(2,'0')}`,value:100}));
+ const demand={seed:null,referenceMonth:scope.toMonth,status:'ready' as const,series:[{keyword:'scooter',searches:100000,points,status:'ready' as const,sourceRef:'market-source:'+('a'.repeat(64)),errorCode:null}],issues:[]};
+ const actual=projectMarketOverviewOriginalSynthesis({scope,parameters,sources:[source('market_research',{topProducts:100,totalUnits:120000})],industryDemand:demand});
+ const chapter=actual.chapters!.find(item=>item.id==='demand-keywords')!;
+ assert.doesNotMatch(chapter.conclusion,/成熟型需求市场/);
+ assert.match(chapter.conclusion,/成熟度需结合上架年龄/);
 });
 
 test('keyword trend normalization aggregates duplicate months before seasonal conclusions',()=>{
@@ -170,7 +181,7 @@ test('keyword trend normalization aggregates duplicate months before seasonal co
 test('seasonal conclusions cap long month lists without repeating months',()=>{
  const points=Array.from({length:18},(_,index)=>({
   month:`${2025+Math.floor(index/12)}-${String(index%12+1).padStart(2,'0')}`,
-  value:index%3===0?100:10,
+  value:index%2===0?100:10,
  }));
  const phrase=buildSeasonalPhrase(points,'搜索需求');
  assert.ok(phrase.includes('等'));
@@ -178,11 +189,30 @@ test('seasonal conclusions cap long month lists without repeating months',()=>{
  assert.doesNotMatch(phrase,/01月、01月/);
 });
 
+test('seasonal conclusions refuse non-contiguous month sequences',()=>{
+ const points=['2025-01','2025-02','2025-03','2025-04','2025-06','2025-07']
+  .map((month,index)=>({month,value:index%2?10:100}));
+ const phrase=buildSeasonalPhrase(points,'搜索需求');
+ assert.match(phrase,/月份不连续/);
+ assert.doesNotMatch(phrase,/旺季集中|淡季集中/);
+});
+
+test('seasonal conclusions normalize cross-year months and show coverage years',()=>{
+ const points=Array.from({length:24},(_,index)=>{
+  const year=2024+Math.floor(index/12),month=String(index%12+1).padStart(2,'0');
+  return {month:`${year}-${month}`,value:month==='11'||month==='12'?100:10};
+ });
+ const phrase=buildSeasonalPhrase(points,'搜索需求');
+ assert.match(phrase,/11月（2年）/);
+ assert.match(phrase,/12月（2年）/);
+ assert.doesNotMatch(phrase,/2024-11|2025-11/);
+});
+
 test('concentration conclusions rank by validated unit share instead of provider row order',()=>{
- const rows=[
+ const rows: Array<{label:string;units:number;unitsShare:number;products:number;asinRatio:number}>=[
   {label:'B',units:80,unitsShare:20,products:1,asinRatio:20},
   {label:'A',units:100,unitsShare:60,products:1,asinRatio:60},
   {label:'C',units:50,unitsShare:20,products:1,asinRatio:20},
- ] as any;
+ ];
  assert.deepEqual(rankConcentrationRows(rows).map(row=>row.label),['A','B','C']);
 });
