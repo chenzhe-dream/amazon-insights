@@ -16,11 +16,11 @@ test('complete inputs keep score, radar and original conclusion; partial inputs 
  niche.brandCrn=null;const partial=render(buildCheckedOverviewSynthesis(niche,report));assert.doesNotMatch(partial,/data-score-polygon=/);assert.equal((partial.match(/data-score-point=/g)??[]).length,5);assert.match(partial,/品牌集中度/);
 });
 
-test('radar center uses the additive six-dimension score shown by the summary',()=>{
+test('radar summary moves the additive score out of the chart plotting area',()=>{
  const {niche,report}=completeScoreFixture();
  const ready=buildCheckedOverviewSynthesis(niche,report);
  const html=renderToStaticMarkup(<MarketOverviewOriginalSummary result={{version:6,...ready,inputGaps:[],sourceRefs:[],originalAssumptions:[]}}/>);
- assert.match(html, new RegExp(`>${ready.summary.score}%<`));
- assert.doesNotMatch(html,/fill-opacity="0\.76"/);
- assert.match(html,/fill="#fff"/);
+ assert.match(html,/综合得分/);
+ assert.match(html, new RegExp(`>${ready.summary.score}\/100<`));
+ assert.doesNotMatch(html,/ss-market-synthesis-radar-center/);
 });

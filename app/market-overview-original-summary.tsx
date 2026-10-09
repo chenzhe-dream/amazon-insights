@@ -83,7 +83,11 @@ function MarketSynthesisRadarChart({
     <div className="ss-market-synthesis-radar-card">
       <div className="ss-market-synthesis-radar-head">
         <h5>六维机会雷达</h5>
-        <span>分数越高越有利</span>
+        <div className="ss-market-synthesis-radar-head-meta" aria-label="综合得分">
+          <strong>{complete&&score!==null?`${score}/100`:'—'}</strong>
+          <span>{complete?'综合得分':'待补充'}</span>
+          <small>分数越高越有利</small>
+        </div>
       </div>
       <div className="ss-market-synthesis-radar">
         <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="市场机会六维雷达图">
@@ -179,15 +183,6 @@ function MarketSynthesisRadarChart({
               </g>
             );
           })}
-          <g className="ss-market-synthesis-radar-center">
-            <circle cx={cx} cy={cy} r={28} fill="#fff" stroke="#ddd6fe" strokeWidth="1.2" />
-            <text x={cx} y={cy - 2} textAnchor="middle" className="ss-market-synthesis-radar-center-label">
-              {complete?'综合':'待补充'}
-            </text>
-            <text x={cx} y={cy + 14} textAnchor="middle" className="ss-market-synthesis-radar-center-value">
-              {complete&&score!==null?`${score}%`:'—'}
-            </text>
-          </g>
         </svg>
       </div>
       <ul className="ss-market-synthesis-radar-legend">
