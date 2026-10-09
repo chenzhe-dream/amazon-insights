@@ -41,7 +41,11 @@
 .market-ui-reference .market-reference-overview .ss-report-kpis article dt { color: #738399; }
 .market-ui-reference .market-reference-overview .market-research-result > .market-research-note { font-size: 11px; }
 .market-ui-reference .market-reference-overview .market-overview-distributions { margin-top: 18px; }
-.market-ui-reference .market-reference-overview .ss-report-block { padding: 14px 16px; margin: 0; background: white; border: 1px solid #e9d5ff; border-radius: 12px; }
+.market-ui-reference .market-reference-overview .ss-report-block { padding: 14px 16px; margin: 0; background: white; border: 1px solid #e9d5ff; border-radius: 12px; content-visibility: auto; contain-intrinsic-size: 420px; }
+.market-ui-reference .market-reference-overview .market-overview-loading-shell{display:grid;gap:14px;margin-top:18px;padding:18px;border:1px solid #e7ddff;border-radius:12px;background:linear-gradient(180deg,#fcfaff,#fff)}
+.market-ui-reference .market-reference-overview .market-overview-loading-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.market-ui-reference .market-reference-overview .market-overview-loading-grid span{display:block;height:54px;border-radius:10px;background:linear-gradient(90deg,#f0eaff 25%,#faf8ff 37%,#f0eaff 63%);background-size:400% 100%;animation:market-overview-loading 1.4s ease infinite}
+@keyframes market-overview-loading{0%{background-position:100% 0}100%{background-position:-100% 0}}
 .market-ui-reference .market-reference-overview .ss-report-block header { margin-bottom: 12px; }
 .market-ui-reference .market-reference-overview .ss-report-block h4 { margin: 0; font-size: 14px; }
 .market-ui-reference .market-reference-overview .ss-report-facts { padding: 12px 14px; border: 1px solid #e4e8f1; border-radius: 8px; background: #fbfcff; font-size: 12px; }

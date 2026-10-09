@@ -52,6 +52,7 @@ test('role-specific audit visibility preserves report loading and failure recove
   const html=renderToStaticMarkup(<MarketOverviewReportView entry={detail.entry} detail={null} error={error} onRetry={()=>{}} showAuditDetails={showAuditDetails}/>);
   assert.match(html,/已保存总览报告/);
   assert.match(html,error?/读取暂时失败|重新读取报告/:/正在读取此版本报告/);
+  if(!error) assert.match(html,/market-overview-loading-shell/);
   assert.equal(html.includes('报告版本与来源身份'),false,'audit UI requires the client tools host');
  }
 });
