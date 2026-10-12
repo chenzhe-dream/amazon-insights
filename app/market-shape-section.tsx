@@ -57,6 +57,12 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     const [choice, setChoice] = useState('latest'), [historic, setHistoric] = useState<MarketShapePublicRevision | null>(null), [historyError, setHistoryError] = useState<string | null>(null);
     const [presentation, setPresentation] = useState<MarketShapeExplanationPresentation | null>(null);
     const [analysisNotice,setAnalysisNotice]=useState<{runId:string;revisionId:string;reason:string|null}|null>(null);
+    const selectionKey=JSON.stringify([selection.marketplace??'US',selection.nodeIdPath,selection.fromMonth,selection.toMonth]);
+    const selectionState=useRef({key:selectionKey,revision:0,selection,onSelectionChange});
+    if(selectionState.current.key!==selectionKey)selectionState.current.revision++;
+    selectionState.current={...selectionState.current,key:selectionKey,selection,onSelectionChange};
+    // A restoration can adopt scope once. Polling cannot change the query draft.
+    const scopeRestore=useRef<{runId:string;revision:number|null}|null>(null);
     const owner = useRef<AbortController | null>(null), draftRun = useRef(''), pendingStart = useRef<{
         hash: string;
         studyKey: string;
@@ -66,12 +72,19 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         key: string;
     } | null>(null);
     useEffect(() => { const abort = new AbortController(); owner.current = abort; const id = MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('shapeRun')); if (id.success) {
+        scopeRestore.current={runId:id.data,revision:null};
         setRunId(id.data);
         setRestoreId(id.data);
     } return () => { abort.abort(); owner.current = null; }; }, []);
     useEffect(() => {
         if (!runId)
             return;
+        const intent=scopeRestore.current;
+        if(intent?.runId===runId&&intent.revision===null){
+            // Capture after the parent's URL hydration has supplied module conditions.
+            if(selectionState.current.selection.nodeIdPath.trim())scopeRestore.current=null;
+            else intent.revision=selectionState.current.revision;
+        }
         const abort = new AbortController();
         let timer: ReturnType<typeof setTimeout> | undefined;
         let failures=0;
@@ -79,6 +92,14 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
             const next = await readShapeRun(runId, abort.signal);
             if (abort.signal.aborted)
                 return;
+            const restore=scopeRestore.current;
+            if(restore===intent&&restore?.runId===runId){
+                scopeRestore.current=null;
+                if(restore.revision===selectionState.current.revision){
+                    const {marketplace,nodeIdPath,fromMonth,toMonth}=next.scope;
+                    selectionState.current.onSelectionChange({marketplace,nodeIdPath,fromMonth,toMonth});
+                }
+            }
             setRun(next);
             failures=0;
             setLastReadAt(new Date().toLocaleTimeString());
@@ -191,7 +212,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     function restore(e: FormEvent) { e.preventDefault(); const id = MarketModuleIdSchema.safeParse(restoreId.trim()); if (!id.success) {
         setError('请输入有效任务编号。');
         return;
-    } setRun(null); setChoice('latest'); setRunId(id.data); remember(id.data); draftRun.current = ''; setReload(n => n + 1); }
+    } scopeRestore.current={runId:id.data,revision:selectionState.current.revision}; setRun(null); setChoice('latest'); setRunId(id.data); remember(id.data); draftRun.current = ''; setReload(n => n + 1); }
     const queryLocked=busy||!!(run&&active(run));
     function requestPoolSizeChange(size: number) {
         if (!run || size === run.params.poolSize) {

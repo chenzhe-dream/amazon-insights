@@ -309,3 +309,16 @@ The system SHALL expose safe observable network phases and bounded versioned mar
 #### Scenario: No work is ready during cooldown
 - **WHEN** tick returns false and queued work has a future attempt time
 - **THEN** acceptance waits and rechecks rather than treating this as completion.
+
+### Requirement: Shape task restoration restores usable query controls
+The system SHALL adopt a saved shape task's marketplace, category and month range once after a successful explicit restore. A saved task deep link with an empty category SHALL fill its saved scope after URL hydration. Normal polling and refresh of a nonempty query SHALL preserve independently edited conditions. Only shape module URL parameters SHALL change, and reads SHALL NOT initiate collection or model execution.
+
+#### Scenario: A saved report is restored with missing query conditions
+- **WHEN** the operator restores a saved shape task explicitly or opens its task link with an empty category
+- **THEN** the saved marketplace, category and month range fill the controls and the recollection confirmation becomes reachable
+- **AND** cancelling that confirmation creates no collection or model work
+
+#### Scenario: Query conditions change before a restore read completes
+- **WHEN** the operator edits the query while restoration is pending, or switches to a newer task
+- **THEN** late reads do not overwrite the newer query or consume another restore's scope adoption
+- **AND** normal polling, page refresh and module navigation preserve nonempty edited conditions and other module inputs
