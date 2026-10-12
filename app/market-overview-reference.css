@@ -26,6 +26,15 @@
 .market-ui-reference .market-reference-cache-help { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
 .market-ui-reference .market-reference-cache-help:focus-visible { outline: 2px solid #8f7dea; outline-offset: 2px; }
 .market-ui-reference .market-reference-run-status { font-size: 12px; font-weight: 500; color: #6e7d91; }
+.market-ui-reference .market-overview-progress-notice { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid #e3eaf3; border-radius: 8px; color: #33465c; background: #f8faff; }
+.market-ui-reference .market-overview-progress-notice > div { min-width: 0; }
+.market-ui-reference .market-overview-progress-notice strong { display: block; font-size: 12px; font-weight: 650; }
+.market-ui-reference .market-overview-progress-notice p { margin: 4px 0 0; color: #687a91; font-size: 11px; line-height: 1.6; }
+.market-ui-reference .market-overview-progress-notice .market-theme-spinner { flex: none; margin-top: 2px; }
+.market-ui-reference .market-overview-progress-notice.tone-active,
+.market-ui-reference .market-overview-progress-notice.tone-partial { border-color: #edd4a7; background: #fff8ec; }
+.market-ui-reference .market-overview-progress-notice.tone-complete { border-color: #c8e6d1; background: #f4fbf6; }
+.market-ui-reference .market-overview-progress-notice.tone-failed { border-color: #efc7c0; background: #fff7f5; }
 .market-ui-reference .market-reference-overview .ss-market-report-panel { margin-top: 12px; }
 .market-ui-reference .market-reference-overview .ss-report-hero { display: grid; gap: 16px; padding: 16px 18px; }
 .market-ui-reference .market-reference-overview .ss-report-hero-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
