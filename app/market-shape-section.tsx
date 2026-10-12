@@ -122,10 +122,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         catch (e) {
             if (!abort.signal.aborted) {
                 if(typeof e==='object'&&e!==null&&'status' in e&&e.status===403){
-                    cancel();cancelTarget();historyOwner.current?.abort();scopeRestore.current=null;
-                    setRun(null);setRunId('');setHistoric(null);setChoice('latest');setHistoryError(null);setPresentation(null);setAnalysisNotice(null);setLastReadAt(null);
-                    draftRun.current='';pendingSave.current=null;onReferenceState({dirty:false,saving:false,fingerprint:''});
-                    setReadError(`${e instanceof Error?e.message:'当前报告无权读取'}；当前报告访问权限已撤销，请重新读取有权访问的任务。`);return;
+                    revokeCurrentReport(e);return;
                 }
                 const delay=shapePollingDelay(++failures,e);
                 setReadError(`${e instanceof Error ? e.message : '读取状态失败'}；${delay===null?'自动重试已停止，请手动刷新状态':`${delay/1000}秒后自动重试（${failures}/5）`}`);
@@ -228,6 +225,12 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
             setBusy(false);
     } }
     function cancelTarget(){targetOwner.current?.abort();targetGeneration.current++;setTargetLoading(false);setPendingTarget(null);setTargetError(null);}
+    function revokeCurrentReport(error:unknown){
+        currentReadCancel.current?.();cancelTarget();historyOwner.current?.abort();scopeRestore.current=null;
+        setRun(null);setRunId('');setHistoric(null);setChoice('latest');setHistoryError(null);setPresentation(null);setAnalysisNotice(null);setLastReadAt(null);
+        draftRun.current='';pendingSave.current=null;onReferenceState({dirty:false,saving:false,fingerprint:''});
+        setReadError(`${error instanceof Error?error.message:'当前报告无权读取'}；当前报告访问权限已撤销，请重新读取有权访问的任务。`);
+    }
     function commitTarget(target:Target,discard=false){
         if(!owner.current||target.generation!==targetGeneration.current||targetOwner.current?.signal.aborted||liveState.current.busy||referenceLive.current.saving)return;
         const same=liveState.current.runId===target.run.id;
@@ -248,7 +251,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         cancelTarget();const generation=targetGeneration.current,abort=new AbortController();targetOwner.current=abort;
         const inputRevision=selectionState.current.revision;setTargetLoading(true);setTargetError(null);
         try{const next=await readShapeRun(id.data,abort.signal);commitTarget({run:next,generation,inputRevision,draft:liveState.current.draftFingerprint});}
-        catch(e){if(!abort.signal.aborted&&generation===targetGeneration.current){setTargetLoading(false);setTargetError(`目标任务读取失败，${liveState.current.runId?'仍显示原任务':'未读取到任务'}：${e instanceof Error?e.message:'请重试'}`);}}
+        catch(e){if(!abort.signal.aborted&&generation===targetGeneration.current){if(id.data===liveState.current.runId&&typeof e==='object'&&e!==null&&'status' in e&&e.status===403){revokeCurrentReport(e);return;}setTargetLoading(false);setTargetError(`目标任务读取失败，${liveState.current.runId?'仍显示原任务':'未读取到任务'}：${e instanceof Error?e.message:'请重试'}`);}}
     }
     const switchLocked=busy||referenceState.saving;
     const writeLocked=busy||targetLoading||!!pendingTarget;

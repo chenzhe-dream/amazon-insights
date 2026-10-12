@@ -46,5 +46,7 @@ test('reference drafts guard task switches and pause autosave during target read
  await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();targetRelease=()=>{};await page.getByLabel('形态任务编号').fill(b.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();while(targetReads===beforeTarget)await page.waitForTimeout(10);currentRelease!();currentRelease=undefined;await page.getByText(/current reference permission revoked/).waitFor();targetRelease!();targetRelease=undefined;await page.waitForTimeout(150);
  assert.equal(await input.count(),0,'current 403 unmounts modern reference source and draft panel');
  currentStatus=200;await page.getByLabel('形态任务编号').fill(a.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();await input.waitFor();targetRelease=undefined;
+ currentStatus=403;await page.getByLabel('形态任务编号').fill(a.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText(/current reference permission revoked/).waitFor();assert.equal(await input.count(),0,'explicit same-task403 revokes modern source and draft panel');
+ currentStatus=200;await page.getByRole('button',{name:'读取任务',exact:true}).click();await input.waitFor();
  missingStatus=401;await page.getByLabel('形态任务编号').fill('00000000-0000-4000-8000-000000000999');await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText('Login required',{exact:true}).waitFor();assert.equal(await input.count(),0,'auth-required event clears retained report through auth gate');assert.equal(writes,1);
 });

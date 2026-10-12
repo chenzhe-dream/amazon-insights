@@ -189,6 +189,15 @@ test('shape restoration binds saved scope without overwriting newer drafts or ot
     assert.equal(await page.getByRole('button',{name:'放弃修改并切换',exact:true}).count(),0,'staged target must be invalidated');
     const stopped=reads;await page.waitForTimeout(4200);assert.equal(reads,stopped,'403 must stop polling');
   });
+  await t.test('explicit same-task 403 clears revoked source and historical report',async()=>{
+    const revision=shapeRevision();current.run.latestRevision=revision;current.run.history=[{revisionId:revision.revisionId,ordinal:1,createdAt:revision.createdAt}];
+    await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);
+    await page.getByLabel('形态报告版本').selectOption(revision.revisionId);await page.getByText('正在读取此版本…',{exact:true}).waitFor({state:'hidden'});
+    nextCurrent={status:403,body:{error:'explicit same-task permission revoked'}};await restore();
+    await page.getByText(/explicit same-task permission revoked/).waitFor();
+    assert.equal(await page.getByText('Shelf lamp',{exact:true}).count(),0,'same-task403 revokes displayed source');
+    assert.equal(await page.getByLabel('形态报告版本').count(),0,'same-task403 revokes displayed history');
+  });
   await t.test('saving blocks target restores until write settles',async()=>{
     await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);await openShapeTaskRecovery(page);
     writeRelease=()=>{};await page.getByLabel('修订说明').fill('save in progress');
