@@ -61,7 +61,7 @@ import {
 } from "./lib/provider-diagnostics.mjs";
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
-import { listingInputFromPersistedJob } from "./lib/image-remark-listing-input.mjs";
+import { listingInputFromPersistedJob, partitionImageListingInput } from "./lib/image-remark-listing-input.mjs";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -98,6 +98,15 @@ export function imageRemarkRunAsins(job, asins) {
   return asins.filter(asin => (!Array.isArray(planned) || planned.includes(asin))
     && (stage?.imageAction !== "refresh" || job?.asinProgress?.[asin]?.listing?.status === "ready")
     && (stage?.imageAction || job?.asinProgress?.[asin]?.image_remarks?.status === "pending"));
+}
+
+/** Only the validated gallery cohort may reach the image subprocess. */
+export async function runGalleryReadyImageProcess(job, asins, dispatch) {
+  const partition = partitionImageListingInput(job, asins);
+  const process = partition.readyAsins.length
+    ? await dispatch(partition.readyAsins)
+    : { succeeded: true };
+  return { ...partition, process };
 }
 
 function reactivateImageRemarksForReadyGalleries(jobId, asins) {
@@ -424,6 +433,7 @@ export function applyPersistedStagePostcondition(
     commandSucceeded = true,
     unavailableReason = null,
     resultStatusesByAsin = null,
+    resultReasonsByAsin = null,
     readReadiness = readAsinStageReadiness,
     markModule = markAsinModule,
     updateStage = setStage,
@@ -445,10 +455,10 @@ export function applyPersistedStagePostcondition(
     if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) {
       markModule(jobId, asin, stageId, {
         status: reported,
-        reason: reported === "ready" ? null
-          : diagnostics.some(item => item.asin === asin && item.stage === stageId && item.causeCode === "PROVIDER_DEGRADED")
+        reason: reported === "ready" ? null : resultReasonsByAsin?.[asin] ??
+          (diagnostics.some(item => item.asin === asin && item.stage === stageId && item.causeCode === "PROVIDER_DEGRADED")
             ? "数据源连接异常，保护机制已跳过本次请求，可补抓未完成项"
-            : "连接器记录的局部结果",
+            : "连接器记录的局部结果"),
       });
     }
   }
@@ -1395,9 +1405,14 @@ async function main() {
       let imageListingInputFile;
       let imageCandidateFile;
       let imageListingByAsin;
+      let galleryReadyAsins = imageAsins;
+      let missingGalleryAsins = [];
       if (persistedImageJob?.scope?.organizationId) {
         // Verify provenance before handing the captured gallery to the image subprocess.
-        imageListingByAsin = listingInputFromPersistedJob(persistedImageJob, imageAsins);
+        const partition = partitionImageListingInput(persistedImageJob, imageAsins);
+        imageListingByAsin = partition.listingByAsin;
+        galleryReadyAsins = partition.readyAsins;
+        missingGalleryAsins = partition.missingAsins;
         const { dataRoot } = resolveRuntimeRoots({
           codeRoot: root, formal: Boolean(process.env.AGENT_FORMAL_WORKTREE_ROOT), env: process.env,
         });
@@ -1411,13 +1426,13 @@ async function main() {
       let imageProcess;
       let imageStagePersisted = false;
       try {
-        imageProcess = await runImageRemarkProcess({
+        const dispatchImageProcess = async (readyAsins) => runImageRemarkProcess({
         command: "npm",
         args: ["run", "image-remarks:sync"],
         cwd: root,
         env: repairProviderEnvironment(job, "image_remarks", {
           ...process.env,
-          REMARK_ASINS: imageAsins.join(","),
+          REMARK_ASINS: readyAsins.join(","),
           AGENT_SYNC_JOB_ID: jobId,
           AGENT_SYNC_STAGE_ID: "image_remarks",
           ...(imageListingInputFile ? { AGENT_SYNC_LISTING_STAGE_FILE: imageListingInputFile } : {}),
@@ -1436,10 +1451,13 @@ async function main() {
         },
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
         });
+        imageProcess = persistedImageJob?.scope?.organizationId
+          ? (await runGalleryReadyImageProcess(persistedImageJob, imageAsins, dispatchImageProcess)).process
+          : await dispatchImageProcess(imageAsins);
         let imageRemarksData = { remarksByAsin: {}, outcomesByAsin: {} };
         if (imageCandidateFile && fs.existsSync(imageCandidateFile)) {
-          imageRemarksData = readImageRemarkCandidate(imageCandidateFile, { job: persistedImageJob, asins: imageAsins });
-        } else if (imageCandidateFile && imageProcess.succeeded) {
+          imageRemarksData = readImageRemarkCandidate(imageCandidateFile, { job: persistedImageJob, asins: galleryReadyAsins });
+        } else if (imageCandidateFile && galleryReadyAsins.length && imageProcess.succeeded) {
           throw new Error("Successful image worker did not persist its job candidate");
         }
         const scopedImageStatuses = imageCandidateFile
@@ -1453,7 +1471,11 @@ async function main() {
             readReadiness: (_stage, cohort) => imageCandidateReadiness(imageRemarksData, imageListingByAsin, cohort),
           } : {}),
           resultStatusesByAsin: scopedImageStatuses,
-          unavailableReason: imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
+          resultReasonsByAsin: Object.fromEntries(missingGalleryAsins.map(asin =>
+            [asin, "本次任务缺少可用图库，未调用图片模型"])),
+          unavailableReason: missingGalleryAsins.length
+            ? `本次任务缺少可用图库，未分析 ${missingGalleryAsins.length} 个 ASIN`
+            : imageProcess.succeeded ? null : "图片 AI 备注存在明确缺口",
           stageDetail: latestImageStageDetail,
         });
         if (imageCandidateFile) {

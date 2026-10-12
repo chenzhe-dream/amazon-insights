@@ -115,6 +115,21 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData);
+  if (stageStatus === 'partial' && stageId === 'sales_trend') {
+    // Valid observations are evidence even when natural-month readiness is unavailable.
+    // Keep the ASIN in the gap; do not promote daily data to monthly readiness.
+    const observations = readSource(source, readExport);
+    for (const asin of requestedAsins) {
+      const record = observations?.[asin];
+      if (record?.asin !== asin || !['empty','error'].includes(record.status)) continue;
+      const validPoints = (points, dateField, pattern) => Array.isArray(points) && points.length > 0 &&
+        points.every(point => pattern.test(point?.[dateField]) && Number.isFinite(point.value) && point.value >= 0);
+      const hasEvidence = ['volume','amount','price','rank'].some(field =>
+        validPoints(record[field], 'month', /^\d{4}-(0[1-9]|1[0-2])$/) ||
+        validPoints(record.dailyObservations?.[field], 'date', /^\d{4}-\d{2}-\d{2}$/));
+      if (hasEvidence) data.trendByAsin[asin] = record;
+    }
+  }
   if (stageStatus === "partial") {
     const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
     const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, readyAsins);
@@ -204,7 +219,7 @@ function sanitizeGapItem(raw) {
   const causeCode = gapReasonCodes.has(raw?.causeCode) ? raw.causeCode : null;
   if (!/^[A-Z0-9]{10}$/.test(asin) || !causeCode) return null;
   const item = { asin, causeCode };
-  const operations = new Set(["tools/list", "asin_detail", "asin_sales_trend", "keepa_info", "review", "product_customers_say", "product_reviews", "product_detail", "product_trend", "product_variations", "category_name_search", "category_trend"]);
+  const operations = new Set(["tools/list", "asin_detail", "asin_sales_trend", "keepa_info", "review", "product_customers_say", "product_reviews", "product_detail", "product_content", "product_trend", "product_variations", "category_name_search", "category_trend"]);
   const boundaries = new Set(["response-body", "rpc-envelope", "tool-content", "consumer-shape"]);
   if (operations.has(raw.operation)) item.operation = raw.operation;
   if (boundaries.has(raw.boundary)) item.boundary = raw.boundary;

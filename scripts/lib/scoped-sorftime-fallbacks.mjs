@@ -82,17 +82,20 @@ export function buildScopedSorftimeModuleResult({
   if (module === "price_strategy") {
     const price = evidence.detail.data?.price;
     const coupon = evidence.detail.data?.coupon;
+    const signed = evidence.detail.data?.couponEncoding === 'signed';
+    const hasCoupon = Number.isFinite(coupon) && (signed ? coupon !== 0 : coupon > 0);
+    const couponLabel = !hasCoupon ? '' : signed ? coupon < 0 ? `${Math.abs(coupon)}% 比例折扣` : `$${coupon.toFixed(2)} 固定金额券` : String(coupon);
     const currentPrice = positiveMoneyOrNull(price);
     if (currentPrice == null) return null;
-    const couponText = Number.isFinite(coupon) && coupon > 0 ? `，Coupon ${coupon}` : "";
+    const couponText = hasCoupon ? `，Coupon ${couponLabel}` : "";
     return {
       ...base(evidence.detail),
       status: "ready",
       currentPrice,
       coupon: Number.isFinite(coupon) ? coupon : 0,
       anchor: `当前售价 $${currentPrice.toFixed(2)}${couponText}。`,
-      promotion: Number.isFinite(coupon) && coupon > 0
-        ? "Sorftime product_detail 返回有效 Coupon。"
+      promotion: hasCoupon
+        ? `Sorftime product_detail 返回有效 Coupon${signed ? `：${couponLabel}` : ''}。`
         : "Sorftime product_detail 暂未返回有效 Coupon。",
       psychology: "以当前公开售价作为可核验价格锚点。",
       evidence: "Sorftime · same-job product_detail（price/coupon）",

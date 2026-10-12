@@ -1,3 +1,5 @@
+import { normalizeProductDetailResponse } from './sorftime-product-contract.mjs';
+
 function normalizeImageList(items) {
   return items
     .map(item => String(item ?? "").trim())
@@ -21,16 +23,16 @@ export function parseImageList(raw) {
   return [];
 }
 
-export function createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }) {
+export function createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation = 'product_detail' }) {
   if (!jobId) return null;
   return {
     jobId: String(jobId),
     marketplace: String(marketplace).toUpperCase(),
     asin: String(asin).toUpperCase(),
-    operation: "product_detail",
+    operation,
     fetchedAt: String(fetchedAt),
     connector: "sorftime",
-    tool: "product_detail",
+    tool: operation,
     stageId: "listing",
   };
 }
@@ -84,7 +86,10 @@ export function selectScopedListingRecord({
   forceRefresh = false,
   requireScopedEvidence = false,
 }) {
-  if (evidence) return buildListingRecordFromProductDetailEvidence(evidence);
+  if (evidence) {
+    const record = buildListingRecordFromProductDetailEvidence(evidence);
+    return record.galleryImages.length ? record : null;
+  }
   if (requireScopedEvidence) return null;
   if (!forceRefresh && existingRecord?.status === "ready" && existingRecord.galleryImages?.length) {
     return existingRecord;
@@ -94,4 +99,37 @@ export function selectScopedListingRecord({
 
 export function discardUnscopedListingRecord(records, asin) {
   delete records[asin];
+}
+
+export async function collectListingProductData({ asin, marketplace, key, callTool, detailEvidence, refreshImages = false }) {
+  let detail = detailEvidence?.data;
+  if (!detail) detail = normalizeProductDetailResponse(await callTool(key, 'product_detail', { asin, amz_site: marketplace }), { asin });
+  let galleryImages = refreshImages && detailEvidence ? [] : parseImageList(detail.galleryImages ?? detail.main_image);
+  const hasAplus = detail.hasAplus === true || detail.a_plus === true ? true : detail.hasAplus === false || detail.a_plus === false ? false : null;
+  let operation = 'product_detail';
+  if (!galleryImages.length) {
+    try {
+      const content = normalizeProductDetailResponse(await callTool(key, 'product_content', { asin, amz_site: marketplace }), { asin, operation: 'product_content' });
+      if (content.asin !== asin) throw Object.assign(new TypeError('Product content ASIN missing'), { kind: 'schema' });
+      galleryImages = parseImageList(content.main_image);
+      operation = 'product_content';
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      error.listingDetailSignals = { hasAplus, operation: 'product_detail' };
+      throw error;
+    }
+  }
+  return { galleryImages, hasAplus, operation };
+}
+
+export function buildListingFailureRecord({ asin, marketplace, jobId, fetchedAt, error }) {
+  const signals = error?.listingDetailSignals;
+  return {
+    asin, marketplace, fetchedAt, status: 'error',
+    statusMessage: error instanceof Error ? error.message : String(error),
+    mainImage: null, galleryImages: [], secondaryImages: [], imageCount: 0,
+    hasAplus: signals?.hasAplus ?? null, hasEbc: null, hasVideo: null, lqs: null,
+    source: 'Sorftime',
+    provenance: signals ? createDirectListingProvenance({ asin, marketplace, jobId, fetchedAt, operation: signals.operation }) : null,
+  };
 }

@@ -13,7 +13,7 @@ const causeCodes = new Set([
 const diagnosticOperations = new Set([
   "tools/list",
   "asin_detail", "asin_sales_trend", "keepa_info", "review",
-  "product_customers_say", "product_reviews", "product_detail", "product_trend",
+  "product_customers_say", "product_reviews", "product_detail", "product_content", "product_trend",
   "product_variations", "category_name_search", "category_trend",
 ]);
 const diagnosticBoundaries = new Set([

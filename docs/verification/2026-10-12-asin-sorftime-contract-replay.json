@@ -1,0 +1,23 @@
+{
+  "checkedAt": "2026-10-12T07:14:28.898Z",
+  "evidence": "saved real Sorftime responses, offline replay",
+  "category": {
+    "nodeId": "14109871",
+    "categoryName": "Chairs & Seats",
+    "topCategory": "Home & Kitchen",
+    "sourceAsin": "B0BWCQHCWX"
+  },
+  "price": 59.99,
+  "galleryCount": 7,
+  "galleryOperation": "product_content",
+  "trendPeriod": "day",
+  "dailyObservations": 731,
+  "monthlyPoints": 0,
+  "dailyEvidencePersisted": 731,
+  "monthlyReadiness": "empty",
+  "sourceJobId": "ee026e41-82b1-4c57-9215-3831471302e7",
+  "missingGalleryCount": 10,
+  "imageDispatches": 0,
+  "newSupplierCalls": 0,
+  "productionWrites": 0
+}

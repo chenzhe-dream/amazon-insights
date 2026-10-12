@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getProjectRoot } from "./project-root.mjs";
 import { resolveRuntimeRoots } from "./runtime-roots.mjs";
 import { parseImageList } from "./sorftime-listing-parse.mjs";
+import { normalizeProductDetailResponse, resolveProductCategory } from "./sorftime-product-contract.mjs";
 import { parseSorftimeCategoryTrend } from "./sorftime-trend-parse.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -38,7 +39,9 @@ function evidencePath(identity, options) {
   );
 }
 
-function normalizeProductDetailData(data) {
+function normalizeProductDetailData(raw, asin) {
+  const data = normalizeProductDetailResponse(raw, { asin: asin ?? raw?.data?.asin ?? raw?.asin });
+  const category = Object.hasOwn(data, 'sub_category') ? resolveProductCategory(data, { asin: asin ?? data.asin }) : null;
   const galleryImages = parseImageList(data?.galleryImages ?? data?.main_image);
   const hasAplus = data?.hasAplus === true || data?.a_plus === true
     ? true
@@ -54,12 +57,13 @@ function normalizeProductDetailData(data) {
     fbaFee: optionalNumber(data?.fbaFee ?? data?.fba_fee),
     packageSize: optionalText(data?.packageSize ?? data?.package_size_cm),
     price: optionalNumber(data?.price),
-    coupon: optionalNumber(data?.coupon),
-    nodeId: data?.nodeId != null || data?.node_id != null
+    coupon: typeof data?.coupon === 'number' && Number.isFinite(data.coupon) ? data.coupon : null,
+    couponEncoding: data.couponEncoding === 'signed' || raw?.doc != null || data.sub_category != null ? 'signed' : 'legacy',
+    nodeId: category?.nodeId ?? (data?.nodeId != null || data?.node_id != null
       ? optionalText(String(data?.nodeId ?? data?.node_id))
-      : null,
-    categoryName: optionalText(data?.categoryName ?? data?.subcategory ?? data?.category),
-    topCategory: optionalText(data?.topCategory ?? data?.top_category),
+      : null),
+    categoryName: category?.categoryName ?? optionalText(data?.categoryName ?? data?.subcategory ?? data?.category),
+    topCategory: category?.topCategory ?? optionalText(data?.topCategory ?? data?.top_category),
   };
 }
 
@@ -147,7 +151,7 @@ export function createProductDetailEvidence({
       tool: "product_detail",
       stageId: "catalog",
     },
-    data: normalizeProductDetailData(detail),
+    data: normalizeProductDetailData(detail, identity.asin),
   };
 }
 

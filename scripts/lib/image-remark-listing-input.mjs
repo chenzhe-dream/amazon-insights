@@ -43,3 +43,19 @@ export function readListingInputFile(filePath, jobId, asins) {
   }
   return listingInputFromPersistedJob(payload.job, asins);
 }
+
+/** Validate the immutable source first; absence of a usable gallery is a local gap. */
+export function partitionImageListingInput(job, asins) {
+  listingInputFromPersistedJob(job, []);
+  const listingByAsin = {};
+  const missingAsins = [];
+  for (const asin of asins) {
+    try {
+      Object.assign(listingByAsin, listingInputFromPersistedJob(job, [asin]));
+    } catch (error) {
+      if (error.message !== `Image listing gallery unavailable for ${asin}`) throw error;
+      missingAsins.push(asin);
+    }
+  }
+  return { listingByAsin, readyAsins: asins.filter(asin => !missingAsins.includes(asin)), missingAsins };
+}

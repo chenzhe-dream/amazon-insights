@@ -9,6 +9,7 @@ import {
   ProviderDiagnosticError,
 } from "./lib/provider-diagnostics.mjs";
 import { parseSorftimeCategoryTrend } from "./lib/sorftime-trend-parse.mjs";
+import { resolveProductCategory } from "./lib/sorftime-product-contract.mjs";
 import { selectSorftimeCategoryInputs } from "./lib/sorftime-category-input.mjs";
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
@@ -47,21 +48,7 @@ function mergeByMonth(volume, avgPrice) {
 
 async function resolveNodeFromAsin(callTool, key, asin, marketplace) {
   const detail = await callTool(key, "product_detail", { asin, amz_site: marketplace });
-  const data = detail?.data ?? detail;
-  // A matching product with the observed empty node field has no category
-  // trend to request. Missing/malformed envelopes still fail schema checks.
-  if (data?.asin === asin && data.node_id === "") return null;
-  const nodeId = data?.node_id != null ? String(data.node_id) : null;
-  if (!nodeId || (data?.asin != null && data.asin !== asin)) {
-    throw Object.assign(new Error("category node unavailable"), {
-      kind: "schema",
-      providerDiagnostic: { operation: "product_detail", boundary: "consumer-shape" },
-    });
-  }
-  const subcategory = String(data.subcategory ?? "");
-  const categoryName = subcategory.replace(/\s*\(Rank:\s*\d+\)\s*$/i, "").trim() || data.category || "未知类目";
-  const topCategory = String(data.top_category ?? "").replace(/\s*\(Rank:\s*\d+\)\s*$/i, "").trim();
-  return { nodeId, categoryName, topCategory, sourceAsin: asin };
+  return resolveProductCategory(detail, { asin });
 }
 
 export async function runSorftimeCategoryCli(options = {}) {

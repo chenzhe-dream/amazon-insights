@@ -179,7 +179,7 @@ function sorftimeLogicalOperationKey(method, params) {
     asin: providerAsin(params),
     nodeId: String(args?.node_id ?? args?.nodeId ?? ""),
     trendIndex: String(args?.trend_index ?? args?.trendIndex ?? ""),
-    productTrendType: String(args?.product_trend_type ?? ""),
+    productTrendType: String(args?.type ?? args?.product_trend_type ?? ""),
   });
   return `sorftime:${createHash("sha256").update(identity).digest("hex")}`;
 }

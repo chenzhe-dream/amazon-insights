@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
-import { parseSorftimeTrend } from "./lib/sorftime-trend-parse.mjs";
+import { parseSorftimeTrend, parseSorftimeProductTrend } from "./lib/sorftime-trend-parse.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
@@ -42,20 +42,30 @@ export function parsePriceStrategyResponse({ asin, detailRaw, priceRaw }) {
     failureKind: "schema", causeCode: "MCP_SCHEMA", boundary: "consumer-shape",
   }); };
   const detail = detailRaw?.data ?? detailRaw;
+  const couponEncoding = detailRaw?.doc != null || detail?.sub_category != null ? 'signed' : 'legacy';
+  if (detailRaw?.doc != null && detail?.asin !== asin) fail('product_detail');
   if (!detail || typeof detail !== "object" || Array.isArray(detail) ||
       (detail.asin != null && detail.asin !== asin) || !Object.hasOwn(detail, "price") ||
       (detail.price != null && (typeof detail.price !== "number" && typeof detail.price !== "string" ||
         String(detail.price).trim() === "" || !Number.isFinite(Number(detail.price)) || Number(detail.price) < 0))) fail("product_detail");
   const raw = typeof priceRaw === "string" ? priceRaw : priceRaw?.data ?? priceRaw?.content ?? priceRaw;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    let observations;
+    try { observations = parseSorftimeProductTrend(priceRaw, { asin, type: 'Price' }); }
+    catch { fail('product_trend'); }
+    return buildStrategy({price: detail.price, coupon: detail.coupon ?? 0,
+      prices: observations.period === 'day' ? observations.daily : observations.monthly,
+      observationPeriod: observations.period, couponEncoding});
+  }
   if (!(typeof raw === "string" || Array.isArray(raw))) fail("product_trend");
   const parts = (Array.isArray(raw) ? raw : raw.split(',')).filter(part => part !== "");
   const prices = parseSorftimeTrend(priceRaw);
   if (parts.some(part => typeof part !== "string") || prices.length !== parts.length ||
       prices.some(point => !/^\d{4}-(0[1-9]|1[0-2])$/.test(point.month))) fail("product_trend");
-  return buildStrategy({price: detail.price, coupon: detail.coupon ?? 0, prices});
+  return buildStrategy({price: detail.price, coupon: detail.coupon ?? 0, prices, couponEncoding});
 }
 
-export function buildStrategy({ price, coupon, prices }) {
+export function buildStrategy({ price, coupon, prices, observationPeriod = 'month', couponEncoding = 'legacy' }) {
   if (price != null && positiveMoneyOrNull(price) == null) return null;
   if (!prices.length && price == null) return null;
 
@@ -67,8 +77,8 @@ export function buildStrategy({ price, coupon, prices }) {
   const current = positiveMoneyOrNull(price) ?? latest;
   if (current == null) return null;
   const couponValue = Number(coupon);
-  const hasCoupon = Number.isFinite(couponValue) && couponValue > 0;
-  const couponLooksPercent = hasCoupon && couponValue > 0 && couponValue <= 80 && Number.isInteger(couponValue);
+  const hasCoupon = Number.isFinite(couponValue) && (couponEncoding === 'signed' ? couponValue !== 0 : couponValue > 0);
+  const couponLooksPercent = couponEncoding === 'signed' ? couponValue < 0 : hasCoupon && couponValue <= 80 && Number.isInteger(couponValue);
   const volatility = series.length >= 2 ? max - min : 0;
   const endsWith99 = current != null && /^\d+\.99$/.test(Number(current).toFixed(2));
 
@@ -84,7 +94,7 @@ export function buildStrategy({ price, coupon, prices }) {
     anchorParts.push(`当前售价 ${money(current)}`);
   }
   if (min != null && max != null && series.length) {
-    anchorParts.push(`近 ${series.length} 个月价格区间 ${money(min)}–${money(max)}`);
+    anchorParts.push(`${observationPeriod === 'day' ? `日序列 ${series.length} 次观测` : `近 ${series.length} 个月`}价格区间 ${money(min)}–${money(max)}`);
   }
   if (volatility >= 8) anchorParts.push("采用多档动态改价");
   else if (volatility > 0 && volatility < 3) anchorParts.push("价格相对稳定");
@@ -92,12 +102,12 @@ export function buildStrategy({ price, coupon, prices }) {
   let promotion;
   if (hasCoupon) {
     promotion = couponLooksPercent
-      ? `Sorftime 返回当前 Coupon 约 ${couponValue}% 比例折扣，叠加在售价之上形成即时优惠。`
+      ? `Sorftime 返回当前 Coupon 约 ${Math.abs(couponValue)}% 比例折扣，叠加在售价之上形成即时优惠。`
       : `Sorftime 返回当前 Coupon 约 ${money(couponValue)} 固定金额券，用于拉低感知到手价。`;
   } else if (volatility >= 5) {
-    promotion = "Sorftime 暂未返回有效 Coupon；近月价格波动明显，促销更偏向直接改价而非领券。";
+    promotion = "Sorftime 暂未返回有效 Coupon；价格观测波动明显，促销更偏向直接改价而非领券。";
   } else {
-    promotion = "Sorftime 暂未返回有效 Coupon；近月价格变动有限，促销动作偏弱或未公开券信息。";
+    promotion = "Sorftime 暂未返回有效 Coupon；价格观测变动有限，促销动作偏弱或未公开券信息。";
   }
 
   let psychology;
@@ -122,7 +132,9 @@ export function buildStrategy({ price, coupon, prices }) {
     coupon: hasCoupon ? couponValue : 0,
     priceMin: min ?? null,
     priceMax: max ?? null,
-    months: series.length,
+    months: observationPeriod === 'month' ? series.length : 0,
+    observationPeriod,
+    observationCount: series.length,
   };
 }
 
@@ -232,10 +244,9 @@ async function main() {
         await callSorftimeTool(key, "product_trend", {
           asin,
           amz_site: marketplace,
-          product_trend_type: "Price",
+          type: "Price",
         }),
       ];
-      const prices = parseSorftimeTrend(priceRaw);
       const strategy = parsePriceStrategyResponse({ asin, detailRaw, priceRaw });
       if (!strategy) {
         const result = fallback();
@@ -244,7 +255,7 @@ async function main() {
         console.log("empty");
       } else {
         records[asin] = { ...strategy, asin, marketplace, fetchedAt, status: "ready", source: "Sorftime" };
-        console.log(`${prices.length} months · price ${strategy.currentPrice}`);
+        console.log(`${strategy.observationCount} ${strategy.observationPeriod ?? 'no-history'} observations · price ${strategy.currentPrice}`);
       }
     } catch (error) {
       if (error instanceof ProviderDiagnosticError) {

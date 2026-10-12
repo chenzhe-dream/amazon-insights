@@ -78,3 +78,18 @@ test("image worker counts persisted secondary images when the code checkout has 
   assert.match(outcome.output, /"total":2/);
   assert.match(outcome.output, /"connector-failed":2/);
 });
+
+test("valid missing galleries are partitioned without discarding ready siblings", async () => {
+  const { partitionImageListingInput } = await import("../../scripts/lib/image-remark-listing-input.mjs");
+  const job = persistedJob();
+  job.asins.push("B000000002");
+  const { persistedStageOutputContentHash } = await import("../../scripts/lib/sync-stage-output.mjs");
+  job.outputs[0].asins = [...job.asins];
+  job.outputs[0].contentHash = persistedStageOutputContentHash(job.outputs[0]);
+  const result = partitionImageListingInput(job, job.asins);
+  assert.deepEqual(result.readyAsins, [asin]);
+  assert.deepEqual(result.missingAsins, ["B000000002"]);
+  assert.deepEqual(result.listingByAsin[asin].galleryImages, galleryImages);
+  job.outputs[0].data.contentByAsin[asin].galleryImages.push("https://example.test/corrupt.jpg");
+  assert.throws(() => partitionImageListingInput(job, job.asins), /hash/i);
+});

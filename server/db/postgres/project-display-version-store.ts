@@ -193,7 +193,7 @@ function outputFromRow(row: OutputRow, expected: { organizationId: string; proje
   }) as StageOutputProjection;
 }
 
-function gapsFor(asins: readonly string[], catalog: readonly Record<string, unknown>[], stageOutputs: Record<ProjectableSyncStage, DisplayStageOutput>): ProjectDisplayGap[] {
+export function gapsFor(asins: readonly string[], catalog: readonly Record<string, unknown>[], stageOutputs: Record<ProjectableSyncStage, DisplayStageOutput>): ProjectDisplayGap[] {
   const result: ProjectDisplayGap[] = [];
   const catalogByAsin = new Map(catalog.map(item => [item.asin, item]));
   for (const asin of asins) {
@@ -223,8 +223,18 @@ function gapsFor(asins: readonly string[], catalog: readonly Record<string, unkn
     }
     for (const field of fields) {
       const values = record(output.data?.[field]);
-      for (const asin of asins) if (!Object.hasOwn(values, asin)) {
-        result.push({ asin, field: `${stage}.${field}`, reasonCode: gapReason(output.gap, asin) });
+      for (const asin of asins) {
+        const explicitGap = output.gap?.items?.some(item => item.asin === asin);
+        const salesRecord = stage === "sales_trend" ? record(values[asin]) : null;
+        const nonreadySales = salesRecord && typeof salesRecord.status === "string" && salesRecord.status !== "ready";
+        if (!Object.hasOwn(values, asin) || explicitGap || nonreadySales) {
+          result.push({ asin, field: `${stage}.${field}`, reasonCode: gapReason(output.gap, asin) });
+        }
+      }
+    }
+    if (!fields.length) {
+      for (const asin of asins) if (output.gap?.items?.some(item => item.asin === asin)) {
+        result.push({ asin, field: stage, reasonCode: gapReason(output.gap, asin) });
       }
     }
   }

@@ -512,7 +512,12 @@ export function createDetachedRunner(
           resolve();
           return;
         }
-        reject(new Error(`sync runner exited ${signal ?? code}`));
+        // Contract failures are fixed messages with bounded ASIN/index suffixes.
+        // Do not copy arbitrary subprocess stderr (which may contain credentials).
+        const imageContractFailure = stderr.text().split(/\r?\n/).findLast(line =>
+          /^\[error\] (?:Image listing (?:stage (?:output is missing or ambiguous|scope mismatch|has no usable data|content hash mismatch|data is missing)|ASIN scope mismatch|gallery unavailable for [A-Z0-9]{10})|Image candidate (?:job identity mismatch|ASIN scope mismatch|listing content hash mismatch|content hash mismatch|(?:gallery\/index mismatch|remark URL\/index mismatch|outcome\/index mismatch|ready outcome has no remark|listing URL\/index mismatch) for [A-Z0-9]{10}(?::\d+)?)|Persisted image stage (?:content hash mismatch|scope mismatch|data is missing|maps are invalid|ASIN scope mismatch|omits a ready ASIN|is incomplete for a ready ASIN)|Successful image worker did not persist its job candidate)$/.test(line));
+        const detail = imageContractFailure ? `: ${imageContractFailure.slice(8, 508)}` : "";
+        reject(new Error(`sync runner exited ${signal ?? code}${detail}`));
       });
     });
   };

@@ -546,3 +546,18 @@ test("detached XYDC envelope is fixed from the lease rather than inherited overr
     });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('detached runner retains safe image contract failure detail on nonzero exit', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sync-image-contract-failure-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const runnerPath = join(directory, 'runner.mjs');
+  await writeFile(runnerPath, `console.error('[error] Image listing stage content hash mismatch'); console.error('password=private-sentinel'); process.exitCode = 1;`);
+  const runner = createDetachedRunner(process.cwd(), { runnerPath });
+  await assert.rejects(() => runner(runningLease(), {
+    workerId: 'lifecycle-worker', leaseGeneration: 1, mirrorPath: join(directory, 'mirror.json'), async writeMirror() {},
+  }), error => {
+    assert.match(String(error), /sync runner exited 1: Image listing stage content hash mismatch/);
+    assert.doesNotMatch(String(error), /private-sentinel/);
+    return true;
+  });
+});

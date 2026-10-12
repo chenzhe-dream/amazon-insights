@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
-import { parseSorftimeTrend } from "./lib/sorftime-trend-parse.mjs";
+import { parseSorftimeProductTrend } from "./lib/sorftime-trend-parse.mjs";
+import {ProviderDiagnosticError, formatProviderDiagnosticLine} from './lib/provider-diagnostics.mjs';
 import {
   isForceRefresh,
   logCacheHit,
@@ -21,6 +22,43 @@ function readCatalogAsins() {
 }
 
 function hasFullTrend(record) { return hasUsableTrendRecord(record); }
+
+const trendTypes = {volume:'SalesVolume', amount:'SalesAmount', price:'Price', rank:'Rank'};
+export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool}) {
+  const responses = {}, requestErrors = {};
+  for (const [field, type] of Object.entries(trendTypes)) {
+    try { responses[field] = await callTool(key, 'product_trend', {asin, amz_site:marketplace, type}); }
+    catch { requestErrors[field] = 'Provider request failed'; }
+  }
+  return {responses, requestErrors};
+}
+export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, previous = {}}) {
+  const next = {...previous, asin, marketplace, fetchedAt,
+    dailyObservations:{...previous.dailyObservations}, observationPeriods:{...previous.observationPeriods}, observationErrors:{...requestErrors},
+    fieldFetchedAt:{...previous.fieldFetchedAt}};
+  for (const [field, type] of Object.entries(trendTypes)) {
+    next[field] ??= [];
+    if (next[field].length || next.dailyObservations[field]?.length) next.fieldFetchedAt[field] ??= previous.fetchedAt;
+    if (!Object.hasOwn(responses, field)) continue;
+    try {
+      const result = parseSorftimeProductTrend(responses[field], {asin, type});
+      next[field] = result.monthly;
+      next.dailyObservations[field] = result.daily;
+      next.observationPeriods[field] = result.period;
+      next.fieldFetchedAt[field] = fetchedAt;
+    } catch (error) {
+      next.observationErrors[field] = error.message;
+    }
+  }
+  const hasDaily = Object.values(next.dailyObservations).some(points => points.length);
+  const hasMonths = Object.keys(trendTypes).some(field => next[field].length);
+  const invalid = Object.keys(next.observationErrors).length > 0;
+  next.status = invalid ? 'error' : hasMonths ? 'ready' : 'empty';
+  delete next.statusMessage;
+  if (invalid) next.statusMessage = '部分趋势响应格式不符，已保留可验证数据';
+  else if (hasDaily) next.statusMessage = '来源包含日观测序列，月度销量口径待确认；未将日观测累加为月销量';
+  return next;
+}
 
 async function main() {
   const key = readSorftimeKey();
@@ -55,10 +93,14 @@ async function main() {
       for (const [field, trendType] of Object.entries({volume:"SalesVolume",amount:"SalesAmount",price:"Price",rank:"Rank"})) {
         if (hasUsableTrendRecord({status:"ready", [field]: next[field]})) continue;
         try {
-          const raw = await callSorftimeTool(key, "product_trend", {asin, amz_site:marketplace, product_trend_type:trendType});
-          const points = parseSorftimeTrend(raw);
-          if (!hasUsableTrendRecord({status:"ready", [field]:points})) throw new Error(`${field}: empty provider response`);
-          next[field] = points;
+          const raw = await callSorftimeTool(key, "product_trend", {asin, amz_site:marketplace, type:trendType});
+          const parsed = buildSalesTrendRecord({asin, marketplace, fetchedAt, responses:{[field]:raw}, previous:next});
+          if (parsed.observationErrors[field]) throw new Error(parsed.observationErrors[field]);
+          Object.assign(next, parsed);
+          if (!parsed[field].length) {
+            failed = true;
+            reportIncompleteRepair(asin);
+          }
         } catch (error) {
           failed = true;
           next[field] ??= [];
@@ -66,7 +108,7 @@ async function main() {
           reportIncompleteRepair(asin);
         }
       }
-      records[asin] = {...next, status:failed ? "error" : "ready", ...(failed ? {statusMessage:"Trend repair incomplete; retained available cached portions"} : {})};
+      records[asin] = {...next, status:failed ? "error" : "ready", ...(failed ? {statusMessage:next.statusMessage ?? "Trend repair incomplete; retained available cached portions"} : {})};
       continue;
     }
 
@@ -74,28 +116,19 @@ async function main() {
     try {
       // The formal Sorftime policy permits one request at a time. Avoid spending
       // the other metrics' admission deadlines while the first request runs.
-      const [volumeRaw, amountRaw, priceRaw, rankRaw] = [
-        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesVolume" }),
-        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "SalesAmount" }),
-        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Price" }),
-        await callSorftimeTool(key, "product_trend", { asin, amz_site: marketplace, product_trend_type: "Rank" }),
-      ];
-      const volume = parseSorftimeTrend(volumeRaw);
-      const amount = parseSorftimeTrend(amountRaw);
-      const price = parseSorftimeTrend(priceRaw);
-      const rank = parseSorftimeTrend(rankRaw);
-      records[asin] = {
-        asin,
-        marketplace,
-        fetchedAt,
-        status: volume.length || amount.length || price.length || rank.length ? "ready" : "empty",
-        volume,
-        amount,
-        price,
-        rank,
-      };
+      const collected = await collectSalesTrendResponses({key, asin, marketplace});
+      records[asin] = buildSalesTrendRecord({asin, marketplace, fetchedAt,
+        ...collected, previous:existing[asin]?.marketplace === marketplace ? existing[asin] : {}});
+      for (const field of Object.keys(records[asin].observationErrors)) {
+        if (collected.requestErrors[field]) continue; // Transport emits its original cause at the request boundary.
+        const error = new ProviderDiagnosticError({connector:'sorftime',stage:'sales_trend',asin,
+          operation:'product_trend',failureKind:'schema',causeCode:'MCP_SCHEMA',boundary:'consumer-shape'});
+        process.stderr.write(`${formatProviderDiagnosticLine(error.diagnostic)}\n`);
+        process.exitCode = 1;
+      }
+      const {amount, price, rank} = records[asin];
       console.log(
-        `${volume.length}m vol · ${amount.length}m amt · ${price.length}m price · ${rank.length}m rank`,
+        `${records[asin].volume.length}m vol · ${amount.length}m amt · ${price.length}m price · ${rank.length}m rank`,
       );
     } catch (error) {
       if (hasFullTrend(existing[asin])) {
@@ -127,6 +160,10 @@ export type SorftimeSalesTrendRecord = {
   fetchedAt: string;
   status: "ready" | "empty" | "error";
   statusMessage?: string;
+  dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
+  observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
+  observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
+  fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   volume: SorftimeTrendPoint[];
   amount: SorftimeTrendPoint[];
   price: SorftimeTrendPoint[];
@@ -152,4 +189,4 @@ export const sorftimeSalesTrendData: Record<string, SorftimeSalesTrendRecord> = 
   console.log(`[done] ${ready}/${asins.length} ASIN → app/sorftime-sales-trend-data.ts`);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) main();

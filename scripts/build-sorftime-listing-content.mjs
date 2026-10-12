@@ -7,8 +7,10 @@ import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./lib/seller
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import {
   createDirectListingProvenance,
+  collectListingProductData,
+  buildListingRecordFromProductDetailEvidence,
+  buildListingFailureRecord,
   discardUnscopedListingRecord,
-  parseImageList,
   selectScopedListingRecord,
 } from "./lib/sorftime-listing-parse.mjs";
 import { readScopedSorftimeEvidence } from "./lib/scoped-sorftime-evidence.mjs";
@@ -84,6 +86,7 @@ async function main() {
     if (!sorftimeKey) {
       console.log(`[skip] ${asin} · 无 Sorftime MCP key`);
       if (refreshImages) reportIncompleteRepair(asin);
+      else if (evidence) records[asin] = buildListingRecordFromProductDetailEvidence(evidence);
       else if (jobId) discardUnscopedListingRecord(records, asin);
       missingCredential = true;
       continue;
@@ -91,14 +94,13 @@ async function main() {
 
     process.stdout.write(`[listing] ${asin} ... `);
     try {
-      const detailRaw = await callSorftimeTool(sorftimeKey, "product_detail", { asin, amz_site: marketplace });
-      const detail = detailRaw?.data ?? detailRaw;
-      const galleryImages = parseImageList(detail?.main_image);
+      const product = await collectListingProductData({ asin, marketplace, key: sorftimeKey, callTool: callSorftimeTool, detailEvidence: evidence, refreshImages });
+      const { galleryImages, operation } = product;
       if (refreshImages && !galleryImages.length) throw new Error("本次未返回图片，保留原图册");
       const mainImage = galleryImages[0] ?? null;
       const secondaryImages = galleryImages.slice(1);
       const hasAplus =
-        detail?.a_plus === true ? true : detail?.a_plus === false ? false : refreshImages ? existing[asin]?.hasAplus ?? null : null;
+        product.hasAplus ?? (refreshImages ? existing[asin]?.hasAplus ?? null : null);
 
       let hasEbc = refreshImages ? existing[asin]?.hasEbc ?? null : null;
       let hasVideo = refreshImages ? existing[asin]?.hasVideo ?? null : null;
@@ -136,7 +138,7 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
-          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
         };
         console.log("empty");
       } else {
@@ -155,7 +157,7 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
-          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt }),
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
         };
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }
@@ -167,23 +169,7 @@ async function main() {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         records[asin] = existing[asin];
       } else {
-        records[asin] = {
-          asin,
-          marketplace,
-          fetchedAt,
-          status: "error",
-          statusMessage: error instanceof Error ? error.message : String(error),
-          mainImage: null,
-          galleryImages: [],
-          secondaryImages: [],
-          imageCount: 0,
-          hasAplus: null,
-          hasEbc: null,
-          hasVideo: null,
-          lqs: null,
-          source: "Sorftime",
-          provenance: null,
-        };
+        records[asin] = buildListingFailureRecord({ asin, marketplace, fetchedAt, jobId, error });
         console.log(`error: ${records[asin].statusMessage}`);
       }
     }
@@ -221,7 +207,7 @@ export type SorftimeListingContentRecord = {
 
 export const sorftimeListingContentMeta = ${JSON.stringify(
     {
-      source: "Sorftime MCP · product_detail（main_image / a_plus）+ 卖家精灵 badge（EBC / 视频 / LQS）",
+      source: "Sorftime MCP · product_content（图片）+ product_detail（a_plus / 旧版图片）+ 卖家精灵 badge（EBC / 视频 / LQS）",
       updatedAt: fetchedAt,
       marketplace,
       syncCommand: "npm run listing:sync",
