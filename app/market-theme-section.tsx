@@ -46,7 +46,14 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const command=useRef<{signature:string;key:string}|null>(null);
   const [targetLoading,setTargetLoading]=useState(false),[targetError,setTargetError]=useState<string|null>(null);
   const reportWrites=useRef(new Set<string>()),[reportSaving,setReportSaving]=useState(false);
-  const onReportWrite=useCallback((source:string,saving:boolean)=>{if(saving)reportWrites.current.add(source);else reportWrites.current.delete(source);setReportSaving(reportWrites.current.size>0);},[]);
+  const onReportWrite=useCallback((source:string,saving:boolean)=>{
+    const wasSaving=reportWrites.current.size>0;
+    if(saving)reportWrites.current.add(source);else reportWrites.current.delete(source);
+    // Reads started before a writer must not accept their stale snapshot after it settles.
+    revision.current++;
+    const isSaving=reportWrites.current.size>0;setReportSaving(isSaving);
+    if(wasSaving&&!isSaving)setReload(n=>n+1);
+  },[]);
   const targetOwner=useRef<AbortController|null>(null),targetGeneration=useRef(0),pollOwner=useRef<AbortController|null>(null),pollGeneration=useRef(0);
   const queryKey=JSON.stringify([selection?.marketplace??localSite,node,selection?.fromMonth??month,month,members,pool]);
   const queryState=useRef({key:queryKey,revision:0,node});
@@ -69,7 +76,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     if(intent?.id===runId&&intent.revision===null){if(queryState.current.node.trim())scopeRestore.current=null;else intent.revision=queryState.current.revision;}
     const abort=new AbortController(),generation=++pollGeneration.current;pollOwner.current=abort;let timer:ReturnType<typeof setTimeout>|undefined;
     async function poll(){const version=revision.current;try{const result=await readThemeRun(runId!,abort.signal);if(abort.signal.aborted||generation!==pollGeneration.current)return;
-      if(version!==revision.current||writing.current){timer=setTimeout(()=>void poll(),3000);return;}
+      if(version!==revision.current||writing.current||reportWrites.current.size){timer=setTimeout(()=>void poll(),3000);return;}
       setRun(result);setReadError(null);if(scopeRestore.current===intent&&intent?.id===runId){scopeRestore.current=null;if(intent.revision!==null)restoreQuery(result,intent.revision);}if(themeRunActive(result))timer=setTimeout(()=>void poll(),3000);
     }catch(e){if(!abort.signal.aborted&&generation===pollGeneration.current){if([401,403].includes((e as {status:number}).status)){clearReport();cancelTarget();}setReadError(e instanceof Error?e.message:'读取状态失败');}}}
     void poll();return()=>{abort.abort();if(timer)clearTimeout(timer);};

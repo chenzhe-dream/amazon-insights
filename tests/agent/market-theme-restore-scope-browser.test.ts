@@ -279,6 +279,65 @@ test('overlapping translation owners keep restore locked until both settle', { t
     assert.equal(count, 2);
     assert.equal(state.writes, 0);
 });
+for (const automatic of [false, true]) test(`${automatic ? 'automatic poll' : 'manual current read'} defers report replacement through nested write settlement`, { timeout: 30000 }, async (t) => {
+    const { page, base, state, open } = await fixture(t);
+    if (automatic) base.steps = [{ id: '60000000-0000-4000-8000-000000000006', kind: 'report', status: 'running', latestAttemptId: null, attemptCount: 0, current: true, canRetry: false, asin: null, errorCode: null }];
+    await open();
+    const latest = structuredClone(base);
+    latest.steps = [];
+    latest.currentReport!.attemptId = '60000000-0000-4000-8000-000000000088';
+    latest.latestSavedReport = latest.currentReport;
+    latest.history = [latest.currentReport!, ...base.history];
+    let releaseWrite = () => {}, enteredWrite = () => {}, writes = 0;
+    const writing = new Promise<void>(resolve => enteredWrite = resolve);
+    await page.route('**/translations', async route => {
+        writes++; enteredWrite();
+        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 12000); releaseWrite = () => { clearTimeout(timer); resolve(); }; });
+        await route.fulfill({ status: 503, json: { error: { message: 'synthetic settled' } } }).catch(() => {});
+    });
+    t.after(() => releaseWrite());
+    state.response = latest;
+    state.hold = true;
+    const reading = new Promise<void>(resolve => state.entered = resolve);
+    if (!automatic) await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await reading;
+    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await writing;
+    const response = page.waitForResponse(r => r.url().endsWith('/runs/' + base.id));
+    state.release();
+    await response;
+    // A following animation frame observes React's acceptance of the response.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.getByRole('button', { name: '读取任务', exact: true }).isDisabled(), true, 'Current reads must retain pending writer lock');
+    assert.equal(await page.getByLabel('报告版本').locator(`option[value="${latest.currentReport!.attemptId}"]`).count(), 0);
+    releaseWrite();
+    await page.getByLabel('报告版本').locator(`option[value="${latest.currentReport!.attemptId}"]`).waitFor({ state: 'attached' });
+    await page.waitForFunction(() => !(Array.from(document.querySelectorAll('button')).find(b => b.textContent === '读取任务') as HTMLButtonElement)?.disabled);
+    assert.equal(writes, 1);
+});
+
+for (const status of [401, 403]) test(`current ${status} revokes report during a pending nested write`, { timeout: 30000 }, async (t) => {
+    const { page, state, open } = await fixture(t);
+    await open();
+    let release = () => {}, entered = () => {}, settled = false;
+    const writing = new Promise<void>(resolve => entered = resolve);
+    await page.route('**/translations', async route => {
+        entered();
+        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 10000); release = () => { clearTimeout(timer); resolve(); }; });
+        settled = true;
+        await route.fulfill({ status: 503, json: {} }).catch(() => {});
+    });
+    t.after(() => release());
+    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await writing;
+    state.status = status;
+    await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: '状态读取失败' }).waitFor();
+    assert.equal(settled, false);
+    assert.equal(await page.getByLabel('报告版本').count(), 0);
+    release();
+});
+
 test('nested selection save locks restore and target reads prevent selection writes', { timeout: 120000 }, async (t) => {
     const { page, base, second, state, open, restore } = await fixture(t);
     const { aggregateCustomerThemes } = await import('../../server/domain/market-research/customer-themes');
