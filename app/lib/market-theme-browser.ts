@@ -9,7 +9,7 @@ async function request<T>(path:string,schema:z.ZodType<T>,init:RequestInit={}) {
   init.signal?.throwIfAborted();
   const response=await localAgentFetch(`/v1/market-analysis/${path}`,{...init,cache:'no-store'});
   const value:unknown=await response.json().catch(()=>null);init.signal?.throwIfAborted();
-  if(!response.ok)throw new Error(localAgentErrorMessage(value,'主题分析请求失败，请刷新状态后重试。'));
+  if(!response.ok)throw Object.assign(new Error(localAgentErrorMessage(value,'主题分析请求失败，请刷新状态后重试。')),{status:response.status});
   const parsed=schema.safeParse(value);if(!parsed.success)throw new Error('主题分析响应格式不正确，未加载该结果。');return parsed.data;
 }
 const post=(body:unknown,key:string,signal?:AbortSignal):RequestInit=>({method:'POST',signal,headers:{'idempotency-key':MarketModuleIdSchema.parse(key)},body:JSON.stringify(body)});
