@@ -7,10 +7,14 @@ export type SorftimeSalesTrendRecord = {
   fetchedAt: string;
   status: "ready" | "empty" | "error";
   statusMessage?: string;
+  missingDailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;fetchedAt:string}[]>>;
+  missingMonthlyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {month:string;fetchedAt:string}[]>>;
+  dailyObservationFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", Record<string,string>>>;
+  monthlyObservationFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", Record<string,string>>>;
   dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
   observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
   observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
-  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null}>>;
+  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "source-unknown" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null}>>;
   dailyFieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   volume: SorftimeTrendPoint[];

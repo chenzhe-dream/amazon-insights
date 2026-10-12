@@ -26,6 +26,16 @@ function makeJob(jobId) {
   };
 }
 
+function copyInstrumentedCollector(fixture) {
+  const source = fs.readFileSync(path.join(sourceRoot, 'scripts/build-listing-image-remarks.mjs'), 'utf8');
+  // Fixture-only closed instrumentation. Production fatal handling remains untouched.
+  const instrumented = source.replace('main().catch(() => {', `main().catch(error => {
+    const cause = error?.message === "Unable to establish Windows interprocess lock owner identity"
+      ? "windows-lock-owner-identity-unavailable" : "other-integrity-error";
+    console.error("TEST_IMAGE_INTEGRITY_CAUSE " + cause);`);
+  fs.writeFileSync(path.join(fixture, 'scripts/build-listing-image-remarks.mjs'), instrumented);
+}
+
 function runBuilder(fixture, job, endpoint) {
   const listingFile = path.join(fixture, `${job.jobId}-listing.json`);
   const candidateFile = path.join(fixture, `${job.jobId}-candidate.json`);
@@ -60,7 +70,7 @@ test('two jobs for one ASIN keep separate candidate remarks after shared file ra
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   fs.mkdirSync(path.join(fixture, 'scripts'));
   fs.mkdirSync(path.join(fixture, 'app'));
-  fs.copyFileSync(path.join(sourceRoot, 'scripts/build-listing-image-remarks.mjs'), path.join(fixture, 'scripts/build-listing-image-remarks.mjs'));
+  copyInstrumentedCollector(fixture);
   fs.cpSync(path.join(sourceRoot, 'scripts/lib'), path.join(fixture, 'scripts/lib'), { recursive: true });
   fs.writeFileSync(path.join(fixture, 'app/competitor-data.ts'), 'export const refreshedCatalog = [];\n');
   fs.writeFileSync(path.join(fixture, 'app/sorftime-listing-content-data.ts'),
@@ -110,7 +120,7 @@ test('collector retries two URL identities and preserves all 58 ready notes afte
   const fixture = fs.mkdtempSync(path.join(sourceRoot, '.tmp-image-targeted-'));
   t.after(() => fs.rmSync(fixture, { recursive:true,force:true }));
   fs.mkdirSync(path.join(fixture,'scripts'));fs.mkdirSync(path.join(fixture,'app'));
-  fs.copyFileSync(path.join(sourceRoot,'scripts/build-listing-image-remarks.mjs'),path.join(fixture,'scripts/build-listing-image-remarks.mjs'));
+  copyInstrumentedCollector(fixture);
   fs.cpSync(path.join(sourceRoot,'scripts/lib'),path.join(fixture,'scripts/lib'),{recursive:true});
   const asins=Array.from({length:10},(_,i)=>`B00000000${i}`);
   const galleries=Object.fromEntries(asins.map(a=>[a,Array.from({length:6},(_,i)=>`https://images.test/${a}/${i}`)]));

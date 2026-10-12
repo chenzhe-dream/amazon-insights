@@ -19,10 +19,18 @@ function isCurrentProductTrend(raw) {
 /** Current product_trend observations retain their supplied calendar period. */
 export function parseSorftimeProductTrend(raw, { asin, type } = {}) {
   if (!isCurrentProductTrend(raw)) {
-    const monthly = parseSorftimeTrend(raw);
     const source = raw?.data ?? raw?.content ?? raw;
-    if (source == null || typeof source !== 'string' && !Array.isArray(source) || !monthly.length && (typeof source === 'string' ? source.trim().length > 0 : source.length > 0)) throw new Error('Invalid Sorftime trend response');
-    return { period: monthly.length ? 'month' : null, monthly, daily: [] };
+    if (typeof source !== 'string' && !Array.isArray(source)) throw new Error('Invalid Sorftime trend response');
+    const parts = normalizeTrendParts(raw);
+    const monthly = parts.map(part => {
+      const match = part.match(/^(\d{4})(?:年(\d{2})月|-(\d{2}))=(.+)$/);
+      const month = Number(match?.[2] ?? match?.[3]);
+      const amount = match?.[4]?.trim();
+      if (!match || Number(match[1]) < 1000 || month < 1 || month > 12 || !amount || !Number.isFinite(Number(amount)) || Number(amount) < 0) throw new Error('Invalid Sorftime trend observation');
+      return {month: `${match[1]}-${String(month).padStart(2,'0')}`, value:Number(amount)};
+    });
+    if (new Set(monthly.map(point => point.month)).size !== monthly.length) throw new Error('Conflicting Sorftime trend observations');
+    return { period: monthly.length ? 'month' : null, monthly, daily: [], missingMonthly:[], missingDaily:[] };
   }
   const value = raw?.data ?? raw;
   if (typeof value.asin !== 'string' || (asin && value.asin !== asin) ||
@@ -57,9 +65,13 @@ export function parseSorftimeProductTrend(raw, { asin, type } = {}) {
     if (points.has(label) && points.get(label) !== amount) throw new Error('Conflicting Sorftime trend observations');
     points.set(label, amount);
   }
-  const observations = [...points].sort(([a], [b]) => a.localeCompare(b)).filter(([, amount]) => amount !== -1);
+  const sorted = [...points].sort(([a], [b]) => a.localeCompare(b));
+  const observations = sorted.filter(([, amount]) => amount !== -1);
+  const missing = sorted.filter(([, amount]) => amount === -1);
   return {
     period,
+    missingMonthly: period === 'month' ? missing.map(([month]) => ({month})) : [],
+    missingDaily: period === 'day' ? missing.map(([date]) => ({date})) : [],
     monthly: period === 'month' ? observations.map(([month, value]) => ({ month, value })) : [],
     daily: period === 'day' ? observations.map(([date, value]) => ({ date, value })) : [],
   };

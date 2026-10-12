@@ -715,13 +715,13 @@ export function CompetitorOverviewHistory({products, salesTrendByAsin, metric, o
 export function SourceDailyObservations({products, salesTrendByAsin}: Readonly<{products: Product[]; salesTrendByAsin: typeof sorftimeSalesTrendData}>) {
   const fields = ["volume", "amount", "price", "rank"] as const;
   const labels = {volume: "销量来源观测值", amount: "销售额来源观测值", price: "价格来源观测值", rank: "排名来源观测值"};
-  const records = products.filter(product => fields.some(field => salesTrendByAsin[product.asin]?.dailyObservations?.[field]?.length));
+  const records = products.filter(product => fields.some(field => (salesTrendByAsin[product.asin]?.dailyObservations?.[field]?.length || salesTrendByAsin[product.asin]?.missingDailyObservations?.[field]?.length)));
   if (!records.length) return null;
   return <section className="overview-history-records"><h4>来源日观测序列</h4><p>来源日期为日粒度，指标口径未确认；这些观测值不参与自然月汇总或年度与增长计算。</p>{records.map(product => {
     const record = salesTrendByAsin[product.asin];
-    const dates = [...new Set(fields.flatMap(field => (record.dailyObservations?.[field] ?? []).map(point => point.date)))].sort();
+    const dates = [...new Set(fields.flatMap(field => [...(record.dailyObservations?.[field] ?? []), ...(record.missingDailyObservations?.[field] ?? [])].map(point => point.date)))].sort();
     const hasMonths = fields.some(field => record[field]?.length);
-    return <details key={product.asin} open><summary>{product.brand} · {product.asin}</summary>{!hasMonths && <p>月度数据不可用，月度口径待确认。</p>}<div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>来源日期</th>{fields.map(field => <th key={field}>{labels[field]}<small>采集：{record.dailyObservations?.[field]?.length ? (record.dailyFieldFetchedAt?.[field] ?? record.fieldFetchedAt?.[field] ?? record.fetchedAt) : "未知"}</small></th>)}</tr></thead><tbody>{dates.map(date => <tr key={date}><th>{date}</th>{fields.map(field => { const value = record.dailyObservations?.[field]?.find(point => point.date === date)?.value; return <td key={field}>{isValidTrendValue(value) ? value : "—"}</td>; })}</tr>)}</tbody></table></div></details>;
+    return <details key={product.asin} open><summary>{product.brand} · {product.asin}</summary>{!hasMonths && <p>月度数据不可用，月度口径待确认。</p>}<div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>来源日期</th>{fields.map(field => <th key={field}>{labels[field]}<small>采集：{record.dailyObservations?.[field]?.length ? (record.dailyFieldFetchedAt?.[field] ?? record.fieldFetchedAt?.[field] ?? record.fetchedAt) : "未知"}</small></th>)}</tr></thead><tbody>{dates.map(date => <tr key={date}><th>{date}</th>{fields.map(field => { const value = record.dailyObservations?.[field]?.find(point => point.date === date)?.value; const missing = record.missingDailyObservations?.[field]?.find(point => point.date === date); const observedAt = record.dailyObservationFetchedAt?.[field]?.[date] ?? record.dailyFieldFetchedAt?.[field] ?? record.fieldFetchedAt?.[field] ?? record.fetchedAt; return <td key={field}>{missing ? <>—<small>来源缺失 · 采集：{missing.fetchedAt}</small>{isValidTrendValue(value) && <small>保留观测：{value} · 采集：{observedAt}</small>}</> : isValidTrendValue(value) ? <>{value}<small>采集：{observedAt}</small></> : "—"}</td>; })}</tr>)}</tbody></table></div></details>;
   })}</section>;
 }
 

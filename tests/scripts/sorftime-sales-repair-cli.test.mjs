@@ -102,3 +102,39 @@ test('saved B0B response preserves 25 points through CLI persistence and frozen 
     assert.deepEqual(frozen.data.trendByAsin[asin].volume,persisted[asin].volume);
   }finally{process.exitCode=old;fs.rmSync(directory,{recursive:true,force:true});}
 });
+
+test('actual CLI rejects CN and ISO blank or invalid legacy months without erasing previous values',async()=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'legacy-invalid-')), old=process.exitCode;
+ try {
+ for(const raw of ['2026年09月=','2026-09=   ','2026年13月=12','2026-00=12','2026-09=0,broken']) {
+ const target=path.join(directory,'sales.ts');
+ const previous={...empty,status:'error',volume:[{month:'2026-09',value:99}]};
+ await sales.runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-12',existing:{[asin]:previous},outPath:target,repair:false,callTool:async(_k,_n,args)=>args.type==='SalesVolume'?raw:'',delayMs:0});
+ const record=readCachedDataExport(target,'sorftimeSalesTrendData')[asin];
+ assert.equal(record.observationOutcomes.volume.category,'malformed-response');
+ assert.deepEqual(record.volume,previous.volume);assert.equal(record.fieldFetchedAt.volume,'2026-10-01');
+ }
+ }finally{process.exitCode=old;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('actual missing-only repair reuses retained daily volume after empty or unknown-month refresh',async()=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'retained-day-reuse-')), old=process.exitCode;
+ try {
+ for(const data of [[],['202609',-1]]) {
+ const target=path.join(directory,'sales.ts');
+ const previous=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-01',responses:{volume:{data:{asin,type:'SalesVolume',data:['20260901',7]}}}});
+ await sales.runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-12',existing:{[asin]:previous},outPath:target,repair:false,callTool:async(_k,_n,args)=>({data:{asin,type:args.type,data:args.type==='SalesVolume'?data:[]}}),delayMs:0});
+ const refreshed=readCachedDataExport(target,'sorftimeSalesTrendData');
+ assert.equal(refreshed[asin].observationPeriods.volume,data.length?'month':null);
+ assert.deepEqual(refreshed[asin].dailyObservations.volume,[{date:'2026-09-01',value:7}]);
+ const types=[];
+ await sales.runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-13',existing:refreshed,outPath:target,repair:true,callTool:async(_k,_n,args)=>{types.push(args.type);return {data:{asin,type:args.type,data:[]}};},delayMs:0});
+ assert.equal(types.filter(type=>type==='SalesVolume').length,0);
+ assert.deepEqual(types,['SalesAmount','Price','Rank']);
+ const repaired=readCachedDataExport(target,'sorftimeSalesTrendData')[asin];
+ assert.equal(repaired.dailyFieldFetchedAt.volume,'2026-10-01');
+ assert.equal(repaired.dailyObservationFetchedAt.volume['2026-09-01'],'2026-10-01');
+ if(data.length) assert.deepEqual(repaired.missingMonthlyObservations.volume,[{month:'2026-09',fetchedAt:'2026-10-12'}]);
+ }
+ }finally{process.exitCode=old;fs.rmSync(directory,{recursive:true,force:true});}
+});
