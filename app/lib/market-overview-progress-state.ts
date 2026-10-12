@@ -23,7 +23,7 @@ const progressCopy: Partial<Record<MarketOverviewProgressState, ProgressCopy>> =
   partial: {
     tone: 'partial',
     title: '报告已保存，但存在数据缺口',
-    detail: '以下为已确认结果，当前不能作为最终评级；可重试或补齐缺失步骤。',
+    detail: '以下为已确认结果；缺失项不会按默认值计算，可重试或补齐缺失步骤。',
   },
   complete: {
     tone: 'complete',
