@@ -97,6 +97,16 @@ Confirmed keyword draft edge: immediately clearing the current run before a requ
 
 ## Public proxy integration
 
+### Flow stability: staged restoration and query ownership (2026-10-12)
+
+Approved F-02/F-03 plan: docs/superpowers/plans/2026-10-12-market-restore-and-query-draft-repair.md. The displayed run owns report selection, revision reads, source-bound writes and current URL. A separate abortable target read owns its generation, loading state and error. A target GET never clears the displayed run or writes its run URL before successful validation; success commits only if still current, mounted and no write is in progress. Failed or cancelled target reads retain the original authorized report, history choice and drafts. Same-run restoration refreshes state without switching or resetting edits. Authentication-required events still obey session-gate cleanup; a target permission failure never exposes its data.
+
+Shape manual edits are compared with the hydrated or successfully saved baseline. A successful target switch that would discard dirty edits requires an in-page confirmation; cancellation preserves them. Edits made during target reading or confirmation must be considered again before commit. Saves and potentially conflicting writes prevent switching. Target failures are separate from current-run polling failures, so failure of a different UUID does not incorrectly invalidate the current report. Explicit 404 stops automatic reads; transient current-run network/5xx polling remains bounded with existing delays.
+
+Theme query adoption follows the existing F-01 shape policy: explicit target restoration or an empty-category task deep link carries a once-only adoption intent and input revision. Capture initial empty-category intent after parent URL hydration. Complete nonempty query drafts survive ordinary reads, page refresh and module return. New edits to site/category/month/sample inputs invalidate old adoption; stale responses cannot consume a newer intent. Only the corresponding module URL parameters change. Displayed report scope remains truthful when query draft differs. No new source/model work, global draft cache or database migration is introduced.
+
+Validation combines deterministic failed-read/late-response browser regressions, F-01 and keyword recovery regressions, typecheck/strict specification checks, controlled formal source verification and real logged-in desktop/narrow-screen proof. Five data findings and remaining whole-change acceptance stay separate. No task is marked complete from plan approval alone.
+
 ### Real supplier product-pool compatibility (2026-09-17)
 
 Frozen product-month replay selects by snapshot expectedRecordIds rather than assuming poolSize=100 or inferring membership from source expectedCount. It retains original raw indexes and checks every reconstructed selected record against the saved snapshot. Source digest, payload hash, scope, identity echoes, units, period and receivedCount remain exact. Four explicitly enumerated old/current collector coverage descriptions are accepted as historical presentation variants; expectedCount, when known, must equal the frozen requested set. Replay does not replace the original source or its hash. This compatibility is necessary for both shape selection and public report reads.

@@ -322,3 +322,32 @@ The system SHALL adopt a saved shape task's marketplace, category and month rang
 - **WHEN** the operator edits the query while restoration is pending, or switches to a newer task
 - **THEN** late reads do not overwrite the newer query or consume another restore's scope adoption
 - **AND** normal polling, page refresh and module navigation preserve nonempty edited conditions and other module inputs
+
+### Requirement: Staged market task restoration preserves authorized displayed work
+The system SHALL read and validate a target shape or theme task before changing the displayed task, report version or task URL. Failed or cancelled target reads SHALL preserve the original authorized report, manual drafts and query conditions, with truthful target-error text. Only the latest mounted request SHALL commit a switch; authentication-required events SHALL retain existing session cleanup and unauthorized target data SHALL NOT be displayed.
+
+#### Scenario: Target task is absent or unreadable
+- **WHEN** an operator restores a different task and its GET fails, including an explicit 404 or target permission rejection
+- **THEN** the current authorized report, task URL, selected historical version and drafts remain unchanged, and the failed target is identified separately from the displayed task
+- **AND** 404 automatic retry stops, no collection/model work is created, and an empty page does not claim to retain a prior report
+
+#### Scenario: A late or cancelled target response arrives
+- **WHEN** a newer restoration supersedes the request, the operator cancels reading or the component unmounts
+- **THEN** its response cannot switch reports, change query scope, write a task URL or consume a newer restoration's adoption intent
+
+#### Scenario: Switching would discard manual edits or a save is in progress
+- **WHEN** a valid target read completes with unsaved shape edits, or a revision write is in progress
+- **THEN** unsaved-edit switching requires an in-page discard confirmation, cancelling keeps the original work, and writes in progress prevent switching
+- **AND** new edits while reading or confirming are rechecked before commit; restoring the displayed task only refreshes state without discarding drafts or historical selection
+
+### Requirement: Theme query drafts have independent restoration ownership
+The system SHALL adopt saved theme conditions once for a successful explicit restoration or an empty-category task deep link after initial URL hydration. Ordinary polling, full nonempty-query reload and module navigation SHALL preserve the query draft. Edits made while reads are pending SHALL take precedence over old scope adoption, and other modules' URL conditions SHALL remain unchanged.
+
+#### Scenario: A complete theme query draft differs from the saved report
+- **WHEN** the operator changes query conditions without submitting and reloads, refreshes status or leaves and returns to the module
+- **THEN** the updated query and corresponding module URL remain, the saved report retains its own scope and any mismatch is visible
+
+#### Scenario: Theme restoration has missing conditions or concurrent query edits
+- **WHEN** a saved task is explicitly restored or its deep link has an empty category
+- **THEN** saved conditions are adopted only if the request is still current and the operator has not edited query inputs since the adoption intent was captured
+- **AND** site, category, month and sample edits protect their newer values; report reads cause no collection/model calls
