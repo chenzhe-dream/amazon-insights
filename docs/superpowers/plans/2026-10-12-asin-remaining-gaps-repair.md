@@ -24,11 +24,11 @@ Files: scripts/lib/image-remark-request.mjs, image-remark-outcome.mjs, image-rem
 
 Interface: request error diagnostic -> sanitized outcome.diagnostic -> progress/cache/candidate/frozen output -> display reason. Existing outcomes without diagnostics remain valid, with historical reason marked unrecorded. Gallery URL binds each outcome and remark.
 
-- [ ] Write regressions before code: actual request 429/401/403/network/invalid JSON/output traverses queue and serialized candidate; timeout remains distinct; injected secret fields are discarded. Historical connector failure displays unrecorded. Auth failure is not automatically requeued; transient failures are bounded by job/attempt policy.
-- [ ] Run `node --test tests/scripts/image-remark-request.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/image-remark-status-identity.test.mjs` and observe missing diagnostics failures.
-- [ ] Extend existing sanitization/outcome projection: `imageRemarkOutcome(status, {attemptJobId, diagnostic})`; pass safe diagnostics at every serialization boundary, and preserve fatal source/hash/scope exceptions.
-- [ ] Add collector regression with sixty prior outcomes and exactly two failed G6 URLs: assert `requests.length === 2`, all 58 ready notes preserved, changed gallery ordering realigned by URL, and missing/conflicting identities rejected.
-- [ ] Run relevant queue, candidate/hash, frozen schema and rendered diagnostic tests; review diff and record exact results. Root commits reviewed task files to avoid concurrent git index mutation.
+- [x] Write regressions before code: actual request 429/401/403/network/invalid JSON/output traverses queue and serialized candidate; timeout remains distinct; injected secret fields are discarded. Historical connector failure displays unrecorded. Auth failure is not automatically requeued; transient failures are bounded by job/attempt policy.
+- [x] Run `node --test tests/scripts/image-remark-request.test.mjs tests/scripts/image-remarks-concurrency.test.mjs tests/scripts/image-remark-status-identity.test.mjs` and observe missing diagnostics failures.
+- [x] Extend existing sanitization/outcome projection: `imageRemarkOutcome(status, {attemptJobId, diagnostic})`; pass safe diagnostics at every serialization boundary, and preserve fatal source/hash/scope exceptions.
+- [x] Add collector regression with sixty prior outcomes and exactly two failed G6 URLs: assert `requests.length === 2`, all 58 ready notes preserved, changed gallery ordering realigned by URL, and missing/conflicting identities rejected.
+- [x] Run relevant queue, candidate/hash, frozen schema and rendered diagnostic tests; review diff and record exact results. Root commits reviewed task files to avoid concurrent git index mutation.
 
 ## Task 2: Independent Xiyou completeness and detail-only repair
 
@@ -36,12 +36,12 @@ Files: scripts/lib/xydc-repair-readiness.ts, scripts/build-xydc-variant-data.ts,
 
 Interface: existing readiness gains independent relationship/coreDetails/ratings/orders results and missing fields per child. Existing aggregate status remains truthful; runner uses an explicit reason with independently complete orders. Collector reuses verified orders when only details require repair.
 
-- [ ] Write regressions before code using matched twelve-month zero orders and PARTIAL_CHILD_INFO: one child missing only stars/ratings keeps core ready and annual orders complete; missing title/image/price keeps core incomplete; mismatched family/window/all-child coverage remains rejected.
-- [ ] Run `node --import tsx --test tests/scripts/xydc-repair-readiness.test.ts` and observe early family-status rejection failure.
-- [ ] Remove detail-first early return; evaluate identity-bound order snapshot independently. Keep original family.infoStatus, null ratings and missing detail values unchanged.
-- [ ] Add a collector detail-only regression: four missing child details dispatched, complete orders dispatched zero times; successful core details remain visible and valid empty ratings cause a bounded nonblocking detail gap.
-- [ ] Update runner/funnel/order display copy to describe exact child/field gaps, with “全年订单已完整” where verified. Render regression asserts no combined order-gap claim for complete snapshots.
-- [ ] Run readiness, collector/cache/window and display tests, review and record exact results. Root commits reviewed task files.
+- [x] Write regressions before code using matched twelve-month zero orders and PARTIAL_CHILD_INFO: one child missing only stars/ratings keeps core ready and annual orders complete; missing title/image/price keeps core incomplete; mismatched family/window/all-child coverage remains rejected.
+- [x] Run `node --import tsx --test tests/scripts/xydc-repair-readiness.test.ts` and observe early family-status rejection failure.
+- [x] Remove detail-first early return; evaluate identity-bound order snapshot independently. Keep original family.infoStatus, null ratings and missing detail values unchanged.
+- [x] Add a collector detail-only regression: four missing child details dispatched, complete orders dispatched zero times; successful core details remain visible and valid empty ratings cause a bounded nonblocking detail gap.
+- [x] Update runner/funnel/order display copy to describe exact child/field gaps, with “全年订单已完整” where verified. Render regression asserts no combined order-gap claim for complete snapshots.
+- [x] Run readiness, collector/cache/window and display tests, review and record exact results. Root commits reviewed task files.
 
 ## Task 3: Trend evidence, classification and source daily display
 
@@ -49,17 +49,17 @@ Files: scripts/build-sorftime-sales-trend.mjs, scripts/lib/sorftime-trend-parse.
 
 Interface: each metric retains monthly arrays or dailyObservations plus collection dates/period and closed failure category. Frozen sales output preserves independent evidence. Monthly charts consume monthly arrays only; a separate source daily observation panel shows date/value with semantics unverified.
 
-- [ ] Extend actual repair CLI regressions before code: valid empty, daily-only, request failure, wrong ASIN/type and malformed response have distinct classes. A later failed metric cannot erase successful fields. Keep real G6 historic generic cause unrecorded.
-- [ ] Run `node --test tests/scripts/sorftime-sales-repair-cli.test.mjs tests/scripts/sorftime-current-sales.test.mjs` to observe missing classification failures.
-- [ ] Reuse existing field reducer; add closed safe status metadata where missing and preserve source/hash checks. Never construct synthetic natural months from unknown daily sequences.
-- [ ] Add rendered page test with valid daily points and no month points: source day observations visible with exact dates/values, monthly unavailability disclosed, no “日销量” or annual/growth inference. Check monthly arrays still render and zero/missing observations remain distinct.
-- [ ] Run collection/parser/frozen/schema/display tests and offline saved B0B replay; points must match response -> persisted fields -> frozen output -> display.
-- [ ] Root inspects current tool description and performs at most one governed single-ASIN probe if credentials/source access permits. Record raw echo and period semantics as confirmed or unresolved. Prepare missing-only recovery commands; never mutate formal canonical state.
-- [ ] Task review and exact test evidence; root commits reviewed task files.
+- [x] Extend actual repair CLI regressions before code: valid empty, daily-only, request failure, wrong ASIN/type and malformed response have distinct classes. A later failed metric cannot erase successful fields. Keep real G6 historic generic cause unrecorded.
+- [x] Run `node --test tests/scripts/sorftime-sales-repair-cli.test.mjs tests/scripts/sorftime-current-sales.test.mjs` to observe missing classification failures.
+- [x] Reuse existing field reducer; add closed safe status metadata where missing and preserve source/hash checks. Never construct synthetic natural months from unknown daily sequences.
+- [x] Add rendered page test with valid daily points and no month points: source day observations visible with exact dates/values, monthly unavailability disclosed, no “日销量” or annual/growth inference. Check monthly arrays still render and zero/missing observations remain distinct.
+- [x] Run collection/parser/frozen/schema/display tests and offline saved B0B replay; points must match response -> persisted fields -> frozen output -> display.
+- [x] Root inspects current tool description and records governed single-ASIN probe receipts (actual: 1 tool-description call and 5 metric calls, including one capture-order retry; six total, all reconciled). Record raw echo and period semantics as confirmed or unresolved. Prepare missing-only recovery commands; never mutate formal canonical state.
+- [x] Task review and exact test evidence; root commits reviewed task files.
 
 ## Task 4: Whole-change review and integration receipt
 
-- [ ] Run combined affected script/agent tests, `node node_modules/typescript/bin/tsc --noEmit`, and `git diff --check`; use production build if relevant runtime dependencies permit.
-- [ ] Generate scoped task/whole-branch review packages and resolve actionable findings with regressions.
-- [ ] Record candidate workspace/commits, passing counts, live supplier probe outcomes, remaining semantics, target-only request plan and formal update/browser acceptance steps in docs/verification/2026-10-12-asin-remaining-gaps-repair.md.
-- [ ] Finish on a committed clean candidate branch. Formal deployment, real target recovery and current-report browser acceptance remain explicit unchecked items for main-window coordination.
+- [x] Run combined affected script/agent tests, `node node_modules/typescript/bin/tsc --noEmit`, and `git diff --check`; use production build if relevant runtime dependencies permit.
+- [x] Generate scoped task/whole-branch review packages and resolve actionable findings with regressions.
+- [x] Record candidate workspace/commits, passing counts, live supplier probe outcomes, remaining semantics, target-only request plan and formal update/browser acceptance steps in docs/verification/2026-10-12-asin-remaining-gaps-repair.md.
+- [x] Finish on a committed clean candidate branch. Formal deployment, real target recovery and current-report browser acceptance remain explicit unchecked items for main-window coordination.

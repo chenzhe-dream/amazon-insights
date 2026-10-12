@@ -1,0 +1,27 @@
+{
+  "candidateBranch": "codex/asin-remaining-gaps-repair",
+  "baseCommit": "88be795ecf4571a9cbeb6542cfa613daf9fc14b8",
+  "implementationCommits": [
+    "673eb9accff98d7b52657bce2f75e2bf34db8cd4",
+    "ad8dfa92ce8ca4a54b142cac9846f07f959a785c"
+  ],
+  "verifiedAt": "2026-10-12T11:30:00.3023572Z",
+  "tests": {
+    "combinedPassed": 231,
+    "combinedFiles": 25,
+    "fileConcurrency": 2,
+    "xydcStaticPassed": 5,
+    "totalPassed": 236,
+    "internalImageJobsConcurrent": true
+  },
+  "typecheckExit": 0,
+  "lintExit": 0,
+  "lintExistingWarnings": 1,
+  "diffCheckExit": 0,
+  "productionBuildExit": 0,
+  "sourceHash": "74ffaecf7a7a759ae0ca10d9bef1c41dc6633de07ec77a8dfdebbb1487d5a27b",
+  "reviewOpenFindings": 0,
+  "formalPublished": false,
+  "formalBrowserAccepted": false,
+  "additionalProviderCallsInFinalFix": 0
+}

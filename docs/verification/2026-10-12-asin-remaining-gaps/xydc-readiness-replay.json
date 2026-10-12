@@ -1,0 +1,135 @@
+{
+  "checkedAt": "2026-10-12T10:43:10.065Z",
+  "sourceJobId": "97a8b00e-90f4-4078-8190-08745abc6cd8",
+  "canonicalWrites": 0,
+  "providerRequests": 0,
+  "details": [
+    {
+      "asin": "B0BWCQHCWX",
+      "status": "upstream-empty",
+      "relationship": "ready",
+      "coreDetails": "upstream-empty",
+      "ratings": "upstream-empty",
+      "orders": "ready",
+      "missingFields": [
+        {
+          "asin": "B0H2LS8SB6",
+          "fields": [
+            "title",
+            "imageUrl",
+            "price",
+            "stars",
+            "productPageRatings"
+          ]
+        },
+        {
+          "asin": "B0H2LXX358",
+          "fields": [
+            "title",
+            "imageUrl",
+            "price",
+            "stars",
+            "productPageRatings"
+          ]
+        }
+      ]
+    },
+    {
+      "asin": "B0CKZGYS37",
+      "status": "upstream-empty",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "upstream-empty",
+      "orders": "ready",
+      "missingFields": [
+        {
+          "asin": "B0GY89FG5D",
+          "fields": [
+            "stars",
+            "productPageRatings"
+          ]
+        }
+      ]
+    },
+    {
+      "asin": "B0CSFDX9HM",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0DPFDXJL3",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0DS5ZZ1DJ",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0FC5M26WM",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0FP14435V",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0FP27S8VY",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    },
+    {
+      "asin": "B0FWKKKK19",
+      "status": "upstream-empty",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "upstream-empty",
+      "orders": "ready",
+      "missingFields": [
+        {
+          "asin": "B0GH3CDJ8Q",
+          "fields": [
+            "stars",
+            "productPageRatings"
+          ]
+        }
+      ]
+    },
+    {
+      "asin": "B0G6RSSR6V",
+      "status": "ready",
+      "relationship": "ready",
+      "coreDetails": "ready",
+      "ratings": "ready",
+      "orders": "ready",
+      "missingFields": []
+    }
+  ]
+}

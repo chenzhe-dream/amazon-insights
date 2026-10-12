@@ -1,0 +1,13 @@
+✔ renders fixed-window annual parent cards from the complete family denominator (20.6144ms)
+✔ labels every matched input ASIN in input order even when one is outside the annual top three (3.5628ms)
+✔ keeps variant information while truthfully rendering pending, partial, zero-only, and stale orders (9.127ms)
+✔ renders complete historical cache against its actual period while the default current period remains pending (10.2669ms)
+✔ complete annual orders remain visible with exact missing ratings fields (6.0971ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1058.9819

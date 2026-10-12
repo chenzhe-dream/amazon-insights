@@ -1,0 +1,81 @@
+{
+  "checkedAt": "2026-10-12T11:26:27.321Z",
+  "asin": "B0BWCQHCWX",
+  "physicalRequests": 0,
+  "canonicalWrites": 0,
+  "metrics": {
+    "SalesVolume": {
+      "period": "month",
+      "monthlyCount": 25,
+      "dailyCount": 0,
+      "first": "2024-10",
+      "last": "2026-10"
+    },
+    "SalesAmount": {
+      "period": "month",
+      "monthlyCount": 25,
+      "dailyCount": 0,
+      "first": "2024-10",
+      "last": "2026-10"
+    },
+    "Price": {
+      "period": "month",
+      "monthlyCount": 25,
+      "dailyCount": 0,
+      "first": "2024-10",
+      "last": "2026-10"
+    },
+    "Rank": {
+      "period": "month",
+      "monthlyCount": 25,
+      "dailyCount": 0,
+      "first": "2024-10",
+      "last": "2026-10"
+    }
+  },
+  "persistedCounts": {
+    "volume": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "amount": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "price": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "rank": {
+      "monthly": 25,
+      "daily": 0
+    }
+  },
+  "frozenCounts": {
+    "volume": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "amount": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "price": {
+      "monthly": 25,
+      "daily": 0
+    },
+    "rank": {
+      "monthly": 25,
+      "daily": 0
+    }
+  },
+  "frozenHashVerified": true,
+  "responseHash": "6acbde4d85c460ee64207dbba363fb52a056f3889ebd8055dac0fb6146544917",
+  "replayId": "asin-candidate-metrics-20261012-aaa82dc7-27bb-4a4d-a471-1540d3db20a4",
+  "sourceProbeJobIds": [
+    "asin-candidate-probe-20261012-9f6ec058-1036-45cb-aafd-0edfa7f04c91",
+    "asin-candidate-probe-20261012-fa9b12ce-411d-46b1-8718-e9f5f9cd9f5b",
+    "asin-candidate-metrics-20261012-6446341b-5d51-4c76-8821-c8043fbe033a"
+  ],
+  "candidateProjectionOnly": true
+}

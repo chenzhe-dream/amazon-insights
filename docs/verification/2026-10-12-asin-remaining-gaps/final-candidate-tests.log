@@ -1,0 +1,296 @@
+(node:97460) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ cleanup deletes only expired known candidate directories and preserves newer writes (46.2512ms)
+✔ cleanup never deletes a candidate whose runner PID is live (9.7974ms)
+✔ cleanup refuses a candidate path that is a directory symlink (10.9512ms)
+✔ retention sweeps immediately and periodically without overlapping (85.1432ms)
+✔ Agent Service startup sweeps an expired candidate under its configured data root (1254.6805ms)
+✔ a refreshed gallery maps legacy remarks by the previous URL, never the slot (1.4537ms)
+✔ URL-bound remarks take priority after analysis and mismatched results stay hidden (0.5461ms)
+✔ legacy unchanged galleries retain their notes; duplicate previous URLs are ambiguous (0.2509ms)
+✔ an empty previous gallery keeps unbound remarks on the current image slots (0.2215ms)
+✔ frozen image diagnostic strips injected secrets and renders distinct safe reasons (2.658ms)
+✔ persisted Amazon gallery, product-header, and preview sources use the normalized same-origin proxy (9.0863ms)
+✔ injected Sorftime gallery stays visible without AI remarks and takes priority over the catalog MCP image (1.447ms)
+✔ Sorftime gallery reports the exact count of ready AI remarks (1.1388ms)
+✔ video thumbnail is counted and labelled separately from static secondary images (1.0894ms)
+✔ eight saved ASIN galleries render all 53 images and matching remarks without a missing-note warning (9.4399ms)
+✔ missing remarks display their fixed per-slot outcome reason (2.2204ms)
+✔ injected catalog MCP fallback renders with SellerSprite provenance and a non-empty state (1.1526ms)
+✔ injected empty MCP sources render a truthful no-image state without claiming a pull succeeded (0.8893ms)
+✔ interactive hover and pinned previews render same-origin proxy sources (3000.5183ms)
+✔ each ASIN has a small image actions button below its identity (1.9704ms)
+✔ image action menu dispatches the selected ASIN and shows success and failure (3425.3679ms)
+✔ failed reanalysis keeps the previous note visible with an explicit failure label (2.0494ms)
+✔ supplemental image remarks fill only matching missing slots and carry a visible source label (3.8293ms)
+✔ snapshot renders the original matrix with all 11 online images, matched remarks and overlay (2327.843ms)
+✔ previous URL remap binds a legacy remark to the matching current image and rejects stale overlay (2.6433ms)
+✔ URL-tagged remarks follow reordered images rather than their former slot (2.3097ms)
+✔ snapshot scopes ASIN and site and never falls back to generated global image data (2.4238ms)
+✔ main-image-only remarks obey URL identity and unsafe links remain explained placeholders (3.1832ms)
+✔ snapshot diagnostics survive frozen read and render safe distinct failure reasons (4.3827ms)
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+✔ overview snapshot retains the native matrix and complete cached selling points (62.1636ms)
+✔ source daily panel renders exact values and missing observations without monthly inference (1.7771ms)
+✔ saved B0B monthly response exposes all 25 source months in rendered records (91.9395ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+✔ raw missing days survive actual CLI cache and frozen rendering including all unknown (15.7202ms)
+✔ later unknown cell shows retained numeric evidence with its original collection time (2.3591ms)
+✔ product_content schema diagnostics survive strict stage output validation (7.8572ms)
+✔ display projection retains explicit sales gaps even when evidence key exists (8.5074ms)
+✔ daily and error sales evidence retain display gaps without changing ready records (0.3359ms)
+✔ historical public jobs remain unversioned instead of becoming canonical version one (4.7747ms)
+✔ stage output accepts one normalized data branch and rejects mixed or unknown fields (12.7368ms)
+✔ stage output accepts a partial branch with data and a known schema cause (2.8154ms)
+✔ stage outputs require canonical ownership and a currently terminal stage (5766.8139ms)
+✔ existing outputs disappear when their current stage is reset to pending or queued (2519.4704ms)
+✔ out-of-scope output drafts cannot make a projectable stage terminal (2454.1076ms)
+✔ every done projector draft satisfies the Task 1 stage-output schema (11.5243ms)
+✔ complete and fail settle projectable stages only with fixed atomic gaps (2701.5279ms)
+✔ multi-stage terminal fallbacks persist every gap and raise jobVersion once (2395.9589ms)
+✔ sync completion publishes a validated current display version in the same transaction (2616.2232ms)
+✔ worker discards an invalid output draft instead of forwarding its terminal stage (542.2195ms)
+✔ real optional XYDC launcher preserves the safe missing coordination root diagnostic (1100.4605ms)
+✔ real optional launcher drains hostile stderr but forwards only a bounded exact allowlisted line (112.5827ms)
+✔ catalog phase invokes XiYou after pending or cached catalog work and continues after its failure (6.7854ms)
+✔ category diagnostics preserve ready siblings while classifying bounded failures (0.247ms)
+✔ Sorftime variant stage invokes the Sorftime builder with the Sorftime ASIN scope (0.219ms)
+✔ zero exit plus empty persisted sales records upstream-empty and makes its own stage partial (0.8235ms)
+✔ zero exit plus incomplete image remarks records image_remarks as upstream-empty only (0.2363ms)
+✔ image postcondition projects the job candidate without reading global remarks (1.1773ms)
+✔ canonical ready data completes and records the same stage key (0.4291ms)
+✔ cached projectable data uses the audited projection path instead of an unbacked skip (0.3562ms)
+✔ cached child sales uses the audited projection path instead of an unbacked skip (0.172ms)
+✔ mixed projectable cohorts submit processed and cached ASINs together so one partial projection retains both (0.6481ms)
+✔ production child sales and price strategy finalize the full mixed cohort (2.7766ms)
+✔ mixed cached category finalization preserves its explicit terminal failure contract (0.3883ms)
+✔ persisted partial projection replays with the same data scope and gap items (1.135ms)
+✔ strict SIF keyword schema records become bounded per-ASIN diagnostics (0.232ms)
+✔ a failed command records a connector gap rather than erasing ready ASIN results (0.4743ms)
+✔ machine-readable image outcomes preserve timeout and connector failure (0.404ms)
+✔ runner import does not load local environment at module scope (2.2727ms)
+✔ release runner activates the image remarks child and reconciles authoritative statuses (0.9098ms)
+✔ release runner removes the disabled-image fallback (0.7624ms)
+✔ image remarks run after terminal traffic and before build or publication (0.6737ms)
+✔ preflight Sorftime takeover skips SellerSprite and only requests missing ASINs (0.4533ms)
+✔ valid SellerSprite catalog never invokes fallback (0.2129ms)
+✔ SellerSprite and Sorftime failures leave only the still-missing ASIN as a catalog gap (0.2016ms)
+✔ sequential traffic completion retains earlier ready data and unprojected failure status (620.0089ms)
+✔ two jobs for one ASIN keep separate candidate remarks after shared file races (1088.5487ms)
+✔ collector retries two URL identities and preserves all 58 ready notes after gallery reorder (708.1535ms)
+✔ job candidate survives an unrelated global gallery overwrite and projects exact URL/index (3.1402ms)
+✔ candidate rejects altered body, wrong image URL, wrong job and changed listing (0.734ms)
+✔ candidate file is read back only with the matching job and canonical hash (1.5888ms)
+✔ candidate readiness and failure causes derive from its own slots (1.0115ms)
+✔ partial image refresh retains an untouched sibling only from validated job output (0.6261ms)
+✔ ambiguous duplicated image URL identities are fatal before provider dispatch (0.7283ms)
+✔ frozen stage projection retains safe diagnostics from cache and removes secret fields (0.2733ms)
+✔ automatic image remark requests use the shared 120 second deadline and ignore environment shortening (0.7372ms)
+✔ image remark requests abort when the timeout elapses (3.2375ms)
+✔ image remark endpoint uses the official default and one relay v1 segment (0.4638ms)
+✔ image remark endpoint rejects unsafe bases without echoing them (0.3331ms)
+✔ image remark model precedence is vision, VOC, then fallback (0.1162ms)
+✔ provider failures expose only closed request diagnostics (17.4956ms)
+✔ provider payload reader uses the same closed diagnostics (0.5313ms)
+✔ provider failure diagnostics survive queue and progress without secrets (0.9422ms)
+✔ authentication failures do not automatically retry in a later job (0.1858ms)
+✔ actual request failure retains closed diagnostics in a serialized candidate (1.5837ms)
+✔ queue never downgrades fatal source hash and scope failures (0.4243ms)
+✔ image remarks are ready only for the listing URL they describe (0.8176ms)
+✔ a changed gallery URL counts as pending even when old index has a remark (0.2006ms)
+✔ failed image outcomes retry only in a later valid sync job (0.8788ms)
+✔ only failed outcomes persist a safe attempt job identity (0.7839ms)
+✔ fully cached image remarks stay ready when no work is queued (0.141ms)
+✔ one ready and one empty slot remains an explicit per-ASIN gap until persistence is complete (0.1384ms)
+✔ image queue caps concurrent workers at four and reports safe settled progress (32.2575ms)
+✔ image queue replaces provider text with fixed safe per-slot outcomes (0.7622ms)
+✔ each image has an independent 120 second timeout boundary (14.7004ms)
+✔ queue frees timed-out slots without waiting for abort-aware cleanup (15.3412ms)
+✔ never-resolving timed-out workers return bounded results and let queued work start (0.7894ms)
+✔ reorders remarks by exact trimmed URL rather than image position (1.611ms)
+✔ additions, removals and altered URLs never inherit another image remark (0.1306ms)
+✔ duplicate old URLs are ambiguous even when their remarks are identical (0.1042ms)
+✔ duplicate new URLs can reuse one unambiguous old remark (0.0961ms)
+✔ nonarray inputs, blank or nonstring URLs and absent remarks yield safe empty values (0.1682ms)
+✔ separate ASIN calls never share state even for the same URL (0.0909ms)
+✔ does not mutate URL arrays, remarks array or nested remark objects (0.1195ms)
+✔ a conflicting remark imageUrl cannot be reused from an old gallery index (0.0915ms)
+✔ product legacy rejects blank, invalid months and partial malformed payloads (2.2383ms)
+✔ missing refresh preserves numeric evidence and missing dates with period provenance (7.5035ms)
+✔ sales projection retains daily evidence without claiming monthly readiness (0.4427ms)
+✔ sales projection rejects metric mismatch but keeps valid independent observations (0.2015ms)
+✔ a malformed refresh preserves previously validated monthly portions with their collection date (0.2514ms)
+✔ partial immutable sales output retains daily evidence while recording an unready gap (1.5215ms)
+✔ later transport failures retain successful earlier metrics and still collect remaining metrics (0.3277ms)
+✔ monthly refresh preserves daily source evidence and its collection date (0.157ms)
+✔ strict string stamps reject coercions and invalid dates or values (0.231ms)
+✔ immutable partial output preserves closed valid-empty diagnostics without inventing points (0.3717ms)
+✔ legacy daily evidence retains original collection date on monthly refresh (0.2ms)
+✔ partial unknown refresh retains old numeric values and individual source collection dates (0.1674ms)
+✔ product parser separates missing stamps while generic/category numeric compatibility remains unchanged (0.7573ms)
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+✔ actual repair CLI persists daily evidence rather than retaining an empty cache as a schema failure (11.7415ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+✔ actual repair CLI keeps valid new observations alongside a failed independent metric (2.7613ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+✔ repair reuses verified daily fields and fetches only missing metrics (18.6395ms)
+✔ a verified empty refresh cannot erase earlier monthly observations (0.262ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+@@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 25m vol · 0m amt · 0m price · 0m rank
+✔ actual repair CLI classifies metric outcomes without leaking provider text (76.7345ms)
+✔ saved governed B0B response accepts strict string calendar stamps (0.6863ms)
+[done] 1/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+1m vol · 0m amt · 0m price · 0m rank
+✔ saved B0B response preserves 25 points through CLI persistence and frozen output (10.0904ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+1m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+1m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+1m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... @@provider-diagnostic@@{"connector":"sorftime","stage":"sales_trend","asin":"B0BWCQHCWX","failureKind":"schema","causeCode":"MCP_SCHEMA","operation":"product_trend","boundary":"consumer-shape"}
+1m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+✔ actual CLI rejects CN and ISO blank or invalid legacy months without erasing previous values (66.5288ms)
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+[sorftime] B0BWCQHCWX trend ... 0m vol · 0m amt · 0m price · 0m rank
+[done] 0/1 ASIN → app/sorftime-sales-trend-data.ts
+✔ actual missing-only repair reuses retained daily volume after empty or unknown-month refresh (60.7151ms)
+✔ product trends normalize current arrays and legacy strings identically (1.1895ms)
+✔ product trends discard malformed entries and keep valid month/value pairs (0.6883ms)
+✔ partial projections retain ready data and an exact bounded gap (2.1986ms)
+✔ partial projections retain only ready ASIN data and bounded per-ASIN diagnostic items (7.3456ms)
+✔ the projectable stage set includes child sales, price strategy, and image remarks (0.1101ms)
+✔ projectStageOutput hashes only the fixed sales projection (0.2192ms)
+✔ projectStageOutput uses canonical object keys and a fixed terminal gap (0.235ms)
+✔ projectStageOutput emits only the fixed schema branches for every done stage (1.2156ms)
+✔ category hash is independent of node and object insertion order (0.2682ms)
+✔ traffic projection reads the real nested SIF overview shape without copying raw fields (0.7911ms)
+✔ traffic projection omits unavailable detail arrays but preserves authoritative empty arrays (0.31ms)
+✔ traffic projection ignores malformed structure instead of inventing child detail (0.366ms)
+✔ traffic projection rejects object-shaped children without an ASIN and retains source indices without mutation (0.3184ms)
+✔ traffic accepts only the explicitly whitelisted legacy normalized overview fallback (0.157ms)
+✔ image projection uses the job candidate without reading the shared generated file (0.1467ms)
+✔ returns a prior complete annual snapshot as stale without rewriting provenance (3.9833ms)
+✔ prefers a complete current window and falls back past an incomplete current candidate (0.6608ms)
+✔ uses a current partial snapshot only when no complete history exists (0.1771ms)
+✔ treats a complete all-zero snapshot as complete display data (0.3347ms)
+✔ rejects mismatched identity, child sets, duplicate children, future windows, and malformed payloads (1.4565ms)
+✔ rejects future snapshot, child, and source timestamps (0.3423ms)
+✔ uses a stable content tie-breaker and never mutates candidates (7.7125ms)
+✔ discovers only canonical family files and tolerates malformed optional candidates (21.8728ms)
+✔ collector and display share one 24-hour freshness predicate (0.2234ms)
+✔ pins twelve completed UTC months, never the current month (0.9918ms)
+✔ handles December/January and UTC-offset boundaries (0.4045ms)
+✔ strictly validates order snapshots and their cross-field identities (7.4899ms)
+✔ rejects snapshots whose derived sums cannot remain safe integers (0.2913ms)
+✔ matches country, parent, child set and window without depending on child order (0.3488ms)
+✔ aggregates the labelled historical fixture without averaging monthly shares (0.7942ms)
+✔ uses every child in the denominator even when only three rows are previewed (0.1993ms)
+✔ marks failed, absent and missing-month children incomplete without inventing zero (0.3528ms)
+✔ treats raw zero as undisclosed and keeps zero-only shares unknown (7.0226ms)
+✔ does not turn an empty family into a complete zero-total family (0.2142ms)
+✔ sorts equal positive totals by ASIN and unknown rows last (0.1697ms)
+✔ projects the observed monthly response with exact identity and no provider-only fields (3.6862ms)
+✔ collects every child sequentially and deduplicates shared children globally (625.8292ms)
+✔ a complete fresh cache hit makes no request, while a changed UTC window refetches (33.2614ms)
+✔ partial cache resumes only missing child histories and preserves reused fetchedAt (33.6067ms)
+✔ expired and future-dated complete caches are recollected instead of laundered (56.6238ms)
+✔ a failed-refresh stale fallback is retried and only becomes fresh after collection (34.0326ms)
+✔ partial resume recollects an aged complete child and preserves an eligible sibling (28.6452ms)
+✔ mixed-age assembled snapshots expire when their oldest child reaches 24 hours (43.4748ms)
+✔ shared ASIN work is deduplicated per market and rejects a response from the wrong market (55.9781ms)
+✔ failed forced refresh preserves an intact complete same-window snapshot as stale (30.6958ms)
+✔ a forced partial response also preserves the intact complete snapshot as stale (27.5848ms)
+✔ retries a structured 429 once after a bounded Retry-After wait (17.7595ms)
+✔ retries explicit 429 at most twice with fallback delay and stops later children on auth or quota (33.4934ms)
+✔ outer cancellation wins and an injected request ignoring cancellation cannot hang the phase (18.7123ms)
+✔ cache path binds country parent window and complete child set, validates content and rejects future freshness (10.0983ms)
+✔ Xiyou repair reuses complete current zero orders and selects missing or partial families (596.993ms)
+✔ Xiyou readiness uses the CLI default data root and preserves unavailable causes (27.5421ms)
+✔ partial details do not hide independently complete twelve-month zero orders (27.1817ms)
+✔ Xiyou runner reason separates completed orders from exact child detail gaps (0.8776ms)
+✔ order-only gaps do not invent child concerns when diagnostics exist (0.1278ms)
+✔ bounded collector diagnostic parser accepts split CRLF, fields and scoped parents only (1.1328ms)
+✔ bounded recovery retries only a failed discovery and leaves ready children untouched (12.5456ms)
+✔ info transport failures retain their reason in real cache and bounded recovery clears it (50.1228ms)
+✔ cancellation during the final variation request is propagated without writing failure cache (0.6978ms)
+✔ discovered parents are checkpointed before a later request exhausts recovery (0.4222ms)
+✔ forced discovery cannot replace ready cache before details or a later parent cancels (0.8049ms)
+✔ variant collection stops before a paid call when its job lifetime is cancelled (0.2355ms)
+✔ missing token preserves ready and partial relationship evidence regardless of force (0.7778ms)
+✔ missing token preserves eligible cache hits while persisting unavailable misses (0.3741ms)
+✔ missing token does not reuse invalid or unsafe cached relationship candidates (0.5225ms)
+✔ missing credential keeps variant cache bytes and annual order display readable (11.2825ms)
+✔ projects the real XiYou variation and info contracts without materializing unlisted children (1.2268ms)
+✔ rejects a non-success real XiYou info payload without retaining its body (0.4159ms)
+✔ rejects real XiYou info rows whose country differs from the request (0.3602ms)
+✔ normalizes blank optional fields from a real XiYou info row without discarding ready siblings (0.5034ms)
+✔ projects a child input into its real parent with deduplicated children and provider-safe fields (0.1918ms)
+✔ hydrates globally deduplicated children in batches and checkpoints a partial family for resume (1.5567ms)
+✔ uses a fresh ready cache without a provider request and force rehydrates every current child (0.5295ms)
+✔ merges input siblings under one parent, creates a single-product family, and degrades to stale cache (0.9731ms)
+✔ merges a failed parent input with a ready child family independently of input order (0.7692ms)
+✔ keeps stale relationship provenance ahead of a newer empty failure in either input order (0.5159ms)
+✔ keeps two failed variation inputs unavailable (0.2575ms)
+✔ failed Windows replacement removes only the temporary file and preserves an old cache target (7.1556ms)
+✔ a variation failure with no old cache remains unavailable and is not reused as a ready cache (0.5086ms)
+✔ rejects invalid variation and info rows as schema-invalid without retaining provider bodies (0.539ms)
+✔ retains legal partial info fields while marking the child and family partial (0.3715ms)
+✔ accumulates complementary legal partial info without erasing prior child evidence (0.4179ms)
+✔ force restores the old ready family as stale when child enrichment fails (0.3813ms)
+✔ force restores the old ready family as stale when child enrichment is schema-invalid (0.281ms)
+✔ rejects cache entries whose family country differs from the normalized path country (2.8813ms)
+✔ treats null fields as incomplete and rejects boolean, blank, URL, and range-invalid info values (1.7684ms)
+✔ a schema-invalid info batch only marks the families containing that batch's children (0.7144ms)
+✔ a schema-invalid partial resumes to ready without requesting variations again (0.5195ms)
+✔ a schema-invalid shared-child batch preserves another input family's ready child evidence (0.4002ms)
+✔ continues after a schema-invalid info batch to checkpoint the next independent batch (0.5323ms)
+✔ persists a stale fallback unchanged after a forced provider failure (9.9608ms)
+✔ Windows npm CLI executes offline fixture enrichment and writes the scoped cache (1735.0625ms)
+✔ valid empty ratings are a nonblocking detail gap and do not trigger the recovery pass (0.6064ms)
+✔ detail-only repair dispatches four child details and zero independently complete order requests (619.7607ms)
+✔ aged partial preserves core evidence and provenance after empty, failed detail or discovery (0.8132ms)
+✔ rediscovery never borrows details from another parent, child set, country or input (0.8379ms)
+ℹ tests 231
+ℹ suites 0
+ℹ pass 231
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28040.4008
