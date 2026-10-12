@@ -358,7 +358,7 @@ test("sync service accepts the exact image publication recovery selection", asyn
   assert.equal(resumed?.job.currentStageId, "image_remarks");
 });
 
-test("sync service accepts an exact build-only publication recovery selection", async () => {
+for (const buildStatus of ["failed", "done"]) test(`sync service accepts exact build-only recovery with ${buildStatus} build`, async () => {
   const input: Parameters<SyncJobRepository["admit"]>[0] = {
     jobId: "build-publication-recovery",
     organizationId: ORGANIZATION_ID,
@@ -381,7 +381,7 @@ test("sync service accepts an exact build-only publication recovery selection", 
     ...queuedJob(input),
     status: "failed",
     stages: input.stages.map((stage) => stage.id === "build"
-      ? { ...stage, status: "failed" }
+      ? { ...stage, status: buildStatus }
       : stage),
   };
   repository.findById = async () => failedJob;
@@ -399,7 +399,7 @@ test("sync service accepts an exact build-only publication recovery selection", 
     .update(JSON.stringify({ data: { outcomesByAsin: {}, remarksByAsin: {} }, stage: "image_remarks" }))
     .digest("hex");
 
-  const resumed = await new SyncJobService(repository, {
+  const service = new SyncJobService(repository, {
     loadSyncJobMirror: async () => ({
       jobId: input.jobId,
       fingerprint: input.fingerprint,
@@ -421,7 +421,9 @@ test("sync service accepts an exact build-only publication recovery selection", 
         data,
       }],
     }),
-  }).resume({
+  });
+  if (buildStatus === "done") assert.deepEqual((await service.read(input.jobId))?.resumableStages, ["build"]);
+  const resumed = await service.resume({
     jobId: input.jobId,
     organizationId: input.organizationId,
     actorId: input.actorId,
@@ -431,6 +433,16 @@ test("sync service accepts an exact build-only publication recovery selection", 
   assert.equal(resumed?.job.currentStageId, "build");
   assert.equal(recoveryEvidence?.outputs.length, 1);
   assert.equal(recoveryEvidence?.outputs[0]?.contentHash, contentHash);
+  if (buildStatus === "done") {
+    const validMirror = {jobId:input.jobId,fingerprint:input.fingerprint,scope:{organizationId:input.organizationId,projectId:input.projectId,runId:input.runId,marketplace:input.marketplace,asins:input.asins},outputs:recoveryEvidence!.outputs};
+    for (const invalidMirror of [null, {...validMirror,fingerprint:"wrong"}, {...validMirror,outputs:validMirror.outputs.map(output=>({...output,contentHash:"0".repeat(64)}))}]) {
+      const guarded = new SyncJobService(repository,{loadSyncJobMirror:async()=>invalidMirror});
+      assert.notDeepEqual((await guarded.read(input.jobId))?.resumableStages,["build"]);
+      await guarded.resume({jobId:input.jobId,organizationId:input.organizationId,actorId:input.actorId});
+      assert.equal(recoveryEvidence,undefined);
+    }
+  }
+
 });
 
 test("scoped sync service creates a canonical run and fingerprints the project boundary", async () => {

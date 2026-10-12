@@ -27,3 +27,7 @@ Actual repair CLI regressions were observed red with missing daily evidence and 
 Controlled recovery uses the existing build-only resume service for this failed task; it validates persisted stage hashes/scope and does not dispatch supplier or image-model collection. Do not weaken the coverage guard, overwrite original stage bodies, or force a full recollection to repair this publication error.
 
 Remaining acceptance gaps: supplier natural-month sales semantics, actual persisted sales observations lost by the prior repair, and two failed image-analysis slots. They are distinct from the captured-gallery/publication repair and must not be labeled complete.
+
+## Stranded publication recovery
+
+The real failed task had `currentStageId: build` and `build: done`; generic repository failure had preserved this already-terminal build marker. The existing resume selector therefore found no unfinished stage. The service now advertises/resumes only build for this exact stranded failed shape when the matching mirror provides fully validated scope, fingerprint, all ten outputs and hashes. Repository backfill/ownership checks remain intact. Missing or corrupt evidence cannot resume it. Future publication failures mark the build stage failed without changing sibling outputs. Service regressions 13/13 and disposable PostgreSQL failed/done backfill regressions 2/2 passed.

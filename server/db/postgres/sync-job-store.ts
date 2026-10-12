@@ -952,7 +952,12 @@ export class PostgresSyncJobStore implements SyncJobRepository {
           exactBuildPublicationSelection(selectedRepairStages);
         const terminalBuildPublicationRepair =
           terminalRepair &&
-          exactFailedBuildPublicationSelection(target.stages, selectedRepairStages);
+          (exactFailedBuildPublicationSelection(target.stages, selectedRepairStages) ||
+            (target.status === "failed" && target.currentStageId === "build" &&
+              target.stages.find(stage => stage.id === "build")?.status === "done" &&
+              target.stages.every(stage => stage.kind === "manual" || stage.id === "queue" || stage.id === "build" ||
+                ["done", "partial", "skipped"].includes(stage.status)) &&
+              Boolean(input.buildPublicationRecoveryEvidence)));
         let resumedStages: readonly string[];
         let progress = target.asinProgress;
         if (queuedExplicitCategoryRepair || terminalCategoryRepair) {
@@ -1520,8 +1525,15 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         const changed = await upsertStageOutput(this.queries, input.jobId, output);
         outputChanged ||= changed;
       }
+      const publicationRejectedAfterBuild = current.currentStageId === "build" &&
+        input.error.code === "SYNC_JOB_RUNNER_ERROR" &&
+        current.stages.find(stage => stage.id === "build")?.status === "done" &&
+        current.stages.every(stage => stage.kind === "manual" || stage.id === "queue" || stage.id === "build" ||
+          ["done", "partial", "skipped"].includes(stage.status));
       const stages = settleTerminalStages(
-        current.stages,
+        publicationRejectedAfterBuild ? current.stages.map(stage => stage.id === "build"
+          ? { ...stage, status: "failed", detail: input.message, completedAt: input.failedAt }
+          : stage) : current.stages,
         "failed",
         input.failedAt,
         input.message,

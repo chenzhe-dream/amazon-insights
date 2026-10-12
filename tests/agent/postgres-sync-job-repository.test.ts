@@ -1106,7 +1106,7 @@ test("terminal build interruption resumes only build when canonical projected ou
   assert.equal(resumed?.job.stages.find((stage) => stage.id === "build")?.status, "pending");
 });
 
-test("terminal build recovery backfills missing canonical mirror outputs before resuming only build", async () => {
+for (const buildStatus of ["failed", "done"]) test(`terminal build recovery backfills validated outputs with ${buildStatus} build`, async () => {
   const { first, firstPool } = await createRepositories();
   const organizationId = randomUUID();
   const actorId = randomUUID();
@@ -1186,10 +1186,17 @@ test("terminal build recovery backfills missing canonical mirror outputs before 
     })),
     outputs,
   });
+  if (buildStatus === "done") {
+    await first.recordProgress({jobId:admitted.job.jobId,leaseGeneration:lease!.leaseGeneration,workerId:"build-backfill-worker",recordedAt:LATER,currentStageId:"build",stage:{id:"build",status:"done",completedAt:LATER}});
+    const beforePublicationFailure = await first.findById(admitted.job.jobId);
+    const publicationFailure = await first.fail({jobId:admitted.job.jobId,leaseGeneration:lease!.leaseGeneration,workerId:"build-backfill-worker",failedAt:LATER,message:"Candidate would lose verified data: price provenance",error:{code:"SYNC_JOB_RUNNER_ERROR"}});
+    assert.equal(publicationFailure.stages.find(stage=>stage.id==="build")?.status,"failed");
+    assert.deepEqual(publicationFailure.stages.filter(stage=>stage.id!=="build"), beforePublicationFailure!.stages.filter(stage=>stage.id!=="build"));
+  }
   const failedStages = stages.map((stage) => projectable.includes(stage.id as typeof projectable[number])
     ? { ...stage, status: stage.id === "reviews" ? "partial" : "done", completedAt: LATER }
     : stage.id === "build"
-      ? { ...stage, status: "failed", completedAt: LATER }
+      ? { ...stage, status: buildStatus, completedAt: LATER }
       : stage);
   await firstPool.query(
     `UPDATE sync_jobs
@@ -1207,6 +1214,7 @@ test("terminal build recovery backfills missing canonical mirror outputs before 
     [admitted.job.jobId],
   )).rows[0]?.count, 7);
 
+  if (buildStatus === "done") await assert.rejects(first.resume({jobId:admitted.job.jobId,organizationId,actorId,resumedAt:LATER}), /not eligible for in-place resume/i);
   const evidence = {
     jobId: admitted.job.jobId,
     organizationId,

@@ -225,7 +225,11 @@ export class SyncJobService {
 
   async read(jobId: string): Promise<SyncJob | null> {
     const job = await this.#syncJobs.findById(jobId);
-    return job ? toPublicSyncJob(job) : null;
+    if (!job) return null;
+    const strandedBuildEvidence = strandedBuildPublication(job)
+      ? buildRecoveryEvidence(await this.#loadSyncJobMirror(jobId), job)
+      : undefined;
+    return toPublicSyncJob(strandedBuildEvidence ? { ...job, resumableStages: ["build"] } : job);
   }
 
   async readStageOutput(input: {
@@ -323,6 +327,7 @@ export class SyncJobService {
 }
 
 function exactFailedBuildOnly(job: SyncJobRecord): boolean {
+  if (strandedBuildPublication(job)) return true;
   if (job.status !== "failed" || job.stages.find((stage) => stage.id === "build")?.status !== "failed") {
     return false;
   }
@@ -332,6 +337,14 @@ function exactFailedBuildOnly(job: SyncJobRecord): boolean {
     ["failed", "pending", "active", "running"].includes(stage.status)
   );
   return unfinished.length === 1 && unfinished[0]?.id === "build";
+}
+
+function strandedBuildPublication(job: SyncJobRecord): boolean {
+  return job.status === "failed" && job.currentStageId === "build" &&
+    job.leasedBy == null && job.leaseExpiresAt == null &&
+    job.stages.find(stage => stage.id === "build")?.status === "done" &&
+    job.stages.every(stage => stage.kind === "manual" || stage.id === "queue" || stage.id === "build" ||
+      ["done", "partial", "skipped"].includes(stage.status));
 }
 
 function buildRecoveryEvidence(
