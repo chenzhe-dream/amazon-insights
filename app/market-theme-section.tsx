@@ -41,6 +41,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const [reportChoice,setReportChoice]=useState('latest');
   const [retainedReport,setRetainedReport]=useState<Run['currentReport']>(null),[priorRuns,setPriorRuns]=useState<string[]>([]);
   const owner=useRef<AbortController|null>(null),writing=useRef(false),revision=useRef(0);
+  const mutationOwner=useRef<AbortController|null>(null);
   const startCommand=useRef<{signature:string;studyKey:string;runKey:string}|null>(null);
   const refreshCommand=useRef<{runId:string;studyKey:string;runKey:string}|null>(null);
   const command=useRef<{signature:string;key:string}|null>(null);
@@ -69,8 +70,8 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   }
   function cancelTarget(){targetOwner.current?.abort();targetOwner.current=null;targetGeneration.current++;setTargetLoading(false);}
   function invalidatePoll(){pollOwner.current?.abort();pollGeneration.current++;}
-  function clearReport(){invalidatePoll();setRun(null);setRetainedReport(null);setRunId(null);scopeRestore.current=null;}
-  useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=themeRunFromUrl();if(restored){scopeRestore.current={id:restored,revision:null};setRunId(restored);setRestoreId(restored);}return()=>{abort.abort();owner.current=null;targetOwner.current?.abort();targetGeneration.current++;invalidatePoll();};},[]);
+  function clearReport(){invalidatePoll();mutationOwner.current?.abort();mutationOwner.current=null;writing.current=false;revision.current++;setBusy(false);setRun(null);setRetainedReport(null);setRunId(null);scopeRestore.current=null;}
+  useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=themeRunFromUrl();if(restored){scopeRestore.current={id:restored,revision:null};setRunId(restored);setRestoreId(restored);}return()=>{abort.abort();owner.current=null;mutationOwner.current?.abort();mutationOwner.current=null;targetOwner.current?.abort();targetGeneration.current++;invalidatePoll();};},[]);
   useEffect(()=>{
     if(!runId)return;const intent=scopeRestore.current;
     if(intent?.id===runId&&intent.revision===null){if(queryState.current.node.trim())scopeRestore.current=null;else intent.revision=queryState.current.revision;}
@@ -82,10 +83,12 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     void poll();return()=>{abort.abort();if(timer)clearTimeout(timer);};
   },[runId,reload]);
   function adopt(next:Run,inputRevision:number){invalidatePoll();restoreQuery(next,inputRevision);setRun(next);setRunId(next.id);setRestoreId(next.id);setReportChoice('latest');setReadError(null);rememberRun(next.id);}
-  async function mutate(work:(signal:AbortSignal)=>Promise<void>){const current=owner.current;if(!current||current.signal.aborted||writing.current||targetOwner.current||reportWrites.current.size)return;
+  async function mutate(work:(signal:AbortSignal)=>Promise<void>){if(!owner.current||owner.current.signal.aborted||writing.current||targetOwner.current||reportWrites.current.size)return;
+    // Permission cleanup aborts this operation without disabling explicit future requests.
+    const current=new AbortController();mutationOwner.current=current;
     writing.current=true;revision.current++;setBusy(true);setError(null);
-    try{await work(current.signal);}catch(e){if(!current.signal.aborted)setError(e instanceof Error?e.message:'提交失败');}
-    finally{if(!current.signal.aborted){writing.current=false;revision.current++;setBusy(false);setReload(n=>n+1);}}}
+    try{await work(current.signal);}catch(e){if(!current.signal.aborted&&mutationOwner.current===current)setError(e instanceof Error?e.message:'提交失败');}
+    finally{if(!current.signal.aborted&&mutationOwner.current===current){mutationOwner.current=null;writing.current=false;revision.current++;setBusy(false);setReload(n=>n+1);}}}
   async function submit(event:FormEvent){event.preventDefault();if(run&&themeRunActive(run))return;if(month>maxMonth||members>pool){setError('请选择完整月份，且商品池数量不得小于主题样本数量。');return;}
     const scope={marketplace:selection?.marketplace??localSite,nodeIdPath:node,fromMonth:selection?.fromMonth??month,toMonth:month,currency:marketSiteCurrency(selection?.marketplace??localSite)},params={memberCount:members,poolSize:pool,newProductMonths:6 as const};
     const signature=JSON.stringify({scope,params});if(startCommand.current?.signature!==signature)startCommand.current={signature,studyKey:browserRequestId(),runKey:browserRequestId()};

@@ -3,7 +3,8 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
-import { themeRuleRun, themeEntry } from './helpers/market-theme-page-fixture';
+import { themeRuleRun, themeRun, themeEntry } from './helpers/market-theme-page-fixture';
+import { MarketThemeRunResponseSchema } from '../../shared/market-module-contracts';
 const missing = '60000000-0000-4000-8000-000000000099';
 const harness = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{MarketThemeSection}from'/app/market-theme-section';function App(){const q=new URL(location.href).searchParams;const [s,set]=useState({marketplace:'US',nodeIdPath:q.get('themeNode')||'',fromMonth:'2026-08',toMonth:'2026-08'});return <MarketThemeSection maxMonth="2026-08" selection={s} onSelectionChange={p=>set(v=>{const n={...v,...p};const u=new URL(location.href);u.searchParams.set('themeNode',n.nodeIdPath);history.replaceState(null,'',u);return n})}/>};createRoot(document.getElementById('root')).render(<App/>);`;
 test('failed target retains history and URL; complete query draft survives reload', { timeout: 120000 }, async (t) => {
@@ -110,6 +111,115 @@ async function fixture(t: any) {
     async function restore(id: string) { await page.getByLabel('任务 UUID').fill(id); await page.getByRole('button', { name: '读取任务', exact: true }).click(); }
     return { page, base, second, state, open, restore };
 }
+
+for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`current403 invalidates pending ${kind} adoption and allows explicit recovery`, { timeout: 30000 }, async (t) => {
+    const { page, base, second, state, open, restore } = await fixture(t);
+    if (kind === 'retry' || kind === 'cancel') base.steps = themeRun(kind === 'cancel').run.steps;
+    MarketThemeRunResponseSchema.parse({ run: base });
+    await open();
+    state.status = 403;
+    state.hold = true;
+    const reading = new Promise<void>(resolve => state.entered = resolve);
+    await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await reading;
+    const releaseRead = state.release;
+    let releaseAction = () => {}, enteredAction = () => {}, actionWrites = 0;
+    const actionPending = new Promise<void>(resolve => enteredAction = resolve);
+    const gate = () => new Promise<void>(resolve => {
+        const timer = setTimeout(resolve, 12000);
+        releaseAction = () => { clearTimeout(timer); resolve(); };
+    });
+    t.after(() => { releaseRead(); releaseAction(); });
+    if (kind === 'retry' || kind === 'cancel') {
+        await page.route(`**/runs/${base.id}/${kind}`, route => {
+            actionWrites++;
+            return route.fulfill({ json: kind === 'retry' ? { moduleRunId: base.id, stepIds: [] } : { moduleRunId: base.id, cancelled: true } });
+        });
+        await page.route(`**/runs/${base.id}`, async route => {
+            enteredAction(); await gate();
+            await route.fulfill({ json: { run: base } }).catch(() => {});
+        });
+    } else {
+        await page.route('**/studies', route => {
+            actionWrites++;
+            const id = route.request().headers()['idempotency-key'];
+            return route.fulfill({ json: { study: { id, scope: { ...base.scope, ...route.request().postDataJSON(), researchId: id }, createdAt: base.createdAt } } });
+        });
+        await page.route('**/customer-themes', async route => {
+            actionWrites++;
+            const next = structuredClone(second);
+            next.scope.researchId = new URL(route.request().url()).pathname.split('/').at(-2)!;
+            for (const entry of [next.currentReport, next.latestSavedReport, ...next.history]) if (entry) entry.report.scope = next.scope;
+            MarketThemeRunResponseSchema.parse({ run: next });
+            enteredAction(); await gate();
+            await route.fulfill({ json: { run: next } }).catch(() => {});
+        });
+    }
+    const button = kind === 'retry' ? '重试 B0THEME002' : kind === 'cancel' ? '取消本次分析' : kind === 'submit' ? '拉取见解' : '重新拉取';
+    await page.getByRole('button', { name: button, exact: true }).click();
+    await actionPending;
+    releaseRead();
+    await page.getByRole('alert').filter({ hasText: '状态读取失败' }).waitFor();
+    assert.equal(await page.getByLabel('已保存主题报告').count(), 0);
+    releaseAction();
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 150)));
+    assert.equal(await page.getByLabel('已保存主题报告').count(), 0, 'Revoked report must not be resurrected by an older mutation');
+    assert.equal(await page.getByRole('alert').filter({ hasText: '状态读取失败' }).count(), 1);
+    assert.equal(new URL(page.url()).searchParams.get('themeRun'), base.id);
+    assert.equal(await page.getByLabel('类目路径').inputValue(), '999');
+    assert.equal(actionWrites, kind === 'retry' || kind === 'cancel' ? 1 : 2);
+    await page.unroute(`**/runs/${base.id}`);
+    await restore(second.id);
+    await page.waitForURL(u => u.searchParams.get('themeRun') === second.id);
+    assert.equal(await page.getByLabel('已保存主题报告').count(), 1);
+    assert.equal(await page.getByRole('button', { name: '拉取见解', exact: true }).isDisabled(), false);
+});
+test('revoked retry cannot finish a newer retry or change its idempotency key', { timeout: 30000 }, async (t) => {
+    const { page, base, state, open, restore } = await fixture(t);
+    base.steps = themeRun().run.steps;
+    await open();
+    state.status = 403; state.hold = true;
+    const reading = new Promise<void>(resolve => state.entered = resolve);
+    await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await reading;
+    const releaseRead = state.release;
+    const releases: (() => void)[] = [], keys: string[] = [];
+    let entered = () => {}, reads = 0;
+    await page.route(`**/runs/${base.id}/retry`, route => {
+        keys.push(route.request().headers()['idempotency-key']);
+        return route.fulfill({ json: { moduleRunId: base.id, stepIds: [] } });
+    });
+    const actionRoute = async (route: any) => {
+        reads++; entered();
+        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 12000); releases.push(() => { clearTimeout(timer); resolve(); }); });
+        await route.fulfill({ json: { run: base } }).catch(() => {});
+    };
+    t.after(() => { releaseRead(); releases.forEach(release => release()); });
+    await page.route(`**/runs/${base.id}`, actionRoute);
+    const first = new Promise<void>(resolve => entered = resolve);
+    await page.getByRole('button', { name: '重试 B0THEME002', exact: true }).click();
+    await first;
+    releaseRead();
+    await page.getByRole('alert').filter({ hasText: '状态读取失败' }).waitFor();
+    await page.unroute(`**/runs/${base.id}`, actionRoute);
+    await restore(base.id);
+    await page.getByLabel('报告版本').waitFor();
+    await page.route(`**/runs/${base.id}`, actionRoute);
+    const second = new Promise<void>(resolve => entered = resolve);
+    await page.getByRole('button', { name: '重试 B0THEME002', exact: true }).click();
+    await second;
+    releases[0]();
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 150)));
+    assert.equal(await page.getByRole('button', { name: '读取任务', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: '重试 B0THEME002', exact: true }).isDisabled(), true);
+    assert.equal(reads, 2, 'Old finally must not trigger another current read');
+    assert.equal(keys.length, 2);
+    assert.equal(keys[0], keys[1], 'An interrupted command retains its idempotency key');
+    await page.unroute(`**/runs/${base.id}`, actionRoute);
+    releases[1]();
+    await page.waitForFunction(() => !(Array.from(document.querySelectorAll('button')).find(b => b.textContent === '读取任务') as HTMLButtonElement)?.disabled);
+});
+
 test('target cancellation and latest target win; late reads preserve all edited query fields', { timeout: 120000 }, async (t) => {
     const { page, base, second, state, open, restore } = await fixture(t);
     await open();
