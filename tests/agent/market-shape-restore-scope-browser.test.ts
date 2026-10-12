@@ -16,6 +16,7 @@ test('shape restoration binds saved scope without overwriting newer drafts or ot
   current.run.scope={...current.run.scope,marketplace:'UK',currency:'GBP',fromMonth:'2026-06',toMonth:'2026-07'};
   const newer=shapePageRun();newer.run.id='71000000-0000-4000-8000-000000000005';newer.run.status='succeeded';newer.run.scope.nodeIdPath='4:5:6';
   let writes=0, reads=0, release:(()=>void)|undefined,newerRelease:(()=>void)|undefined,newerReads=0,writeRelease:(()=>void)|undefined;
+  let nextCurrent:{status:number;body:unknown;release?:()=>Promise<void>}|undefined;
   const base='?themeView=shapes&marketShapeNode=&marketNode=999999&marketSite=US&marketMonth=2026-08&marketFrom=2026-08&marketKeywordNode=888888&marketKeywordSite=US&marketKeywordFrom=2026-08&marketKeywordMonth=2026-08';
   const page=await browser.newPage();page.setDefaultTimeout(5000);
   await page.route('**/*',async route=>{
@@ -27,6 +28,7 @@ test('shape restoration binds saved scope without overwriting newer drafts or ot
     if(url.pathname.includes('/shape-price/revisions/'))return route.fulfill({json:{revision:shapeRevision()}});
     if(url.pathname.endsWith(`/runs/${shapeRunId}/shape-price`)){
       reads++;
+      if(nextCurrent){const response=nextCurrent;nextCurrent=undefined;if(response.release)await response.release();return route.fulfill({status:response.status,json:response.body});}
       if(release)await new Promise<void>(resolve=>{release=resolve});
       return route.fulfill({json:current});
     }
@@ -155,6 +157,37 @@ test('shape restoration binds saved scope without overwriting newer drafts or ot
     assert.equal(await page.getByLabel('形态报告版本').inputValue(),revision.revisionId);
     await restore();await page.getByRole('status').filter({hasText:'正在读取目标任务'}).waitFor({state:'hidden'});
     assert.equal(await page.getByLabel('形态报告版本').inputValue(),revision.revisionId);assert.equal(writes,0);
+  });
+  await t.test('same-task success invalidates older current success and failure reads',async()=>{
+    for(const status of [200,503]){
+      await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);
+      await page.getByLabel('修订说明').fill('retain newest draft');await node.fill('123123');await openShapeTaskRecovery(page);
+      let releaseOld!:()=>void;const old=structuredClone(current);old.run.source!.products[0].title='Obsolete lamp';old.run.steps=[{id:'71000000-0000-4000-8000-000000000006',kind:'collect-product-month',status:'running',latestAttemptId:null,attemptCount:0,asin:null,current:true,canRetry:false,errorCode:null}];
+      nextCurrent={status,body:status===200?old:{error:'obsolete read failure'},release:()=>new Promise<void>(resolve=>{releaseOld=resolve})};
+      await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();while(!releaseOld)await page.waitForTimeout(10);
+      await restore();await page.getByRole('status').filter({hasText:'正在读取目标任务'}).waitFor({state:'hidden'});
+      releaseOld();await page.waitForTimeout(150);
+      assert.equal(await page.getByText('Obsolete lamp',{exact:true}).count(),0,'older current success must not override same-task restore');
+      assert.equal(await page.getByText(/obsolete read failure/).count(),0,'older current failure must not restore readError');
+      const afterRestore=reads;await page.waitForTimeout(4200);assert.equal(reads,afterRestore,'older current response must not restart polling');
+      assert.equal(await page.getByLabel('修订说明').inputValue(),'retain newest draft');assert.equal(await node.inputValue(),'123123');
+    }
+  });
+  await t.test('current 403 clears report, historical display and staged target confirmation',async()=>{
+    const revision=shapeRevision();current.run.latestRevision=revision;current.run.history=[{revisionId:revision.revisionId,ordinal:1,createdAt:revision.createdAt}];
+    await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);
+    await page.getByLabel('形态报告版本').selectOption(revision.revisionId);await page.getByText('正在读取此版本…',{exact:true}).waitFor({state:'hidden'});
+    await page.getByLabel('修订说明').fill('local draft stays recoverable');await openShapeTaskRecovery(page);
+    let releaseForbidden!:()=>void;
+    nextCurrent={status:403,body:{error:'current permission revoked'},release:()=>new Promise<void>(resolve=>{releaseForbidden=resolve})};
+    await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();while(!releaseForbidden)await page.waitForTimeout(10);
+    await page.getByLabel('形态任务编号').fill(newer.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();
+    await page.getByRole('button',{name:'放弃修改并切换',exact:true}).waitFor();releaseForbidden();
+    await page.getByText(/current permission revoked/).waitFor();
+    assert.equal(await page.getByText('Shelf lamp',{exact:true}).count(),0,'revoked source products must unmount');
+    assert.equal(await page.getByLabel('形态报告版本').count(),0,'revoked derived history must unmount');
+    assert.equal(await page.getByRole('button',{name:'放弃修改并切换',exact:true}).count(),0,'staged target must be invalidated');
+    const stopped=reads;await page.waitForTimeout(4200);assert.equal(reads,stopped,'403 must stop polling');
   });
   await t.test('saving blocks target restores until write settles',async()=>{
     await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);await openShapeTaskRecovery(page);

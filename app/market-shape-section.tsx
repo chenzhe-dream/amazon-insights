@@ -52,6 +52,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     onFavorite?:()=>void;
 }) {
     const [runId, setRunId] = useState(''), [restoreId, setRestoreId] = useState(''), [run, setRun] = useState<MarketShapeRun | null>(null), [reload, setReload] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [readError, setReadError] = useState<string | null>(null);
+    const currentReadCancel=useRef<(()=>void)|null>(null),historyOwner=useRef<AbortController|null>(null);
     const [lastReadAt,setLastReadAt]=useState<string|null>(null);
     const [targetLoading,setTargetLoading]=useState(false),[targetError,setTargetError]=useState<string|null>(null);
     type Target={run:MarketShapeRun;generation:number;inputRevision:number;draft:string};
@@ -96,8 +97,10 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         }
         const abort = new AbortController();
         let timer: ReturnType<typeof setTimeout> | undefined;
+        const cancel=()=>{abort.abort();if(timer)clearTimeout(timer);};
+        currentReadCancel.current=cancel;
         let failures=0;
-        const read = async () => { try {
+        const read = async () => { if(abort.signal.aborted)return;try {
             const next = await readShapeRun(runId, abort.signal);
             if (abort.signal.aborted)
                 return;
@@ -118,21 +121,26 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         }
         catch (e) {
             if (!abort.signal.aborted) {
+                if(typeof e==='object'&&e!==null&&'status' in e&&e.status===403){
+                    cancel();cancelTarget();historyOwner.current?.abort();scopeRestore.current=null;
+                    setRun(null);setRunId('');setHistoric(null);setChoice('latest');setHistoryError(null);setPresentation(null);setAnalysisNotice(null);setLastReadAt(null);
+                    draftRun.current='';pendingSave.current=null;onReferenceState({dirty:false,saving:false,fingerprint:''});
+                    setReadError(`${e instanceof Error?e.message:'当前报告无权读取'}；当前报告访问权限已撤销，请重新读取有权访问的任务。`);return;
+                }
                 const delay=shapePollingDelay(++failures,e);
                 setReadError(`${e instanceof Error ? e.message : '读取状态失败'}；${delay===null?'自动重试已停止，请手动刷新状态':`${delay/1000}秒后自动重试（${failures}/5）`}`);
                 if(delay!==null)timer=setTimeout(()=>void read(),delay);
             }
         } };
         void read();
-        return () => { abort.abort(); if (timer)
-            clearTimeout(timer); };
+        return () => { cancel();if(currentReadCancel.current===cancel)currentReadCancel.current=null; };
     }, [runId, reload]);
     function loadDraft(next: MarketShapeRun) { const r = next.latestRevision, labels = new Map((r?.labels ?? next.params.catalog.allowedLabels).map(l => [l.labelId,l.label])); const draft={selected:r?.selectedAsins ?? next.source?.products.map(p => p.asin) ?? [],assignments:Object.fromEntries((r?.assignments ?? []).map(a => [a.asin, a.labelId ? labels.get(a.labelId) ?? '' : ''])),parent:r?.revisionId ?? null,note:r?.note ?? '',bands:r ? r.bands.map(b => b.minInclusive).join(',') : '0,20,40'};draftBaseline.current=JSON.stringify(draft);setSelected(draft.selected);setAssignments(draft.assignments);setParent(draft.parent);setNote(draft.note);setBands(draft.bands); draftRun.current = next.id; pendingSave.current = null; }
     useEffect(() => { if (run) { setPoolSize(run.params.poolSize); setPendingPoolSize(null); setPendingPoolRefresh(false); } }, [run?.id, run?.params.poolSize]);
     useEffect(() => { if (run?.source && draftRun.current !== run.id)
         loadDraft(run); }, [run]);
     useEffect(() => { setHistoric(null); setHistoryError(null); if (!runId || choice === 'latest')
-        return; const abort = new AbortController(); void readShapeRevision(runId, choice, abort.signal).then(r => { if (!abort.signal.aborted)
+        return; const abort = new AbortController();historyOwner.current=abort; void readShapeRevision(runId, choice, abort.signal).then(r => { if (!abort.signal.aborted)
         setHistoric(r); }, e => { if (!abort.signal.aborted)
         setHistoryError(e instanceof Error ? e.message : '读取报告失败'); }); return () => abort.abort(); }, [runId, choice]);
     const remember = (id: string) => { const url = new URL(window.location.href); url.searchParams.set('shapeRun', id); url.searchParams.set('themeView', 'shapes'); window.history.replaceState(window.history.state, '', url); setRestoreId(id); };
@@ -228,8 +236,9 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         if(!same&&dirty&&(!discard||target.draft!==fingerprint)){
             setPendingTarget({...target,draft:fingerprint});setTargetLoading(false);return;
         }
+        currentReadCancel.current?.();
         setPendingTarget(null);setTargetLoading(false);setRun(target.run);setReadError(null);setLastReadAt(new Date().toLocaleTimeString());
-        if(same)return;
+        if(same){if(active(target.run))setReload(n=>n+1);return;}
         scopeRestore.current=null;setChoice('latest');setHistoric(null);setHistoryError(null);loadDraft(target.run);onReferenceState({dirty:false,saving:false,fingerprint:''});setRunId(target.run.id);remember(target.run.id);
         if(target.inputRevision===selectionState.current.revision){const {marketplace,nodeIdPath,fromMonth,toMonth}=target.run.scope;selectionState.current.onSelectionChange({marketplace,nodeIdPath,fromMonth,toMonth});}
     }

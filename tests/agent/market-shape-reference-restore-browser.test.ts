@@ -11,7 +11,7 @@ test('reference drafts guard task switches and pause autosave during target read
  const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});
  const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();page.setDefaultTimeout(5000);
  const a=shapeSorftimePageRun(2,2),b=shapeSorftimePageRun(2,2);b.run.id='71000000-0000-4000-8000-000000000005';b.run.scope.nodeIdPath='4:5:6';
- let targetRelease:(()=>void)|undefined,writeRelease:(()=>void)|undefined,targetReads=0,writes=0,missingStatus=404;
+ let targetRelease:(()=>void)|undefined,writeRelease:(()=>void)|undefined,targetReads=0,writes=0,missingStatus=404,currentStatus=200;let currentRelease:(()=>void)|undefined;
  const draft={version:0,items:[],catalogLabels:[],updatedAt:null};
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());if(url.origin!==origin)return route.abort();
@@ -19,7 +19,7 @@ test('reference drafts guard task switches and pause autosave during target read
   if(!url.pathname.startsWith('/api/'))return route.continue();
   if(url.pathname.endsWith('/auth/session'))return route.fulfill({json:{authenticated:true,user:{id:a.run.scope.organizationId,organizationId:a.run.scope.organizationId,email:'test@example.com',displayName:'Fixture',role:'member',status:'active',createdAt:'2026-09-01T00:00:00.000Z',updatedAt:'2026-09-01T00:00:00.000Z'},sessionIdentity:'a'.repeat(43),canViewUserPresence:false}});
   if(url.pathname.endsWith('/shape-price/draft')){if(request.method()!=='GET'){writes++;if(writeRelease)await new Promise<void>(resolve=>{writeRelease=resolve});return route.fulfill({status:503,json:{error:'synthetic draft offline'}});}return route.fulfill({json:{draft}});}
-  if(url.pathname.endsWith(`/runs/${a.run.id}/shape-price`))return route.fulfill({json:a});
+  if(url.pathname.endsWith(`/runs/${a.run.id}/shape-price`)){const status=currentStatus;if(currentRelease)await new Promise<void>(resolve=>{currentRelease=resolve});return route.fulfill({status,json:status===200?a:{error:"current reference permission revoked"}});}
   if(url.pathname.endsWith(`/runs/${b.run.id}/shape-price`)){targetReads++;if(targetRelease)await new Promise<void>(resolve=>{targetRelease=resolve});return route.fulfill({json:b});}
   return route.fulfill({status:missingStatus,json:{error:'synthetic missing target'}});
  });
@@ -39,5 +39,12 @@ test('reference drafts guard task switches and pause autosave during target read
   missingStatus=status;await page.getByLabel('形态任务编号').fill('00000000-0000-4000-8000-000000000999');await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText(/目标任务读取失败/).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('shapeRun'),b.run.id);assert.equal(await input.count(),1);
  }
- missingStatus=401;await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText('Login required',{exact:true}).waitFor();assert.equal(await input.count(),0,'auth-required event clears retained report through auth gate');assert.equal(writes,1);
+ currentStatus=403;
+ await page.getByLabel('形态任务编号').fill(a.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText(/目标任务读取失败/).waitFor();assert.equal(await input.count(),1,'different target 403 retains authorized B');
+ currentStatus=200;await page.getByLabel('形态任务编号').fill(a.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.waitForFunction(()=>new URL(location.href).searchParams.get('shapeRun')==='71000000-0000-4000-8000-000000000001');await input.waitFor();
+ currentStatus=403;currentRelease=()=>{};const beforeTarget=targetReads;
+ await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();targetRelease=()=>{};await page.getByLabel('形态任务编号').fill(b.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();while(targetReads===beforeTarget)await page.waitForTimeout(10);currentRelease!();currentRelease=undefined;await page.getByText(/current reference permission revoked/).waitFor();targetRelease!();targetRelease=undefined;await page.waitForTimeout(150);
+ assert.equal(await input.count(),0,'current 403 unmounts modern reference source and draft panel');
+ currentStatus=200;await page.getByLabel('形态任务编号').fill(a.run.id);await page.getByRole('button',{name:'读取任务',exact:true}).click();await input.waitFor();targetRelease=undefined;
+ missingStatus=401;await page.getByLabel('形态任务编号').fill('00000000-0000-4000-8000-000000000999');await page.getByRole('button',{name:'读取任务',exact:true}).click();await page.getByText('Login required',{exact:true}).waitFor();assert.equal(await input.count(),0,'auth-required event clears retained report through auth gate');assert.equal(writes,1);
 });
