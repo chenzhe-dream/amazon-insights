@@ -212,27 +212,29 @@ export class SyncJobWorkerHandler {
       );
       if (terminalSuccessStatuses.has(status)) {
         const catalogCapture = catalogCaptureFromMirror(mirrored);
-        await ignoreLeaseLoss(() =>
-          this.#syncJobs.complete({
+        await ignoreLeaseLoss(async () => {
+          const completed = await this.#syncJobs.complete({
             jobId: lease.job.jobId,
             leaseGeneration: lease.leaseGeneration,
             workerId,
             completedAt: this.#now(),
             message,
             ...(catalogCapture ? { catalogCapture } : {}),
-          }),
-        );
+          });
+          await this.#reconcileTerminalMirror(mirrorPath, lease.job, completed);
+        });
       } else if (status === "failed") {
-        await ignoreLeaseLoss(() =>
-          this.#syncJobs.fail({
+        await ignoreLeaseLoss(async () => {
+          const failed = await this.#syncJobs.fail({
             jobId: lease.job.jobId,
             leaseGeneration: lease.leaseGeneration,
             workerId,
             failedAt: this.#now(),
             message,
             error: { code: "SYNC_JOB_FAILED" },
-          }),
-        );
+          });
+          await this.#reconcileTerminalMirror(mirrorPath, lease.job, failed);
+        });
       }
     } catch (error) {
       if (!stopped) {
@@ -241,19 +243,50 @@ export class SyncJobWorkerHandler {
       }
       await abortAndSettleRunner(runnerAbortController, runnerPromise);
       await progressQueue;
-      await ignoreLeaseLoss(() =>
-        this.#syncJobs.fail({
+      await ignoreLeaseLoss(async () => {
+        const failed = await this.#syncJobs.fail({
           jobId: lease.job.jobId,
           leaseGeneration: lease.leaseGeneration,
           workerId,
           failedAt: this.#now(),
           message: sanitizeMessage(error instanceof Error ? error.message : String(error)),
           error: { code: "SYNC_JOB_RUNNER_ERROR" },
-        }),
-      );
+        });
+        await this.#reconcileTerminalMirror(mirrorPath, lease.job, failed);
+      });
     } finally {
       clearInterval(progressPoll);
       clearInterval(heartbeat);
+    }
+  }
+
+  async #reconcileTerminalMirror(mirrorPath: string, leasedJob: SyncJobRecord, authoritative: SyncJobRecord): Promise<void> {
+    if (authoritative.jobId !== leasedJob.jobId || authoritative.organizationId !== leasedJob.organizationId ||
+        authoritative.projectId !== leasedJob.projectId || authoritative.runId !== leasedJob.runId ||
+        authoritative.marketplace !== leasedJob.marketplace ||
+        JSON.stringify([...authoritative.asins].sort()) !== JSON.stringify([...leasedJob.asins].sort())) return;
+    try {
+      await mutateSyncJobMirror(mirrorPath, (current: Record<string, unknown> | null) => {
+        const scope = current?.scope as Record<string, unknown> | undefined;
+        if (!current || current.jobId !== leasedJob.jobId || current.fingerprint !== leasedJob.fingerprint ||
+            current.marketplace !== leasedJob.marketplace || !Array.isArray(current.asins) ||
+            JSON.stringify([...current.asins].sort()) !== JSON.stringify([...leasedJob.asins].sort()) || !scope ||
+            scope.organizationId !== leasedJob.organizationId || scope.projectId !== (leasedJob.projectId ?? "unscoped") ||
+            scope.runId !== leasedJob.runId || scope.marketplace !== leasedJob.marketplace ||
+            !Array.isArray(scope.asins) || JSON.stringify([...scope.asins].sort()) !== JSON.stringify([...leasedJob.asins].sort())) return null;
+        return redactDiagnosticMirror({ ...current,
+          status: authoritative.status, message: sanitizeMessage(authoritative.message),
+          currentStageId: authoritative.currentStageId, stages: authoritative.stages,
+          asinProgress: authoritative.asinProgress, error: authoritative.error,
+          updatedAt: authoritative.updatedAt,
+          ...(Number.isSafeInteger(authoritative.jobVersion) ? {jobVersion: authoritative.jobVersion} : {}),
+          ...(authoritative.status === "failed"
+            ? { completedAt: null, failedAt: authoritative.updatedAt, needsReload: false }
+            : { completedAt: authoritative.completedAt ?? this.#now() }),
+        });
+      });
+    } catch {
+      // Diagnostic I/O must not turn authoritative success into a failed job.
     }
   }
 

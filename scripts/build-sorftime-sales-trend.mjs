@@ -1,4 +1,4 @@
-import { reportIncompleteRepair, createRepairSafeRecordMap, isRepairIncomplete, hasUsableTrendRecord } from "./lib/sync-cache.mjs";
+import { isRepairIncomplete, hasUsableTrendRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
@@ -24,9 +24,10 @@ function readCatalogAsins() {
 function hasFullTrend(record) { return hasUsableTrendRecord(record); }
 
 const trendTypes = {volume:'SalesVolume', amount:'SalesAmount', price:'Price', rank:'Rank'};
-export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool}) {
+export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool, fields = Object.keys(trendTypes)}) {
   const responses = {}, requestErrors = {};
   for (const [field, type] of Object.entries(trendTypes)) {
+    if (!fields.includes(field)) continue;
     try { responses[field] = await callTool(key, 'product_trend', {asin, amz_site:marketplace, type}); }
     catch { requestErrors[field] = 'Provider request failed'; }
   }
@@ -42,6 +43,9 @@ export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, 
     if (!Object.hasOwn(responses, field)) continue;
     try {
       const result = parseSorftimeProductTrend(responses[field], {asin, type});
+      // A verified empty response cannot erase previously collected observations.
+      if (!result.monthly.length && !result.daily.length &&
+          (next[field].length || next.dailyObservations[field]?.length)) continue;
       next[field] = result.monthly;
       next.dailyObservations[field] = result.daily;
       next.observationPeriods[field] = result.period;
@@ -60,13 +64,18 @@ export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, 
   return next;
 }
 
-async function main() {
-  const key = readSorftimeKey();
-  const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
-  const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
-  const fetchedAt = new Date().toISOString().slice(0, 10);
-  const existing = readCachedDataExport(outPath, "sorftimeSalesTrendData");
-  const records = createRepairSafeRecordMap(existing);
+export async function runSalesTrendSync(options = {}) {
+  const key = options.key ?? readSorftimeKey();
+  const marketplace = options.marketplace ?? process.env.SORFTIME_MARKETPLACE ?? "US";
+  const asins = options.asins ?? process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
+  const fetchedAt = options.fetchedAt ?? new Date().toISOString().slice(0, 10);
+  const targetPath = options.outPath ?? outPath;
+  const existing = options.existing ?? readCachedDataExport(targetPath, "sorftimeSalesTrendData");
+  const repair = options.repair ?? isRepairIncomplete();
+  const callTool = options.callTool ?? callSorftimeTool;
+  // The per-field reducer retains prior data. A whole-record repair proxy would
+  // discard usable daily/partial results whenever monthly readiness is absent.
+  const records = { ...existing };
 
   if (!key && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -77,7 +86,7 @@ async function main() {
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (shouldUseCachedRecord(existing[asin]) && hasFullTrend(existing[asin])) {
+    if (!repair && shouldUseCachedRecord(existing[asin]) && hasFullTrend(existing[asin])) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
@@ -87,38 +96,19 @@ async function main() {
       continue;
     }
 
-    if (isRepairIncomplete()) {
-      const next = {...existing[asin], asin, marketplace, fetchedAt: existing[asin]?.fetchedAt ?? fetchedAt};
-      let failed = false;
-      for (const [field, trendType] of Object.entries({volume:"SalesVolume",amount:"SalesAmount",price:"Price",rank:"Rank"})) {
-        if (hasUsableTrendRecord({status:"ready", [field]: next[field]})) continue;
-        try {
-          const raw = await callSorftimeTool(key, "product_trend", {asin, amz_site:marketplace, type:trendType});
-          const parsed = buildSalesTrendRecord({asin, marketplace, fetchedAt, responses:{[field]:raw}, previous:next});
-          if (parsed.observationErrors[field]) throw new Error(parsed.observationErrors[field]);
-          Object.assign(next, parsed);
-          if (!parsed[field].length) {
-            failed = true;
-            reportIncompleteRepair(asin);
-          }
-        } catch (error) {
-          failed = true;
-          next[field] ??= [];
-          console.error(`[repair-incomplete] ${asin} ${field}: ${error instanceof Error ? error.message : String(error)}`);
-          reportIncompleteRepair(asin);
-        }
-      }
-      records[asin] = {...next, status:failed ? "error" : "ready", ...(failed ? {statusMessage:next.statusMessage ?? "Trend repair incomplete; retained available cached portions"} : {})};
-      continue;
-    }
-
     process.stdout.write(`[sorftime] ${asin} trend ... `);
     try {
       // The formal Sorftime policy permits one request at a time. Avoid spending
       // the other metrics' admission deadlines while the first request runs.
-      const collected = await collectSalesTrendResponses({key, asin, marketplace});
+      const previous = existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace ? existing[asin] : {};
+      const fields = Object.keys(trendTypes).filter(field => !repair || !(
+        hasUsableTrendRecord({status:'ready', [field]:previous[field]}) ||
+        previous.observationPeriods?.[field] === 'day' && Array.isArray(previous.dailyObservations?.[field]) &&
+        previous.dailyObservations[field].length > 0 && previous.dailyObservations[field].every(point =>
+          /^\d{4}-\d{2}-\d{2}$/.test(point?.date) && Number.isFinite(point.value) && point.value >= 0)));
+      const collected = await collectSalesTrendResponses({key, asin, marketplace, callTool, fields});
       records[asin] = buildSalesTrendRecord({asin, marketplace, fetchedAt,
-        ...collected, previous:existing[asin]?.marketplace === marketplace ? existing[asin] : {}});
+        ...collected, previous});
       for (const field of Object.keys(records[asin].observationErrors)) {
         if (collected.requestErrors[field]) continue; // Transport emits its original cause at the request boundary.
         const error = new ProviderDiagnosticError({connector:'sorftime',stage:'sales_trend',asin,
@@ -126,6 +116,7 @@ async function main() {
         process.stderr.write(`${formatProviderDiagnosticLine(error.diagnostic)}\n`);
         process.exitCode = 1;
       }
+      if (Object.keys(records[asin].observationErrors).length) process.exitCode = 1;
       const {amount, price, rank} = records[asin];
       console.log(
         `${records[asin].volume.length}m vol · ${amount.length}m amt · ${price.length}m price · ${rank.length}m rank`,
@@ -148,7 +139,7 @@ async function main() {
       };
       console.log(`error: ${records[asin].statusMessage}`);
     }
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, options.delayMs ?? 300));
   }
 
   const body = `// Generated by scripts/build-sorftime-sales-trend.mjs — do not edit manually
@@ -184,9 +175,10 @@ export const sorftimeSalesTrendMeta = ${JSON.stringify(
 
 export const sorftimeSalesTrendData: Record<string, SorftimeSalesTrendRecord> = ${JSON.stringify(records, null, 2)};
 `;
-  fs.writeFileSync(outPath, body, "utf8");
+  fs.writeFileSync(targetPath, body, "utf8");
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${asins.length} ASIN → app/sorftime-sales-trend-data.ts`);
+  return records;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) runSalesTrendSync();

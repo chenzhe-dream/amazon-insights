@@ -868,11 +868,13 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
             : "同步已完成。"}
         </p>
       ) : null}
-      {job?.publication?.status === "pending" ? (
+      {job?.status === "failed" ? (
+        <p role="alert" className="error">新报告未发布，保留原报告。已采集数据可用于修复后重试。{job.message}</p>
+      ) : job?.publication?.status === "pending" ? (
         <p role="status">数据已生成，正在发布到页面，请勿重复提交。</p>
       ) : job?.publication?.status === "failed" ? (
         <p role="alert" className="error">数据已生成，但页面发布失败。数据不会重新抓取。</p>
-      ) : job?.publication?.status === "applied" ? (
+      ) : job?.publication?.status === "applied" && ["completed", "completed-with-gaps"].includes(job.status) ? (
         <p role="status">数据已发布。</p>
       ) : null}
       {job && collectAsinModuleGaps(job.asinProgress).length ? (

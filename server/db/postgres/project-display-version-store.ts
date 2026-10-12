@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
+import { EntityIdSchema, MarketplaceSchema, LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
 import { ImageRemarkOverlayEntrySchema, type ImageRemarkOverlayEntry } from "../../../shared/image-remark-overlay";
 import {
   imageRemarkEvidenceSummary,
@@ -190,6 +190,67 @@ function outputFromRow(row: OutputRow, expected: { organizationId: string; proje
     jobVersion: Number(row.job_version), outputVersion: Number(row.output_version),
     contentHash: row.content_hash, updatedAt: dateTime(row.updated_at),
     ...(data ? { data } : {}), ...(gap ? { gap: gap as StageOutputProjection["gap"] } : {}),
+  }) as StageOutputProjection;
+}
+
+/** Derive display metadata from a verified capture, without changing the immutable source output. */
+export function bindCapturedPriceStrategyProjection(input: Readonly<{
+  output: unknown;
+  sourceOrganizationId: string;
+  scope: Readonly<{ organizationId: string; projectId: string; runId: string; jobId: string;
+    marketplace: string; asins: readonly string[] }>;
+}>): StageOutputProjection {
+  const fail = (message: string): never => { throw new ProjectDisplayVersionConflictError(message); };
+  const parsed = LocalDataStageOutputResponseSchema.safeParse(input.output);
+  if (!parsed.success) return fail('Captured price stage schema is invalid');
+  const output = parsed.data;
+  const scope = input.scope;
+  const requested = asins(scope.asins);
+  if (output.stage !== 'price_strategy' || output.jobId !== scope.jobId || output.projectId !== scope.projectId
+    || output.runId !== scope.runId || input.sourceOrganizationId !== scope.organizationId
+    || !EntityIdSchema.safeParse(scope.organizationId).success || !MarketplaceSchema.safeParse(scope.marketplace).success
+    || output.outputVersion > output.jobVersion) {
+    return fail('Captured price stage ownership is invalid');
+  }
+  const branch = { stage: output.stage, ...('data' in output ? { data: output.data } : {}),
+    ...('gap' in output ? { gap: output.gap } : {}) };
+  if (hash(branch) !== output.contentHash) return fail('Captured price stage hash mismatch');
+  if (output.stageStatus === 'failed') return output as StageOutputProjection;
+  let changed = false;
+  const strategyByAsin = Object.fromEntries(Object.entries(output.data.strategyByAsin).map(([asin, value]) => {
+    const price = record(value);
+    if (!requested.includes(asin)) return fail('Captured price record is outside the requested scope');
+    // Other provider/legacy record shapes keep their original validation and coverage behavior.
+    if (price.source !== 'Sorftime') return [asin, value];
+    if (price.asin !== asin || price.marketplace !== scope.marketplace
+      || price.status !== 'ready' || typeof price.currentPrice !== 'number'
+      || !Number.isFinite(price.currentPrice) || price.currentPrice <= 0 || typeof price.fetchedAt !== 'string'
+      || !Number.isFinite(Date.parse(price.fetchedAt)) || Date.parse(price.fetchedAt) > Date.parse(output.updatedAt)) return fail('Captured price record is invalid');
+    let provenance = record(price.provenance);
+    if (price.provenance != null) {
+      if (provenance.asin !== asin || provenance.marketplace !== scope.marketplace || provenance.connector !== 'sorftime'
+        || !['jobId', 'operation', 'tool', 'fetchedAt'].every(key => typeof provenance[key] === 'string' && (provenance[key] as string).trim())
+        || Date.parse(provenance.fetchedAt as string) !== Date.parse(price.fetchedAt)) {
+        return fail('Captured price provenance is invalid');
+      }
+    } else {
+      provenance = { jobId: scope.jobId, asin, marketplace: scope.marketplace, fetchedAt: price.fetchedAt,
+        connector: 'sorftime', operation: 'persisted_stage_output', tool: 'persisted_stage_output' };
+    }
+    const boundProvenance = {
+      ...provenance,
+      stageId: provenance.stageId ?? 'price_strategy',
+      trendType: provenance.trendType ?? 'not-recorded', observationPeriod: provenance.observationPeriod ?? 'not-recorded',
+      sourceContentHash: output.contentHash, captureJobId: scope.jobId,
+      organizationId: scope.organizationId, projectId: scope.projectId, runId: scope.runId,
+    };
+    changed ||= hash(boundProvenance) !== hash(price.provenance ?? null);
+    return [asin, { ...price, provenance: boundProvenance }];
+  }));
+  if (!changed) return output as StageOutputProjection;
+  const data = { strategyByAsin };
+  return LocalDataStageOutputResponseSchema.parse({ ...output, data,
+    contentHash: hash({ stage: output.stage, data, ...('gap' in output ? { gap: output.gap } : {}) }),
   }) as StageOutputProjection;
 }
 
@@ -559,10 +620,15 @@ export class PostgresProjectDisplayVersionStore {
       const stageOutputs = {} as Record<ProjectableSyncStage, DisplayStageOutput>;
       for (const stage of stages) stageOutputs[stage] = { stage, stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" };
       for (const output of outputs) {
-        stageOutputs[output.stage_id as ProjectableSyncStage] = outputFromRow(output, {
+        const projection = outputFromRow(output, {
           organizationId: input.organizationId, projectId: input.projectId,
           runId: job.run_id, jobId: input.jobId,
         });
+        stageOutputs[output.stage_id as ProjectableSyncStage] = projection.stage === 'price_strategy'
+          ? bindCapturedPriceStrategyProjection({ output: projection, sourceOrganizationId: output.organization_id,
+            scope: { organizationId: input.organizationId, projectId: input.projectId,
+              runId: job.run_id, jobId: input.jobId, marketplace: job.marketplace, asins: asins(job.asins) } })
+          : projection;
       }
       const catalog = scopedCatalog(input.catalog, asins(job.asins));
       const evidence = input.catalogEvidence

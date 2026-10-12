@@ -561,3 +561,57 @@ test('detached runner retains safe image contract failure detail on nonzero exit
     return true;
   });
 });
+
+for (const publishFails of [false, true]) test(`authoritative display publication ${publishFails ? 'rejection replaces runner success' : 'success reconciles terminal mirror'}`, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'sync-display-publication-settlement-'));
+  t.after(() => rm(directory, {recursive:true,force:true}));
+  const lease = runningLease();
+  const events: string[] = [];
+  const reason = 'Candidate would lose verified data: price_strategy.strategyByAsin.B0CSFDX9HM.provenance';
+  const stages = [{id:'build',label:'Build',kind:'auto' as const,status:'done' as const,estimatedSeconds:1}];
+  const repository = repositoryForLifecycle({events});
+  repository.complete = async () => {
+    events.push('db:publish');
+    if (publishFails) throw new Error(reason);
+    return {...lease.job,status:'completed',message:'authoritative completed',stages,completedAt:NOW};
+  };
+  repository.fail = async input => {
+    events.push('db:fail');
+    return {...lease.job,status:'failed',message:input.message,error:input.error,currentStageId:'build',stages:[{...stages[0],status:'failed',detail:input.message}],failedAt:NOW};
+  };
+  const outputs = [{stage:'listing',contentHash:'a'.repeat(64),data:{contentByAsin:{}}}];
+  const artifact = {status:'published',artifactId:'artifact',publishedAt:NOW};
+  const handler = new SyncJobWorkerHandler({syncJobs:repository,mirrorDirectory:directory,now:()=>NOW,
+    runner:async (_lease,context)=>{
+      await context.writeMirror({status:'completed-with-gaps',message:'runner success',outputs,publication:artifact,completedAt:NOW,needsReload:true});
+      return {status:'completed-with-gaps'};
+    }});
+  await handler.handle(lease);
+  const mirror = JSON.parse(await fs.promises.readFile(join(directory,`${lease.job.jobId}.json`),'utf8'));
+  assert.equal(mirror.status,publishFails ? 'failed' : 'completed');
+  assert.equal(mirror.message,publishFails ? reason : 'authoritative completed');
+  assert.deepEqual(mirror.outputs,outputs);
+  assert.deepEqual(mirror.publication,artifact);
+  assert.equal(mirror.scope.organizationId,lease.job.organizationId);
+  assert.equal(mirror.stages[0].status,publishFails ? 'failed' : 'done');
+  if (publishFails) {
+    assert.equal(mirror.completedAt,null);
+    assert.equal(mirror.needsReload,false);
+    assert.equal(mirror.error.code,'SYNC_JOB_RUNNER_ERROR');
+    assert.deepEqual(events,['db:publish','db:fail']);
+  } else assert.deepEqual(events,['db:publish']);
+});
+
+for (const mismatch of ['scope', 'fingerprint', 'asins']) test(`terminal reconciliation does not rewrite a ${mismatch}-mismatched mirror`,async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'sync-terminal-scope-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const lease=runningLease();
+  const repository=repositoryForLifecycle({events:[]});
+  const handler=new SyncJobWorkerHandler({syncJobs:repository,mirrorDirectory:directory,runner:async (_lease,context)=>{
+    await context.writeMirror({status:'completed-with-gaps',...(mismatch==='scope'?{scope:{organizationId:'other',projectId:'unscoped',runId:null,marketplace:'US',asins:lease.job.asins}}:mismatch==='fingerprint'?{fingerprint:'other'}:{asins:['B0OTHER0001']})});
+    return {status:'completed'};
+  }});
+  await handler.handle(lease);
+  const mirror=JSON.parse(await fs.promises.readFile(join(directory,`${lease.job.jobId}.json`),'utf8'));
+  assert.equal(mirror.status,'completed-with-gaps');
+});

@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import type { Pool } from "pg";
 
 import { reviseProjectDisplayCatalog } from "../../scripts/revise-project-display-catalog";
+import { readCurrentProjectDisplayVersion } from "../../app/lib/project-display-version-browser";
 
 import { LocalDataStageOutputResponseSchema } from "../../shared/agent-contracts";
 import { runPostgresMigrations } from "../../server/db/postgres/migrations";
@@ -130,6 +131,88 @@ async function addJob(pool: Pool, ids: Awaited<ReturnType<typeof fixture>>["ids"
   await seedAllOutputs(pool, { ...ids, runId, jobId });
   return { ...ids, runId, jobId };
 }
+
+test('new display binds missing captured price provenance and preserves immutable source rows and seven images', async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const gallery = Array.from({length: 7}, (_, index) => `https://example.test/captured-${index}.jpg`);
+  const listing = (urls: string[]) => ({ contentByAsin: { [asin]: {
+    status: 'ready', mainImage: urls[0], galleryImages: urls, secondaryImages: urls.slice(1), imageCount: urls.length,
+  } } });
+  const price = { asin, marketplace: 'US', status: 'ready', source: 'Sorftime', fetchedAt: '2026-09-21',
+    currentPrice: 59.99, anchor: 'Verified price', promotion: 'No coupon', psychology: 'Stable price', evidence: 'Captured price strategy' };
+  await replaceDoneOutput(pool, ids, 'listing', listing(gallery.slice(0, 6)));
+  await replaceDoneOutput(pool, ids, 'price_strategy', { strategyByAsin: { [asin]: { ...price, provenance: {
+    jobId: ids.jobId, asin, marketplace: 'US', fetchedAt: price.fetchedAt, connector: 'sorftime',
+    operation: 'product_detail', tool: 'product_detail',
+  } } } });
+  const prior = await store.publishFromCompletedJob({ organizationId: ids.organizationId, projectId: ids.projectId,
+    jobId: ids.jobId, expectedCurrentVersionId: null });
+  const nextIds = await addJob(pool, ids, '2026-09-22T10:00:00.000Z');
+  await replaceDoneOutput(pool, nextIds, 'listing', listing(gallery));
+  const captured = { strategyByAsin: { [asin]: { ...price, currentPrice: 69.99 } } };
+  await replaceDoneOutput(pool, nextIds, 'price_strategy', captured);
+  const before = (await pool.query('SELECT data_json,content_hash FROM sync_job_stage_outputs WHERE job_id=$1 AND stage_id=$2',
+    [nextIds.jobId, 'price_strategy'])).rows[0]!;
+  const next = await store.publishFromCompletedJob({ organizationId: ids.organizationId, projectId: ids.projectId,
+    jobId: nextIds.jobId, expectedCurrentVersionId: prior.versionId });
+  const restored = await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId });
+  assert.equal(restored?.versionId, next.versionId);
+  const displayPrice = next.stageOutputs.price_strategy;
+  assert.notEqual(displayPrice.stageStatus, 'missing-output');
+  if (displayPrice.stageStatus === 'missing-output') assert.fail('Missing price display');
+  const bound = (displayPrice.data!.strategyByAsin as Record<string,Record<string,unknown>>)[asin]!;
+  const provenance = bound.provenance as Record<string,string>;
+  assert.equal(provenance.jobId, nextIds.jobId);
+  assert.equal(provenance.operation, 'persisted_stage_output');
+  assert.equal(provenance.tool, 'persisted_stage_output');
+  assert.equal(provenance.sourceContentHash, before.content_hash);
+  assert.equal(provenance.projectId, ids.projectId);
+  assert.equal(provenance.runId, nextIds.runId);
+  assert.equal(provenance.organizationId, ids.organizationId);
+  assert.equal(bound.currentPrice, 69.99);
+  assert.equal(displayPrice.contentHash, hash({stage:'price_strategy',data:displayPrice.data}));
+  assert.notEqual(displayPrice.contentHash,before.content_hash);
+  const after = (await pool.query('SELECT data_json,content_hash FROM sync_job_stage_outputs WHERE job_id=$1 AND stage_id=$2',
+    [nextIds.jobId,'price_strategy'])).rows[0]!;
+  assert.deepEqual(after,before);
+  assert.deepEqual(after.data_json,captured);
+  const browser = await readCurrentProjectDisplayVersion({ organizationId: ids.organizationId, projectId: ids.projectId,
+    marketplace: 'US', asins: ASINS }, async()=>new Response(JSON.stringify(restored),{status:200}));
+  const displayedListing=browser!.stageOutputs.listing;
+  assert.ok(displayedListing && displayedListing.stage === 'listing' && 'data' in displayedListing);
+  const content=displayedListing.data.contentByAsin as Record<string,{galleryImages:string[]}>;
+  assert.deepEqual(content[asin]!.galleryImages,gallery);
+  const freshIds = await addJob(pool, ids, '2026-09-23T10:00:00.000Z');
+  await replaceDoneOutput(pool, freshIds, 'listing', listing(gallery));
+  const physical = {jobId:freshIds.jobId,asin,marketplace:'US',fetchedAt:price.fetchedAt,connector:'sorftime',
+    operation:'product_detail+product_trend',tool:'product_detail+product_trend',stageId:'price_strategy',trendType:'Price',observationPeriod:'day'};
+  await replaceDoneOutput(pool, freshIds, 'price_strategy', {strategyByAsin:{[asin]:{...price,currentPrice:79.99,provenance:physical}}});
+  const freshSource = (await pool.query('SELECT data_json,content_hash FROM sync_job_stage_outputs WHERE job_id=$1 AND stage_id=$2',
+    [freshIds.jobId,'price_strategy'])).rows[0]!;
+  const fresh = await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,
+    jobId:freshIds.jobId,expectedCurrentVersionId:next.versionId});
+  const freshPrice = fresh.stageOutputs.price_strategy;
+  if(freshPrice.stageStatus==='missing-output') assert.fail('Missing fresh price');
+  const freshP=(freshPrice.data!.strategyByAsin as Record<string,Record<string,unknown>>)[asin]!.provenance as Record<string,string>;
+  for(const [key,value] of Object.entries(physical)) assert.equal(freshP[key],value);
+  assert.equal(freshP.captureJobId,freshIds.jobId);
+  assert.equal(freshP.sourceContentHash,freshSource.content_hash);
+  assert.deepEqual((await pool.query('SELECT data_json,content_hash FROM sync_job_stage_outputs WHERE job_id=$1 AND stage_id=$2',
+    [freshIds.jobId,'price_strategy'])).rows[0],freshSource);
+  const finalIds=await addJob(pool,ids,'2026-09-24T10:00:00.000Z');
+  await replaceDoneOutput(pool,finalIds,'listing',listing(gallery));
+  await replaceDoneOutput(pool,finalIds,'price_strategy',{strategyByAsin:{[asin]:{...price,currentPrice:89.99}}});
+  const final=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,
+    jobId:finalIds.jobId,expectedCurrentVersionId:fresh.versionId});
+  assert.equal(final.jobId,finalIds.jobId,'future legacy captures also retain stable provenance key coverage');
+  const unknownIds=await addJob(pool,ids,'2026-09-25T10:00:00.000Z');
+  await replaceDoneOutput(pool,unknownIds,'listing',listing(gallery));
+  await replaceDoneOutput(pool,unknownIds,'price_strategy',{strategyByAsin:{[asin]:{...price,source:'Unknown'}}});
+  await assert.rejects(store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,
+    jobId:unknownIds.jobId,expectedCurrentVersionId:final.versionId}),/Candidate would lose verified data: price_strategy.*provenance/);
+  assert.equal((await store.readCurrent({organizationId:ids.organizationId,projectId:ids.projectId}))?.versionId,final.versionId);
+});
 
 test("failed and stale completed jobs cannot replace a published version", async () => {
   const { pool, ids, store } = await fixture();
