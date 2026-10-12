@@ -4,6 +4,7 @@ import {chromium, type Page} from 'playwright';
 import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
 import {shapePageRun, shapeRunId,shapeRevision} from './helpers/market-shape-page-fixture';
+import {MarketShapeRunResponseSchema} from '../../shared/market-shape-public-contracts';
 import {openShapeTaskRecovery} from './helpers/open-market-admin-tools';
 
 test('shape restoration binds saved scope without overwriting newer drafts or other modules', {timeout:90_000}, async t => {
@@ -162,8 +163,8 @@ test('shape restoration binds saved scope without overwriting newer drafts or ot
     for(const status of [200,503]){
       await page.goto(origin+base+'&shapeRun='+shapeRunId);await reportLoaded(page);
       await page.getByLabel('修订说明').fill('retain newest draft');await node.fill('123123');await openShapeTaskRecovery(page);
-      let releaseOld!:()=>void;const old=structuredClone(current);old.run.source!.products[0].title='Obsolete lamp';old.run.steps=[{id:'71000000-0000-4000-8000-000000000006',kind:'collect-product-month',status:'running',latestAttemptId:null,attemptCount:0,asin:null,current:true,canRetry:false,errorCode:null}];
-      nextCurrent={status,body:status===200?old:{error:'obsolete read failure'},release:()=>new Promise<void>(resolve=>{releaseOld=resolve})};
+      let releaseOld!:()=>void;const old=structuredClone(current);old.run.source!.products[0].title='Obsolete lamp';old.run.steps=[{id:'71000000-0000-4000-8000-000000000006',kind:'collect-product-month',status:'running',latestAttemptId:null,attemptCount:0,asin:null,month:null,current:true,canRetry:false,errorCode:null}];
+      nextCurrent={status,body:status===200?MarketShapeRunResponseSchema.parse(old):{error:'obsolete read failure'},release:()=>new Promise<void>(resolve=>{releaseOld=resolve})};
       await page.getByRole('button',{name:'刷新形态状态',exact:true}).click();while(!releaseOld)await page.waitForTimeout(10);
       await restore();await page.getByRole('status').filter({hasText:'正在读取目标任务'}).waitFor({state:'hidden'});
       releaseOld();await page.waitForTimeout(150);
