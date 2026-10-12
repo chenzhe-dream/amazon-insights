@@ -1,7 +1,7 @@
 'use client';
 import {MarketAdminContent} from './market-admin-tools';
 import {shapePollingDelay} from './lib/market-shape-polling';
-import {MarketShapeReferencePanel} from './market-shape-reference-panel';
+import {MarketShapeReferencePanel,type ShapeReferenceSwitchState} from './market-shape-reference-panel';
 import {MarketShapeMonthPicker} from './market-shape-month-picker';
 import {MarketShapeCategoryDashboard} from './market-shape-category-dashboard';
 
@@ -9,7 +9,7 @@ import { browserRequestId } from "./lib/browser-request-id";
 import {MarketSiteSelector} from './market-site-selector';
 import {marketSiteCurrency,marketSites,type MarketSite} from '../shared/market-sites';
 import {assertMarketProductQueryWindow} from '../shared/market-product-source-policy';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback,useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema } from '../shared/market-module-contracts';
 import type { MarketShapeRun, MarketShapePublicRevision } from '../shared/market-shape-public-contracts';
 import { queryShapeRun, readShapeRun, saveShapeRevisionAnalysis, readShapeRevision, retryShapeSteps, cancelShapeRun, resolveShapeNodeInput } from './lib/market-shape-browser';
@@ -53,10 +53,19 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
 }) {
     const [runId, setRunId] = useState(''), [restoreId, setRestoreId] = useState(''), [run, setRun] = useState<MarketShapeRun | null>(null), [reload, setReload] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null), [readError, setReadError] = useState<string | null>(null);
     const [lastReadAt,setLastReadAt]=useState<string|null>(null);
+    const [targetLoading,setTargetLoading]=useState(false),[targetError,setTargetError]=useState<string|null>(null);
+    type Target={run:MarketShapeRun;generation:number;inputRevision:number;draft:string};
+    const [pendingTarget,setPendingTarget]=useState<Target|null>(null);
+    const [referenceState,setReferenceState]=useState<ShapeReferenceSwitchState>({dirty:false,saving:false,fingerprint:''});
+    const referenceLive=useRef(referenceState);
+    const onReferenceState=useCallback((state:ShapeReferenceSwitchState)=>{referenceLive.current=state;setReferenceState(state);},[]);
+    const targetOwner=useRef<AbortController|null>(null),targetGeneration=useRef(0),draftBaseline=useRef('');
     const [poolSize, setPoolSize] = useState(100), [pendingPoolSize, setPendingPoolSize] = useState<number | null>(null), [pendingPoolRefresh, setPendingPoolRefresh] = useState(false), [bands, setBands] = useState('0,20,40'), [selected, setSelected] = useState<string[]>([]), [assignments, setAssignments] = useState<Record<string, string>>({}), [parent, setParent] = useState<string | null>(null), [note, setNote] = useState('');
     const [choice, setChoice] = useState('latest'), [historic, setHistoric] = useState<MarketShapePublicRevision | null>(null), [historyError, setHistoryError] = useState<string | null>(null);
     const [presentation, setPresentation] = useState<MarketShapeExplanationPresentation | null>(null);
     const [analysisNotice,setAnalysisNotice]=useState<{runId:string;revisionId:string;reason:string|null}|null>(null);
+    const draftFingerprint=JSON.stringify({selected,assignments,parent,note,bands});
+    const liveState=useRef({busy,runId,draftFingerprint});liveState.current={busy,runId,draftFingerprint};
     const selectionKey=JSON.stringify([selection.marketplace??'US',selection.nodeIdPath,selection.fromMonth,selection.toMonth]);
     const selectionState=useRef({key:selectionKey,revision:0,selection,onSelectionChange});
     if(selectionState.current.key!==selectionKey)selectionState.current.revision++;
@@ -75,7 +84,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         scopeRestore.current={runId:id.data,revision:null};
         setRunId(id.data);
         setRestoreId(id.data);
-    } return () => { abort.abort(); owner.current = null; }; }, []);
+    } return () => { abort.abort(); owner.current = null;targetOwner.current?.abort();targetGeneration.current++; }; }, []);
     useEffect(() => {
         if (!runId)
             return;
@@ -118,7 +127,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         return () => { abort.abort(); if (timer)
             clearTimeout(timer); };
     }, [runId, reload]);
-    function loadDraft(next: MarketShapeRun) { const r = next.latestRevision, labels = new Map((r?.labels ?? next.params.catalog.allowedLabels).map(l => [l.labelId,l.label])); setSelected(r?.selectedAsins ?? next.source?.products.map(p => p.asin) ?? []); setAssignments(Object.fromEntries((r?.assignments ?? []).map(a => [a.asin, a.labelId ? labels.get(a.labelId) ?? '' : '']))); setParent(r?.revisionId ?? null); setNote(r?.note ?? ''); setBands(r ? r.bands.map(b => b.minInclusive).join(',') : '0,20,40'); draftRun.current = next.id; pendingSave.current = null; }
+    function loadDraft(next: MarketShapeRun) { const r = next.latestRevision, labels = new Map((r?.labels ?? next.params.catalog.allowedLabels).map(l => [l.labelId,l.label])); const draft={selected:r?.selectedAsins ?? next.source?.products.map(p => p.asin) ?? [],assignments:Object.fromEntries((r?.assignments ?? []).map(a => [a.asin, a.labelId ? labels.get(a.labelId) ?? '' : ''])),parent:r?.revisionId ?? null,note:r?.note ?? '',bands:r ? r.bands.map(b => b.minInclusive).join(',') : '0,20,40'};draftBaseline.current=JSON.stringify(draft);setSelected(draft.selected);setAssignments(draft.assignments);setParent(draft.parent);setNote(draft.note);setBands(draft.bands); draftRun.current = next.id; pendingSave.current = null; }
     useEffect(() => { if (run) { setPoolSize(run.params.poolSize); setPendingPoolSize(null); setPendingPoolRefresh(false); } }, [run?.id, run?.params.poolSize]);
     useEffect(() => { if (run?.source && draftRun.current !== run.id)
         loadDraft(run); }, [run]);
@@ -130,7 +139,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     async function start(e?: FormEvent, requestedPoolSize = poolSize, requestedSelection = selection, forceRefresh = false) {
         e?.preventDefault();
         const signal = owner.current?.signal;
-        if (!signal || busy || (run && active(run)))
+        if (!signal || busy || referenceLive.current.saving || targetLoading || pendingTarget || (run && active(run)))
             return;
         setBusy(true);
         setError(null);
@@ -164,7 +173,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     }
     async function save() {
         const signal = owner.current?.signal;
-        if (!signal || busy || !run?.source || readError)
+        if (!signal || busy || targetLoading || pendingTarget || !run?.source || readError)
             return;
         setBusy(true);
         setError(null);
@@ -179,6 +188,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
             pendingSave.current = null;
             setAnalysisNotice({runId:run.id,revisionId:revision.revisionId,reason:saved.explanationUnavailableReason??null});
             setParent(revision.revisionId);
+            draftBaseline.current=JSON.stringify({selected,assignments,parent:revision.revisionId,note,bands});
             setRun(current => current?.id === run.id ? { ...current, latestRevision: revision, history: [{ revisionId: revision.revisionId, ordinal: revision.ordinal, createdAt: revision.createdAt }, ...current.history.filter(r => r.revisionId !== revision.revisionId)].slice(0, 100) } : current);
             setChoice('latest');
             setReload(n => n + 1);
@@ -192,7 +202,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
                 setBusy(false);
         }
     }
-    async function action(kind: 'retry' | 'cancel', step?: MarketShapeRun['steps'][number]) { const signal = owner.current?.signal; if (!signal || !run || busy || readError)
+    async function action(kind: 'retry' | 'cancel', step?: MarketShapeRun['steps'][number]) { const signal = owner.current?.signal; if (!signal || !run || busy || targetLoading || pendingTarget || readError)
         return; setBusy(true); setError(null); try {
         if (kind === 'retry' && step?.latestAttemptId)
             await retryShapeSteps(run.id, [{ stepId: step.id, failedAttemptId: step.latestAttemptId }], browserRequestId(), signal);
@@ -209,11 +219,32 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         if (!signal.aborted)
             setBusy(false);
     } }
-    function restore(e: FormEvent) { e.preventDefault(); const id = MarketModuleIdSchema.safeParse(restoreId.trim()); if (!id.success) {
-        setError('请输入有效任务编号。');
-        return;
-    } scopeRestore.current={runId:id.data,revision:selectionState.current.revision}; setRun(null); setChoice('latest'); setRunId(id.data); remember(id.data); draftRun.current = ''; setReload(n => n + 1); }
-    const queryLocked=busy||!!(run&&active(run));
+    function cancelTarget(){targetOwner.current?.abort();targetGeneration.current++;setTargetLoading(false);setPendingTarget(null);setTargetError(null);}
+    function commitTarget(target:Target,discard=false){
+        if(!owner.current||target.generation!==targetGeneration.current||targetOwner.current?.signal.aborted||liveState.current.busy||referenceLive.current.saving)return;
+        const same=liveState.current.runId===target.run.id;
+        const fingerprint=run?.referenceHistory!==undefined?referenceLive.current.fingerprint:liveState.current.draftFingerprint;
+        const dirty=run?.referenceHistory!==undefined?referenceLive.current.dirty:!!draftRun.current&&fingerprint!==draftBaseline.current;
+        if(!same&&dirty&&(!discard||target.draft!==fingerprint)){
+            setPendingTarget({...target,draft:fingerprint});setTargetLoading(false);return;
+        }
+        setPendingTarget(null);setTargetLoading(false);setRun(target.run);setReadError(null);setLastReadAt(new Date().toLocaleTimeString());
+        if(same)return;
+        scopeRestore.current=null;setChoice('latest');setHistoric(null);setHistoryError(null);loadDraft(target.run);onReferenceState({dirty:false,saving:false,fingerprint:''});setRunId(target.run.id);remember(target.run.id);
+        if(target.inputRevision===selectionState.current.revision){const {marketplace,nodeIdPath,fromMonth,toMonth}=target.run.scope;selectionState.current.onSelectionChange({marketplace,nodeIdPath,fromMonth,toMonth});}
+    }
+    async function restore(e: FormEvent){
+        e.preventDefault();if(liveState.current.busy||referenceLive.current.saving)return;
+        const id=MarketModuleIdSchema.safeParse(restoreId.trim());if(!id.success){setTargetError('请输入有效任务编号。');return;}
+        cancelTarget();const generation=targetGeneration.current,abort=new AbortController();targetOwner.current=abort;
+        const inputRevision=selectionState.current.revision;setTargetLoading(true);setTargetError(null);
+        try{const next=await readShapeRun(id.data,abort.signal);commitTarget({run:next,generation,inputRevision,draft:liveState.current.draftFingerprint});}
+        catch(e){if(!abort.signal.aborted&&generation===targetGeneration.current){setTargetLoading(false);setTargetError(`目标任务读取失败，${liveState.current.runId?'仍显示原任务':'未读取到任务'}：${e instanceof Error?e.message:'请重试'}`);}}
+    }
+    const switchLocked=busy||referenceState.saving;
+    const writeLocked=busy||targetLoading||!!pendingTarget;
+    const queryLocked=busy||referenceState.saving||!!(run&&active(run));
+    const queryWriteLocked=queryLocked||targetLoading||!!pendingTarget;
     function requestPoolSizeChange(size: number) {
         if (!run || size === run.params.poolSize) {
             setPoolSize(size);
@@ -245,28 +276,31 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
     return <div className="market-shape-workspace market-shape-reference" style={{gridTemplateColumns:"minmax(0, 1fr)"}}><section className="card ss-market-query ss-market-query--lilac market-shape-controls">
   <form onSubmit={e => { if (pendingPoolSize !== null) { e.preventDefault(); return; } void start(e); }}>
    <div className="ss-market-query-row"><span className="ss-market-query-label">选择站点</span><MarketSiteSelector value={selection.marketplace??'US'} onChange={marketplace=>onSelectionChange({marketplace,nodeIdPath:''})} disabled={queryLocked}/></div>
-   <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={queryLocked}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!/^\d+(?::\d+)*$/.test(selection.nodeIdPath.trim())} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID 或英文名，例如 Floor Lamps" required disabled={queryLocked}/></div></div>
+   <div className="ss-market-query-highlight"><div className="ss-market-query-row"><span className="ss-market-query-label">选择类目</span><div className="ss-market-node-field"><button type="submit" className="ss-market-search-btn" disabled={queryWriteLocked}>{busy?'提交中':'搜索'}</button><button type="button" className="ss-market-fav-btn" disabled={!onFavorite||!/^\d+(?::\d+)*$/.test(selection.nodeIdPath.trim())} title="保存到团队共享收藏" onClick={onFavorite}>☆ 收藏</button><input aria-label="类目节点" value={selection.nodeIdPath} onChange={e=>onSelectionChange({nodeIdPath:e.target.value})} placeholder="输入类目节点 ID 或英文名，例如 Floor Lamps" required disabled={queryLocked}/></div></div>
     <div className="market-theme-actions market-shape-query-months"><span>研究月份</span><MarketShapeMonthPicker label="起始月" value={selection.fromMonth} max={selection.toMonth} onChange={fromMonth=>onSelectionChange({fromMonth})} disabled={queryLocked}/><MarketShapeMonthPicker label="结束月" value={selection.toMonth} max={maxMonth} onChange={toMonth=>onSelectionChange({toMonth})} disabled={queryLocked}/></div>
-    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={queryLocked||pendingPoolSize!==null}>{busy?'提交中…':queryLocked?'正在采集':'筛选市场'}</button><button className="ghost-btn" type="button" disabled={queryLocked||pendingPoolSize!==null||!run||!selection.nodeIdPath} onClick={()=>{setPendingPoolSize(poolSize);setPendingPoolRefresh(true)}}>重新采集</button><button className="ss-market-reset-btn" type="button" disabled={queryLocked} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);setPendingPoolSize(null);setPendingPoolRefresh(false);}}>重置条件</button></div>
-   {pendingPoolSize !== null && <div className="market-shape-recollect-confirm" role="status"><span>{pendingPoolRefresh?`将按 ${pendingPoolSize} 件商品重新采集，确认后才会启动 Sorftime 任务。`:`将优先读取 ${pendingPoolSize} 件商品的缓存；没有可用缓存时才启动 Sorftime 任务。`}</span><button className="primary-btn" type="button" disabled={queryLocked} onClick={confirmPendingPoolSize}>{pendingPoolRefresh?`确认重新采集 ${pendingPoolSize} 件`:`确认使用 ${pendingPoolSize} 件`}</button><button className="ghost-btn" type="button" disabled={queryLocked} onClick={cancelPendingPoolSize}>取消</button></div>}
+    <div className="ss-market-query-actions"><button className="ss-market-filter-btn" type="submit" disabled={queryWriteLocked||pendingPoolSize!==null}>{busy?'提交中…':queryLocked?'正在采集':'筛选市场'}</button><button className="ghost-btn" type="button" disabled={queryWriteLocked||pendingPoolSize!==null||!run||!selection.nodeIdPath} onClick={()=>{setPendingPoolSize(poolSize);setPendingPoolRefresh(true)}}>重新采集</button><button className="ss-market-reset-btn" type="button" disabled={queryLocked} onClick={()=>{onSelectionChange({nodeIdPath:'',fromMonth:maxMonth,toMonth:maxMonth});setPoolSize(100);setPendingPoolSize(null);setPendingPoolRefresh(false);}}>重置条件</button></div>
+   {pendingPoolSize !== null && <div className="market-shape-recollect-confirm" role="status"><span>{pendingPoolRefresh?`将按 ${pendingPoolSize} 件商品重新采集，确认后才会启动 Sorftime 任务。`:`将优先读取 ${pendingPoolSize} 件商品的缓存；没有可用缓存时才启动 Sorftime 任务。`}</span><button className="primary-btn" type="button" disabled={queryWriteLocked} onClick={confirmPendingPoolSize}>{pendingPoolRefresh?`确认重新采集 ${pendingPoolSize} 件`:`确认使用 ${pendingPoolSize} 件`}</button><button className="ghost-btn" type="button" disabled={queryLocked} onClick={cancelPendingPoolSize}>取消</button></div>}
    </div></form>
-  <MarketAdminContent><details className="market-shape-query-footer"><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={busy}/></label><button className="ghost-btn" disabled={busy}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p>
+  <MarketAdminContent><details className="market-shape-query-footer"><summary>恢复已有形态任务</summary><form onSubmit={restore} className="market-theme-actions"><label>形态任务编号 <input value={restoreId} onChange={e => setRestoreId(e.target.value)} disabled={switchLocked}/></label><button className="ghost-btn" disabled={switchLocked}>读取任务</button></form><p>恢复和切换版本只读取已保存结果。</p>
+  {targetLoading&&<p role="status">正在读取形态任务：正在读取目标任务，{run?'当前报告保留':'等待结果'}。<button className="ghost-btn" onClick={cancelTarget}>取消读取</button></p>}
+  {targetError&&<p role="alert" className="market-research-error">{targetError}</p>}
+  {pendingTarget&&<div role="alert"><p>有未保存的人工形态修改，是否放弃修改并切换任务？</p><button className="ghost-btn" onClick={cancelTarget}>保留修改</button><button className="primary-btn" disabled={switchLocked} onClick={()=>commitTarget(pendingTarget,true)}>放弃修改并切换</button></div>}
   {runId && <button type="button" className="ghost-btn" disabled={busy} onClick={() => setReload(n => n + 1)}>刷新形态状态</button>}</details></MarketAdminContent>
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，来源修改操作暂停。{lastReadAt&&` 最后成功读取：${lastReadAt}`}</p>}
  </section>
  {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>采集完成后直接查看看板，在 TOP 销售表修改形态即可更新统计；保存可保留当前版本。</span></div></LaunchSection>}
- {run && run.referenceHistory!==undefined?<MarketShapeReferencePanel key={run.id} run={run} readError={readError} starting={busy} requestedPoolSize={pendingPoolSize ?? run.params.poolSize} onRefresh={()=>setReload(n=>n+1)} onPoolSizeChange={requestPoolSizeChange}/>:run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
+ {run && run.referenceHistory!==undefined?<MarketShapeReferencePanel key={run.id} run={run} readError={readError} starting={writeLocked} switching={targetLoading||!!pendingTarget} onSwitchStateChange={onReferenceState} requestedPoolSize={pendingPoolSize ?? run.params.poolSize} onRefresh={()=>setReload(n=>n+1)} onPoolSizeChange={requestPoolSizeChange}/>:run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
    {!report && !run.source?.summary && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}
  <section className="card market-shape-controls market-shape-revision-controls"><h3>人工确认与统计版本</h3>
  <MarketAdminContent><details className="market-shape-task-details"><summary>{active(run) && <span className="market-theme-spinner" aria-hidden="true"/>}{shapeRunSummary(run)}</summary>
   <p>本任务范围：{run.scope.marketplace} · {run.scope.nodeIdPath} · {run.scope.fromMonth} 至 {run.scope.toMonth}</p><p className="market-research-note">样本使用供应商返回的商品池，尚未核验为 BSR 前 {run.params.poolSize} 名。{run.sourcePolicy?'站点和月份按接口查询范围绑定；币种依据供应商站点定义，响应回显另行记录。':'来源未确认单位或周期的原值不参与可比统计。'}</p>
-  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{s.categoryMetric?categoryNames[s.categoryMetric]:stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
-  {active(run) && <button className="ghost-btn" disabled={busy || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
+  <ul className="market-theme-steps">{run.steps.filter(s => s.current).map(s => <li key={s.id}>{s.asin ? `${s.asin} · ` : ''}{s.month ? `${s.month} · ` : ''}{s.categoryMetric?categoryNames[s.categoryMetric]:stepNames[s.kind] ?? '后台步骤'}：{statusNames[s.status]}{s.errorCode ? `（${stepErrors[s.errorCode] ?? s.errorCode}）` : ''}{s.canRetry && <button className="ghost-btn" disabled={writeLocked || !!readError} onClick={() => void action('retry', s)}>重试此步骤</button>}</li>)}</ul>
+  {active(run) && <button className="ghost-btn" disabled={writeLocked || !!readError} onClick={() => void action('cancel')}>取消形态任务</button>}
   </details></MarketAdminContent>
   {run.source && <>
    {parent !== (run.latestRevision?.revisionId ?? null) && <p role="status">已有较新版本。当前草稿仍基于原版本，可先保留修改或重新载入。</p>}
-   <div className="market-theme-actions"><label>参考价格带下界 <input value={bands} onChange={e => setBands(e.target.value)} disabled={busy}/></label><label>修订说明 <input value={note} maxLength={500} onChange={e => setNote(e.target.value)} disabled={busy}/></label><button className="primary-btn" disabled={busy || !!readError || !selected.length || run.status === 'cancelled'} onClick={() => void save()}>确认并重新计算</button><button className="ghost-btn" disabled={busy || !!readError} onClick={() => loadDraft(run)}>重新载入最新草稿</button></div><p className="market-research-note">例：0,20,40 分为 [0,20)、[20,40)、[40,+∞)。保存保留旧版本，未分类商品保留为单独分组；修改形态不会重新抓取。</p>
+   <div className="market-theme-actions"><label>参考价格带下界 <input value={bands} onChange={e => setBands(e.target.value)} disabled={busy}/></label><label>修订说明 <input value={note} maxLength={500} onChange={e => setNote(e.target.value)} disabled={busy}/></label><button className="primary-btn" disabled={writeLocked || !!readError || !selected.length || run.status === 'cancelled'} onClick={() => void save()}>确认并重新计算</button><button className="ghost-btn" disabled={writeLocked || !!readError} onClick={() => loadDraft(run)}>重新载入最新草稿</button></div><p className="market-research-note">例：0,20,40 分为 [0,20)、[20,40)、[40,+∞)。保存保留旧版本，未分类商品保留为单独分组；修改形态不会重新抓取。</p>
   </>}
  </section>
  {run.history.length > 0 && <label className="market-theme-version">形态报告版本 <select aria-label="形态报告版本" value={choice} onChange={e => setChoice(e.target.value)}><option value="latest">最新保存版本</option>{run.history.map(r => <option key={r.revisionId} value={r.revisionId}>版本 {r.ordinal} · {r.createdAt}</option>)}</select></label>}
