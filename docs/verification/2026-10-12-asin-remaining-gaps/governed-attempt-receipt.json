@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-10-12T10:44:15.668Z",
+  "attempts": [
+    {
+      "job_id": "asin-candidate-probe-20261012-9f6ec058-1036-45cb-aafd-0edfa7f04c91",
+      "resource": "sorftime",
+      "stage_id": "sales-trend-acceptance",
+      "physical_attempts": 2,
+      "first_at": "2026-10-12T10:33:16.823Z",
+      "last_at": "2026-10-12T10:33:17.111Z"
+    },
+    {
+      "job_id": "asin-candidate-probe-20261012-fa9b12ce-411d-46b1-8718-e9f5f9cd9f5b",
+      "resource": "sorftime",
+      "stage_id": "sales-trend-acceptance",
+      "physical_attempts": 1,
+      "first_at": "2026-10-12T10:34:06.193Z",
+      "last_at": "2026-10-12T10:34:06.193Z"
+    },
+    {
+      "job_id": "asin-candidate-metrics-20261012-6446341b-5d51-4c76-8821-c8043fbe033a",
+      "resource": "sorftime",
+      "stage_id": "sales-trend-acceptance",
+      "physical_attempts": 3,
+      "first_at": "2026-10-12T10:37:51.458Z",
+      "last_at": "2026-10-12T10:37:52.344Z"
+    },
+    {
+      "job_id": "asin-candidate-images-20261012-a564b581-4abb-4931-8110-ff3c185a7b47",
+      "resource": "image",
+      "stage_id": "image-acceptance",
+      "physical_attempts": 2,
+      "first_at": "2026-10-12T10:40:10.366Z",
+      "last_at": "2026-10-12T10:41:42.713Z"
+    }
+  ],
+  "totals": {
+    "sorftime": 6,
+    "image": 2
+  },
+  "canonicalWrites": 0
+}

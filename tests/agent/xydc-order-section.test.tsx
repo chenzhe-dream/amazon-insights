@@ -827,3 +827,16 @@ test("opens only the selected parent's accessible detail dialog and restores foc
     await page.getByRole("button", { name: "关闭订单明细" }).click();
   });
 });
+
+test("complete annual orders remain visible with exact missing ratings fields", t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-08T12:00:00.000Z") });
+  const family = familyFixture();
+  family.status = "partial";
+  family.reasonCode = "PARTIAL_CHILD_INFO";
+  family.children[0] = { ...family.children[0]!, stars: null, productPageRatings: null, infoStatus: "unavailable" };
+  const html = renderSection([family], [orderFixture()]);
+  assert.match(html, /全年订单已完整/);
+  assert.match(html, /评分、评论数未返回/);
+  assert.match(html, /5,900\+/);
+  assert.doesNotMatch(html, /子体信息不可用|全年订单仍有缺口|部分订单数据不可用/);
+});

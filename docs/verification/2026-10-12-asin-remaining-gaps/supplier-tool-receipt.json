@@ -1,0 +1,67 @@
+{
+  "probeJobId": "asin-candidate-probe-20261012-9f6ec058-1036-45cb-aafd-0edfa7f04c91",
+  "checkedAt": "2026-10-12T10:33:16.779Z",
+  "asin": "B0BWCQHCWX",
+  "marketplace": "US",
+  "canonicalWrites": 0,
+  "evidence": [
+    {
+      "method": "tools/list",
+      "httpStatus": 200,
+      "tool": {
+        "name": "product_trend",
+        "description": "Query historical trend data of Amazon product by ASIN. Select trend dimension via type parameter: sales volume, sales amount, price, original price, main category rank, subcategory BSR rank, review count, star rating, ASIN-level monthly sales volume. Returns a flat key-value array. For AI agents to analyze product sales curves, price fluctuations, rank changes and review accumulation rhythm.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "asin": {
+              "description": "Product ASIN. Example: B0CVM8TXHP",
+              "type": "string"
+            },
+            "type": {
+              "description": "Trend dimension, default SalesVolume. Enum: SalesVolume=Monthly sales volume trend; SalesAmount=Monthly sales amount trend; Price=Price trend; ListPrice=Original list price trend; Rank=Main category monthly rank trend; BsrRank=Subcategory BSR daily rank trend; ReviewCount=Review count trend; Star=Star rating trend; AsinSalesVolume=ASIN-level monthly sales volume (only current asin itself, separate child variations).",
+              "type": "string",
+              "default": "SalesVolume"
+            },
+            "amz_site": {
+              "description": "Amazon marketplace site. Allowed: US、GB、DE、FR、IN、CA、JP、ES、IT、MX、AE、AU、BR、SA.",
+              "type": "string",
+              "enum": [
+                "Unknow",
+                "US",
+                "GB",
+                "DE",
+                "FR",
+                "IN",
+                "CA",
+                "JP",
+                "ES",
+                "IT",
+                "MX",
+                "AE",
+                "AU",
+                "BR",
+                "SA"
+              ],
+              "default": "Unknow"
+            }
+          },
+          "required": [
+            "asin"
+          ]
+        }
+      }
+    },
+    {
+      "method": "tools/call",
+      "httpStatus": 200,
+      "errorClass": "Error",
+      "diagnostic": null
+    }
+  ],
+  "physicalRequests": 2,
+  "httpStatuses": [
+    200,
+    200
+  ]
+}

@@ -1,4 +1,5 @@
-import { governExternalRequest } from "./postgres-resource-governor.mjs";
+import { readImageRemarkFailureDiagnostic } from "./image-remark-request.mjs";
+import { ResourceGovernorAdmissionError, governExternalRequest } from "./postgres-resource-governor.mjs";
 import { imageRemarkOutcome, validImageRemarkAttemptJobId } from "./image-remark-outcome.mjs";
 import {
   IMAGE_REMARK_CONCURRENCY,
@@ -11,6 +12,11 @@ const RETRYABLE_IMAGE_REMARK_STATUSES = new Set(["timeout", "connector-failed"])
 
 export function shouldQueueImageRemarkSlot({ outcome, force = false, jobId } = {}) {
   const status = outcome?.status;
+  if (!force && outcome?.diagnostic) {
+    const diagnostic = outcome.diagnostic;
+    if (["invalid-json", "invalid-output"].includes(diagnostic.errorClass)) return false;
+    if (diagnostic.errorClass === "http" && diagnostic.httpStatus !== 429 && diagnostic.httpStatus < 500) return false;
+  }
   if (status === "ready" || status === "upstream-empty") return force;
   if (!RETRYABLE_IMAGE_REMARK_STATUSES.has(status)) return true;
   const currentJobId = validImageRemarkAttemptJobId(jobId);
@@ -24,8 +30,8 @@ function timeoutResult(attemptJobId) {
   return imageRemarkOutcome("timeout", { attemptJobId });
 }
 
-function failureResult(attemptJobId) {
-  return imageRemarkOutcome("connector-failed", { attemptJobId });
+function failureResult(attemptJobId, error) {
+  return imageRemarkOutcome("connector-failed", { attemptJobId, diagnostic: error instanceof ResourceGovernorAdmissionError ? {stage:"governance",httpStatus:null,errorClass:"governance",governanceCategory:error.reason} : readImageRemarkFailureDiagnostic(error) });
 }
 
 async function runOne(item, worker, timeoutMs, governorContext) {
@@ -38,7 +44,10 @@ async function runOne(item, worker, timeoutMs, governorContext) {
       attemptKind: "initial",
       operation: () => worker(item, { signal: controller.signal }),
     }))
-    .catch(() => failureResult(governorContext.jobId));
+    .catch(error => {
+      if (!(error instanceof ResourceGovernorAdmissionError) && !readImageRemarkFailureDiagnostic(error)) throw error;
+      return failureResult(governorContext.jobId, error);
+    });
   try {
     const result = await Promise.race([
       work,
@@ -49,10 +58,11 @@ async function runOne(item, worker, timeoutMs, governorContext) {
         }, timeoutMs);
       }),
     ]);
-    if (result !== null) return imageRemarkOutcome(result?.status, { attemptJobId: governorContext.jobId });
+    if (result !== null) return imageRemarkOutcome(result?.status, { attemptJobId: governorContext.jobId, diagnostic: result?.diagnostic });
     return timeoutResult(governorContext.jobId);
-  } catch {
-    return failureResult(governorContext.jobId);
+  } catch (error) {
+    if (!(error instanceof ResourceGovernorAdmissionError) && !readImageRemarkFailureDiagnostic(error)) throw error;
+    return failureResult(governorContext.jobId, error);
   } finally {
     clearTimeout(timeout);
   }
@@ -104,6 +114,7 @@ export async function runImageRemarkQueue(items, worker, options = {}) {
       });
       results[index] = imageRemarkOutcome(results[index]?.status, {
         attemptJobId: results[index]?.attemptJobId,
+        diagnostic: results[index]?.diagnostic,
       });
       completed += 1;
       await onSettled(
@@ -111,6 +122,7 @@ export async function runImageRemarkQueue(items, worker, options = {}) {
           completed,
           total: items.length,
           status: results[index]?.status ?? "upstream-empty",
+          ...(results[index]?.diagnostic ? {diagnostic: results[index].diagnostic} : {}),
         }),
         index,
       );

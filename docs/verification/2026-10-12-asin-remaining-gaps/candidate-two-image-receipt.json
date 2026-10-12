@@ -1,0 +1,40 @@
+{
+  "probeJobId": "asin-candidate-images-20261012-a564b581-4abb-4931-8110-ff3c185a7b47",
+  "sourceJobId": "97a8b00e-90f4-4078-8190-08745abc6cd8",
+  "checkedAt": "2026-10-12T10:40:10.328Z",
+  "sourceListingHash": "1f44c9d73a0c3077d7ba45fc5da2e57d2e48de037db7efbb7df3fa9574c81cb5",
+  "originalSourceHash": "48a97fe36ff40b90174d3a0fdba24cab7887f94a38c680b7bcb29bf6dc9fc7c4",
+  "originalCacheHash": "952d998adccc8fff5c33008ede4353cb8809f3d859c113d72e1fad64914fee03",
+  "sourceReadyNotes": {
+    "frozen": 54,
+    "urlBoundCache": 4
+  },
+  "physicalRequests": 2,
+  "canonicalWrites": 0,
+  "targets": [
+    {
+      "asin": "B0G6RSSR6V",
+      "imageNumber": 2,
+      "imageUrlSha256": "2f01514a632383278339776843be280779e89e62a09ee7916b37e6faf652f37e",
+      "outcome": {
+        "status": "ready",
+        "reason": "图片备注已就绪"
+      }
+    },
+    {
+      "asin": "B0G6RSSR6V",
+      "imageNumber": 5,
+      "imageUrlSha256": "943e46f16d1b1225a32922ea3f8ae48b33cca160ccc17d871830841b4b288b7a",
+      "outcome": {
+        "status": "ready",
+        "reason": "图片备注已就绪"
+      }
+    }
+  ],
+  "readyBefore": 58,
+  "readyPreserved": 58,
+  "sourceUnchanged": true,
+  "cacheUnchanged": true,
+  "candidateValidated": true,
+  "readyAfter": 60
+}

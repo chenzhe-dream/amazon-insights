@@ -9,12 +9,14 @@ const imageRemarkFailureStages = new Set([
   "http-response",
   "response-json",
   "response-output",
+  "governance",
 ]);
 const imageRemarkErrorClasses = new Set([
   "network",
   "http",
   "invalid-json",
   "invalid-output",
+  "governance",
 ]);
 
 class ImageRemarkRequestError extends Error {
@@ -173,12 +175,15 @@ function invalidOutputError(httpStatus) {
   });
 }
 
-function sanitizeImageRemarkFailureDiagnostic(input) {
+export function sanitizeImageRemarkFailureDiagnostic(input) {
+  if (!input || typeof input !== "object" || !imageRemarkFailureStages.has(input.stage) || !imageRemarkErrorClasses.has(input.errorClass)) return null;
   const stage = imageRemarkFailureStages.has(input?.stage) ? input.stage : "fetch";
   const errorClass = imageRemarkErrorClasses.has(input?.errorClass) ? input.errorClass : "network";
   const numericStatus = Number(input?.httpStatus);
   const httpStatus = Number.isInteger(numericStatus) && numericStatus >= 100 && numericStatus <= 599
     ? numericStatus
     : null;
-  return Object.freeze({ stage, httpStatus, errorClass });
+  const safe = { stage, httpStatus, errorClass };
+  if (stage === "governance" && errorClass === "governance" && ["rolling-window","concurrency","paused","unavailable","cancelled","missing-key"].includes(input.governanceCategory)) safe.governanceCategory = input.governanceCategory;
+  return Object.freeze(safe);
 }

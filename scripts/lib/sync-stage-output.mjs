@@ -1,3 +1,4 @@
+import { imageRemarkOutcome } from "./image-remark-outcome.mjs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { generatedAppDataPath } from "./generated-app-data-path.mjs";
@@ -127,7 +128,7 @@ export function projectStageOutput(stageId, asins, {
       const hasEvidence = ['volume','amount','price','rank'].some(field =>
         validPoints(record[field], 'month', /^\d{4}-(0[1-9]|1[0-2])$/) ||
         validPoints(record.dailyObservations?.[field], 'date', /^\d{4}-\d{2}-\d{2}$/));
-      if (hasEvidence) data.trendByAsin[asin] = record;
+      if (hasEvidence || record.observationOutcomes || record.observationErrors) data.trendByAsin[asin] = record;
     }
   }
   if (stageStatus === "partial") {
@@ -239,7 +240,7 @@ function sanitizeShape(raw) {
 function readImageOutcomes(source, readExport) {
   const meta = readSource(source, readExport);
   return meta && typeof meta === "object" && !Array.isArray(meta)
-    ? meta.imageOutcomesByAsin
+    ? Object.fromEntries(Object.entries(meta.imageOutcomesByAsin ?? {}).map(([asin, slots]) => [asin, Array.isArray(slots) ? slots.map(outcome => outcome == null ? null : imageRemarkOutcome(outcome.status, outcome)) : []]))
     : {};
 }
 

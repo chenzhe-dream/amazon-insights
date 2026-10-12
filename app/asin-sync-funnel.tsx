@@ -881,7 +881,7 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
         <div className="sync-progress-foot" data-asin-module-gaps="true">
           {collectAsinModuleGaps(job.asinProgress).map(gap => (
             <p key={`${gap.asin}-${gap.module}`}>
-              {gap.asin} · {gap.module === "xydc_orders" ? "西柚子体与全年订单" : gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+              {gap.asin} · {gap.module === "xydc_orders" ? "西柚数据" : gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
             </p>
           ))}
         </div>

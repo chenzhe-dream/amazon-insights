@@ -1,0 +1,13 @@
+{
+  "checkedAt": "2026-10-12T11:25:00.2952968Z",
+  "webStatus": "ok",
+  "webCode": {
+    "sourceCommit": "88be795ecf4571a9cbeb6542cfa613daf9fc14b8",
+    "sourceHash": "66ac3d301a5e73d25b06ea043823a1ee63b0ba5e0467dc4ca9950da3af229dcc"
+  },
+  "agentStatus": "ok",
+  "agentCode": {
+    "sourceCommit": "88be795ecf4571a9cbeb6542cfa613daf9fc14b8",
+    "sourceHash": "66ac3d301a5e73d25b06ea043823a1ee63b0ba5e0467dc4ca9950da3af229dcc"
+  }
+}

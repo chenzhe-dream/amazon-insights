@@ -19,21 +19,33 @@ function isCurrentProductTrend(raw) {
 /** Current product_trend observations retain their supplied calendar period. */
 export function parseSorftimeProductTrend(raw, { asin, type } = {}) {
   if (!isCurrentProductTrend(raw)) {
-    const monthly = parseSorftimeTrend(raw);
-    return { period: monthly.length ? 'month' : null, monthly, daily: [] };
+    const source = raw?.data ?? raw?.content ?? raw;
+    if (typeof source !== 'string' && !Array.isArray(source)) throw new Error('Invalid Sorftime trend response');
+    const parts = normalizeTrendParts(raw);
+    const monthly = parts.map(part => {
+      const match = part.match(/^(\d{4})(?:年(\d{2})月|-(\d{2}))=(.+)$/);
+      const month = Number(match?.[2] ?? match?.[3]);
+      const amount = match?.[4]?.trim();
+      if (!match || Number(match[1]) < 1000 || month < 1 || month > 12 || !amount || !Number.isFinite(Number(amount)) || Number(amount) < 0) throw new Error('Invalid Sorftime trend observation');
+      return {month: `${match[1]}-${String(month).padStart(2,'0')}`, value:Number(amount)};
+    });
+    if (new Set(monthly.map(point => point.month)).size !== monthly.length) throw new Error('Conflicting Sorftime trend observations');
+    return { period: monthly.length ? 'month' : null, monthly, daily: [], missingMonthly:[], missingDaily:[] };
   }
   const value = raw?.data ?? raw;
   if (typeof value.asin !== 'string' || (asin && value.asin !== asin) ||
       typeof value.type !== 'string' || (type && value.type !== type) ||
       !Array.isArray(value.data) || value.data.length % 2 !== 0) {
-    throw new Error('Invalid Sorftime trend identity or observation pairs');
+    const error = new Error('Invalid Sorftime trend identity or observation pairs');
+    error.category = typeof value.asin === 'string' && typeof value.type === 'string' && ((asin && value.asin !== asin) || (type && value.type !== type)) ? 'identity-mismatch' : 'malformed-response';
+    throw error;
   }
   let period = null;
   const points = new Map();
   for (let i = 0; i < value.data.length; i += 2) {
     const stamp = value.data[i];
     const amount = value.data[i + 1];
-    if (!Number.isSafeInteger(stamp) || typeof amount !== 'number' ||
+    if (!(Number.isSafeInteger(stamp) || typeof stamp === 'string' && /^\d{6}(?:\d{2})?$/.test(stamp)) || typeof amount !== 'number' ||
         !Number.isFinite(amount) || amount < -1 || (amount < 0 && amount !== -1)) {
       throw new Error('Invalid Sorftime trend observation');
     }
@@ -53,9 +65,13 @@ export function parseSorftimeProductTrend(raw, { asin, type } = {}) {
     if (points.has(label) && points.get(label) !== amount) throw new Error('Conflicting Sorftime trend observations');
     points.set(label, amount);
   }
-  const observations = [...points].sort(([a], [b]) => a.localeCompare(b)).filter(([, amount]) => amount !== -1);
+  const sorted = [...points].sort(([a], [b]) => a.localeCompare(b));
+  const observations = sorted.filter(([, amount]) => amount !== -1);
+  const missing = sorted.filter(([, amount]) => amount === -1);
   return {
     period,
+    missingMonthly: period === 'month' ? missing.map(([month]) => ({month})) : [],
+    missingDaily: period === 'day' ? missing.map(([date]) => ({date})) : [],
     monthly: period === 'month' ? observations.map(([month, value]) => ({ month, value })) : [],
     daily: period === 'day' ? observations.map(([date, value]) => ({ date, value })) : [],
   };

@@ -775,6 +775,36 @@ const xydcSafeStopReasons = new Set([
   "XYDC_JOB_DATABASE_NOT_CONFIGURED", "XYDC_COLLECTION_STOPPED",
 ]);
 
+export function createXydcDiagnosticParser(asins, scopeAsins) {
+    let safeReason;
+    const repairStatuses = {};
+    const repairOrders = {};
+    const repairDetails = {};
+    let diagnosticLine = "";
+    let discardLine = false;
+    const push = chunk => {
+      if (safeReason) return;
+      // Drain all stderr, but retain at most 128 ASCII bytes and never echo provider text.
+      for (const byte of chunk) {
+        if (byte === 10) {
+          const repair = scopeAsins && !discardLine && /^\[xydc-repair\] ([A-Z0-9]{10}) (ready|upstream-empty|timeout|connector-failed)\r?$/.exec(diagnosticLine);
+          if (repair && asins.includes(repair[1])) repairStatuses[repair[1]] = repair[2];
+          const order = scopeAsins && !discardLine && /^\[xydc-orders\] ([A-Z0-9]{10}) (ready|upstream-empty|timeout|connector-failed)\r?$/.exec(diagnosticLine);
+          if (order && asins.includes(order[1])) repairOrders[order[1]] = order[2];
+          const detail = scopeAsins && !discardLine && /^\[xydc-detail\] ([A-Z0-9]{10}) ([A-Z0-9]{10}) ((?:title|imageUrl|price|currency|stars|productPageRatings)(?:,(?:title|imageUrl|price|currency|stars|productPageRatings))*)\r?$/.exec(diagnosticLine);
+          if (detail && asins.includes(detail[1])) (repairDetails[detail[1]] ??= []).push({ asin: detail[2], fields: detail[3].split(",") });
+          const match = !discardLine && /^\[xydc\] (XYDC_[A-Z_]+)\r?$/.exec(diagnosticLine);
+          diagnosticLine = ""; discardLine = false;
+          if (match && xydcSafeStopReasons.has(match[1])) { safeReason = match[1]; return; }
+        } else if (!discardLine) {
+          if (byte > 127 || diagnosticLine.length >= 128) { diagnosticLine = ""; discardLine = true; }
+          else diagnosticLine += String.fromCharCode(byte);
+        }
+      }
+    };
+    return { push, get safeReason() { return safeReason; }, result: { repairStatuses, repairOrders, repairDetails } };
+}
+
 export function runOptionalXydcVariantEnrichment({ asins, marketplace, scopeAsins, run, env = process.env }) {
   const childEnvironment = {
     XYDC_ASINS: asins.join(","),
@@ -790,26 +820,9 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, scopeAsin
       cwd: root, windowsHide: true, stdio: ["ignore", "ignore", "pipe", "ipc"],
       env: { ...env, ...childEnvironment, AGENT_XYDC_PARENT_IPC: "1" },
     });
-    let safeReason;
-    const repairStatuses = {};
-    let diagnosticLine = "";
-    let discardLine = false;
-    child.stderr.on("data", chunk => {
-      if (safeReason) return;
-      // Drain all stderr, but retain at most 128 ASCII bytes and never echo provider text.
-      for (const byte of chunk) {
-        if (byte === 10) {
-          const repair = scopeAsins && !discardLine && /^\[xydc-repair\] ([A-Z0-9]{10}) (ready|upstream-empty|timeout|connector-failed)\r?$/.exec(diagnosticLine);
-          if (repair && asins.includes(repair[1])) repairStatuses[repair[1]] = repair[2];
-          const match = !discardLine && /^\[xydc\] (XYDC_[A-Z_]+)\r?$/.exec(diagnosticLine);
-          diagnosticLine = ""; discardLine = false;
-          if (match && xydcSafeStopReasons.has(match[1])) { safeReason = match[1]; return; }
-        } else if (!discardLine) {
-          if (byte > 127 || diagnosticLine.length >= 128) { diagnosticLine = ""; discardLine = true; }
-          else diagnosticLine += String.fromCharCode(byte);
-        }
-      }
-    });
+    const parser = createXydcDiagnosticParser(asins, scopeAsins);
+    const { repairStatuses, repairOrders, repairDetails } = parser.result;
+    child.stderr.on("data", parser.push);
     let terminationSignal;
     const cancel = signal => { terminationSignal = signal; if (child.connected) child.disconnect(); };
     const interrupt = () => cancel("SIGINT");
@@ -822,10 +835,17 @@ export function runOptionalXydcVariantEnrichment({ asins, marketplace, scopeAsin
       process.off("SIGTERM", terminate);
       // Preserve the runner's original termination semantics after its directly owned child has drained.
       if (terminationSignal) { process.kill(process.pid, terminationSignal); return; }
-      if (code !== 0) console.error(`[warn] optional XYDC collection stopped${safeReason ? `: ${safeReason}` : ""}`);
-      resolve(Object.freeze({ succeeded: code === 0, ...(scopeAsins ? { repairStatuses } : {}) }));
+      if (code !== 0) console.error(`[warn] optional XYDC collection stopped${parser.safeReason ? `: ${parser.safeReason}` : ""}`);
+      resolve(Object.freeze({ succeeded: code === 0, ...(scopeAsins ? { repairStatuses, repairOrders, repairDetails } : {}) }));
     });
   });
+}
+
+export function xydcRepairReason(result, asin) {
+  const labels = { title: "标题", imageUrl: "图片", price: "价格", currency: "币种", stars: "评分", productPageRatings: "评论数" };
+  const details = (result?.repairDetails?.[asin] ?? []).map(child => `${child.asin}：${child.fields.map(field => labels[field]).join("、")}未返回`).join("；");
+  const orders = result?.repairOrders?.[asin] === "ready" ? "全年订单已完整" : "全年订单待补齐";
+  return details ? `${orders}；${details}` : result?.repairDetails ? orders : `${orders}；子体详情待确认`;
 }
 
 export function diagnosticStatusesByAsin(asins, diagnostics) {
@@ -1129,7 +1149,7 @@ async function main() {
     for (const asin of job.stages.find(stage => stage.id === "catalog")?.repairXydcAsins ?? []) {
       markAsinModule(jobId, asin, "xydc_orders", {
         status: xydcResult?.repairStatuses?.[asin] ?? "connector-failed",
-        reason: xydcResult?.repairStatuses?.[asin] === "ready" ? null : "西柚子体或全年订单仍有缺口",
+        reason: xydcResult?.repairStatuses?.[asin] === "ready" ? null : xydcRepairReason(xydcResult, asin),
       });
     }
 

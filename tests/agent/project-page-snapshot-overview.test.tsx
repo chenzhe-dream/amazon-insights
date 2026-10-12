@@ -46,3 +46,58 @@ test("overview snapshot retains the native matrix and complete cached selling po
   assert.ok(withCategories.includes("Listing 垄断系数"));
   assert.doesNotMatch(withCategories, /<select/);
 });
+
+test('source daily panel renders exact values and missing observations without monthly inference', async()=>{
+  const overviewModule = await import('../../app/project-report-views/competitor-overview');
+  assert.equal(typeof overviewModule.SourceDailyObservations,'function');
+  const html=renderToStaticMarkup(<overviewModule.SourceDailyObservations products={[{asin:'B0BWCQHCWX',brand:'Test'}] as unknown as CompetitorOverviewSnapshotProps["products"]} salesTrendByAsin={{B0BWCQHCWX:{asin:'B0BWCQHCWX',marketplace:'US',fetchedAt:'2026-10-12',status:'empty',volume:[],amount:[],price:[],rank:[],dailyObservations:{volume:[{date:'2026-09-01',value:0},{date:'2026-09-03',value:12}],price:[{date:'2026-09-02',value:23}]}}}}/>);
+  for(const text of ['来源日观测序列','2026-09-01','2026-09-02','2026-09-03','12','23','月度数据不可用','口径未确认','>0<','>—<']) assert.ok(html.includes(text),text);
+  assert.doesNotMatch(html,/日销量|年销量|增长率/);
+  assert.match(html, /销售额[^<]*<small>采集：未知<\/small>/);
+});
+
+test('saved B0B monthly response exposes all 25 source months in rendered records',async()=>{
+  const {readFileSync}=await import('node:fs');
+  const {buildSalesTrendRecord}=await import('../../scripts/build-sorftime-sales-trend.mjs');
+  const {projectStageOutput}=await import('../../scripts/lib/sync-stage-output.mjs');
+  const raw=JSON.parse(readFileSync(new URL('../fixtures/sorftime-b0b-monthly-trend.json',import.meta.url),'utf8'));
+  const asin='B0BWCQHCWX';
+  const record=buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',responses:{volume:raw}}) as import('../../app/sorftime-sales-trend-data').SorftimeSalesTrendRecord;
+  const frozen=projectStageOutput('sales_trend',[asin],{readExport:()=>({[asin]:record})});
+  assert.ok('data' in frozen);
+  const html=renderToStaticMarkup(<CompetitorOverviewSnapshotView products={[{asin,brand:'Test',specifications:[],history:[],prices:[],ranks:[],variantShare:[],variantDetails:[],sellingPoints:[]}] as unknown as CompetitorOverviewSnapshotProps["products"]} market='US' slugParam='test' salesTrendByAsin={frozen.data.trendByAsin as CompetitorOverviewSnapshotProps["salesTrendByAsin"]} ratingByAsin={{}} fbaFeeByAsin={{}} childSalesByAsin={{}} priceStrategyByAsin={{}} categoryTrendByNode={{}} sellingTranslationsByAsin={{}}/>);
+  for(const point of record.volume) assert.ok(html.includes(`<th>${point.month}</th>`),point.month);
+  assert.equal((html.match(/<th>202[456]-\d{2}<\/th>/g)??[]).length,25);
+});
+
+test('raw missing days survive actual CLI cache and frozen rendering including all unknown',async()=>{
+ const {mkdtempSync,rmSync}=await import('node:fs'); const {tmpdir}=await import('node:os'); const {join}=await import('node:path');
+ const {runSalesTrendSync}=await import('../../scripts/build-sorftime-sales-trend.mjs');
+ const {readCachedDataExport}=await import('../../scripts/lib/sync-cache.mjs');
+ const {projectStageOutput}=await import('../../scripts/lib/sync-stage-output.mjs');
+ const {SourceDailyObservations}=await import('../../app/project-report-views/competitor-overview');
+ const asin='B0BWCQHCWX', directory=mkdtempSync(join(tmpdir(),'unknown-trend-')), old=process.exitCode;
+ try {
+ for(const data of [['20260901',0,'20260902',-1,'20260903',12],['20260902',-1],[]]) {
+ const target=join(directory,'trend.ts');
+ await runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-12',existing:{},outPath:target,repair:true,delayMs:0,callTool:async(_k:unknown,_n:unknown,args:{type:string})=>({data:{asin,type:args.type,data:args.type==='SalesVolume'?data:[]}})});
+ const persisted=readCachedDataExport(target,'sorftimeSalesTrendData');
+ const frozen=projectStageOutput('sales_trend',[asin],{stageStatus:'partial',dataAsins:[],readExport:()=>persisted} as Parameters<typeof projectStageOutput>[2]); assert.ok('data' in frozen);
+ const records=frozen.data.trendByAsin as CompetitorOverviewSnapshotProps['salesTrendByAsin'];
+ const html=renderToStaticMarkup(<SourceDailyObservations products={[{asin,brand:'Test'}] as unknown as CompetitorOverviewSnapshotProps["products"]} salesTrendByAsin={records}/>);
+ if(data.length) { assert.ok(html.includes('2026-09-02'));assert.match(html,/>—</);assert.ok(html.includes('2026-10-12')); assert.deepEqual(records[asin].missingDailyObservations?.volume,[{date:'2026-09-02',fetchedAt:'2026-10-12'}]); }
+ else {assert.equal(html,'');assert.equal(records[asin].observationOutcomes?.volume?.category,'valid-empty');}
+ if(data.length>2) {assert.match(html,/>0</);assert.match(html,/>12</);}
+ }
+ }finally{process.exitCode=old;rmSync(directory,{recursive:true,force:true});}
+});
+
+test('later unknown cell shows retained numeric evidence with its original collection time',async()=>{
+ const {buildSalesTrendRecord}=await import('../../scripts/build-sorftime-sales-trend.mjs');
+ const {SourceDailyObservations}=await import('../../app/project-report-views/competitor-overview');
+ const asin='B0BWCQHCWX';
+ const previous=buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-01',responses:{volume:{data:{asin,type:'SalesVolume',data:['20260901',0]}}}});
+ const record=buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',previous,responses:{volume:{data:{asin,type:'SalesVolume',data:['20260901',-1,'20260902',5]}}}});
+ const html=renderToStaticMarkup(<SourceDailyObservations products={[{asin,brand:'Test'}] as unknown as CompetitorOverviewSnapshotProps["products"]} salesTrendByAsin={{[asin]:record} as unknown as CompetitorOverviewSnapshotProps["salesTrendByAsin"]}/>);
+ assert.ok(html.includes('来源缺失 · 采集：2026-10-12'));assert.ok(html.includes('保留观测：0 · 采集：2026-10-01'));
+});

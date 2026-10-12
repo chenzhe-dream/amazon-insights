@@ -1,3 +1,4 @@
+import { ImageRemarkOutcomeSchema } from "../../shared/agent-contracts";
 import { z } from "zod";
 import { MarketSiteSchema, marketSites } from "../../shared/market-sites";
 import { ImageRemarkOverlayEntrySchema } from "../../shared/image-remark-overlay";
@@ -15,7 +16,7 @@ const remarkSchema = z.object({
   remark: z.string(), image_types: z.array(z.string()), confidence: z.enum(["high", "medium", "low"]),
   imageUrl: z.string().optional(),
 });
-const outcomeSchema = z.object({ status: z.enum(["ready", "upstream-empty", "timeout", "connector-failed"]) });
+const outcomeSchema = ImageRemarkOutcomeSchema;
 
 export type ImagesSnapshotSources = Readonly<{
   products: {asin: string; brand: string; image: string}[];

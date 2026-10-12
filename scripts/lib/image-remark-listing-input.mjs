@@ -31,6 +31,7 @@ export function listingInputFromPersistedJob(job, asins) {
           typeof url !== "string" || !/^https:\/\//.test(url))) {
       throw new Error(`Image listing gallery unavailable for ${asin}`);
     }
+    if (new Set(record.galleryImages).size !== record.galleryImages.length) throw new Error(`Image listing URL identity is ambiguous for ${asin}`);
     result[asin] = record;
   }
   return result;

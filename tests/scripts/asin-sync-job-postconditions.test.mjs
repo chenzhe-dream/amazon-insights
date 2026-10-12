@@ -392,7 +392,9 @@ test("release runner activates the image remarks child and reconciles authoritat
   assert.match(source, /runImageRemarkProcess/);
   assert.match(source, /shouldRunSyncStage\(job, "image_remarks"\)/);
   assert.match(source, /args: \["run", "image-remarks:sync"\]/);
-  assert.match(source, /REMARK_ASINS: imageAsins\.join\(","\)/);
+  assert.match(source, /dispatchImageProcess = async \(readyAsins\)/);
+  assert.match(source, /REMARK_ASINS: readyAsins\.join\(","\)/);
+  assert.match(source, /partitionImageListingInput\(persistedImageJob, imageAsins\)/);
   assert.match(source, /AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1"/);
   assert.match(source, /resultStatusesByAsin: scopedImageStatuses/);
   assert.match(source, /readImageRemarkCandidate\(imageCandidateFile/);

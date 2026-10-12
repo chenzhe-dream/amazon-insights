@@ -26,6 +26,16 @@ function makeJob(jobId) {
   };
 }
 
+function copyInstrumentedCollector(fixture) {
+  const source = fs.readFileSync(path.join(sourceRoot, 'scripts/build-listing-image-remarks.mjs'), 'utf8');
+  // Fixture-only closed instrumentation. Production fatal handling remains untouched.
+  const instrumented = source.replace('main().catch(() => {', `main().catch(error => {
+    const cause = error?.message === "Unable to establish Windows interprocess lock owner identity"
+      ? "windows-lock-owner-identity-unavailable" : "other-integrity-error";
+    console.error("TEST_IMAGE_INTEGRITY_CAUSE " + cause);`);
+  fs.writeFileSync(path.join(fixture, 'scripts/build-listing-image-remarks.mjs'), instrumented);
+}
+
 function runBuilder(fixture, job, endpoint) {
   const listingFile = path.join(fixture, `${job.jobId}-listing.json`);
   const candidateFile = path.join(fixture, `${job.jobId}-candidate.json`);
@@ -60,7 +70,7 @@ test('two jobs for one ASIN keep separate candidate remarks after shared file ra
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   fs.mkdirSync(path.join(fixture, 'scripts'));
   fs.mkdirSync(path.join(fixture, 'app'));
-  fs.copyFileSync(path.join(sourceRoot, 'scripts/build-listing-image-remarks.mjs'), path.join(fixture, 'scripts/build-listing-image-remarks.mjs'));
+  copyInstrumentedCollector(fixture);
   fs.cpSync(path.join(sourceRoot, 'scripts/lib'), path.join(fixture, 'scripts/lib'), { recursive: true });
   fs.writeFileSync(path.join(fixture, 'app/competitor-data.ts'), 'export const refreshedCatalog = [];\n');
   fs.writeFileSync(path.join(fixture, 'app/sorftime-listing-content-data.ts'),
@@ -104,4 +114,38 @@ test('two jobs for one ASIN keep separate candidate remarks after shared file ra
     assert.equal(projected.data.remarksByAsin[asin][0].remark, job.jobId === 'job-a' ? 'Job A' : 'Job B');
     assert.doesNotThrow(() => validatePersistedImageStageOutput(job, projected));
   }
+});
+
+test('collector retries two URL identities and preserves all 58 ready notes after gallery reorder', async t => {
+  const fixture = fs.mkdtempSync(path.join(sourceRoot, '.tmp-image-targeted-'));
+  t.after(() => fs.rmSync(fixture, { recursive:true,force:true }));
+  fs.mkdirSync(path.join(fixture,'scripts'));fs.mkdirSync(path.join(fixture,'app'));
+  copyInstrumentedCollector(fixture);
+  fs.cpSync(path.join(sourceRoot,'scripts/lib'),path.join(fixture,'scripts/lib'),{recursive:true});
+  const asins=Array.from({length:10},(_,i)=>`B00000000${i}`);
+  const galleries=Object.fromEntries(asins.map(a=>[a,Array.from({length:6},(_,i)=>`https://images.test/${a}/${i}`)]));
+  const remarks=Object.fromEntries(asins.map(a=>[a,galleries[a].map((url,i)=>a===asins[9]&&[1,4].includes(i)?null:{remark:`saved ${url}`,imageUrl:url,image_types:[],confidence:'high'})]));
+  const outcomes=Object.fromEntries(asins.map(a=>[a,galleries[a].map((url,i)=>remarks[a][i]?{status:'ready'}:{status:'connector-failed',attemptJobId:'old',diagnostic:{stage:'http-response',httpStatus:429,errorClass:'http'}})]));
+  const listing=Object.fromEntries(asins.map(a=>[a,{status:'ready',galleryImages:a===asins[9]?[...galleries[a]].reverse():galleries[a]}]));
+  const scope={organizationId:'org',projectId:'project',runId:'run'};
+  const job={jobId:'targeted-job',asins,scope,outputs:[projectStageOutput('listing',asins,{...scope,readExport:()=>listing})]};
+  fs.writeFileSync(path.join(fixture,'app/competitor-data.ts'),'export const refreshedCatalog = [];');
+  fs.writeFileSync(path.join(fixture,'app/listing-image-remarks.ts'),`export const listingImageRemarksMeta = ${JSON.stringify({imageUrlsByAsin:galleries,imageOutcomesByAsin:outcomes})};\nexport const listingImageRemarks = ${JSON.stringify(remarks)};`);
+  const listingFile=path.join(fixture,'listing.json');const candidateFile=path.join(fixture,'candidate.json');
+  fs.writeFileSync(listingFile,JSON.stringify({jobId:job.jobId,job}));
+  const requests=[];
+  const server=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;const payload=JSON.parse(body);const url=payload.messages[0].content[1].image_url.url;requests.push(url);res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({remark:`new ${url}`,image_types:[],confidence:'high'})}}]}));});
+  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>server.close());
+  const child=spawn(process.execPath,[path.join(fixture,'scripts/build-listing-image-remarks.mjs')],{cwd:fixture,env:{...process.env,AGENT_FORMAL_WORKTREE_ROOT:'',AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED:'0',AGENT_SYNC_JOB_ID:job.jobId,AGENT_SYNC_LISTING_STAGE_FILE:listingFile,AGENT_SYNC_LISTING_STAGE_HASH:job.outputs[0].contentHash,AGENT_SYNC_IMAGE_CANDIDATE_FILE:candidateFile,REMARK_ASINS:asins.join(','),OPENAI_API_KEY:'fixture-key',OPENAI_BASE_URL:`http://127.0.0.1:${server.address().port}`},stdio:['ignore','pipe','pipe']});
+  let log='';child.stdout.on('data',b=>log+=b);child.stderr.on('data',b=>log+=b);const [code]=await once(child,'close');assert.equal(code,0,log);
+  const candidate=JSON.parse(fs.readFileSync(candidateFile,'utf8'));
+  assert.equal(requests.length,2);
+  assert.deepEqual(requests.sort(),[galleries[asins[9]][1],galleries[asins[9]][4]].sort());
+  let preserved=0;
+  for(const a of asins) for(const note of candidate.remarksByAsin[a]) {
+    assert.equal(listing[a].galleryImages.includes(note.imageUrl),true);
+    if(note.remark.startsWith('saved ')){preserved++;assert.equal(note.remark,`saved ${note.imageUrl}`);}
+  }
+  assert.equal(preserved,58);
+  assert.equal(candidate.outcomesByAsin[asins[9]].every(outcome=>outcome.status==='ready'),true);
 });

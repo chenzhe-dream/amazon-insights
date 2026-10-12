@@ -1,3 +1,4 @@
+import { imageRemarkOutcome } from "./image-remark-outcome.mjs";
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,6 +40,7 @@ function validateSlots(asins, galleries, remarksByAsin, outcomesByAsin) {
         !Array.isArray(outcomes) || outcomes.length !== gallery.length) {
       throw new Error(`Image candidate gallery/index mismatch for ${asin}`);
     }
+    if (new Set(gallery).size !== gallery.length) throw new Error(`Image candidate URL identity is ambiguous for ${asin}`);
     gallery.forEach((url, index) => {
       const remark = remarks[index];
       const outcome = outcomes[index];
@@ -77,6 +79,9 @@ export function createImageRemarkCandidate({
     Array.from(galleries[asin] ?? [], (_, index) => outcomesByAsin?.[asin]?.[index] ?? null),
   ]));
   validateSlots(scopedAsins, galleries, remarks, outcomes);
+  for (const slots of Object.values(outcomes)) {
+    slots.forEach((outcome, index) => { if (outcome) slots[index] = imageRemarkOutcome(outcome.status, outcome); });
+  }
   const body = {
     schemaVersion: 1,
     jobId,
@@ -114,7 +119,7 @@ export function validateImageRemarkCandidate(candidate, { job, asins }) {
   }
   return {
     remarksByAsin: candidate.remarksByAsin,
-    outcomesByAsin: candidate.outcomesByAsin,
+    outcomesByAsin: Object.fromEntries(Object.entries(candidate.outcomesByAsin).map(([asin, slots]) => [asin, slots.map(outcome => outcome == null ? null : imageRemarkOutcome(outcome.status, outcome))])),
   };
 }
 
