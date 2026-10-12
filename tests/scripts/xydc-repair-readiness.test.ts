@@ -56,3 +56,29 @@ test("Xiyou readiness uses the CLI default data root and preserves unavailable c
     ]);
   } finally { await rm(codeRoot, { recursive: true, force: true }); }
 });
+
+test("partial details do not hide independently complete twelve-month zero orders", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-independent-"));
+  const now = new Date("2026-09-10T10:00:00Z");
+  const asin = "B000000001";
+  const family: XydcVariantFamily = { inputAsin: asin, parentAsin: asin, country: "US", dimensions: [],
+    children: [{ asin, attributes: [], title: "Known", imageUrl: "https://example.com/a.jpg", price: 1, currency: "USD", stars: null, productPageRatings: null, listingDate: null, infoStatus: "unavailable" }],
+    sourceUpdatedAt: null, fetchedAt: now.toISOString(), status: "partial", reasonCode: "PARTIAL_CHILD_INFO", cacheState: "fresh" };
+  const window = getXydcOrderWindow(now);
+  try {
+    await writeXydcVariantFamily(root, "US", family);
+    await writeXydcOrderSnapshot(root, family, { version: 1, source: "xydc", aggregation: "children", country: "US", parentAsin: asin, childAsins: [asin], window,
+      children: [{ asin, trends: window.months.map(date => ({ date, orders: 0 })), fetchedAt: now.toISOString(), reasonCode: null }], sourceUpdatedAt: null, fetchedAt: now.toISOString(), cacheState: "fresh", reasonCode: null });
+    const { readXydcRepairDetails } = await import("../../scripts/lib/xydc-repair-readiness");
+    const [details] = await readXydcRepairDetails([asin], "US", { dataRoot: root, now });
+    assert.equal(details.orders, "ready");
+    assert.equal(details.relationship, "ready");
+    assert.equal(details.coreDetails, "ready");
+    assert.equal(details.ratings, "upstream-empty");
+    assert.equal(details.status, "upstream-empty");
+    assert.deepEqual(details.missingFields, [{ asin, fields: ["stars", "productPageRatings"] }]);
+    await writeXydcVariantFamily(root, "US", { ...family, children: [{ ...family.children[0]!, title: null, imageUrl: null, price: null }] });
+    assert.equal((await readXydcRepairDetails([asin], "US", { dataRoot: root, now }))[0].coreDetails, "upstream-empty");
+    assert.notEqual((await readXydcRepairDetails([asin], "US", { dataRoot: root, now: new Date("2026-10-10T10:00:00Z") }))[0].orders, "ready");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

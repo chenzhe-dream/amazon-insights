@@ -72,8 +72,10 @@ export function formatListingDate(child: XydcVariantFamilyGroup["children"][numb
 }
 
 function childInfoLabel(child: XydcVariantFamilyGroup["children"][number] | undefined) {
-  if (child?.infoStatus === "pending") return "子体信息待补充";
-  if (child?.infoStatus === "unavailable") return "子体信息不可用";
+  if (child && child.infoStatus !== "ready") {
+    const fields = [[child.title, "标题"], [child.imageUrl, "图片"], [child.price, "价格"], [child.currency, "币种"], [child.stars, "评分"], [child.productPageRatings, "评论数"]].filter(([value]) => value === null).map(([, label]) => label);
+    return fields.length ? `${fields.join("、")}未返回` : "子体信息待确认";
+  }
   return null;
 }
 
@@ -162,6 +164,7 @@ export function XydcOrderCard({
         {group.status === "unavailable" ? "变体数据暂不可用" : "部分变体数据可用"}：{group.reasonCode ? variantReasonLabels[group.reasonCode] : "数据源未返回具体原因"}
       </p> : null}
 
+      {summary?.complete ? <p className="xydc-order-complete">全年订单已完整</p> : null}
       <div className="xydc-order-metric-row">
         <div>
           <span>12个月已披露订单量汇总</span>

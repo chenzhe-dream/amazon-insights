@@ -98,3 +98,20 @@ test("main-image-only remarks obey URL identity and unsafe links remain explaine
   assert.doesNotMatch(unsafeHtml, /127\.0\.0\.1/);
   assert.ok(unsafeHtml.includes(`href="${urls[1]}"`));
 });
+
+test('snapshot diagnostics survive frozen read and render safe distinct failure reasons',()=>{
+  const ctx=context({remarks:[null,null,null,null,null,null],overlays:[]});
+  const diagnosticOutcomes=[
+    {status:'connector-failed',diagnostic:{stage:'http-response',httpStatus:429,errorClass:'http',apiKey:'secret'}},
+    {status:'connector-failed',diagnostic:{stage:'http-response',httpStatus:401,errorClass:'http'}},
+    {status:'connector-failed',diagnostic:{stage:'fetch',httpStatus:null,errorClass:'network'}},
+    {status:'connector-failed',diagnostic:{stage:'response-json',httpStatus:200,errorClass:'invalid-json'}},
+    {status:'connector-failed',diagnostic:{stage:'response-output',httpStatus:200,errorClass:'invalid-output'}},
+    {status:'connector-failed'},
+  ];
+  (ctx.version!.stageOutputs as any).image_remarks.data.outcomesByAsin[asin]=diagnosticOutcomes;
+  const source=readPageSnapshotImages(ctx);
+  assert.equal(JSON.stringify(source.outcomesByAsin).includes('secret'),false);
+  const html=renderToStaticMarkup(<PageSnapshotImages {...source}/>);
+  for(const reason of ['HTTP 429','HTTP 401','图片分析网络异常','图片分析返回无效 JSON','图片分析返回无效分析内容','历史原因未记录']) assert.ok(html.includes(reason),reason);
+});

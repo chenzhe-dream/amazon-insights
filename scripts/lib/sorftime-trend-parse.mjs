@@ -20,20 +20,24 @@ function isCurrentProductTrend(raw) {
 export function parseSorftimeProductTrend(raw, { asin, type } = {}) {
   if (!isCurrentProductTrend(raw)) {
     const monthly = parseSorftimeTrend(raw);
+    const source = raw?.data ?? raw?.content ?? raw;
+    if (source == null || typeof source !== 'string' && !Array.isArray(source) || !monthly.length && (typeof source === 'string' ? source.trim().length > 0 : source.length > 0)) throw new Error('Invalid Sorftime trend response');
     return { period: monthly.length ? 'month' : null, monthly, daily: [] };
   }
   const value = raw?.data ?? raw;
   if (typeof value.asin !== 'string' || (asin && value.asin !== asin) ||
       typeof value.type !== 'string' || (type && value.type !== type) ||
       !Array.isArray(value.data) || value.data.length % 2 !== 0) {
-    throw new Error('Invalid Sorftime trend identity or observation pairs');
+    const error = new Error('Invalid Sorftime trend identity or observation pairs');
+    error.category = typeof value.asin === 'string' && typeof value.type === 'string' && ((asin && value.asin !== asin) || (type && value.type !== type)) ? 'identity-mismatch' : 'malformed-response';
+    throw error;
   }
   let period = null;
   const points = new Map();
   for (let i = 0; i < value.data.length; i += 2) {
     const stamp = value.data[i];
     const amount = value.data[i + 1];
-    if (!Number.isSafeInteger(stamp) || typeof amount !== 'number' ||
+    if (!(Number.isSafeInteger(stamp) || typeof stamp === 'string' && /^\d{6}(?:\d{2})?$/.test(stamp)) || typeof amount !== 'number' ||
         !Number.isFinite(amount) || amount < -1 || (amount < 0 && amount !== -1)) {
       throw new Error('Invalid Sorftime trend observation');
     }

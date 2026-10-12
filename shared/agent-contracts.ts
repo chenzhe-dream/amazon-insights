@@ -1501,6 +1501,18 @@ const JsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
   z.record(z.string(), JsonValueSchema),
 ]));
 const JsonMapSchema = z.record(z.string(), JsonValueSchema);
+export const ImageRemarkDiagnosticSchema = z.object({
+  stage: z.enum(["fetch", "http-response", "response-json", "response-output", "governance"]),
+  httpStatus: z.number().int().min(100).max(599).nullable(),
+  errorClass: z.enum(["network", "http", "invalid-json", "invalid-output", "governance"]),
+  governanceCategory: z.enum(["rolling-window", "concurrency", "paused", "unavailable", "cancelled", "missing-key"]).optional(),
+});
+export const ImageRemarkOutcomeSchema = z.object({
+  status: z.enum(["ready", "upstream-empty", "timeout", "connector-failed"]),
+  reason: z.string().optional(),
+  attemptJobId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
+  diagnostic: ImageRemarkDiagnosticSchema.optional(),
+});
 const StageDataSchemas = {
   keywords: strictObject({ analysisByAsin: JsonMapSchema, enrichmentByKeyword: JsonMapSchema }),
   reviews: strictObject({ analysisByAsin: JsonMapSchema, ratingByAsin: JsonMapSchema }),
@@ -1511,7 +1523,7 @@ const StageDataSchemas = {
   traffic: strictObject({ listingByAsin: JsonMapSchema, monthlyByAsin: JsonMapSchema }),
   child_sales: strictObject({ rowsByAsin: JsonMapSchema }),
   price_strategy: strictObject({ strategyByAsin: JsonMapSchema }),
-  image_remarks: strictObject({ remarksByAsin: JsonMapSchema, outcomesByAsin: JsonMapSchema }),
+  image_remarks: strictObject({ remarksByAsin: JsonMapSchema, outcomesByAsin: z.record(z.string(), z.array(ImageRemarkOutcomeSchema.nullable())) }),
 } as const;
 const ProjectionBase = {
   jobId: z.string().min(1).max(200), projectId: EntityIdSchema, runId: EntityIdSchema,

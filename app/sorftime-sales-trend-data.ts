@@ -7,6 +7,12 @@ export type SorftimeSalesTrendRecord = {
   fetchedAt: string;
   status: "ready" | "empty" | "error";
   statusMessage?: string;
+  dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
+  observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
+  observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
+  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null}>>;
+  dailyFieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
+  fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   volume: SorftimeTrendPoint[];
   amount: SorftimeTrendPoint[];
   price: SorftimeTrendPoint[];

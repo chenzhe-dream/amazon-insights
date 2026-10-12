@@ -1,3 +1,5 @@
+import { sanitizeImageRemarkFailureDiagnostic } from "./image-remark-request.mjs";
+
 export const IMAGE_REMARK_OUTCOME_REASONS = Object.freeze({
   ready: "图片备注已就绪",
   "upstream-empty": "上游未返回可用图片备注",
@@ -21,15 +23,16 @@ export function validImageRemarkAttemptJobId(value) {
  * @property {keyof typeof IMAGE_REMARK_OUTCOME_REASONS} status
  * @property {string} reason
  * @property {string} [attemptJobId]
+ * @property {object} [diagnostic]
  */
 
 /**
  * @param {unknown} status
- * @param {{ attemptJobId?: unknown }} [options]
+ * @param {{ attemptJobId?: unknown, diagnostic?: unknown }} [options]
  * @returns {ImageRemarkOutcome}
  */
 export function imageRemarkOutcome(status, options = {}) {
-  const { attemptJobId } = options;
+  const { attemptJobId, diagnostic } = options;
   const safeStatus = Object.hasOwn(IMAGE_REMARK_OUTCOME_REASONS, status)
     ? status
     : "upstream-empty";
@@ -41,5 +44,7 @@ export function imageRemarkOutcome(status, options = {}) {
   if ((safeStatus === "timeout" || safeStatus === "connector-failed") && safeAttemptJobId) {
     outcome.attemptJobId = safeAttemptJobId;
   }
+  const safeDiagnostic = sanitizeImageRemarkFailureDiagnostic(diagnostic);
+  if (safeStatus === "connector-failed" && safeDiagnostic) outcome.diagnostic = safeDiagnostic;
   return outcome;
 }

@@ -13,7 +13,7 @@ export function PageSnapshotImages(props: ImagesSnapshotSources) {
     resolveImageRemark={(asin, index) => props.remarksByAsin[asin]?.[index] ?? null}
     resolveImageOutcome={(asin, index) => {
       const outcome = props.outcomesByAsin[asin]?.[index];
-      return outcome ? {status: outcome.status, reason: outcome.status} : null;
+      return outcome ? {...outcome, reason: outcome.status} : null;
     }}
     resolveImageOverlay={(asin, index) => props.overlays.find(item => item.asin === asin && item.index === index) ?? null}
   />;

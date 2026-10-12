@@ -59,3 +59,46 @@ test('a verified empty refresh cannot erase earlier monthly observations',()=>{
   assert.deepEqual(record.volume,previous.volume);
   assert.equal(record.fieldFetchedAt.volume,previous.fetchedAt);
 });
+
+test('actual repair CLI classifies metric outcomes without leaking provider text',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-classes-'));
+  const old=process.exitCode;
+  try {
+    for (const [expected,make] of [
+      ['valid-empty',args=>({data:{asin,type:args.type,data:[]}})],
+      ['daily-unverified',args=>response(args.type)],
+      ['request-failed',()=>{throw new Error('secret provider body');}],
+      ['identity-mismatch',args=>({data:{asin:'B000000001',type:args.type,data:[]}})],
+      ['malformed-response',args=>({data:{asin,type:args.type,data:[20260901]}})],
+    ]) {
+      const target=path.join(directory,expected+'.ts');
+      await sales.runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-12',existing:{},outPath:target,repair:true,callTool:async(_k,_n,args)=>make(args),delayMs:0});
+      const record=readCachedDataExport(target,'sorftimeSalesTrendData')[asin];
+      assert.equal(record.observationOutcomes.volume.category,expected);
+      assert.equal(record.observationOutcomes.volume.fetchedAt,'2026-10-12');
+      assert.ok(!JSON.stringify(record).includes('secret provider body'));
+    }
+  }finally{process.exitCode=old;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('saved governed B0B response accepts strict string calendar stamps',()=>{
+  const raw=JSON.parse(fs.readFileSync(new URL('../fixtures/sorftime-b0b-monthly-trend.json',import.meta.url),'utf8'));
+  const response=raw;
+  const record=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',responses:{volume:response}});
+  assert.equal(record.volume.length,25);
+  assert.deepEqual(record.volume[0],{month:'2024-10',value:1337});
+});
+
+test('saved B0B response preserves 25 points through CLI persistence and frozen output',async()=>{
+  const {projectStageOutput}=await import('../../scripts/lib/sync-stage-output.mjs');
+  const raw=JSON.parse(fs.readFileSync(new URL('../fixtures/sorftime-b0b-monthly-trend.json',import.meta.url),'utf8'));
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-replay-')); const old=process.exitCode;
+  try {
+    const target=path.join(directory,'sales.ts');
+    await sales.runSalesTrendSync({key:'offline',asins:[asin],marketplace:'US',fetchedAt:'2026-10-12',existing:{},outPath:target,repair:true,callTool:async(_k,_n,args)=>args.type==='SalesVolume'?raw:{data:{asin,type:args.type,data:[]}},delayMs:0});
+    const persisted=readCachedDataExport(target,'sorftimeSalesTrendData');
+    const frozen=projectStageOutput('sales_trend',[asin],{readExport:()=>persisted});
+    assert.equal(persisted[asin].volume.length,25);
+    assert.deepEqual(frozen.data.trendByAsin[asin].volume,persisted[asin].volume);
+  }finally{process.exitCode=old;fs.rmSync(directory,{recursive:true,force:true});}
+});

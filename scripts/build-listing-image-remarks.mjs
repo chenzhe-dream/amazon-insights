@@ -154,6 +154,7 @@ async function writeRemarksFile({
           ? null
           : imageRemarkOutcome(incoming[slotIndex]?.status, {
             attemptJobId: incoming[slotIndex]?.attemptJobId,
+            diagnostic: incoming[slotIndex]?.diagnostic,
           });
       }
       imageOutcomesByAsin[asin] = slots;
@@ -186,6 +187,7 @@ async function writeRemarksFile({
         } else if (slots[slotIndex]) {
           slots[slotIndex] = imageRemarkOutcome(slots[slotIndex].status, {
             attemptJobId: slots[slotIndex].attemptJobId,
+            diagnostic: slots[slotIndex].diagnostic,
           });
         }
         staticResults.push(slots[slotIndex] ?? imageRemarkOutcome("upstream-empty"));
@@ -287,6 +289,7 @@ async function main() {
     }
     const previousUrls = existingMeta.imageUrlsByAsin?.[asin] ?? remarks[asin]?.map(remark => remark?.imageUrl);
     const previousRemarks = remarks[asin] ?? [];
+    const alignedOutcomes = reconcileListingImageRemarks(previousUrls, record.galleryImages, existingMeta.imageOutcomesByAsin?.[asin]);
     remarks[asin] = reconcileListingImageRemarks(previousUrls, record.galleryImages, previousRemarks)
       .map((remark, slotIndex) => remark ? { ...remark, imageUrl: record.galleryImages[slotIndex] } : null);
     if (explicitImageAction) {
@@ -325,22 +328,21 @@ async function main() {
         counts.ready += 1;
         continue;
       }
-      const candidateOutcome = previousUrls?.[slotIndex] === url
-        ? existingMeta.imageOutcomesByAsin?.[asin]?.[slotIndex] ?? null
-        : null;
+      const candidateOutcome = alignedOutcomes[slotIndex] ?? null;
       const priorOutcome = candidateOutcome?.status === "ready" && !remarks[asin][slotIndex]?.remark
         ? null
         : candidateOutcome;
       if (!shouldQueueImageRemarkSlot({ outcome: priorOutcome, force: force || explicitImageAction, jobId })) {
         imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(priorOutcome.status, {
           attemptJobId: priorOutcome.attemptJobId,
+          diagnostic: priorOutcome.diagnostic,
         });
         completedStaticImages += 1;
         counts[priorOutcome.status] += 1;
         continue;
       }
       if (!hasOpenAI) {
-        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("connector-failed", { attemptJobId: jobId });
+        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("connector-failed", { attemptJobId: jobId, diagnostic: {stage:"governance",httpStatus:null,errorClass:"governance",governanceCategory:"missing-key"} });
         completedStaticImages += 1;
         counts["connector-failed"] += 1;
         pendingWithoutKey += 1;
@@ -369,13 +371,13 @@ async function main() {
     return { status: "ready" };
   }, {
     jobId,
-    onSettled: async ({ status }, index) => {
+    onSettled: async ({ status, diagnostic }, index) => {
       const task = imageTasks[index];
       const durableRemark = status === "ready"
         ? remarks[task.asin]?.[task.slotIndex]
         : null;
       const settledOutcomes = [];
-      settledOutcomes[task.slotIndex] = imageRemarkOutcome(status, { attemptJobId: jobId });
+      settledOutcomes[task.slotIndex] = imageRemarkOutcome(status, { attemptJobId: jobId, diagnostic });
       imageOutcomesByAsin[task.asin][task.slotIndex] = settledOutcomes[task.slotIndex];
       await writeRemarksFile({
         ownedAsins: [task.asin],

@@ -1,5 +1,8 @@
 "use client";
 
+import { imageRemarkFailureReason } from "./lib/image-remark-outcome-presentation";
+import type { z } from "zod";
+import type { ImageRemarkDiagnosticSchema } from "../shared/agent-contracts";
 import { resolveRemarkForGalleryImage } from "./lib/listing-image-remark-resolution";
 
 import { useEffect, useState } from "react";
@@ -54,6 +57,7 @@ type ImageRemarkOutcomeStatus = "ready" | "upstream-empty" | "timeout" | "connec
 type ImageRemarkOutcome = {
   status: ImageRemarkOutcomeStatus;
   reason: string;
+  diagnostic?: z.infer<typeof ImageRemarkDiagnosticSchema>;
 };
 
 const IMAGE_REMARK_OUTCOME_REASONS: Readonly<Record<ImageRemarkOutcomeStatus, string>> = {
@@ -64,12 +68,13 @@ const IMAGE_REMARK_OUTCOME_REASONS: Readonly<Record<ImageRemarkOutcomeStatus, st
 };
 
 function getListingImageOutcome(asin: string, slotIndex: number): ImageRemarkOutcome | null {
-  const status = (listingImageRemarksMeta as unknown as {
-    imageOutcomesByAsin?: Readonly<Record<string, ReadonlyArray<{ status?: unknown } | null>>>;
-  }).imageOutcomesByAsin?.[asin]?.[slotIndex]?.status;
+  const outcome = (listingImageRemarksMeta as unknown as {
+    imageOutcomesByAsin?: Readonly<Record<string, ReadonlyArray<ImageRemarkOutcome | null>>>;
+  }).imageOutcomesByAsin?.[asin]?.[slotIndex];
+  const status = outcome?.status;
   if (typeof status !== "string" || !(status in IMAGE_REMARK_OUTCOME_REASONS)) return null;
   const safeStatus = status as ImageRemarkOutcomeStatus;
-  return { status: safeStatus, reason: IMAGE_REMARK_OUTCOME_REASONS[safeStatus] };
+  return { status: safeStatus, reason: IMAGE_REMARK_OUTCOME_REASONS[safeStatus], diagnostic: outcome?.diagnostic };
 }
 
 type ListingImagesSectionProps = {
@@ -289,7 +294,7 @@ export function ListingImagesSection({
                       ? resolveImageOverlay(product.asin, slotIndex) : null;
                     const imageOutcome = resolveImageOutcome(product.asin, slotIndex);
                     const imageOutcomeReason = imageOutcome
-                      ? IMAGE_REMARK_OUTCOME_REASONS[imageOutcome.status]
+                      ? imageRemarkFailureReason(imageOutcome)
                       : snapshot ? "暂无已保存图片备注" : "尚无图片分析结果";
                     return (
                       <td

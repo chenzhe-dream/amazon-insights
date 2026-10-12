@@ -140,3 +140,17 @@ test('partial image refresh retains an untouched sibling only from validated job
   });
   assert.throws(() => mergeImageRemarkStageData(sourceJob, altered, [secondAsin], nextData), /URL/i);
 });
+
+import { listingInputFromPersistedJob } from '../../scripts/lib/image-remark-listing-input.mjs';
+test('ambiguous duplicated image URL identities are fatal before provider dispatch',()=>{
+  const sourceJob=job();
+  sourceJob.outputs=[projectStageOutput('listing',[asin],{...sourceJob.scope,readExport:()=>({[asin]:{status:'ready',galleryImages:[url,url]}})})];
+  assert.throws(()=>listingInputFromPersistedJob(sourceJob,[asin]),/identity/);
+});
+
+test('frozen stage projection retains safe diagnostics from cache and removes secret fields',()=>{
+  const diagnostic={stage:'http-response',httpStatus:403,errorClass:'http'};
+  const result=projectStageOutput('image_remarks',[asin],{organizationId:'org',projectId:'project',runId:'run',readExport:(file,name)=>name==='listingImageRemarksMeta'?{imageOutcomesByAsin:{[asin]:[{status:'connector-failed',diagnostic:{...diagnostic,token:'secret'},body:'secret'}]}}:{[asin]:[null]}});
+  assert.deepEqual(result.data.outcomesByAsin[asin][0].diagnostic,diagnostic);
+  assert.equal(JSON.stringify(result).includes('secret'),false);
+});

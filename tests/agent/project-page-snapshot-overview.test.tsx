@@ -46,3 +46,26 @@ test("overview snapshot retains the native matrix and complete cached selling po
   assert.ok(withCategories.includes("Listing 垄断系数"));
   assert.doesNotMatch(withCategories, /<select/);
 });
+
+test('source daily panel renders exact values and missing observations without monthly inference', async()=>{
+  const module = await import('../../app/project-report-views/competitor-overview');
+  assert.equal(typeof module.SourceDailyObservations,'function');
+  const html=renderToStaticMarkup(<module.SourceDailyObservations products={[{asin:'B0BWCQHCWX',brand:'Test'}] as any} salesTrendByAsin={{B0BWCQHCWX:{asin:'B0BWCQHCWX',marketplace:'US',fetchedAt:'2026-10-12',status:'empty',volume:[],amount:[],price:[],rank:[],dailyObservations:{volume:[{date:'2026-09-01',value:0},{date:'2026-09-03',value:12}],price:[{date:'2026-09-02',value:23}]}}}}/>);
+  for(const text of ['来源日观测序列','2026-09-01','2026-09-02','2026-09-03','12','23','月度数据不可用','口径未确认','>0<','>—<']) assert.ok(html.includes(text),text);
+  assert.doesNotMatch(html,/日销量|年销量|增长率/);
+  assert.match(html, /销售额[^<]*<small>采集：未知<\/small>/);
+});
+
+test('saved B0B monthly response exposes all 25 source months in rendered records',async()=>{
+  const {readFileSync}=await import('node:fs');
+  const {buildSalesTrendRecord}=await import('../../scripts/build-sorftime-sales-trend.mjs');
+  const {projectStageOutput}=await import('../../scripts/lib/sync-stage-output.mjs');
+  const raw=JSON.parse(readFileSync(new URL('../fixtures/sorftime-b0b-monthly-trend.json',import.meta.url),'utf8'));
+  const asin='B0BWCQHCWX';
+  const record=buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',responses:{volume:raw}}) as import('../../app/sorftime-sales-trend-data').SorftimeSalesTrendRecord;
+  const frozen=projectStageOutput('sales_trend',[asin],{readExport:()=>({[asin]:record})});
+  assert.ok('data' in frozen);
+  const html=renderToStaticMarkup(<CompetitorOverviewSnapshotView products={[{asin,brand:'Test',specifications:[],history:[],prices:[],ranks:[],variantShare:[],variantDetails:[],sellingPoints:[]}] as any} market='US' slugParam='test' salesTrendByAsin={frozen.data.trendByAsin as CompetitorOverviewSnapshotProps["salesTrendByAsin"]} ratingByAsin={{}} fbaFeeByAsin={{}} childSalesByAsin={{}} priceStrategyByAsin={{}} categoryTrendByNode={{}} sellingTranslationsByAsin={{}}/>);
+  for(const point of record.volume) assert.ok(html.includes(`<th>${point.month}</th>`),point.month);
+  assert.equal((html.match(/<th>202[456]-\d{2}<\/th>/g)??[]).length,25);
+});

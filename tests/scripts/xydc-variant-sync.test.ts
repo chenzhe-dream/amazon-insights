@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 
 import {
+  type SyncXydcVariantInput,
   projectXydcVariationFamily,
   syncXydcVariantFamilies,
   retryFailedXydcVariantFamilies,
@@ -1063,5 +1064,89 @@ test("Windows npm CLI executes offline fixture enrichment and writes the scoped 
     assert.equal(JSON.stringify(orderCache).includes("cost_credits"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("valid empty ratings are a nonblocking detail gap and do not trigger the recovery pass", async () => {
+  const prior = cachedRelationship(inputAsin, "partial");
+  const fixture = cacheFixture({ [inputAsin]: prior });
+  const calls: string[] = [];
+  const input: SyncXydcVariantInput = { asins: [inputAsin], country: "US", token: "fixture", now, cache: fixture.cache,
+    callTool: async ({ toolName, args }) => { calls.push(toolName); return infoResponse(args.asins as string[]).map(row => ({ ...row, stars: null, productPageRatings: null })); } };
+  const families = await syncXydcVariantFamilies(input);
+  await retryFailedXydcVariantFamilies(input, families);
+  assert.deepEqual(calls, ["get_asin_info"]);
+  const child = fixture.records[inputAsin].children[0]!;
+  assert.ok(child.title && child.imageUrl && child.price !== null);
+  assert.equal(child.stars, null);
+  assert.equal(child.infoStatus, "unavailable");
+});
+
+test("detail-only repair dispatches four child details and zero independently complete order requests", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "xydc-detail-only-"));
+  try {
+    const { familiesNeedingXydcOrderRepair } = await import("../../scripts/build-xydc-variant-data");
+    const { writeXydcOrderSnapshot } = await import("../../scripts/lib/xydc-order-cache");
+    const { syncXydcOrderFamilies } = await import("../../scripts/lib/xydc-order-sync");
+    const prior = cachedRelationship(inputAsin, "partial", now.toISOString());
+    const template = prior.children[0]!;
+    const childAsins = [inputAsin, "B0CHILD002", "B0CHILD003", "B0CHILD004"];
+    prior.children = childAsins.map(asin => ({ ...template, asin }));
+    const cache = createXydcVariantCache(root);
+    await cache.write("US", prior);
+    const window = getXydcOrderWindow(now);
+    const oldFetchedAt = "2026-09-01T00:00:00.000Z";
+    await writeXydcOrderSnapshot(root, prior, { version: 1, source: "xydc", aggregation: "children", country: "US", parentAsin: prior.parentAsin, childAsins, window,
+      children: childAsins.map(asin => ({ asin, trends: window.months.map(date => ({ date, orders: 0 })), fetchedAt: oldFetchedAt, reasonCode: null })),
+      sourceUpdatedAt: null, fetchedAt: oldFetchedAt, cacheState: "fresh", reasonCode: null });
+    const dispatched: string[] = [];
+    const families = await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture", now, cache,
+      callTool: async ({ toolName, args }) => { assert.equal(toolName, "get_asin_info"); dispatched.push(...args.asins as string[]); return infoResponse(args.asins as string[]); } });
+    assert.deepEqual(dispatched, childAsins);
+    const orderFamilies = await familiesNeedingXydcOrderRepair(families, root, now);
+    let orderCalls = 0;
+    await syncXydcOrderFamilies({ families: orderFamilies, token: "fixture", now, dataRoot: root,
+      callTool: async () => { orderCalls++; throw new Error("must not request complete orders"); } });
+    assert.equal(orderCalls, 0);
+    assert.equal(orderFamilies.length, 0);
+    assert.equal((await familiesNeedingXydcOrderRepair([{ ...families[0]!, parentAsin: "B0OTHER001" }], root, now)).length, 1);
+    assert.equal((await familiesNeedingXydcOrderRepair([{ ...families[0]!, children: families[0]!.children.slice(1) }], root, now)).length, 1);
+    assert.equal(readXydcOrderDisplaySnapshot(root, families[0]!, window, now)?.fetchedAt, oldFetchedAt);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("aged partial preserves core evidence and provenance after empty, failed detail or discovery", async () => {
+  for (const outcome of ["empty", "info-failed", "discovery-failed"]) {
+    const prior = cachedRelationship(inputAsin, "ready", "2026-09-01T08:00:00.000Z");
+    prior.status = "partial"; prior.reasonCode = "PARTIAL_CHILD_INFO";
+    prior.children = prior.children.map(child => ({ ...child, stars: null, productPageRatings: null, infoStatus: "unavailable" }));
+    const fixture = cacheFixture({ [inputAsin]: prior });
+    await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture", now, cache: fixture.cache,
+      callTool: async ({ toolName }) => {
+        if (toolName === "get_asin_variations") { if (outcome === "discovery-failed") throw new Error("RPC_ERROR"); return variationResponse(); }
+        if (outcome !== "empty") throw new Error("RPC_ERROR"); return [];
+      } });
+    const saved = fixture.records[inputAsin];
+    assert.deepEqual(saved.children, prior.children, outcome);
+    assert.equal(saved.fetchedAt, prior.fetchedAt, outcome);
+    assert.equal(saved.sourceUpdatedAt, prior.sourceUpdatedAt, outcome);
+    assert.equal(saved.cacheState, "stale", outcome);
+  }
+});
+
+test("rediscovery never borrows details from another parent, child set, country or input", async () => {
+  for (const mismatch of ["parent", "children", "country", "input"]) {
+    const prior = cachedRelationship(inputAsin, "ready", "2026-09-01T08:00:00.000Z");
+    prior.status = "partial"; prior.reasonCode = "PARTIAL_CHILD_INFO";
+    prior.children = prior.children.map(child => ({ ...child, stars: null, productPageRatings: null, infoStatus: "unavailable" }));
+    if (mismatch === "parent") prior.parentAsin = "B0OTHER001";
+    if (mismatch === "children") prior.children.pop();
+    if (mismatch === "country") prior.country = "CA";
+    if (mismatch === "input") prior.inputAsin = "B0OTHER001";
+    const fixture = cacheFixture({ [inputAsin]: prior });
+    await syncXydcVariantFamilies({ asins: [inputAsin], country: "US", token: "fixture", now, cache: fixture.cache,
+      callTool: async ({ toolName }) => toolName === "get_asin_variations" ? variationResponse() : [] });
+    assert.ok(fixture.records[inputAsin].children.every(child => child.title === null), mismatch);
+    assert.equal(fixture.records[inputAsin].fetchedAt, now.toISOString(), mismatch);
   }
 });

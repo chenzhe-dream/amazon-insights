@@ -707,8 +707,22 @@ export function CompetitorOverviewHistory({products, salesTrendByAsin, metric, o
               </span>
             ))}
           </div>
+          <SourceDailyObservations products={products} salesTrendByAsin={salesTrendByAsin}/>
           <ComparisonChart key={metric} products={products} metric={metric} inverse={metric === "ranks"} trendByAsin={salesTrendByAsin} />
         </section>;
+}
+
+export function SourceDailyObservations({products, salesTrendByAsin}: Readonly<{products: Product[]; salesTrendByAsin: typeof sorftimeSalesTrendData}>) {
+  const fields = ["volume", "amount", "price", "rank"] as const;
+  const labels = {volume: "销量来源观测值", amount: "销售额来源观测值", price: "价格来源观测值", rank: "排名来源观测值"};
+  const records = products.filter(product => fields.some(field => salesTrendByAsin[product.asin]?.dailyObservations?.[field]?.length));
+  if (!records.length) return null;
+  return <section className="overview-history-records"><h4>来源日观测序列</h4><p>来源日期为日粒度，指标口径未确认；这些观测值不参与自然月汇总或年度与增长计算。</p>{records.map(product => {
+    const record = salesTrendByAsin[product.asin];
+    const dates = [...new Set(fields.flatMap(field => (record.dailyObservations?.[field] ?? []).map(point => point.date)))].sort();
+    const hasMonths = fields.some(field => record[field]?.length);
+    return <details key={product.asin} open><summary>{product.brand} · {product.asin}</summary>{!hasMonths && <p>月度数据不可用，月度口径待确认。</p>}<div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>来源日期</th>{fields.map(field => <th key={field}>{labels[field]}<small>采集：{record.dailyObservations?.[field]?.length ? (record.dailyFieldFetchedAt?.[field] ?? record.fieldFetchedAt?.[field] ?? record.fetchedAt) : "未知"}</small></th>)}</tr></thead><tbody>{dates.map(date => <tr key={date}><th>{date}</th>{fields.map(field => { const value = record.dailyObservations?.[field]?.find(point => point.date === date)?.value; return <td key={field}>{isValidTrendValue(value) ? value : "—"}</td>; })}</tr>)}</tbody></table></div></details>;
+  })}</section>;
 }
 
 function SnapshotHistoryRecords({products, salesTrendByAsin, metric}: Readonly<{products: Product[]; salesTrendByAsin: typeof sorftimeSalesTrendData; metric: ChartMetric}>) {
@@ -729,6 +743,7 @@ export function CompetitorOverviewSnapshotView(props: CompetitorOverviewSnapshot
     <section className="card compare-chart-card sales-combined-card">
       <div className="section-head"><div><h3>竞品历史数据追踪</h3><p>月销量 · 历史价格 · 大类 BSR · 月销售额</p></div><span className="source-badge">Sorftime MCP</span></div>
       <div className="chart-legend">{products.map((p, i) => <span key={p.asin}><i style={{background: colors[i]}}/>{p.brand}</span>)}</div>
+      <SourceDailyObservations products={products} salesTrendByAsin={salesTrendByAsin}/>
       {(["history", "revenue", "prices", "ranks"] as const).map(metric => <details key={metric} className="overview-history-detail" open={metric === "history"}><summary>{metric === "history" ? "月销量" : metric === "revenue" ? "月销售额" : metric === "prices" ? "历史价格" : "大类 BSR"}</summary><ComparisonChart products={products} metric={metric} inverse={metric === "ranks"} trendByAsin={salesTrendByAsin}/><SnapshotHistoryRecords products={products} metric={metric} salesTrendByAsin={salesTrendByAsin}/></details>)}
     </section>
   </>;

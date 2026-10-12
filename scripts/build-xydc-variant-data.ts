@@ -12,7 +12,9 @@ import { syncXydcOrderFamilies } from "./lib/xydc-order-sync";
 import { createXydcVariantCache, isFreshXydcVariantCache } from "./lib/xydc-variant-cache";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 import { createXydcOrderJobLifetime } from "./lib/xydc-order-job-lifetime";
-import { readXydcRepairStatuses } from "./lib/xydc-repair-readiness";
+import { readXydcRepairDetails } from "./lib/xydc-repair-readiness";
+import { readXydcOrderDisplaySnapshot } from "./lib/xydc-order-display-cache";
+import { getXydcOrderWindow, summarizeXydcOrders } from "../shared/xydc-order-summary";
 import { syncXydcLabelTranslations } from "./lib/xydc-label-model";
 
 type Cache = {
@@ -443,6 +445,16 @@ function restoreForcedReadyFallbacks(
   }
 }
 
+function usablePriorFamily(candidate: XydcVariantFamily | undefined, asin: string, country: string, now: Date) {
+  const parsed = XydcVariantFamilySchema.safeParse(candidate);
+  if (!parsed.success) return undefined;
+  const prior = parsed.data;
+  const timestamp = Date.parse(prior.fetchedAt);
+  return prior.inputAsin === asin && prior.country === country.trim().toUpperCase()
+    && ["ready", "partial"].includes(prior.status) && prior.children.length > 0
+    && Number.isFinite(timestamp) && timestamp <= now.getTime() ? prior : undefined;
+}
+
 export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   const asins = [...new Set(input.asins.map(normalizeAsin).filter((asin): asin is string => Boolean(asin)))];
   const cached = await input.cache.readMany(input.country, asins);
@@ -471,11 +483,11 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
   const drafts = new Map<string, XydcVariantFamily>();
   const ready = new Set<string>();
   for (const asin of asins) {
-    const prior = cached[asin];
-    if (!input.force && isFreshXydcVariantCache(prior, input.now)) {
+    const prior = usablePriorFamily(cached[asin], asin, input.country, input.now);
+    if (prior && !input.force && isFreshXydcVariantCache(prior, input.now)) {
       drafts.set(asin, prior);
       ready.add(asin);
-    } else if (!input.force && hasRelationshipEvidence(prior, input.now)) {
+    } else if (prior && !input.force && hasRelationshipEvidence(prior, input.now)) {
       drafts.set(asin, { ...prior, cacheState: "fresh" });
     }
   }
@@ -496,15 +508,20 @@ export async function syncXydcVariantFamilies(input: SyncXydcVariantInput) {
         raw: await request({ toolName: "get_asin_variations", args: { asin, country: input.country } }),
         fetchedAt: input.now.toISOString(),
       });
-      const previousByChild = new Map((cached[asin]?.children ?? []).map(child => [child.asin, child]));
+      const prior = usablePriorFamily(cached[asin], asin, input.country, input.now);
+      const matches = prior && prior.parentAsin === draft.parentAsin
+        && prior.children.length === draft.children.length
+        && draft.children.every(child => prior.children.some(previous => previous.asin === child.asin));
+      const previousByChild = new Map((matches ? prior.children : []).map(child => [child.asin, child]));
       drafts.set(asin, {
         ...draft,
-        children: draft.children.map(child => !input.force && previousByChild.get(child.asin)?.infoStatus === "ready" ? previousByChild.get(child.asin)! : child),
+        ...(!input.force && matches ? { fetchedAt: prior.fetchedAt, sourceUpdatedAt: prior.sourceUpdatedAt, cacheState: "stale" as const } : {}),
+        children: draft.children.map(child => !input.force && previousByChild.has(child.asin) ? { ...previousByChild.get(child.asin)!, attributes: child.attributes } : child),
       });
     } catch (error) {
       input.signal?.throwIfAborted();
-      const prior = cached[asin];
-      if (prior?.status === "ready") drafts.set(asin, { ...prior, cacheState: "stale" });
+      const prior = usablePriorFamily(cached[asin], asin, input.country, input.now);
+      if (prior) drafts.set(asin, { ...prior, cacheState: "stale" });
       else drafts.set(asin, unavailableFamily(asin, input.country, input.now, reasonFor(error)));
     }
     input.signal?.throwIfAborted();
@@ -546,7 +563,8 @@ export async function retryFailedXydcVariantFamilies(input: SyncXydcVariantInput
     return family?.country === input.country.trim().toUpperCase() && family.inputAsin === asin
       && (family.status === "unavailable" && ["RPC_ERROR", "TIMEOUT"].includes(family.reasonCode ?? "")
         || family.status === "partial" && ["PARTIAL_CHILD_INFO", "RPC_ERROR", "TIMEOUT"].includes(family.reasonCode ?? "")
-          && family.cacheState === "fresh" && family.children.some(child => child.infoStatus !== "ready"));
+          && family.cacheState === "fresh" && family.children.some(child => child.infoStatus !== "ready")
+          && (family.reasonCode !== "PARTIAL_CHILD_INFO" || family.children.some(child => [child.title, child.imageUrl, child.price, child.currency].some(value => value === null))));
   });
   if (!asins.length) return families;
   const controller = new AbortController();
@@ -577,6 +595,14 @@ async function fixtureToolCall(
     return (keyed as Record<string, unknown>)[args.asin];
   }
   return fixture[toolName];
+}
+
+export async function familiesNeedingXydcOrderRepair(families: XydcVariantFamily[], dataRoot: string, now: Date) {
+  const window = getXydcOrderWindow(now);
+  return families.filter(family => {
+    const snapshot = readXydcOrderDisplaySnapshot(dataRoot, family, window, now);
+    return !snapshot || snapshot.window.startMonth !== window.startMonth || snapshot.window.endMonth !== window.endMonth || !summarizeXydcOrders(snapshot).complete;
+  });
 }
 
 async function main() {
@@ -611,8 +637,10 @@ async function main() {
   const families = await retryFailedXydcVariantFamilies(variantInput, initialFamilies);
   let orderCount = 0;
   try {
+    const orderFamilies = process.env.AGENT_SYNC_REPAIR_INCOMPLETE === "1"
+      ? await familiesNeedingXydcOrderRepair(families, roots.dataRoot, new Date()) : families;
     const orderSnapshots = await syncXydcOrderFamilies({
-      families,
+      families: orderFamilies,
       token: process.env.XYDC_MCP_TOKEN ?? "",
       now: new Date(),
       dataRoot: roots.dataRoot,
@@ -636,8 +664,12 @@ async function main() {
     });
   }
   if (process.env.AGENT_SYNC_REPAIR_INCOMPLETE === "1") {
-    const statuses = await readXydcRepairStatuses(asins, country, { dataRoot: roots.dataRoot });
-    for (const { asin, status } of statuses) process.stderr.write(`[xydc-repair] ${asin} ${status}\n`);
+    const statuses = await readXydcRepairDetails(asins, country, { dataRoot: roots.dataRoot });
+    for (const { asin, status, orders, missingFields } of statuses) {
+      process.stderr.write(`[xydc-repair] ${asin} ${status}\n`);
+      process.stderr.write(`[xydc-orders] ${asin} ${orders}\n`);
+      for (const child of missingFields) process.stderr.write(`[xydc-detail] ${asin} ${child.asin} ${child.fields.join(",")}\n`);
+    }
   }
   } finally { await lifetime.close(); }
 }

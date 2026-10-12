@@ -36,22 +36,27 @@ export async function collectSalesTrendResponses({key, asin, marketplace, callTo
 export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, previous = {}}) {
   const next = {...previous, asin, marketplace, fetchedAt,
     dailyObservations:{...previous.dailyObservations}, observationPeriods:{...previous.observationPeriods}, observationErrors:{...requestErrors},
-    fieldFetchedAt:{...previous.fieldFetchedAt}};
+    fieldFetchedAt:{...previous.fieldFetchedAt}, dailyFieldFetchedAt:{...previous.dailyFieldFetchedAt}, observationOutcomes:{...previous.observationOutcomes}};
+  for (const field of Object.keys(requestErrors)) next.observationOutcomes[field] = {category:"request-failed", fetchedAt};
   for (const [field, type] of Object.entries(trendTypes)) {
     next[field] ??= [];
+    if (next.dailyObservations[field]?.length) next.dailyFieldFetchedAt[field] ??= previous.fieldFetchedAt?.[field] ?? previous.fetchedAt;
     if (next[field].length || next.dailyObservations[field]?.length) next.fieldFetchedAt[field] ??= previous.fetchedAt;
     if (!Object.hasOwn(responses, field)) continue;
     try {
       const result = parseSorftimeProductTrend(responses[field], {asin, type});
+      next.observationOutcomes[field] = {category: result.monthly.length ? 'monthly-verified' : result.daily.length ? 'daily-unverified' : 'valid-empty', fetchedAt, period:result.period};
       // A verified empty response cannot erase previously collected observations.
       if (!result.monthly.length && !result.daily.length &&
           (next[field].length || next.dailyObservations[field]?.length)) continue;
-      next[field] = result.monthly;
-      next.dailyObservations[field] = result.daily;
+      if (result.period !== 'day' || !next[field].length) next[field] = result.monthly;
+      if (result.period !== 'month' || !next.dailyObservations[field]?.length) next.dailyObservations[field] = result.daily;
+      if (result.daily.length) { next.dailyFieldFetchedAt ??= {...previous.dailyFieldFetchedAt}; next.dailyFieldFetchedAt[field] = fetchedAt; }
       next.observationPeriods[field] = result.period;
-      next.fieldFetchedAt[field] = fetchedAt;
+      if (result.period !== 'day' || !next[field].length) next.fieldFetchedAt[field] = fetchedAt;
     } catch (error) {
       next.observationErrors[field] = error.message;
+      next.observationOutcomes[field] = {category:error.category === 'identity-mismatch' ? 'identity-mismatch' : 'malformed-response', fetchedAt};
     }
   }
   const hasDaily = Object.values(next.dailyObservations).some(points => points.length);
@@ -59,7 +64,7 @@ export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, 
   const invalid = Object.keys(next.observationErrors).length > 0;
   next.status = invalid ? 'error' : hasMonths ? 'ready' : 'empty';
   delete next.statusMessage;
-  if (invalid) next.statusMessage = '部分趋势响应格式不符，已保留可验证数据';
+  if (invalid) next.statusMessage = '部分趋势指标请求失败或响应不符，已保留可验证数据';
   else if (hasDaily) next.statusMessage = '来源包含日观测序列，月度销量口径待确认；未将日观测累加为月销量';
   return next;
 }
@@ -154,6 +159,8 @@ export type SorftimeSalesTrendRecord = {
   dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
   observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
   observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
+  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null}>>;
+  dailyFieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   volume: SorftimeTrendPoint[];
   amount: SorftimeTrendPoint[];

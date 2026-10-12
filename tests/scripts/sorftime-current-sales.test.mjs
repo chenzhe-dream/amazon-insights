@@ -48,3 +48,33 @@ test('later transport failures retain successful earlier metrics and still colle
   assert.deepEqual(record.price,[{month:'2026-09',value:123}]);
   assert.equal(record.status,'error');
 });
+
+test('monthly refresh preserves daily source evidence and its collection date',()=>{
+  const previous=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-01',responses:{volume:wrap('SalesVolume',[20260901,0,20260902,12])}});
+  const record=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',previous,responses:{volume:wrap('SalesVolume',['202609',123])}});
+  assert.deepEqual(record.dailyObservations.volume,previous.dailyObservations.volume);
+  assert.equal(record.dailyFieldFetchedAt.volume,'2026-10-01');
+  assert.deepEqual(record.volume,[{month:'2026-09',value:123}]);
+});
+
+test('strict string stamps reject coercions and invalid dates or values',()=>{
+  for (const data of [[' 202609',1],['2.02609e5',1],['202613',1],['20260230',1],['202609','1'],['20260901',-2]]) {
+    const record=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',responses:{volume:wrap('SalesVolume',data)}});
+    assert.equal(record.observationOutcomes.volume.category,'malformed-response');
+    assert.deepEqual(record.volume,[]);
+  }
+});
+
+test('immutable partial output preserves closed valid-empty diagnostics without inventing points',()=>{
+  const record=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',responses:{volume:wrap('SalesVolume',[])}});
+  const output=projectStageOutput('sales_trend',[asin],{stageStatus:'partial',dataAsins:[],readExport:()=>({[asin]:record})});
+  assert.equal(output.data.trendByAsin[asin].observationOutcomes.volume.category,'valid-empty');
+  assert.deepEqual(output.data.trendByAsin[asin].volume,[]);
+  assert.deepEqual(output.gap.items.map(item=>item.asin),[asin]);
+});
+
+test('legacy daily evidence retains original collection date on monthly refresh',()=>{
+  const previous={asin,marketplace:'US',fetchedAt:'2026-10-01',status:'empty',volume:[],amount:[],price:[],rank:[],dailyObservations:{volume:[{date:'2026-09-01',value:10}]},fieldFetchedAt:{volume:'2026-09-30'}};
+  const record=sales.buildSalesTrendRecord({asin,marketplace:'US',fetchedAt:'2026-10-12',previous,responses:{volume:wrap('SalesVolume',['202609',123])}});
+  assert.equal(record.dailyFieldFetchedAt.volume,'2026-09-30');
+});
