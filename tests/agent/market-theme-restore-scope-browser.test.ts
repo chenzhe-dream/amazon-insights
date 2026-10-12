@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { Route } from 'playwright';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -63,13 +64,46 @@ test('nonempty query draft survives initial read and reload independently', { ti
     assert.equal(await page.getByLabel('类目路径').inputValue(), '999');
 });
 // Synthetic runs and bounded response gates: no source/model requests are allowed.
+function responseGates(watchdogMs = 20000) {
+    const pending = new Set<(released: boolean) => void>();
+    const failures: Error[] = [];
+    return {
+        async wait(route: Route, ownRelease: (release: () => void) => void) {
+            const released = await new Promise<boolean>(resolve => {
+                const settle = (released: boolean) => {
+                    if (!pending.delete(settle)) return;
+                    clearTimeout(timer);
+                    resolve(released);
+                };
+                const timer = setTimeout(() => {
+                    failures.push(new Error(`Response gate watchdog expired: ${route.request().method()} ${route.request().url()}`));
+                    settle(false);
+                }, watchdogMs);
+                pending.add(settle);
+                ownRelease(() => settle(true));
+            });
+            if (!released) await route.abort().catch(() => {});
+            return released;
+        },
+        abortAll() { for (const settle of pending) settle(false); },
+        assertHealthy() { assert.equal(failures.length, 0, failures.map(error => error.message).join('\n')); },
+    };
+}
 async function fixture(t: any) {
     const server = await createServer({ configFile: false, cacheDir: 'test-results/theme-race-vite', define: { 'process.env': '{}' }, plugins: [{ name: 'scope-harness', resolveId(id) { if (id === '/scope-harness.tsx')
                     return id; }, load(id) { if (id === '/scope-harness.tsx')
                     return harness; } }, react()], server: { host: '127.0.0.1', port: 0, hmr: false, forwardConsole: false } });
     await server.listen();
     const browser = await chromium.launch();
-    t.after(async () => { await browser.close(); await server.close(); });
+    const gates = responseGates();
+    t.after(async () => {
+        gates.abortAll();
+        try { await page.unrouteAll({ behavior: 'wait' }); }
+        finally {
+            try { await browser.close(); }
+            finally { try { await server.close(); } finally { gates.assertHealthy(); } }
+        }
+    });
     const origin = server.resolvedUrls!.local[0].replace(/\/$/, ''), page = await browser.newPage();
     page.setDefaultTimeout(5000);
     const base = themeRuleRun().run;
@@ -100,8 +134,7 @@ async function fixture(t: any) {
             state.status = 0;
             if (state.hold) {
                 state.hold = false;
-                state.entered();
-                await new Promise<void>(resolve => { const timer = setTimeout(resolve, 6000); state.release = () => { clearTimeout(timer); resolve(); }; });
+                if (!await gates.wait(route, release => { state.release = release; state.entered(); })) return;
             }
             return route.fulfill(status ? { status, json: { error: { message: 'synthetic denied' } } } : { json: { run } }).catch(() => { });
         }
@@ -109,11 +142,11 @@ async function fixture(t: any) {
     });
     async function open(node = '999') { await page.goto(`${origin}/?themeRun=${base.id}&themeNode=${node}&shapeRun=other&keywordNode=keep`); await page.getByText('任务进度、重试与历史报告', { exact: true }).click(); await page.getByLabel('报告版本').waitFor(); await page.getByText('恢复已有主题任务', { exact: true }).click(); }
     async function restore(id: string) { await page.getByLabel('任务 UUID').fill(id); await page.getByRole('button', { name: '读取任务', exact: true }).click(); }
-    return { page, base, second, state, open, restore };
+    return { page, base, second, state, gates, open, restore };
 }
 
 for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`current403 invalidates pending ${kind} adoption and allows explicit recovery`, { timeout: 30000 }, async (t) => {
-    const { page, base, second, state, open, restore } = await fixture(t);
+    const { page, base, second, state, gates, open, restore } = await fixture(t);
     if (kind === 'retry' || kind === 'cancel') base.steps = themeRun(kind === 'cancel').run.steps;
     MarketThemeRunResponseSchema.parse({ run: base });
     await open();
@@ -125,10 +158,7 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
     const releaseRead = state.release;
     let releaseAction = () => {}, enteredAction = () => {}, actionWrites = 0;
     const actionPending = new Promise<void>(resolve => enteredAction = resolve);
-    const gate = () => new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, 12000);
-        releaseAction = () => { clearTimeout(timer); resolve(); };
-    });
+    const gate = (route: Route) => gates.wait(route, release => { releaseAction = release; enteredAction(); });
     t.after(() => { releaseRead(); releaseAction(); });
     if (kind === 'retry' || kind === 'cancel') {
         await page.route(`**/runs/${base.id}/${kind}`, route => {
@@ -136,7 +166,7 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
             return route.fulfill({ json: kind === 'retry' ? { moduleRunId: base.id, stepIds: [] } : { moduleRunId: base.id, cancelled: true } });
         });
         await page.route(`**/runs/${base.id}`, async route => {
-            enteredAction(); await gate();
+            if (!await gate(route)) return;
             await route.fulfill({ json: { run: base } }).catch(() => {});
         });
     } else {
@@ -151,7 +181,7 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
             next.scope.researchId = new URL(route.request().url()).pathname.split('/').at(-2)!;
             for (const entry of [next.currentReport, next.latestSavedReport, ...next.history]) if (entry) entry.report.scope = next.scope;
             MarketThemeRunResponseSchema.parse({ run: next });
-            enteredAction(); await gate();
+            if (!await gate(route)) return;
             await route.fulfill({ json: { run: next } }).catch(() => {});
         });
     }
@@ -175,7 +205,7 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
     assert.equal(await page.getByRole('button', { name: '拉取见解', exact: true }).isDisabled(), false);
 });
 test('revoked retry cannot finish a newer retry or change its idempotency key', { timeout: 30000 }, async (t) => {
-    const { page, base, state, open, restore } = await fixture(t);
+    const { page, base, state, gates, open, restore } = await fixture(t);
     base.steps = themeRun().run.steps;
     await open();
     state.status = 403; state.hold = true;
@@ -190,8 +220,8 @@ test('revoked retry cannot finish a newer retry or change its idempotency key', 
         return route.fulfill({ json: { moduleRunId: base.id, stepIds: [] } });
     });
     const actionRoute = async (route: any) => {
-        reads++; entered();
-        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 12000); releases.push(() => { clearTimeout(timer); resolve(); }); });
+        reads++;
+        if (!await gates.wait(route, release => { releases.push(release); entered(); })) return;
         await route.fulfill({ json: { run: base } }).catch(() => {});
     };
     t.after(() => { releaseRead(); releases.forEach(release => release()); });
@@ -340,14 +370,14 @@ test('empty deep link fills once; no-report failure text is truthful; unmount ca
     assert.equal(state.writes, 0);
 });
 test('nested translation write locks restore until settled and target read locks new writes', { timeout: 120000 }, async (t) => {
-    const { page, base, second, state, open, restore } = await fixture(t);
+    const { page, base, second, state, gates, open, restore } = await fixture(t);
     await open();
     let release: () => void = () => { };
     let started: () => void = () => { };
     const entered = new Promise<void>(r => started = r);
     let writes = 0;
     await page.route('**/translations?*', route => route.fulfill({ json: { report: base.currentReport, items: [] } }));
-    await page.route('**/translations', async (route) => { writes++; started(); await new Promise<void>(resolve => { const timer = setTimeout(resolve, 6000); release = () => { clearTimeout(timer); resolve(); }; }); await route.fulfill({ status: 503, json: { error: { message: 'synthetic write complete' } } }).catch(() => { }); });
+    await page.route('**/translations', async (route) => { writes++; if (!await gates.wait(route, owned => { release = owned; started(); })) return; await route.fulfill({ status: 503, json: { error: { message: 'synthetic write complete' } } }).catch(() => { }); });
     await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
     await entered;
     assert.equal(await page.getByRole('button', { name: '读取任务', exact: true }).isDisabled(), true);
@@ -364,13 +394,13 @@ test('nested translation write locks restore until settled and target read locks
     assert.equal(writes, 1);
 });
 test('overlapping translation owners keep restore locked until both settle', { timeout: 120000 }, async (t) => {
-    const { page, base, state, open } = await fixture(t);
+    const { page, base, state, gates, open } = await fixture(t);
     await open();
     await page.route('**/details?*', async (route) => { const { themeDetails } = await import('./helpers/market-theme-page-fixture'); const detail = themeDetails(new URL(route.request().url())); detail.report = base.currentReport!; await route.fulfill({ json: detail }); });
     await page.route('**/translations?*', route => route.fulfill({ json: { report: base.currentReport, items: [] } }));
     const releases: (() => void)[] = [];
     let entered: () => void = () => { }, count = 0;
-    await page.route('**/translations', async (route) => { count++; entered(); await new Promise<void>(resolve => { const timer = setTimeout(resolve, 6000); releases.push(() => { clearTimeout(timer); resolve(); }); }); await route.fulfill({ status: 503, json: { error: { message: 'synthetic settled ' + count } } }).catch(() => { }); });
+    await page.route('**/translations', async (route) => { count++; if (!await gates.wait(route, release => { releases.push(release); entered(); })) return; await route.fulfill({ status: 503, json: { error: { message: 'synthetic settled ' + count } } }).catch(() => { }); });
     await page.getByText('报告统计口径与完整证据', { exact: true }).click();
     await page.getByRole('button', { name: '重读明细', exact: true }).click();
     await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).nth(1).waitFor();
@@ -390,7 +420,7 @@ test('overlapping translation owners keep restore locked until both settle', { t
     assert.equal(state.writes, 0);
 });
 for (const automatic of [false, true]) test(`${automatic ? 'automatic poll' : 'manual current read'} defers report replacement through nested write settlement`, { timeout: 30000 }, async (t) => {
-    const { page, base, state, open } = await fixture(t);
+    const { page, base, state, gates, open } = await fixture(t);
     if (automatic) base.steps = [{ id: '60000000-0000-4000-8000-000000000006', kind: 'report', status: 'running', latestAttemptId: null, attemptCount: 0, current: true, canRetry: false, asin: null, errorCode: null }];
     await open();
     const latest = structuredClone(base);
@@ -401,8 +431,8 @@ for (const automatic of [false, true]) test(`${automatic ? 'automatic poll' : 'm
     let releaseWrite = () => {}, enteredWrite = () => {}, writes = 0;
     const writing = new Promise<void>(resolve => enteredWrite = resolve);
     await page.route('**/translations', async route => {
-        writes++; enteredWrite();
-        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 12000); releaseWrite = () => { clearTimeout(timer); resolve(); }; });
+        writes++;
+        if (!await gates.wait(route, release => { releaseWrite = release; enteredWrite(); })) return;
         await route.fulfill({ status: 503, json: { error: { message: 'synthetic settled' } } }).catch(() => {});
     });
     t.after(() => releaseWrite());
@@ -427,13 +457,12 @@ for (const automatic of [false, true]) test(`${automatic ? 'automatic poll' : 'm
 });
 
 for (const status of [401, 403]) test(`current ${status} revokes report during a pending nested write`, { timeout: 30000 }, async (t) => {
-    const { page, state, open } = await fixture(t);
+    const { page, state, gates, open } = await fixture(t);
     await open();
     let release = () => {}, entered = () => {}, settled = false;
     const writing = new Promise<void>(resolve => entered = resolve);
     await page.route('**/translations', async route => {
-        entered();
-        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 10000); release = () => { clearTimeout(timer); resolve(); }; });
+        if (!await gates.wait(route, owned => { release = owned; entered(); })) return;
         settled = true;
         await route.fulfill({ status: 503, json: {} }).catch(() => {});
     });
@@ -449,7 +478,7 @@ for (const status of [401, 403]) test(`current ${status} revokes report during a
 });
 
 test('nested selection save locks restore and target reads prevent selection writes', { timeout: 120000 }, async (t) => {
-    const { page, base, second, state, open, restore } = await fixture(t);
+    const { page, base, second, state, gates, open, restore } = await fixture(t);
     const { aggregateCustomerThemes } = await import('../../server/domain/market-research/customer-themes');
     const { deriveThemeSelection } = await import('../../server/domain/market-research/customer-theme-selection');
     const ids = base.currentReport!.report.selectedAsins;
@@ -458,8 +487,7 @@ test('nested selection save locks restore and target reads prevent selection wri
     let writes = 0, release: () => void = () => { }, entered: () => void = () => { };
     await page.route('**/theme-selection', async (route) => { if (route.request().method() === 'POST') {
         writes++;
-        entered();
-        await new Promise<void>(resolve => { const timer = setTimeout(resolve, 6000); release = () => { clearTimeout(timer); resolve(); }; });
+        if (!await gates.wait(route, owned => { release = owned; entered(); })) return;
     } await route.fulfill({ json: view }).catch(() => { }); });
     await open();
     await page.getByRole('button', { name: '移除', exact: true }).first().waitFor();
