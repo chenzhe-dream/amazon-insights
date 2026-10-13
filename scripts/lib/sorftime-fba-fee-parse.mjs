@@ -47,7 +47,15 @@ export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response 
 
   const rawFee = sorftimeOptionalNumber(detail.fba_fee, { unknownSentinel: true });
   const fbaFee = positiveMoneyOrNull(rawFee);
-  const packageSize = normalizeSorftimePackageSize(detail.package_size_cm, { includeUnit: false });
+  let packageSize = null;
+  try {
+    packageSize = normalizeSorftimePackageSize(detail.package_size_cm, { includeUnit: false });
+  } catch (error) {
+    // Packaging is optional for the fee projection; malformed dimensions must
+    // not discard an independently valid quote. Identity and fee checks above
+    // remain strict.
+    if (!(error instanceof TypeError)) throw error;
+  }
 
   return {
     asin,

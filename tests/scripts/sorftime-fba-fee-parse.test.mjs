@@ -10,6 +10,18 @@ import {
   shouldUseCachedSorftimeFbaRecord,
 } from "../../scripts/lib/sorftime-fba-fee-parse.mjs";
 
+test("valid FBA fees survive malformed optional packaging fields", () => {
+  for (const package_size_cm of [[], [""], 10, ["10,20"], ["10,20,30", "40,50,60"]]) {
+    const record = buildSorftimeFbaRecord({
+      asin: "B0TEST0001", marketplace: "US", fetchedAt: "2026-10-13",
+      response: { data: { asin: "B0TEST0001", fba_fee: 4.25, package_size_cm } },
+    });
+    assert.equal(record.status, "ready");
+    assert.equal(record.fbaFee, 4.25);
+    assert.equal(Object.hasOwn(record, "packageSize"), false);
+  }
+});
+
 test("Sorftime FBA record becomes ready from the product-detail fee when no Keepa result is available", () => {
   const record = buildSorftimeFbaRecord({
     asin: "B0TEST0001",
