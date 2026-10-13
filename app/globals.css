@@ -491,3 +491,34 @@ button.nav-item {
 .market-shape-explanation-report summary{cursor:pointer}
 .market-shape-explanation-report details[open]{padding:10px;background:#f4f7fb;border-radius:8px}
 @media(max-width:600px){.market-shape-explanation-report{padding:14px;font-size:13px}.market-shape-report>.market-theme-actions{flex-wrap:wrap}.market-shape-report select{max-width:100%}}
+
+/* One width token controls the rail, workspace, and adjacent navigation. */
+.sidebar-collapse-toggle { display:flex; align-items:center; justify-content:center; gap:8px; flex-shrink:0; width:100%; min-height:36px; margin:0 0 14px; padding:6px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#334155; cursor:pointer; font-size:12px; }
+.sidebar-collapse-toggle:focus-visible,.price-strategy-toggle:focus-visible { outline:3px solid #2f80ed; outline-offset:3px; }
+.catalog-profile-value { display:block; margin-bottom:4px; }
+.price-strategy-toggle { display:block; margin-top:9px; padding:5px 7px; border:1px solid #cbd5e1; border-radius:5px; background:#fff; color:#345c87; font-size:10px; cursor:pointer; }
+.price-strategy-details[hidden] { display:none; }
+.price-strategy-details>small { display:block; padding-top:5px; border-top:1px dashed #e0e7ef; }
+.price-strategy-cell .price-strategy-summary { margin-bottom:0; }
+.price-strategy-details { margin-top:10px; }
+@media (min-width:761px) {
+  .app-shell.sidebar-collapsed { --sidebar-w:72px; }
+  .sidebar-collapsed .sidebar { padding:18px 9px; }
+  .sidebar-collapsed .sidebar-collapse-toggle>span,
+  .sidebar-collapsed .sidebar .brand-copy,
+  .sidebar-collapsed .sidebar .nav-item-copy,
+  .sidebar-collapsed .sidebar .nav-chevron,
+  .sidebar-collapsed .sidebar .sync-status,
+  .sidebar-collapsed .sidebar-bottom>p { display:none; }
+  .sidebar-collapsed .sidebar .brand-mark { justify-content:center; padding:6px 0; margin-bottom:18px; }
+  .sidebar-collapsed .sidebar .brand-icon,.sidebar-collapsed .sidebar .brand-icon svg { width:36px; height:36px; }
+  .sidebar-collapsed .sidebar .nav-item { justify-content:center; padding:10px 0; min-width:0; }
+  .sidebar-collapsed .sidebar-bottom { padding:12px 0 0; }
+  .sidebar-collapsed .help-feedback-entry { justify-content:center; padding:9px 0; }
+  .sidebar-collapsed .help-feedback-entry>b { position:absolute; width:1px; height:1px; clip-path:inset(50%); overflow:hidden; }
+}
+@media (max-width:760px) {
+  .sidebar-collapse-toggle { display:none; }
+  .app-shell .nav-rail > .sidebar-flyout { display:none; position:static; width:100%; max-height:40vh; transform:none; border-radius:0; }
+  .app-shell.flyout-open .nav-rail > .sidebar-flyout { display:flex; position:static; width:100%; max-height:40vh; transform:none; }
+}

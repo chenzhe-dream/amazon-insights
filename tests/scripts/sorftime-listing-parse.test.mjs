@@ -158,7 +158,9 @@ test("six persisted galleries submit each static image once and isolate one fixt
 
   const results = await runImageRemarkQueue(items, async item => {
     calls.set(item.url, (calls.get(item.url) ?? 0) + 1);
-    if (item.url === failedUrl) throw new Error("fixture image failure");
+    if (item.url === failedUrl) return { status: "connector-failed",
+      diagnostic: { stage: "fetch", errorClass: "network", httpStatus: null },
+    };
     return { status: "ready" };
   }, { concurrency: 4, timeoutMs: 100 });
 

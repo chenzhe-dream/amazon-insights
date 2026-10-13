@@ -9,7 +9,9 @@ import {readCachedDataExport} from '../../scripts/lib/sync-cache.mjs';
 const root=path.resolve(import.meta.dirname,'../..');
 const asin='B000000001',other='B000000002',a='https://m.media-amazon.com/images/I/a.jpg',b='https://m.media-amazon.com/images/I/b.jpg',c='https://m.media-amazon.com/images/I/c.jpg';
 function fixture(t){
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'image-action-fixture-'));
+  const fixtureParent=fs.mkdtempSync(path.join(os.tmpdir(),'image-action-fixture-'));
+  const dir=path.join(fixtureParent,'code'), dataRoot=path.join(fixtureParent,'data'), runtimeRoot=path.join(fixtureParent,'runtime');
+  fs.mkdirSync(dir);
   fs.mkdirSync(path.join(dir,'scripts'));fs.mkdirSync(path.join(dir,'app'));
   for (const sub of ['config','connectors']) fs.cpSync(path.join(root,'server',sub),path.join(dir,'server',sub),{recursive:true});
   fs.symlinkSync(path.join(root,'node_modules'),path.join(dir,'node_modules'),'junction');
@@ -17,18 +19,18 @@ function fixture(t){
   for(const script of ['build-sorftime-listing-content.mjs','build-listing-image-remarks.mjs'])fs.copyFileSync(path.join(root,'scripts',script),path.join(dir,'scripts',script));
   const listing={asin,marketplace:'US',fetchedAt:'2026-01-01',status:'ready',mainImage:a,galleryImages:[a,b],secondaryImages:[b],imageCount:2,hasAplus:true,hasEbc:true,hasVideo:false,lqs:99,source:'Sorftime'};
   const records={[asin]:listing,[other]:{...listing,asin:other}};
-  const note=text=>({remark:text,image_types:['产品展示'],confidence:'high'});
+  const note=(text,imageUrl)=>({remark:text,imageUrl,image_types:['产品展示'],confidence:'high'});
   fs.writeFileSync(path.join(dir,'app/sorftime-listing-content-data.ts'),'export const sorftimeListingContentData = '+JSON.stringify(records)+';');
-  fs.writeFileSync(path.join(dir,'app/listing-image-remarks.ts'),'export const listingImageRemarksMeta = {};\nexport const listingImageRemarks = '+JSON.stringify({[asin]:[note('A'),note('B')],[other]:[note('other')]})+';');
+  fs.writeFileSync(path.join(dir,'app/listing-image-remarks.ts'),'export const listingImageRemarksMeta = {};\nexport const listingImageRemarks = '+JSON.stringify({[asin]:[note('A',a),note('B',b)],[other]:[note('other',a)]})+';');
   const diagnosticScript=path.join(dir,'scripts/build-listing-image-remarks.mjs');
   fs.writeFileSync(diagnosticScript,fs.readFileSync(diagnosticScript,'utf8').replace('main().catch(() => {','main().catch(error => { console.error("TEST_DIAGNOSTIC", error.stack);'));
   const preload=path.join(dir,'mock.mjs');
   fs.writeFileSync(preload,`import fs from 'node:fs';globalThis.fetch=async(url,init)=>{const body=JSON.parse(init.body);fs.appendFileSync(process.env.CALL_LOG,JSON.stringify({url:String(url),body})+'\\n');if(body.jsonrpc){return Response.json({jsonrpc:'2.0',id:body.id,result:{content:[{type:'text',text:JSON.stringify({main_image:JSON.parse(process.env.NEXT_IMAGES),...(process.env.OMIT_APLUS ? {} : {a_plus:true})})}]}});}if(process.env.FAIL_AI==='1')return Response.json({error:'fixture failure'},{status:503});return Response.json({choices:[{message:{content:JSON.stringify({remark:'new C',image_types:['产品展示'],confidence:'high'})}}]});};`);
   const log=path.join(dir,'calls.jsonl');
-  const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,TEMP:dir,TMP:dir,AGENT_FORMAL_WORKTREE_ROOT:dir,AGENT_DATA_DIR:path.join(dir,'data'),AGENT_SYNC_JOB_ID:'image-action-fixture',AGENT_SYNC_REPAIR_INCOMPLETE:'1',AGENT_SYNC_IMAGE_ACTION:'refresh',AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED:'0',SORFTIME_MCP_KEY:'fixture',SORFTIME_ASINS:asin,SORFTIME_MARKETPLACE:'US',REMARK_ASINS:asin,OPENAI_API_KEY:'fixture',CALL_LOG:log,NEXT_IMAGES:JSON.stringify([b,a,c])};
+  const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,TEMP:dir,TMP:dir,AGENT_FORMAL_WORKTREE_ROOT:dir,AGENT_DATA_ROOT:dataRoot,AGENT_RUNTIME_ROOT:runtimeRoot,AGENT_SYNC_JOB_ID:'image-action-fixture',AGENT_SYNC_REPAIR_INCOMPLETE:'1',AGENT_SYNC_IMAGE_ACTION:'refresh',AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED:'0',SORFTIME_MCP_KEY:'fixture',SORFTIME_ASINS:asin,SORFTIME_MARKETPLACE:'US',REMARK_ASINS:asin,OPENAI_API_KEY:'fixture',CALL_LOG:log,NEXT_IMAGES:JSON.stringify([b,a,c])};
   const run=(script,overrides={})=>spawnSync(process.execPath,['--import',pathToFileURL(preload).href,path.join(dir,'scripts',script)],{cwd:dir,encoding:'utf8',env:{...env,...overrides},timeout:20000});
-  const read=(file,name)=>readCachedDataExport(path.join(dir,'app',file),name);
-  t.after(()=>{const resolved=path.resolve(dir);assert.ok(resolved.startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(resolved,{recursive:true,force:true});});
+  const read=(file,name)=>readCachedDataExport(path.join(dataRoot,'generated-app-data',file),name);
+  t.after(()=>{const resolved=path.resolve(fixtureParent);assert.ok(resolved.startsWith(path.resolve(os.tmpdir())+path.sep));for(const target of [dir,dataRoot,runtimeRoot])assert.ok(path.resolve(target).startsWith(resolved+path.sep));fs.rmSync(resolved,{recursive:true,force:true});});
   return {dir,records,run,read,calls:()=>fs.existsSync(log)?fs.readFileSync(log,'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x)):[]};
 }
 test('actual generators refresh one ready gallery, reanalyze every static image after refresh',t=>{
@@ -49,7 +51,7 @@ test('empty refresh preserves previous gallery and its timestamp and reports fai
   const f=fixture(t),result=f.run('build-sorftime-listing-content.mjs',{AGENT_SYNC_STAGE_ID:'listing',NEXT_IMAGES:'[]'});
   assert.notEqual(result.status,0,result.stdout+result.stderr);
   assert.deepEqual(f.read('sorftime-listing-content-data.ts','sorftimeListingContentData'),f.records);
-  assert.equal(f.calls().length,1);
+  assert.equal(f.calls().length,2);
 });
 
 test('valid one-image refresh replaces the gallery while absent unrelated metadata survives',t=>{

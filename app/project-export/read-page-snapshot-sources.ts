@@ -110,6 +110,7 @@ export async function readPageSnapshotSources(request: ExportRequest, fetcher: E
       ratingByAsin: selected(stageData(context, "reviews").ratingByAsin),
       fbaFeeByAsin: selected(stageData(context, "fba").feeByAsin),
       childSalesByAsin: selected(stageData(context, "child_sales").rowsByAsin),
+      listingContentByAsin: selected(stageData(context, "listing").contentByAsin),
       priceStrategyByAsin: selected(stageData(context, "price_strategy").strategyByAsin),
       categoryTrendByNode: categories as CompetitorOverviewSnapshotProps["categoryTrendByNode"],
       sellingTranslationsByAsin: Object.fromEntries(selling.map(item => [item.asin, item])),

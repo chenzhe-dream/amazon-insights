@@ -7,6 +7,22 @@ export type SorftimeListingContentRecord = {
   statusMessage?: string;
   mainImage: string | null;
   galleryImages: string[];
+  specifications?: string[];
+  specificationsProvenance?: {
+    jobId: string; marketplace: string; asin: string; operation: string;
+    fetchedAt: string; connector: string; tool: string; stageId?: string;
+  };
+  source?: "Sorftime";
+  provenance?: {
+    jobId: string;
+    marketplace: string;
+    asin: string;
+    operation: string;
+    fetchedAt: string;
+    connector: string;
+    tool: string;
+    stageId?: string;
+  } | null;
   secondaryImages: string[];
   imageCount: number;
   hasAplus: boolean | null;

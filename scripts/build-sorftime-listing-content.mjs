@@ -14,6 +14,7 @@ import {
   selectScopedListingRecord,
 } from "./lib/sorftime-listing-parse.mjs";
 import { readScopedSorftimeEvidence } from "./lib/scoped-sorftime-evidence.mjs";
+import { retainScopedListingSpecifications } from "./lib/sorftime-content-specifications.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -86,7 +87,7 @@ async function main() {
     if (!sorftimeKey) {
       console.log(`[skip] ${asin} · 无 Sorftime MCP key`);
       if (refreshImages) reportIncompleteRepair(asin);
-      else if (evidence) records[asin] = buildListingRecordFromProductDetailEvidence(evidence);
+      else if (evidence) records[asin] = retainScopedListingSpecifications(buildListingRecordFromProductDetailEvidence(evidence), existing[asin]);
       else if (jobId) discardUnscopedListingRecord(records, asin);
       missingCredential = true;
       continue;
@@ -138,6 +139,7 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
+          ...(product.specifications ? { specifications: product.specifications } : {}),
           provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
         };
         console.log("empty");
@@ -157,10 +159,12 @@ async function main() {
           hasVideo,
           lqs,
           source: "Sorftime",
+          ...(product.specifications ? { specifications: product.specifications } : {}),
           provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
         };
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }
+      records[asin] = retainScopedListingSpecifications(records[asin], existing[asin]);
     } catch (error) {
       if (refreshImages) {
         console.error(`error · 保留原图册 (${error instanceof Error ? error.message : String(error)})`);
@@ -186,6 +190,11 @@ export type SorftimeListingContentRecord = {
   mainImage: string | null;
   galleryImages: string[];
   previousGalleryImages?: string[];
+  specifications?: string[];
+  specificationsProvenance?: {
+    jobId: string; marketplace: string; asin: string; operation: string;
+    fetchedAt: string; connector: string; tool: string; stageId?: string;
+  };
   secondaryImages: string[];
   imageCount: number;
   hasAplus: boolean | null;

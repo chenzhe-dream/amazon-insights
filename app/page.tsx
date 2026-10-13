@@ -104,6 +104,8 @@ import { StageOutputGapCard } from "./stage-output-gap-card";
 import { StageOutputGapNotice, stageOutputGapReasonCode } from "./stage-output-gap-notice";
 import type { sorftimeListingContentData } from "./sorftime-listing-content-data";
 import { CatalogSourceStatus, type CatalogSource } from "./catalog-source-status";
+import { useSidebarCollapse } from "./lib/sidebar-preference";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle";
 import { XydcVariantSection } from "./xydc-variant-section";
 
 function currentWebArtifactId(): string {
@@ -563,6 +565,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   const [savingChecklist, setSavingChecklist] = useState(false);
   const [refreshingProjectId, setRefreshingProjectId] = useState<string | null>(null);
   const [flyoutGroupId, setFlyoutGroupId] = useState<NavGroupId | null>(null);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useSidebarCollapse();
   const [flyoutPinned, setFlyoutPinned] = useState(false);
   const [flyoutTop, setFlyoutTop] = useState(96);
   const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1875,10 +1878,11 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     }
   };
 
-  return <main className={`app-shell${flyoutOpen ? " flyout-open" : ""}`}>
+  return <main className={`app-shell${flyoutOpen ? " flyout-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     {publicationConvergenceNotice ? <div role="status">{publicationConvergenceNotice}</div> : null}
     <div className="nav-rail">
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="主导航侧栏">
+      <SidebarCollapseToggle collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
       <div className="brand-mark">
         <span className="brand-icon" aria-hidden="true">
           <svg viewBox="0 0 48 48" width={38} height={38} fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1914,13 +1918,15 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           </strong>
         </div>
       </div>
-      <nav>
+      <nav id="primary-navigation" aria-label="功能模块">
         {nav.map(entry => (
           <Fragment key={entry.id}>
             {isNavGroup(entry) ? (
               <button
                 type="button"
                 data-dim={entry.id}
+                aria-label={entry.label}
+                title={sidebarCollapsed ? entry.label : undefined}
                 aria-expanded={flyoutGroupId === entry.id}
                 aria-controls="sidebar-flyout"
                 className={`nav-item nav-group-trigger${entry.children.some(child => child.id === activeTab) || flyoutGroupId === entry.id ? " active" : ""}`}
@@ -1945,6 +1951,9 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
 <ModuleVisibilityLink
                 visibleModules={authSession.visibleModules} tab={entry.id} href={tabHref(entry.id)}
                 data-dim={entry.id}
+                aria-label={entry.label}
+                aria-current={activeTab === entry.id ? "page" : undefined}
+                title={sidebarCollapsed ? entry.label : undefined}
                 className={activeTab === entry.id ? "nav-item active" : "nav-item"}
                 onClick={closeFlyout}
               >
@@ -2202,7 +2211,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
             gapItems={stageOutputSnapshot.fba && "gap" in stageOutputSnapshot.fba ? stageOutputSnapshot.fba.gap.items : []}
           />
         ) : null}
-        <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationVersionId={authSession.logoutPending ? null : currentDisplayVersion?.versionId ?? null} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
+        <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} listingContentByAsin={listingContentByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationVersionId={authSession.logoutPending ? null : currentDisplayVersion?.versionId ?? null} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
 
         <CompetitorOverviewHistory products={products} salesTrendByAsin={salesTrendByAsin} metric={salesView} onMetricChange={setSalesView} />
 

@@ -42,6 +42,24 @@ test("export follows explicit source binding and freezes results with GET only",
   await verifyExportEligibility(request, content, fetcher);
   assert.ok(!state.calls.slice(count).some(path => path.endsWith("/current-display-version")), "download verification must not refresh body");
 });
+
+test("overview export preserves scoped listing specifications from the saved report", async () => {
+  const { state, request, fetcher } = fixture();
+  const asin = state.project.asins[0];
+  state.version.stageOutputs.listing = {
+    stage: "listing", stageStatus: "done", projectId: state.version.projectId,
+    runId: state.version.runId, jobId: state.version.jobId,
+    jobVersion: 1, outputVersion: 1, contentHash: "c".repeat(64), updatedAt: "2026-09-23T05:00:00Z",
+    data: { contentByAsin: { [asin]: { asin, marketplace: "US", status: "ready", source: "Sorftime",
+      specifications: ["材质：Wood"], galleryImages: [], mainImage: null } } },
+  } as never;
+  const content = await readPageSnapshotSources(request, fetcher);
+  assert.deepEqual(content.overview?.listingContentByAsin?.[asin]?.specifications, ["材质：Wood"]);
+  assert.ok(state.calls.every(path => !path.includes("sync-asins")));
+  const data = state.version.stageOutputs.listing as unknown as { data: { contentByAsin: Record<string, {marketplace: string}> } };
+  data.data.contentByAsin[asin].marketplace = "CA";
+  await assert.rejects(readPageSnapshotSources(request, fetcher), /范围/);
+});
 test("explicit page choice is frozen before reads and variant-off skips its source", async () => {
   const {request, fetcher, state} = fixture();
   const chosen = {pageIds:["overview"] as ("overview" | "images")[], includeVariants:false};
