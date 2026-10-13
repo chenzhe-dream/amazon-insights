@@ -1,4 +1,5 @@
 import {overviewSourceMonth} from '../../shared/market-overview-period';
+import {MarketOverviewEvidenceError,restoreOverviewNumericSnapshot} from '../domain/market-research/overview-catalog-compatibility';
 import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 import {overviewExternalAsins} from '../services/market-overview-external-collector';
 import {z} from 'zod';
@@ -20,7 +21,7 @@ import {canonicalJsonSha256 as digest} from './model-request-accounting';
 import type {MarketStepHandler} from './market-module-step-worker';
 import type {MarketModuleRunView,MarketStepDefinition} from '../db/market-module-execution-repository';
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
-function invalid():never{throw new z.ZodError([{code:'custom',path:[],message:'Overview source receipt or execution binding differs'}]);}
+function invalid():never{throw new MarketOverviewEvidenceError();}
 const factory=(s:MarketInputSnapshot)=>({scope:s.scope,kind:s.kind,sourceVersion:s.sourceVersion,ruleVersion:s.ruleVersion,collectedAt:s.collectedAt,expectedRecordIds:s.expectedRecordIds,records:s.records});
 const sourceRef=z.string().regex(/^market-source:[a-f0-9]{64}$/),inputRef=z.string().regex(/^market-input:[a-f0-9]{64}$/);
 
@@ -40,7 +41,10 @@ export function createMarketOverviewCatalogStep(context:PostgresQueryContext):Ma
 export async function readMarketOverviewCatalog(context:PostgresQueryContext,view:MarketModuleRunView,attemptId:string,signal:AbortSignal,mode:'current'|'frozen'='current',readerActor?:MarketExecutionActor){
   const a=view.attempts.find(a=>a.id===attemptId),step=view.steps.find(s=>s.id===a?.stepId);
   if(!a||!step||step.kind!=='rules'||!['succeeded','empty'].includes(a.status)||mode==='current'&&(step.latestAttemptId!==a.id||step.status!==a.status))invalid();
-  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode,Object.hasOwn(obj(a.output),'ruleBaseline'),readerActor);if(digest(a.output)!==digest(computed.output))invalid();
+  const computed=await computeMarketOverviewCatalog(context,view,step,signal,mode,Object.hasOwn(obj(a.output),'ruleBaseline'),readerActor);
+  computed.catalog.numericSnapshot=restoreOverviewNumericSnapshot(computed.catalog.numericSnapshot,obj(a.output).numericInputSnapshotId);
+  computed.output={...obj(computed.output),numericInputSnapshotId:computed.catalog.numericSnapshot.snapshotId};
+  if(digest(a.output)!==digest(computed.output))invalid();
   const snapshots=new PostgresMarketAnalysisSnapshotStore(context),actor=readerActor??{organizationId:view.run.scope.organizationId,userId:view.run.createdBy};
   for(const value of [computed.catalog.numericSnapshot,...(computed.catalog.semanticSnapshot?[computed.catalog.semanticSnapshot]:[])]){
     signal.throwIfAborted();const saved=await snapshots.findInput({actor,studyId:view.run.scope.researchId,id:value.snapshotId});if(!saved||digest(saved.snapshot)!==digest(value))invalid();

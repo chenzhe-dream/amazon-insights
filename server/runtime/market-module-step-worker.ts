@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import {MarketOverviewEvidenceError} from '../domain/market-research/overview-catalog-compatibility';
 import { MARKET_STEP_KINDS, type MarketStepKind, type MarketStepClaim, type MarketStepSettlement,
   type MarketModuleExecutionRepository } from '../db/market-module-execution-repository';
 import { createTrustedExecutionAbortReason } from './execution-abort';
@@ -102,7 +103,7 @@ export class MarketModuleStepWorker {
         const completed = await this.#terminal(claim);
         if (completed) this.#emit({ ...identity, event: completed });
         else {
-          const code = timedOut ? 'timeout' : controller.signal.aborted ? 'interrupted' : error instanceof z.ZodError ? 'invalid-data' : 'internal';
+          const code = timedOut ? 'timeout' : controller.signal.aborted ? 'interrupted' : error instanceof z.ZodError || error instanceof MarketOverviewEvidenceError ? 'invalid-data' : 'internal';
           const receipt = await this.deps.steps.settleAndEnqueue({ claim, outcome: { status: 'failed', error: { code, retryable: code === 'timeout' || code === 'interrupted' } } });
           this.#emit({ ...identity, event: receipt.status === 'lease-lost' ? 'lease-lost' : 'failed' });
         }

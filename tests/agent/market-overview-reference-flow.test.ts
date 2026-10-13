@@ -26,7 +26,8 @@ test('reference result row opens current-backend report inline and reopening is 
    writes.push({path:url.pathname,body:req.postDataJSON()});
    if(url.pathname.endsWith('/market-research/jobs')){ready=true;return route.fulfill({json:{job}})}
    if(url.pathname.endsWith('/studies')){const id=req.headers()['idempotency-key'];run.run.scope.researchId=id;for(const entry of [...run.run.history,run.run.currentReport!,run.run.latestSavedReport!])entry.report.scope.researchId=id;details.entry.report.scope.researchId=id;return route.fulfill({json:{study:{id,scope:run.run.scope,createdAt:run.run.createdAt}}});}
-   if(url.pathname.endsWith('/overview'))return route.fulfill({json:run});
+   // New runs echo sampleSize; the reused historical fixture intentionally omits it.
+   if(url.pathname.endsWith('/overview')){run.run.params={...run.run.params,...req.postDataJSON()};return route.fulfill({json:run});}
    throw Error('Unexpected write '+url.pathname);
   }
   if(url.pathname.endsWith('/market-research/jobs'))return route.fulfill({json:{jobs:ready?[job]:[]}});

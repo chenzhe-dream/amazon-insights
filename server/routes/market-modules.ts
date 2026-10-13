@@ -8,6 +8,7 @@ import { ContractRouteError } from './analysis-runs';
 import {MarketShapeRevisionIdSchema} from '../../shared/market-shape-public-contracts';
 import {MarketKeywordRevisionIdSchema} from '../../shared/market-keyword-revision-contracts';
 import {MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema} from '../../shared/market-theme-translation-contracts';
+import {MarketOverviewEvidenceError} from '../domain/market-research/overview-catalog-compatibility';
 
 const id = (r: FastifyRequest) => z.object({ id: MarketModuleIdSchema }).strict().parse(r.params).id;
 export function registerMarketModuleRoutes(app: FastifyInstance, service: MarketModuleService | null) {
@@ -17,6 +18,7 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
     if (!service) throw new ContractRouteError(503, 'CONFIGURATION_ERROR', '市场模块需要 PostgreSQL 持久化服务');
     try { return await operation(service, { organizationId: principal.organizationId, userId: principal.userId }); }
     catch (error) {
+      if (error instanceof MarketOverviewEvidenceError) throw new ContractRouteError(409, 'CONFLICT', '已保存报告的数据版本校验未通过，请联系管理员检查历史报告兼容性；无需修改类目编号');
       if (error instanceof z.ZodError) throw new ContractRouteError(400, 'VALIDATION_ERROR', '市场研究参数或任务编号无效');
       if (error instanceof MarketExecutionConflictError || error instanceof MarketAnalysisStorageError) throw new ContractRouteError(409, 'CONFLICT', '研究范围或任务状态已变化，请刷新后重试');
       if (error instanceof MarketModuleServiceError) throw new ContractRouteError(error.statusCode, error.statusCode === 404 ? 'NOT_FOUND' : error.statusCode === 403 ? 'FORBIDDEN' : error.statusCode === 503 ? 'CONFIGURATION_ERROR' : 'VALIDATION_ERROR', error.message);

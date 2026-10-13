@@ -8,7 +8,9 @@ import {startPostgresTestContainer} from './helpers/postgres-test-container';
 import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {createMarketSemanticFixture} from './helpers/market-semantic-fixture';
 import {createMarketSourceStepHandlers} from '../../server/runtime/market-source-step-handlers';
-import {createMarketOverviewCatalogStep} from '../../server/runtime/market-overview-catalog-step';
+import {createMarketOverviewCatalogStep,readMarketOverviewCatalog} from '../../server/runtime/market-overview-catalog-step';
+import {createMarketInputSnapshot} from '../../server/domain/market-research/snapshot';
+import {PostgresMarketAnalysisSnapshotStore} from '../../server/db/postgres/market-analysis-snapshot-store';
 import {createMarketOverviewWindowsStep} from '../../server/runtime/market-overview-windows-step';
 import {createMarketOverviewReportStep} from '../../server/runtime/market-overview-report-step';
 import {MarketModuleStepWorker} from '../../server/runtime/market-module-step-worker';
@@ -51,6 +53,37 @@ test('legacy rules-v2 overview collects all distributions, keeps partial reports
   querySpy.mock.restore();
   assert.equal(detail.numbers.distributions!.length,24);assert.equal(detail.numbers.distributions!.find(d=>d.month==='2026-08'&&d.operation==='market_product_demand_trend')!.status,'empty');
   const priorHash=digest(first.report),saved=await view(),successes=saved.steps.filter(s=>s.kind==='collect-overview-month'&&s.status!=='failed'),failed=saved.steps.find(s=>s.kind==='collect-overview-month'&&s.status==='failed')!;
+  await t.test('pre-productItems catalog restores its exact frozen snapshot without accepting changed facts',async t=>{
+    const rules=saved.steps.find(s=>s.kind==='rules')!,attemptId=rules.latestAttemptId!;
+    const current=await readMarketOverviewCatalog(f.context,saved,attemptId,new AbortController().signal,'frozen');
+    const n=current.catalog.numericSnapshot,records=structuredClone(n.records);
+    for(const record of records)for(const entry of (record.data as any).distributions??[])for(const row of entry.distribution?.rows??[])delete row.productItems;
+    const legacy=createMarketInputSnapshot({scope:n.scope,kind:n.kind,sourceVersion:n.sourceVersion,ruleVersion:n.ruleVersion,collectedAt:n.collectedAt,expectedRecordIds:n.expectedRecordIds,records});
+    assert.notEqual(legacy.snapshotId,n.snapshotId);
+    const historical=structuredClone(saved),attempt=historical.attempts.find(a=>a.id===attemptId)!;
+    (attempt.output as any).numericInputSnapshotId=legacy.snapshotId;
+    const original=PostgresMarketAnalysisSnapshotStore.prototype.findInput;
+    let missing=false;
+    const spy=t.mock.method(PostgresMarketAnalysisSnapshotStore.prototype,'findInput',async function(this:PostgresMarketAnalysisSnapshotStore,args:Parameters<typeof original>[0]){
+      if(args.id===legacy.snapshotId){if(missing)return null;const stored=await original.call(this,{...args,id:n.snapshotId});return stored?{...stored,snapshot:legacy}:null;}
+      return original.call(this,args);
+    });
+    try{
+      const callsBefore=calls.length;
+      const replay=await readMarketOverviewCatalog(f.context,historical,attemptId,new AbortController().signal,'frozen');
+      assert.deepEqual(replay.catalog.numericSnapshot,legacy);
+      assert.deepEqual(replay.output,attempt.output);
+      assert.equal(calls.length,callsBefore);
+      const forged=structuredClone(historical);(forged.attempts.find(a=>a.id===attemptId)!.output as any).sourceRefs=[];
+      await assert.rejects(readMarketOverviewCatalog(f.context,forged,attemptId,new AbortController().signal,'frozen'));
+      const changed=structuredClone(records);(changed[0].data as any).distributions[0].distribution.rows[0].units=999;
+      const changedSnapshot=createMarketInputSnapshot({scope:n.scope,kind:n.kind,sourceVersion:n.sourceVersion,ruleVersion:n.ruleVersion,collectedAt:n.collectedAt,expectedRecordIds:n.expectedRecordIds,records:changed});
+      (attempt.output as any).numericInputSnapshotId=changedSnapshot.snapshotId;
+      await assert.rejects(readMarketOverviewCatalog(f.context,historical,attemptId,new AbortController().signal,'frozen'));
+      (attempt.output as any).numericInputSnapshotId=legacy.snapshotId;missing=true;
+      await assert.rejects(readMarketOverviewCatalog(f.context,historical,attemptId,new AbortController().signal,'frozen'));
+    }finally{spy.mock.restore();}
+  });
   failPrice=false;await service.retry(f.actor,id,{steps:[{stepId:failed.id,failedAttemptId:failed.latestAttemptId}]},randomUUID());for(let i=0;i<10&&await worker.tick();i++){}
   const next=(await reports.read({actor:f.actor,moduleRunId:id}))!.currentReport!;assert.notEqual(next.attemptId,first.attemptId);assert.equal(next.report.coverage.find(c=>c.dimension==='price-distribution')?.status,'available');
   assert.equal(calls.length,28);for(const step of successes)assert.equal((await view()).steps.find(s=>s.id===step.id)!.latestAttemptId,step.latestAttemptId);

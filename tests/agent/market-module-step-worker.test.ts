@@ -3,6 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { runPostgresMigrations } from '../../server/db/postgres/migrations';
 import { MarketModuleStepWorker } from '../../server/runtime/market-module-step-worker';
+import {MarketOverviewEvidenceError} from '../../server/domain/market-research/overview-catalog-compatibility';
 import type { MarketStepSettlement } from '../../server/db/market-module-execution-repository';
 import { createMarketSemanticFixture } from './helpers/market-semantic-fixture';
 import { startPostgresTestContainer } from './helpers/postgres-test-container';
@@ -74,6 +75,10 @@ test('general market step worker fences preparation and atomic commit', { timeou
     const f = await fixture(); const worker = new MarketModuleStepWorker({ steps: f.stores.steps, handlers: { rules: async () => ({ kind: 'atomic', commit: async () => {} }) } });
     await worker.tick(); await worker.stop(); const view = (await f.view())!;
     assert.equal(view.steps[0].status, 'failed'); assert.deepEqual(view.attempts[0].error, { code: 'internal', retryable: false });
+  });
+  await t.test('overview evidence mismatch retains non-retryable invalid-data classification',async()=>{
+    const f=await fixture();const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{rules:async()=>{throw new MarketOverviewEvidenceError();}}});
+    try{await worker.tick();assert.deepEqual((await f.view())!.attempts[0].error,{code:'invalid-data',retryable:false});}finally{await worker.stop();}
   });
   await t.test('bounded shutdown retains an in-flight database commit handle instead of starting new work', async () => {
     const f = await fixture(), entered = deferred(), release = deferred(); let work = 0;
