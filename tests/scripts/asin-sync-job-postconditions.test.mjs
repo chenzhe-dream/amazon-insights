@@ -462,6 +462,21 @@ test("valid SellerSprite catalog never invokes fallback", () => {
   assert.equal(calls.some(call => call.label === "catalog:sorftime:sync"), false);
 });
 
+test("catalog stage upgrades an old scoped Sorftime profile without re-fetching primary siblings", () => {
+  const old = { asin: "B0H8XB1X9S", marketplace: "US", catalogSource: "sorftime-fallback" };
+  const primary = { asin: "B07PX9Y715", catalogSource: "sellerSprite", synced: true };
+  const calls = [];
+  runCatalogStage({
+    asins: [old.asin, primary.asin], catalogPending: [old.asin], marketplace: "US",
+    catalogProviderPlan: { preferredConnectorId: "sorftime", unavailableConnectorIds: ["sellerSprite"] },
+    providers: { run(input) { calls.push(input); return { succeeded: true }; } },
+    asinsNeedingCatalog: () => [], readCatalogProducts: () => [old, primary], apply: () => {},
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].label, "catalog:sorftime:sync");
+  assert.deepEqual(calls[0].asins, [old.asin]);
+});
+
 test("SellerSprite and Sorftime failures leave only the still-missing ASIN as a catalog gap", () => {
   const asins = ["B0TEST0001", "B0TEST0002", "B0TEST0003"];
   const catalog = new Set([asins[0], asins[2]]);

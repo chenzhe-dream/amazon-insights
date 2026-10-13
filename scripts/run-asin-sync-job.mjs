@@ -13,6 +13,7 @@ import {
   getAsinDataStatus,
   isAsinStageReady,
   readAsinStageReadiness,
+  readAsinStatusSources,
   readImageRemarkStatuses,
 } from "./lib/asin-data-status.mjs";
 import {
@@ -61,6 +62,7 @@ import {
 } from "./lib/provider-diagnostics.mjs";
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
+import { asinsNeedingSorftimeCatalogSync } from "./lib/sorftime-catalog-fallback.mjs";
 import { listingInputFromPersistedJob, partitionImageListingInput } from "./lib/image-remark-listing-input.mjs";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
@@ -583,6 +585,11 @@ export function applyPersistedStagePostcondition(
       stageId,
       stagePatch,
       output: projectOutput(stageId, projectionAsins, {
+        jobId,
+        marketplace: currentJob?.marketplace ?? currentJob?.scope?.marketplace ?? "US",
+        organizationId: currentJob?.scope?.organizationId,
+        projectId: currentJob?.scope?.projectId,
+        runId: currentJob?.scope?.runId,
         stageStatus: status,
         gapReasonCode: gapReasonCode ?? projectionGapItems.find(item => item.causeCode !== "UPSTREAM_EMPTY")?.causeCode ?? (commandSucceeded ? "UPSTREAM_EMPTY" : "CONNECTOR_FAILED"),
         gapItems: projectionGapItems,
@@ -692,7 +699,8 @@ function persistedDataAsins(stageId, data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return [];
   const keyed = (...keys) => keys.flatMap(key => Object.keys(data[key] ?? {}));
   if (stageId === "keywords") return keyed("analysisByAsin");
-  if (stageId === "reviews") return keyed("analysisByAsin", "ratingByAsin");
+  // Ratings do not determine review readiness or remove bounded sample gaps.
+  if (stageId === "reviews") return keyed("analysisByAsin");
   if (stageId === "sales_trend") return keyed("trendByAsin");
   if (stageId === "fba") return keyed("feeByAsin");
   if (stageId === "listing") return keyed("contentByAsin");
@@ -740,6 +748,11 @@ export function projectFinalStageHashes(jobId, job, projectOutput) {
     let projected;
     try {
       projected = projectOutput(stageId, job.asins ?? [], {
+        jobId,
+        marketplace: job.marketplace ?? job.scope?.marketplace ?? "US",
+        organizationId: job.scope?.organizationId,
+        projectId: job.scope?.projectId,
+        runId: job.scope?.runId,
         stageStatus: persisted.stageStatus,
         gapReasonCode: persisted.gap?.reasonCode,
         gapItems: persisted.gap?.items ?? [],
@@ -1057,6 +1070,7 @@ export function runCatalogStage({
   catalogProviderPlan = null,
   providers,
   asinsNeedingCatalog = asinsNeedingCatalogSync,
+  readCatalogProducts = () => readAsinStatusSources().catalogProducts ?? [],
   apply,
 }) {
   const unavailableConnectorIds = new Set(catalogProviderPlan?.unavailableConnectorIds ?? []);
@@ -1082,7 +1096,11 @@ export function runCatalogStage({
     });
   }
 
-  const stillMissing = asinsNeedingCatalog(catalogPending);
+  const catalogProducts = readCatalogProducts();
+  const oldFallbackAsins = catalogPending.filter(asin => catalogProducts.some(product =>
+    product.asin === asin && product.catalogSource === "sorftime-fallback"));
+  const profileUpgrades = asinsNeedingSorftimeCatalogSync(oldFallbackAsins, { catalogProducts, marketplace });
+  const stillMissing = [...new Set([...asinsNeedingCatalog(catalogPending), ...profileUpgrades])];
   let fallbackResult = null;
   if (stillMissing.length && !unavailableConnectorIds.has("sorftime")) {
     try {
@@ -1175,9 +1193,15 @@ async function main() {
   markPreflightUnavailableStages(jobId, job);
   const { asins, marketplace } = job;
   const catalogProviderPlan = catalogProviderPlanForJob(job);
-  const catalogCandidates = asinsNeedingCatalogSync(asins, {
+  const catalogSources = readAsinStatusSources();
+  const existingFallbackAsins = asins.filter(asin => catalogSources.catalogProducts?.some(product =>
+    product.asin === asin && product.catalogSource === "sorftime-fallback"));
+  const catalogCandidates = [...new Set([...asinsNeedingCatalogSync(asins, {
     retryFallback: catalogProviderPlan?.preferredConnectorId !== "sorftime",
-  });
+    sources: catalogSources,
+  }), ...asinsNeedingSorftimeCatalogSync(existingFallbackAsins, {
+    catalogProducts: catalogSources.catalogProducts, marketplace,
+  })])];
   const catalogPending = asinsForSyncStage(job, "catalog", catalogCandidates, asins);
   const providers = createJobProviderController(jobId, job);
 

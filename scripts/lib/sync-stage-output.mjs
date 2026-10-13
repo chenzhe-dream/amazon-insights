@@ -1,6 +1,5 @@
 import { imageRemarkOutcome } from "./image-remark-outcome.mjs";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 
 import { readCachedDataExport } from "./sync-cache.mjs";
@@ -77,6 +76,8 @@ export function isProjectableSyncStage(stageId) {
  *   organizationId?: string;
  *   projectId?: string;
  *   runId?: string;
+ *   jobId?: string;
+ *   marketplace?: string;
  * }} options
  */
 export function projectStageOutput(stageId, asins, {
@@ -91,6 +92,8 @@ export function projectStageOutput(stageId, asins, {
   organizationId,
   projectId,
   runId,
+  jobId,
+  marketplace = "US",
 } = {}) {
   const source = projectionSources[stageId];
   if (!source) throw new TypeError(`Stage ${stageId} cannot be projected`);
@@ -116,6 +119,18 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData);
+  if (stageStatus === "partial" && stageId === "reviews") {
+    // A rating is product_detail evidence, independent of review sample readiness.
+    // The analysis cohort and bounded review gaps continue to use readyAsins.
+    const ratings = readSource(source.rating, readExport);
+    for (const asin of requestedAsins) {
+      if (projectedAsins.includes(asin)) continue;
+      const rating = ratings?.[asin];
+      if (validIndependentReviewRating(rating, asin, {
+        marketplace, updatedAt: draft.updatedAt, jobId, organizationId, projectId, runId,
+      })) data.ratingByAsin[asin] = rating;
+    }
+  }
   if (stageStatus === 'partial' && stageId === 'sales_trend') {
     // Valid observations are evidence even when natural-month readiness is unavailable.
     // Keep the ASIN in the gap; do not promote daily data to monthly readiness.
@@ -194,6 +209,51 @@ function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {
 
 function normalizeAsins(asins) {
   return [...new Set((asins ?? []).map((asin) => String(asin).trim().toUpperCase()).filter(asin => /^[A-Z0-9]{10}$/.test(asin)))].sort();
+}
+
+/**
+ * Validate only the independent rating exception; legacy ready-cohort entries
+ * keep their existing contract. No unknown values are converted to zero.
+ * @param {unknown} value
+ * @param {string} asin
+ * @param {{ marketplace?: string; updatedAt?: string; jobId?: string;
+ * organizationId?: string; projectId?: string; runId?: string }} scope
+ */
+export function validIndependentReviewRating(value, asin, scope = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = /** @type {Record<string, unknown>} */ (value);
+  if (record.asin !== asin || record.marketplace !== (scope.marketplace ?? "US") || record.status !== "ready"
+    || typeof record.rating !== "number" || !Number.isFinite(record.rating) || record.rating < 0 || record.rating > 5
+    || (record.reviewCount != null && (!Number.isSafeInteger(record.reviewCount) || record.reviewCount < 0))
+    || typeof record.fetchedAt !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(record.fetchedAt)
+    || !Number.isFinite(Date.parse(record.fetchedAt))
+    || (scope.updatedAt && Date.parse(record.fetchedAt) > Date.parse(scope.updatedAt))
+    || (record.source != null && record.source !== "Sorftime")) return false;
+  if (record.provenance != null) {
+    const provenance = record.provenance;
+    if (typeof provenance !== "object" || Array.isArray(provenance)
+      || provenance.asin !== asin || provenance.marketplace !== record.marketplace || provenance.connector !== "sorftime"
+      || (scope.jobId && provenance.jobId !== scope.jobId)
+      || (provenance.fetchedAt != null && provenance.fetchedAt !== record.fetchedAt)
+      || ["organizationId", "projectId", "runId"].some(key =>
+        scope[key] && provenance[key] != null && provenance[key] !== scope[key])) return false;
+  }
+  return true;
+}
+
+/** @param {unknown} value
+ * @param {{ asins: readonly string[]; marketplace?: string; updatedAt?: string; jobId?: string;
+ * organizationId?: string; projectId?: string; runId?: string }} scope
+ */
+export function validIndependentReviewRatings(value, scope) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = /** @type {Record<string, unknown>} */ (value);
+  const analysis = data.analysisByAsin, ratings = data.ratingByAsin;
+  if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)
+    || !ratings || typeof ratings !== "object" || Array.isArray(ratings)) return false;
+  return Object.entries(ratings).every(([asin, rating]) =>
+    Object.hasOwn(analysis, asin) ||
+    (scope.asins.includes(asin) && validIndependentReviewRating(rating, asin, scope)));
 }
 
 function boundedGap(state, reasonCode, entries, requestedAsins, dataAsins) {

@@ -1,9 +1,47 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyPersistedStagePostcondition } from "../../scripts/run-asin-sync-job.mjs";
+import { applyPersistedStagePostcondition, projectFinalStageHashes } from "../../scripts/run-asin-sync-job.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 
 const asins = ["B09NNDX731", "B0BHHP21DP", "B0CZRBL776"];
+
+test("review siblings and final hash replay preserve independent scores and sample gaps", () => {
+  const cohort = asins.slice(0, 2);
+  const now = "2026-10-13T00:00:00.000Z";
+  const job = { jobId: "review-cohort", jobVersion: 1, marketplace: "US", asins: cohort,
+    stages: [{ id: "reviews", status: "partial" }], outputs: [],
+    asinProgress: Object.fromEntries(cohort.map(asin => [asin, { reviews: { status: "upstream-empty" } }])),
+  };
+  const analysis = { [cohort[0]]: { status: "ready", summary: "Verified samples" } };
+  const ratings = Object.fromEntries(cohort.map(asin => [asin, {
+    asin, marketplace: "US", fetchedAt: now, status: "ready", rating: 4.6, reviewCount: 120,
+  }]));
+  const project = (stage, candidates, options) => projectStageOutput(stage, candidates, { ...options,
+    readExport: (_file, name) => name === "sorftimeRatingData" ? ratings : analysis });
+  for (const asin of cohort) {
+    applyPersistedStagePostcondition(job.jobId, "reviews", [asin], {
+      now: () => now, readJob: () => job,
+      readReadiness: () => ({ items: [{ asin, reviews: analysis[asin] ? "ready" : "missing" }],
+        missingAsins: analysis[asin] ? [] : [asin] }),
+      markModule: (_id, candidate, stage, patch) => { job.asinProgress[candidate][stage] = patch; },
+      projectOutput: project,
+      commitStage: (_id, { stageId, stagePatch, output }) => {
+        job.stages = [{ id: stageId, ...stagePatch }]; job.outputs = [output];
+      },
+    });
+  }
+  const output = job.outputs[0];
+  assert.deepEqual(output.data.analysisByAsin, analysis);
+  assert.deepEqual(output.data.ratingByAsin, ratings);
+  assert.deepEqual(output.gap.items, [{ asin: cohort[1], causeCode: "UPSTREAM_EMPTY" }]);
+  assert.equal(job.asinProgress[cohort[1]].reviews.status, "upstream-empty");
+  assert.deepEqual(projectFinalStageHashes(job.jobId, job, project), { reviews: output.contentHash });
+  ratings[cohort[1]].rating = 4.7;
+  assert.throws(() => projectFinalStageHashes(job.jobId, job, project), /content differs from its source/);
+  ratings[cohort[1]].rating = 4.6;
+  const resumed = { ...job, resumeStages: ["reviews", "build"] };
+  assert.deepEqual(projectFinalStageHashes(resumed.jobId, resumed, project), { reviews: output.contentHash });
+});
 
 test("failed command with an empty diagnostic map remains failed, never verified upstream empty", () => {
   const { job, complete } = fixture();

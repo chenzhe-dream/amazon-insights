@@ -1,7 +1,69 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { PROJECTABLE_SYNC_STAGE_IDS, projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+
+test("partial reviews retain scoped ratings independently without claiming missing review samples ready", () => {
+  const asins = ["B07PX9Y715", "B0BT9F1F72"];
+  const ratings = Object.fromEntries(asins.map(asin => [asin, {
+    asin, marketplace: "US", fetchedAt: "2026-10-13", status: "ready", rating: 4.6, reviewCount: 120,
+  }]));
+  const output = projectStageOutput("reviews", asins, {
+    stageStatus: "partial", dataAsins: [asins[0]],
+    gapItems: [{ asin: asins[1], causeCode: "UPSTREAM_EMPTY", operation: "product_reviews" }],
+    readExport: (_file, name) => name === "sorftimeRatingData" ? ratings
+      : { [asins[0]]: { status: "ready" }, [asins[1]]: { status: "empty" } },
+  });
+  assert.deepEqual(Object.keys(output.data.analysisByAsin), [asins[0]]);
+  assert.deepEqual(output.data.ratingByAsin, ratings);
+  assert.equal(output.stageStatus, "partial");
+  assert.deepEqual(output.gap.items, [{ asin: asins[1], causeCode: "UPSTREAM_EMPTY", operation: "product_reviews" }]);
+});
+
+test("independent rating capture rejects invalid numbers, identities and provenance without importing unrelated ASINs", () => {
+  const asin = "B07PX9Y715", unrelated = "B0OTHER001";
+  const scope = { jobId: "rating-capture", organizationId: "org", projectId: "project", runId: "run", marketplace: "US" };
+  const updatedAt = "2026-10-13T12:00:00.000Z";
+  const valid = { asin, marketplace: "US", fetchedAt: "2026-10-13", status: "ready", rating: 4.6, reviewCount: 120 };
+  const capture = record => projectStageOutput("reviews", [asin], { ...scope, updatedAt,
+    stageStatus: "partial", dataAsins: [],
+    readExport: (_file, name) => name === "sorftimeRatingData" ? { [asin]: record, [unrelated]: { ...valid, asin: unrelated } } : {},
+  });
+  for (const patch of [{ asin: unrelated }, { marketplace: "CA" }, { status: "empty" }, { rating: null },
+    { rating: -1 }, { rating: 6 }, { rating: "4.6" }, { rating: Infinity }, { reviewCount: -1 }, { reviewCount: 1.5 },
+    { fetchedAt: "unknown" }, { fetchedAt: "2026-10-14" }, { source: "Untrusted" },
+    { provenance: { jobId: "other-job", asin, marketplace: "US", connector: "sorftime" } },
+    { provenance: { jobId: scope.jobId, asin, marketplace: "US", connector: "other" } }]) {
+    assert.deepEqual(capture({ ...valid, ...patch }).data.ratingByAsin, {}, JSON.stringify(patch));
+  }
+  const verified = { ...valid, source: "Sorftime", provenance: { ...scope, asin, connector: "sorftime" } };
+  const output = capture(verified);
+  assert.deepEqual(output.data.ratingByAsin, { [asin]: verified });
+  assert.deepEqual(output.data.analysisByAsin, {});
+  assert.deepEqual(output.gap.items, [{ asin, causeCode: "UPSTREAM_EMPTY" }]);
+});
+
+test("local cropped balance-board product responses retain four ratings with two review-ready products", () => {
+  const details = JSON.parse(readFileSync(new URL("../fixtures/sorftime/balance-board-product-details.json", import.meta.url), "utf8"));
+  const ratings = Object.fromEntries(details.map(({ data }) => [data.asin, {
+    asin: data.asin, marketplace: "US", fetchedAt: "2026-10-13", status: "ready",
+    rating: data.star_rating, reviewCount: data.review_count,
+  }]));
+  const asins = Object.keys(ratings);
+  const ready = asins.slice(0, 2);
+  const analysis = Object.fromEntries(ready.map(asin => [asin, { status: "ready" }]));
+  // Replay current evidence in a controlled sample cohort; this is not an original-job reconstruction.
+  const output = projectStageOutput("reviews", asins, {
+    stageStatus: "partial", dataAsins: ready, updatedAt: "2026-10-13T12:00:00.000Z",
+    readExport: (_file, name) => name === "sorftimeRatingData" ? ratings : analysis,
+  });
+  assert.equal(Object.keys(output.data.ratingByAsin).length, 4);
+  assert.deepEqual(output.data.analysisByAsin, analysis);
+  assert.equal(output.data.ratingByAsin.B0H8XB1X9S.rating, 4.2);
+  assert.equal(output.data.ratingByAsin.B0G5GS3XGV.reviewCount, 19);
+  assert.equal(output.gap.items.length, 2);
+});
 
 test("partial projections retain ready data and an exact bounded gap", () => {
   const asin = "B0TEST0091";

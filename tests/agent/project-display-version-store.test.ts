@@ -105,6 +105,35 @@ test("completed job publishes one scoped durable display version with persisted 
   assert.equal((await pool.query("SELECT current_display_version_id FROM projects WHERE id=$1", [ids.projectId])).rows[0]?.current_display_version_id, published.versionId);
 });
 
+test("publication rejects tampered independent ratings and retains only genuine review and rating gaps", async () => {
+  const { pool, ids, store } = await fixture({ asins: ASINS.slice(0, 2) });
+  const first = ASINS[0]!, second = ASINS[1]!;
+  const valid = { asin: second, marketplace: "US", status: "ready", rating: 4.6, reviewCount: 120, fetchedAt: NOW };
+  const gap = { state: "partial", reasonCode: "UPSTREAM_EMPTY", items: [{ asin: second, causeCode: "UPSTREAM_EMPTY" }] };
+  const save = async (rating: Record<string, unknown>) => {
+    const data = { analysisByAsin: { [first]: { status: "ready", summary: "Verified samples" } },
+      ratingByAsin: { [first]: { rating: null, status: "empty" }, [second]: rating } };
+    await pool.query(`UPDATE sync_job_stage_outputs SET stage_status='partial',data_json=$2::jsonb,
+      gap_json=$3::jsonb,content_hash=$4 WHERE job_id=$1 AND stage_id='reviews'`,
+    [ids.jobId, JSON.stringify(data), JSON.stringify(gap), hash({ stage: "reviews", data, gap })]);
+  };
+  for (const patch of [{ asin: first }, { marketplace: "CA" }, { rating: -1 }, { rating: 6 },
+    { rating: null }, { reviewCount: -1 }, { source: "Untrusted" }, { status: "empty" },
+    { provenance: { jobId: "other-job", asin: second, marketplace: "US", connector: "sorftime" } }]) {
+    await save({ ...valid, ...patch });
+    await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+      projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null }),
+    /Independent review rating evidence is invalid/, JSON.stringify(patch));
+  }
+  await save(valid);
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  assert.ok(current.gaps.some(item => item.asin === second && item.field === "reviews.analysisByAsin"));
+  assert.ok(!current.gaps.some(item => item.asin === second && item.field === "reviews.ratingByAsin"));
+  assert.ok(current.gaps.some(item => item.asin === first && item.field === "reviews.ratingByAsin"));
+  assert.ok(!current.gaps.some(item => item.asin === first && item.field === "reviews.analysisByAsin"));
+});
+
 test("a completed job with no usable stage data cannot replace the current report", async () => {
   const { pool, ids, store } = await fixture();
   const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,

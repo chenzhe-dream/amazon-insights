@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { EntityIdSchema, MarketplaceSchema, LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
+import { validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
 import { ImageRemarkOverlayEntrySchema, type ImageRemarkOverlayEntry } from "../../../shared/image-remark-overlay";
 import {
   imageRemarkEvidenceSummary,
@@ -167,7 +168,8 @@ function catalogEvidence(value: ProjectCatalogEvidence): ProjectCatalogEvidence 
     capturedAt: dateTime(value.capturedAt), ...(value.sourceJobId ? { sourceJobId: value.sourceJobId } : {}) };
 }
 
-function outputFromRow(row: OutputRow, expected: { organizationId: string; projectId: string; runId: string; jobId: string }): StageOutputProjection {
+function outputFromRow(row: OutputRow, expected: { organizationId: string; projectId: string; runId: string; jobId: string;
+  asins: readonly string[]; marketplace: string }): StageOutputProjection {
   if (row.organization_id !== expected.organizationId || row.project_id !== expected.projectId ||
       row.run_id !== expected.runId || row.job_id !== expected.jobId ||
       !stages.includes(row.stage_id as ProjectableSyncStage) ||
@@ -183,6 +185,10 @@ function outputFromRow(row: OutputRow, expected: { organizationId: string; proje
   }
   const branch = { stage: row.stage_id, ...(data ? { data } : {}), ...(gap ? { gap } : {}) };
   if (hash(branch) !== row.content_hash) throw new ProjectDisplayVersionConflictError("Stage output hash mismatch");
+  if (row.stage_id === "reviews" && row.stage_status === "partial"
+    && !validIndependentReviewRatings(data, { ...expected, updatedAt: dateTime(row.updated_at) })) {
+    throw new ProjectDisplayVersionConflictError("Independent review rating evidence is invalid");
+  }
   return LocalDataStageOutputResponseSchema.parse({
     stage: row.stage_id as ProjectableSyncStage,
     stageStatus: row.stage_status as StageOutputProjection["stageStatus"],
@@ -288,7 +294,13 @@ export function gapsFor(asins: readonly string[], catalog: readonly Record<strin
         const explicitGap = output.gap?.items?.some(item => item.asin === asin);
         const salesRecord = stage === "sales_trend" ? record(values[asin]) : null;
         const nonreadySales = salesRecord && typeof salesRecord.status === "string" && salesRecord.status !== "ready";
-        if (!Object.hasOwn(values, asin) || explicitGap || nonreadySales) {
+        // Review sample gaps do not erase separately validated product ratings.
+        const reviewRating = stage === "reviews" && field === "ratingByAsin";
+        const ratingRecord = reviewRating ? record(values[asin]) : null;
+        const missingRating = ratingRecord && !(typeof ratingRecord.rating === "number"
+          && Number.isFinite(ratingRecord.rating) && ratingRecord.rating >= 0 && ratingRecord.rating <= 5
+          && (ratingRecord.status === undefined || ratingRecord.status === "ready"));
+        if (!Object.hasOwn(values, asin) || (explicitGap && !reviewRating) || nonreadySales || missingRating) {
           result.push({ asin, field: `${stage}.${field}`, reasonCode: gapReason(output.gap, asin) });
         }
       }
@@ -623,6 +635,7 @@ export class PostgresProjectDisplayVersionStore {
         const projection = outputFromRow(output, {
           organizationId: input.organizationId, projectId: input.projectId,
           runId: job.run_id, jobId: input.jobId,
+          asins: asins(job.asins), marketplace: job.marketplace,
         });
         stageOutputs[output.stage_id as ProjectableSyncStage] = projection.stage === 'price_strategy'
           ? bindCapturedPriceStrategyProjection({ output: projection, sourceOrganizationId: output.organization_id,

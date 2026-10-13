@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
 import { StageOutputGapSchema } from "../../../shared/agent-contracts";
+import { validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
 
 import type { PostgresQueryContext } from "./query-context";
 import { StaleProjectDisplayCandidateError } from "./project-display-version-store";
@@ -2326,6 +2327,15 @@ function validScopedStageOutput(
   const stage = stages.find((candidate) => candidate.id === output.stage);
   if (!stage || stage.status !== output.stageStatus) return false;
   const hasData = output.data !== undefined && validStageData(output.stage, output.data);
+  if (hasData && output.stage === "reviews" && output.stageStatus === "partial") {
+    if (!validIndependentReviewRatings(output.data, { asins: job.asins, marketplace: job.marketplace,
+      updatedAt: output.updatedAt, jobId: job.jobId, organizationId: job.organizationId,
+      projectId: job.projectId, runId: job.runId })) return false;
+    const data = output.data!;
+    const independent = Object.keys(data.ratingByAsin as Record<string, unknown>).some(asin =>
+      !Object.hasOwn(data.analysisByAsin as Record<string, unknown>, asin));
+    if (independent && !stageOutputHashMatches(output)) return false;
+  }
   const parsedGap = output.stageStatus === "done"
     ? null
     : StageOutputGapSchema.safeParse(output.gap);

@@ -19,6 +19,7 @@ import { SyncJobWorkerHandler } from "../../server/services/sync-job-worker-hand
 import { LocalDataStageOutputResponseSchema } from "../../shared/agent-contracts";
 import { createStageOutputOwner } from "../../app/lib/stage-output-browser";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
+import { persistedStageOutputContentHash } from "../../scripts/lib/sync-stage-output.mjs";
 import {
   startPostgresTestContainer,
   type PostgresTestContainer,
@@ -60,6 +61,85 @@ async function seedCanonicalScope(
     [input.runId, input.projectId, actorId, NOW, `stage-output:${input.projectId}`, input.runId],
   );
 }
+
+test("independent rating persists and publishes while review analysis remains partial", async () => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const queries = new PostgresQueryContext(pool);
+  const versions = new PostgresProjectDisplayVersionStore(queries);
+  const store = new PostgresSyncJobStore(queries, versions);
+  const organizationId = randomUUID(), projectId = randomUUID(), runId = randomUUID(), jobId = randomUUID();
+  const asins = ["B07PX9Y715", "B0BT9F1F72"];
+  await seedCanonicalScope(pool, { organizationId, projectId, runId });
+  await pool.query("UPDATE projects SET asins_json=$2::jsonb WHERE id=$1", [projectId, JSON.stringify(asins)]);
+  const stages = ["keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
+    "child_sales", "price_strategy", "image_remarks"];
+  await store.admit({ jobId, organizationId, projectId, runId, actorId: null, marketplace: "US", asins,
+    fingerprint: `independent-rating:${jobId}`, createdAt: NOW, currentStageId: "reviews", message: "Queued",
+    stages: stages.map(id => ({ id, label: id, kind: "auto" as const, status: "active" as const, estimatedSeconds: 1 })),
+  });
+  const workerId = "independent-rating-worker";
+  const lease = await store.claimNext({ workerId, leaseMs: 30_000, wholeJobLimit: 1, claimedAt: NOW });
+  assert.ok(lease);
+  const ratings = Object.fromEntries(asins.map(asin => [asin, {
+    asin, marketplace: "US", fetchedAt: NOW, status: "ready", rating: 4.6, reviewCount: 120,
+  }]));
+  // Seed the intended fixed-map body independently of capture to test both downstream boundaries.
+  const data = { analysisByAsin: { [asins[0]!]: { status: "ready", summary: "Verified samples" } }, ratingByAsin: ratings };
+  const gap = { state: "partial" as const, reasonCode: "UPSTREAM_EMPTY" as const,
+    items: [{ asin: asins[1]!, causeCode: "UPSTREAM_EMPTY" as const }] };
+  const draft: StageOutputDraft = { organizationId, projectId, runId, stage: "reviews", stageStatus: "partial",
+    updatedAt: NOW, data, gap, contentHash: persistedStageOutputContentHash({ stage: "reviews", stageStatus: "partial", data, gap }) };
+  await store.recordProgress({ jobId, leaseGeneration: lease.leaseGeneration, workerId, recordedAt: NOW,
+    stage: { id: "reviews", status: "partial", completedAt: NOW }, outputs: [draft] });
+  const saved = await store.readStageOutput({ organizationId, projectId, runId, jobId, stage: "reviews" });
+  assert.deepEqual(saved?.data?.ratingByAsin, ratings);
+  await store.complete({ jobId, leaseGeneration: lease.leaseGeneration, workerId, completedAt: NOW, message: "done" });
+  const current = await versions.readCurrent({ organizationId, projectId });
+  assert.equal(current?.stageOutputs.reviews.stageStatus, "partial");
+  assert.deepEqual(current?.stageOutputs.reviews.data?.ratingByAsin, ratings);
+  assert.ok(current?.gaps.some(item => item.asin === asins[1] && item.field === "reviews.analysisByAsin"));
+  assert.ok(!current?.gaps.some(item => item.field === "reviews.ratingByAsin"));
+});
+
+test("partial review persistence rejects unbound or invalid independent rating evidence", async () => {
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await postgres.pool.query(`CREATE SCHEMA ${schema}`);
+  const pool = postgres.createPool({ searchPath: schema });
+  await runPostgresMigrations(pool);
+  const store = new PostgresSyncJobStore(new PostgresQueryContext(pool));
+  const organizationId = randomUUID(), projectId = randomUUID(), runId = randomUUID(), jobId = randomUUID();
+  const asin = "B07PX9Y715";
+  await seedCanonicalScope(pool, { organizationId, projectId, runId });
+  await store.admit({ jobId, organizationId, projectId, runId, actorId: null, marketplace: "US", asins: [asin],
+    fingerprint: `rating-guards:${jobId}`, createdAt: NOW, currentStageId: "reviews", message: "Queued",
+    stages: [{ id: "reviews", label: "reviews", kind: "auto", status: "active", estimatedSeconds: 1 }],
+  });
+  const workerId = "rating-guards-worker";
+  const lease = await store.claimNext({ workerId, leaseMs: 30_000, wholeJobLimit: 1, claimedAt: NOW });
+  assert.ok(lease);
+  const valid = { asin, marketplace: "US", fetchedAt: NOW, status: "ready", rating: 4.6, reviewCount: 120 };
+  for (const patch of [{ asin: "B0OTHER001" }, { marketplace: "CA" }, { rating: -1 }, { rating: 6 },
+    { rating: null }, { reviewCount: -1 }, { status: "empty" }, { fetchedAt: "unknown" }, { source: "Untrusted" },
+    { provenance: { jobId: "other-job", asin, marketplace: "US", connector: "sorftime" } }]) {
+    const data = { analysisByAsin: {}, ratingByAsin: { [asin]: { ...valid, ...patch } } };
+    const gap = { state: "partial" as const, reasonCode: "UPSTREAM_EMPTY" as const, items: [{ asin, causeCode: "UPSTREAM_EMPTY" as const }] };
+    const draft: StageOutputDraft = { organizationId, projectId, runId, stage: "reviews", stageStatus: "partial",
+      updatedAt: NOW, data, gap, contentHash: persistedStageOutputContentHash({ stage: "reviews", stageStatus: "partial", data, gap }) };
+    await assert.rejects(store.recordProgress({ jobId, leaseGeneration: lease.leaseGeneration, workerId,
+      recordedAt: NOW, stage: { id: "reviews", status: "partial", completedAt: NOW }, outputs: [draft] }),
+    SyncJobDataError, JSON.stringify(patch));
+  }
+  const data = { analysisByAsin: {}, ratingByAsin: { [asin]: valid } };
+  const gap = { state: "partial" as const, reasonCode: "UPSTREAM_EMPTY" as const, items: [{ asin, causeCode: "UPSTREAM_EMPTY" as const }] };
+  await assert.rejects(store.recordProgress({ jobId, leaseGeneration: lease.leaseGeneration, workerId,
+    recordedAt: NOW, stage: { id: "reviews", status: "partial", completedAt: NOW }, outputs: [{
+      organizationId, projectId, runId, stage: "reviews", stageStatus: "partial", data, gap,
+      updatedAt: NOW, contentHash: "a".repeat(64),
+    }] }), SyncJobDataError);
+});
 
 test("stage outputs require canonical ownership and a currently terminal stage", async () => {
   const schema = `test_${randomUUID().replaceAll("-", "")}`;
