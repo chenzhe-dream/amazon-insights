@@ -7,6 +7,17 @@ export type SorftimeRatingRecord = {
   statusMessage?: string;
   rating: number | null;
   reviewCount: number | null;
+  source?: "Sorftime";
+  provenance?: {
+    jobId?: string;
+    asin: string;
+    marketplace: string;
+    fetchedAt: string;
+    connector: "sorftime";
+    stageId: "rating";
+    operation: "product_detail";
+    tool: "product_detail";
+  };
 };
 
 export const sorftimeRatingMeta = {

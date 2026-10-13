@@ -10,6 +10,7 @@ import {
   shouldUseCachedRecord,
 } from "./lib/sync-cache.mjs";
 import { hasCatalogRatingReviewConflict } from "./lib/commerce-data-validity.mjs";
+import { normalizeSorftimeDetailIdentity } from "./lib/sorftime-profile-normalize.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -49,6 +50,7 @@ export function shouldReuseSorftimeRatingRecord({ record, catalog, asin, marketp
 async function main() {
   const key = readSorftimeKey();
   const marketplace = process.env.SORFTIME_MARKETPLACE ?? "US";
+  const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const asins = process.env.SORFTIME_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const existing = readCachedDataExport(outPath, "sorftimeRatingData");
@@ -88,11 +90,18 @@ async function main() {
     process.stdout.write(`[rating] ${asin} ... `);
     try {
       const detailRaw = await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace });
-      const detail = detailRaw?.data ?? detailRaw;
+      const detail = normalizeSorftimeDetailIdentity(detailRaw, { asin, marketplace });
       const rating = toNumber(detail?.star_rating);
       const reviewCount = toNumber(detail?.review_count);
 
-      records[asin] = buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog: catalogByAsin.get(asin) });
+      records[asin] = {
+        ...buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog: catalogByAsin.get(asin) }),
+        source: "Sorftime",
+        provenance: {
+          ...(jobId ? { jobId } : {}), asin, marketplace, fetchedAt,
+          connector: "sorftime", stageId: "rating", operation: "product_detail", tool: "product_detail",
+        },
+      };
       console.log(records[asin].status === "ready" ? `${rating ?? "—"} · ${reviewCount?.toLocaleString() ?? "—"} reviews` : "empty");
     } catch (error) {
       if (shouldReuseSorftimeRatingRecord({
@@ -128,6 +137,17 @@ export type SorftimeRatingRecord = {
   statusMessage?: string;
   rating: number | null;
   reviewCount: number | null;
+  source?: "Sorftime";
+  provenance?: {
+    jobId?: string;
+    asin: string;
+    marketplace: string;
+    fetchedAt: string;
+    connector: "sorftime";
+    stageId: "rating";
+    operation: "product_detail";
+    tool: "product_detail";
+  };
 };
 
 export const sorftimeRatingMeta = ${JSON.stringify(

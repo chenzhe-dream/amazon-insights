@@ -115,6 +115,7 @@ for (const includeReusableSibling of [false, true]) {
       },
     });
 
+    assert.equal(result.exitCode, 1, result.stderr);
     assert.notEqual(result.records[rejectedAsin]?.status, "ready");
     assert.equal(result.records[rejectedAsin]?.status, "error");
     if (includeReusableSibling) assert.deepEqual(result.records[siblingAsin], sibling);
@@ -138,7 +139,11 @@ test("price strategy UI export preserves machine-readable ready status and curre
 
 async function runRatingScriptWithoutKey(t, { asins, catalog, existing }) {
   const directory = await mkdtemp(path.join(tmpdir(), "sorftime-rating-no-key-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(() => {
+    const resolved = path.resolve(directory);
+    assert.ok(resolved.startsWith(path.resolve(tmpdir()) + path.sep));
+    return rm(resolved, { recursive: true, force: true });
+  });
   await mkdir(path.join(directory, "scripts"), { recursive: true });
   await mkdir(path.join(directory, "app"), { recursive: true });
   await copyFile(
@@ -150,37 +155,47 @@ async function runRatingScriptWithoutKey(t, { asins, catalog, existing }) {
   await writeFile(path.join(directory, "app", "sorftime-rating-data.ts"),
     `export const sorftimeRatingData = ${JSON.stringify(existing, null, 2)};\n`, "utf8");
   const loaderPath = path.join(directory, "production-import-loader.mjs");
+  await writeFile(path.join(directory, "no-key-client.mjs"),
+    `export function readSorftimeKey() { return null; }
+export async function callSorftimeTool() { throw new Error("Unexpected provider call in no-key fixture"); }\n`, "utf8");
   await writeFile(loaderPath, `import path from "node:path";
 import { pathToFileURL } from "node:url";
 const root = ${JSON.stringify(root)};
 const mapped = new Map([
-  ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
   ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],
   ["commerce-data-validity.mjs", "scripts/lib/commerce-data-validity.mjs"],
+  ["generated-app-data-path.mjs", "scripts/lib/generated-app-data-path.mjs"],
+  ["sorftime-profile-normalize.mjs", "scripts/lib/sorftime-profile-normalize.mjs"],
 ]);
 export async function resolve(specifier, context, nextResolve) {
   const filename = specifier.split("/").at(-1);
+  if (specifier === "./lib/sorftime-mcp-client.mjs") {
+    return { url: new URL("./no-key-client.mjs", import.meta.url).href, shortCircuit: true };
+  }
   if (specifier.startsWith(".") && mapped.has(filename)) {
     return { url: pathToFileURL(path.join(root, mapped.get(filename))).href, shortCircuit: true };
   }
   return nextResolve(specifier, context);
 }\n`, "utf8");
+  let stderr = "";
   const exitCode = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
       "--experimental-loader", pathToFileURL(loaderPath).href,
       path.join(directory, "scripts", "build-sorftime-rating.mjs"),
     ], {
       cwd: directory,
-      env: { ...process.env, NODE_ENV: "test", SORFTIME_MCP_KEY: "", SORFTIME_ASINS: asins.join(","), SORFTIME_MARKETPLACE: "US" },
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: directory, TMP: directory,
+        NODE_ENV: "test", SORFTIME_MCP_KEY: "", SORFTIME_ASINS: asins.join(","), SORFTIME_MARKETPLACE: "US" },
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
     });
-    child.stderr.resume();
+    child.stderr.on("data", chunk => { stderr += chunk; });
     child.once("error", reject);
     child.once("close", resolve);
   });
   return {
     exitCode,
+    stderr,
     records: readCachedDataExport(path.join(directory, "app", "sorftime-rating-data.ts"), "sorftimeRatingData"),
   };
 }

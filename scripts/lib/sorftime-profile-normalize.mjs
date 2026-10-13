@@ -14,6 +14,9 @@ export function normalizeSorftimeDetailIdentity(raw, { asin, marketplace }) {
   if (Object.hasOwn(data, 'asin') && (typeof data.asin !== 'string' || !/^[A-Z0-9]{10}$/.test(data.asin) || data.asin !== asin)) {
     throw new TypeError('Sorftime catalog ASIN mismatch');
   }
+  if (Object.hasOwn(raw, 'asin') && (typeof raw.asin !== 'string' || raw.asin !== asin)) {
+    throw new TypeError('Sorftime catalog ASIN mismatch');
+  }
   if (raw.doc != null && data.asin !== asin) throw new TypeError('Sorftime catalog ASIN missing');
   for (const value of [raw.marketplace, raw.amz_site, data.marketplace, data.amz_site]) {
     if (value !== undefined && (typeof value !== 'string' || !/^[A-Z]{2}$/.test(value.trim().toUpperCase()) || (marketplace != null && value.trim().toUpperCase() !== marketplace.trim().toUpperCase()))) {
