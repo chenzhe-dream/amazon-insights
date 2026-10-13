@@ -140,7 +140,7 @@ test("generated Sorftime FBA type retains optional legacy display fields consume
 
 test("FBA table renders each ready record with its truthful source label", () => {
   const source = fs.readFileSync(
-    path.resolve(import.meta.dirname, "../../app/page.tsx"),
+    path.resolve(import.meta.dirname, "../../app/project-report-views/competitor-overview.tsx"),
     "utf8",
   );
   const fbaRow = source.slice(
@@ -153,6 +153,17 @@ test("FBA table renders each ready record with its truthful source label", () =>
     fbaRow,
     /record\?\.source === "keepa" \? "Keepa · 配送费" : "Sorftime · FBA 费用估算"/,
   );
+});
+
+test('FBA unknown sentinel stays empty and package arrays stay usable', () => {
+  const input = { asin: 'B0G5GS3XGV', marketplace: 'US', fetchedAt: '2026-10-13', response: { data: { asin: 'B0G5GS3XGV', is_fba: false, fba_fee: -1, package_size_cm: ['76.2,30.48,14.61'] } } };
+  const record = buildSorftimeFbaRecord(input);
+  assert.equal(record.status, 'empty');
+  assert.equal(record.fbaFee, null);
+  assert.equal(record.packageSize, '76.2 x 30.48 x 14.61 cm');
+  for (const data of [{ asin: 'B0OTHER001', fba_fee: 4 }, { asin: false, fba_fee: 4 }, { marketplace: 'UK', fba_fee: 4 }, { fba_fee: -2 }]) {
+    assert.throws(() => buildSorftimeFbaRecord({ ...input, response: { data } }), TypeError);
+  }
 });
 
 test("Sorftime FBA record is verified empty when the product-detail fee is absent", () => {

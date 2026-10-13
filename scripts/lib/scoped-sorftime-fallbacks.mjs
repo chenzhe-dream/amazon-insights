@@ -10,6 +10,9 @@ function scopeOf(evidence) {
 function scopeMatches(evidence, expected) {
   return evidence
     && evidence.source === "Sorftime"
+    && typeof evidence.asin === 'string' && /^[A-Z0-9]{10}$/.test(evidence.asin)
+    && typeof evidence.marketplace === 'string' && /^[A-Z]{2}$/.test(evidence.marketplace)
+    && typeof evidence.jobId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(evidence.jobId)
     && (!expected || Object.entries(expected).every(([key, value]) => evidence[key] === value));
 }
 

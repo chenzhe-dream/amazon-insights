@@ -1,9 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { syncCatalogAsinsFromSorftime } from "../../scripts/build-catalog-from-sorftime.mjs";
 import { buildScopedSorftimeModuleResult } from "../../scripts/lib/scoped-sorftime-fallbacks.mjs";
-import { createProductVariationsEvidence } from "../../scripts/lib/scoped-sorftime-evidence.mjs";
+import { createProductVariationsEvidence, createProductDetailEvidence, writeScopedSorftimeEvidence, readScopedSorftimeEvidence } from "../../scripts/lib/scoped-sorftime-evidence.mjs";
+
+test('current category and package shapes survive scoped evidence write/read and catalog dispatch', async t => {
+  const responses = JSON.parse(fs.readFileSync(new URL('../fixtures/sorftime/balance-board-product-details.json', import.meta.url), 'utf8'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-evidence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const detail of responses) {
+    const scope = { jobId: 'balance-board-job', marketplace: 'US', asin: detail.data.asin };
+    const evidence = createProductDetailEvidence({ ...scope, detail });
+    writeScopedSorftimeEvidence(evidence, { root });
+    const retained = readScopedSorftimeEvidence({ ...scope, operation: 'product_detail' }, { root });
+    assert.equal(retained.data.categoryName, 'Balance Boards');
+    assert.equal(retained.data.topCategory, 'Sports & Outdoors');
+    assert.equal(retained.data.nodeId, '3407861');
+    assert.equal(retained.data.packageSize, detail.data.package_size_cm ? detail.data.package_size_cm[0].replaceAll(',', ' x ') + ' cm' : null);
+    const result = await syncCatalogAsinsFromSorftime({ asins: [scope.asin], marketplace: 'US', key: 'fixture-key', jobId: scope.jobId, callTool: async () => detail, appendEntry: () => true, writeEvidence: value => writeScopedSorftimeEvidence(value, { root }) });
+    assert.deepEqual(result, { added: [scope.asin], failed: [] });
+  }
+});
+
+test('scoped product evidence rejects malformed or cross-market identity', () => {
+  for (const detail of [{ asin: false }, { asin: 'B0OTHER001' }, { asin: 'B0TEST0001', marketplace: 'UK' }]) {
+    assert.throws(() => createProductDetailEvidence({ jobId: 'job-one', marketplace: 'US', asin: 'B0TEST0001', detail }), TypeError);
+  }
+});
+
+test('legacy category text remains available in scoped product evidence', () => {
+  const evidence = createProductDetailEvidence({ jobId: 'legacy-job', marketplace: 'US', asin: 'B0TEST0001', detail: { category: 'Legacy category', price: 30 } });
+  assert.equal(evidence.data.categoryName, 'Legacy category');
+});
+
+test('scoped fallback rejects malformed envelope identity', () => {
+  const base = { jobId: 'job-one', marketplace: 'US', asin: 'B0TEST0001', operation: 'product_detail', source: 'Sorftime', data: { price: 64.99 } };
+  for (const invalid of [{ asin: 'malformed' }, { marketplace: 'malformed' }, { jobId: '' }]) {
+    assert.equal(buildScopedSorftimeModuleResult({ module: 'price_strategy', evidenceByOperation: { product_detail: { ...base, ...invalid } } }), null);
+  }
+});
 
 test("same-job catalog evidence supplies five truthful module fallbacks with normal-result precedence", async () => {
   const asin = "B086ZLGLV3";

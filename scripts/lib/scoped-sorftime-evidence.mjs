@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getProjectRoot } from "./project-root.mjs";
 import { resolveRuntimeRoots } from "./runtime-roots.mjs";
 import { parseImageList } from "./sorftime-listing-parse.mjs";
-import { normalizeProductDetailResponse, resolveProductCategory } from "./sorftime-product-contract.mjs";
+import { normalizeSorftimeDetailIdentity, normalizeSorftimePackageSize, normalizeSorftimeCategories, sorftimeOptionalNumber } from './sorftime-profile-normalize.mjs';
 import { parseSorftimeCategoryTrend } from "./sorftime-trend-parse.mjs";
 
 const SCHEMA_VERSION = 1;
@@ -23,7 +23,7 @@ function normalizedIdentity({ jobId, marketplace, asin, operation }) {
   const normalizedMarketplace = String(marketplace ?? "").trim().toUpperCase();
   const normalizedAsin = String(asin ?? "").trim().toUpperCase();
   if (!SAFE_ID_PATTERN.test(String(jobId ?? ""))) throw new TypeError("Sorftime evidence jobId invalid");
-  if (!SAFE_ID_PATTERN.test(normalizedMarketplace)) throw new TypeError("Sorftime evidence marketplace invalid");
+  if (!/^[A-Z]{2}$/.test(normalizedMarketplace)) throw new TypeError("Sorftime evidence marketplace invalid");
   if (!ASIN_PATTERN.test(normalizedAsin)) throw new TypeError("Sorftime evidence ASIN invalid");
   if (!SAFE_ID_PATTERN.test(String(operation ?? ""))) throw new TypeError("Sorftime evidence operation invalid");
   return { jobId: String(jobId), marketplace: normalizedMarketplace, asin: normalizedAsin, operation: String(operation) };
@@ -39,9 +39,9 @@ function evidencePath(identity, options) {
   );
 }
 
-function normalizeProductDetailData(raw, asin) {
-  const data = normalizeProductDetailResponse(raw, { asin: asin ?? raw?.data?.asin ?? raw?.asin });
-  const category = Object.hasOwn(data, 'sub_category') ? resolveProductCategory(data, { asin: asin ?? data.asin }) : null;
+function normalizeProductDetailData(raw, asin, marketplace) {
+  const data = normalizeSorftimeDetailIdentity(raw, { asin: asin ?? raw?.data?.asin ?? raw?.asin, marketplace });
+  const category = normalizeSorftimeCategories(data, asin ?? data.asin);
   const galleryImages = parseImageList(data?.galleryImages ?? data?.main_image);
   const hasAplus = data?.hasAplus === true || data?.a_plus === true
     ? true
@@ -54,16 +54,16 @@ function normalizeProductDetailData(raw, asin) {
     galleryImages: galleryImages.slice(0, 32),
     hasAplus,
     title: optionalText(data?.title),
-    fbaFee: optionalNumber(data?.fbaFee ?? data?.fba_fee),
-    packageSize: optionalText(data?.packageSize ?? data?.package_size_cm),
+    fbaFee: sorftimeOptionalNumber(data?.fbaFee ?? data?.fba_fee, { unknownSentinel: true }),
+    packageSize: normalizeSorftimePackageSize(data?.packageSize ?? data?.package_size_cm),
     price: optionalNumber(data?.price),
     coupon: typeof data?.coupon === 'number' && Number.isFinite(data.coupon) ? data.coupon : null,
     couponEncoding: data.couponEncoding === 'signed' || raw?.doc != null || data.sub_category != null ? 'signed' : 'legacy',
-    nodeId: category?.nodeId ?? (data?.nodeId != null || data?.node_id != null
+    nodeId: category.nodeId ?? (data?.nodeId != null || data?.node_id != null
       ? optionalText(String(data?.nodeId ?? data?.node_id))
       : null),
-    categoryName: category?.categoryName ?? optionalText(data?.categoryName ?? data?.subcategory ?? data?.category),
-    topCategory: category?.topCategory ?? optionalText(data?.topCategory ?? data?.top_category),
+    categoryName: category.subRankCategory ?? optionalText(data?.categoryName ?? data?.category),
+    topCategory: category.rankCategory ?? optionalText(data?.topCategory),
   };
 }
 
@@ -125,8 +125,8 @@ function normalizeCategorySalesTrendData(data) {
   };
 }
 
-function normalizeEvidenceData(operation, data) {
-  if (operation === "product_detail") return normalizeProductDetailData(data);
+function normalizeEvidenceData(operation, data, identity) {
+  if (operation === "product_detail") return normalizeProductDetailData(data, identity.asin, identity.marketplace);
   if (operation === "product_variations") return normalizeVariationData(data);
   if (operation === "category_trend_sales_count") return normalizeCategorySalesTrendData(data);
   throw new TypeError("Sorftime evidence operation unsupported");
@@ -151,7 +151,7 @@ export function createProductDetailEvidence({
       tool: "product_detail",
       stageId: "catalog",
     },
-    data: normalizeProductDetailData(detail, identity.asin),
+    data: normalizeProductDetailData(detail, identity.asin, identity.marketplace),
   };
 }
 
@@ -163,7 +163,7 @@ function createOperationEvidence({ jobId, marketplace, asin, fetchedAt = new Dat
     fetchedAt: new Date(fetchedAt).toISOString(),
     source: SOURCE,
     provenance: { connector: "sorftime", tool: operation, stageId: "catalog" },
-    data: normalizeEvidenceData(operation, data),
+    data: normalizeEvidenceData(operation, data, identity),
   };
 }
 
@@ -196,7 +196,7 @@ export function writeScopedSorftimeEvidence(evidence, options = {}) {
     fetchedAt,
     source: SOURCE,
     provenance: { connector: "sorftime", tool: identity.operation, stageId: "catalog" },
-    data: normalizeEvidenceData(identity.operation, evidence.data),
+    data: normalizeEvidenceData(identity.operation, evidence.data, identity),
   };
   const target = evidencePath(identity, options);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -237,7 +237,7 @@ export function readScopedSorftimeEvidence(identityInput, options = {}) {
       fetchedAt,
       source: SOURCE,
       provenance: { connector: "sorftime", tool: identity.operation, stageId: "catalog" },
-      data: normalizeEvidenceData(identity.operation, parsed.data),
+      data: normalizeEvidenceData(identity.operation, parsed.data, identity),
     };
   } catch {
     return null;

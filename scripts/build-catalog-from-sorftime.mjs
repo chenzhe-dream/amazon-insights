@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   appendCatalogEntry,
-  asinsNeedingCatalogSync,
+  asinsNeedingSorftimeCatalogSync,
   readCatalogAsins,
 } from "./lib/catalog-sync.mjs";
 import { buildCatalogEntryFromSorftime } from "./lib/sorftime-catalog-fallback.mjs";
@@ -34,12 +34,12 @@ export async function syncCatalogAsinsFromSorftime({
   for (const asin of uniqueAsins) {
     try {
       const response = await callTool(key, "product_detail", { asin, amz_site: marketplace });
-      const detail = response?.data ?? response;
-      const entry = buildCatalogEntryFromSorftime({ asin, marketplace, detail });
+      const entry = buildCatalogEntryFromSorftime({ asin, marketplace, detail: response });
       if (jobId) {
-        writeEvidence(createProductDetailEvidence({ jobId, marketplace, asin, detail }));
+        const productEvidence = createProductDetailEvidence({ jobId, marketplace, asin, detail: response });
+        writeEvidence(productEvidence);
         if (retainFallbackModules) {
-          const nodeId = detail?.node_id != null ? String(detail.node_id).trim() : "";
+          const nodeId = productEvidence.data.nodeId;
           if (nodeId) {
             try {
               const categoryResponse = await callTool(key, "category_trend", {
@@ -52,8 +52,8 @@ export async function syncCatalogAsinsFromSorftime({
                 marketplace,
                 asin,
                 nodeId,
-                categoryName: detail?.subcategory ?? detail?.category ?? null,
-                topCategory: detail?.top_category ?? null,
+                categoryName: productEvidence.data.categoryName,
+                topCategory: productEvidence.data.topCategory,
                 response: categoryResponse,
               }));
             } catch {
@@ -96,7 +96,7 @@ async function main() {
     throw new TypeError("请指定合法 ASIN：SORFTIME_ASINS=B0XXXXXXXX npm run catalog:sorftime:sync");
   }
 
-  const pending = asinsNeedingCatalogSync(asins);
+  const pending = asinsNeedingSorftimeCatalogSync(asins, marketplace);
   if (!pending.length) {
     console.log("[catalog:sorftime] all ASINs already in competitor-data.ts");
     return;

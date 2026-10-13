@@ -7,6 +7,7 @@ import { detectProductFamily } from "./product-family.mjs";
 import { localizeSellingPoints } from "./selling-point-zh.mjs";
 import { localizeSpecifications } from "./specification-zh.mjs";
 import { extractExportArrayLiteral, readCachedArrayExport } from "./sync-cache.mjs";
+import { asinsNeedingSorftimeCatalogSync as selectSorftimeCatalogSync, SORFTIME_CATALOG_PROFILE_VERSION, SORFTIME_CATALOG_PROFILE_FIELDS } from './sorftime-catalog-fallback.mjs';
 
 const root = path.resolve(import.meta.dirname, "../..");
 export const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -56,6 +57,10 @@ export function asinsNeedingPrimaryCatalogSync(asins, filePath = catalogPath) {
     const entry = catalog.find(item => item.asin === asin);
     return !entry || entry.catalogSource === "sorftime-fallback";
   });
+}
+
+export function asinsNeedingSorftimeCatalogSync(asins, marketplace = 'US', filePath = catalogPath) {
+  return selectSorftimeCatalogSync(asins, { marketplace, catalogProducts: readCachedArrayExport(filePath, 'refreshedCatalog') });
 }
 
 function sleep(ms) {
@@ -219,8 +224,18 @@ export function appendCatalogEntry(entry, filePath = catalogPath) {
   const index = catalog.findIndex(item => item.asin === entry.asin);
   if (index >= 0) {
     // Upgrade an explicitly incomplete fallback, never overwrite a primary record.
-    if (catalog[index].catalogSource !== "sorftime-fallback" || entry.catalogSource !== "sellerSprite") return false;
-    catalog[index] = entry;
+    const previous = catalog[index];
+    if (previous.catalogSource !== 'sorftime-fallback') return false;
+    if (entry.catalogSource === 'sellerSprite') {
+      catalog[index] = entry;
+    } else if (entry.catalogSource === 'sorftime-fallback' && entry.catalogProfileVersion === SORFTIME_CATALOG_PROFILE_VERSION
+      && /^[A-Z]{2}$/.test(entry.marketplace ?? '') && previous.marketplace === entry.marketplace) {
+      const verified = Object.fromEntries(Object.entries(entry.catalogFieldSources ?? {})
+        .filter(([field, source]) => SORFTIME_CATALOG_PROFILE_FIELDS.includes(field) && source === 'sorftime' && entry[field] != null && entry[field] !== '' && entry[field] !== '—')
+        .map(([field]) => [field, entry[field]]));
+      const catalogFieldSources = { ...previous.catalogFieldSources, ...Object.fromEntries(Object.keys(verified).map(field => [field, 'sorftime'])) };
+      catalog[index] = { ...previous, ...verified, marketplace: entry.marketplace, catalogProfileVersion: entry.catalogProfileVersion, catalogFieldSources, synced: false };
+    } else return false;
   } else {
     catalog.push(entry);
   }

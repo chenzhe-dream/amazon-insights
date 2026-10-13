@@ -1,4 +1,5 @@
 export const SORFTIME_FBA_PACING_MS = 300;
+import { normalizeSorftimeDetailIdentity, normalizeSorftimePackageSize, sorftimeOptionalNumber } from './sorftime-profile-normalize.mjs';
 
 function isTransportDemotedToolError(response) {
   const keys = Object.keys(response);
@@ -39,20 +40,14 @@ export function buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response 
     throw new TypeError("Sorftime product_detail returned a transport-demoted tool error");
   }
 
-  const detail = Object.hasOwn(response, "data") ? response.data : response;
+  const detail = normalizeSorftimeDetailIdentity(response, { asin, marketplace });
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
     throw new TypeError("Sorftime product_detail data must be an object");
   }
 
-  const hasFee = Object.hasOwn(detail, "fba_fee");
-  const rawFee = detail.fba_fee;
-  if (hasFee && rawFee != null && (typeof rawFee !== "number" || !Number.isFinite(rawFee) || rawFee < 0)) {
-    throw new TypeError("Sorftime product_detail fba_fee must be a finite non-negative number");
-  }
+  const rawFee = sorftimeOptionalNumber(detail.fba_fee, { unknownSentinel: true });
   const fbaFee = positiveMoneyOrNull(rawFee);
-  const packageSize = typeof detail?.package_size_cm === "string" && detail.package_size_cm.trim()
-    ? detail.package_size_cm.trim()
-    : null;
+  const packageSize = normalizeSorftimePackageSize(detail.package_size_cm, { includeUnit: false });
 
   return {
     asin,

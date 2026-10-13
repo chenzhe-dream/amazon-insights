@@ -1,85 +1,53 @@
-import { parseImageList } from "./sorftime-listing-parse.mjs";
+import { normalizeSorftimeProfile } from './sorftime-profile-normalize.mjs';
 
-function schemaError() {
-  return new TypeError("Sorftime catalog schema invalid");
-}
+export const SORFTIME_CATALOG_PROFILE_VERSION = 1;
+export const SORFTIME_CATALOG_PROFILE_FIELDS = Object.freeze([
+  'title', 'image', 'brand', 'buyBoxSeller', 'fulfillment', 'price', 'rating', 'reviews',
+  'launch', 'variants', 'packageSize', 'packageWeight', 'rankCategory', 'subRankCategory', 'subRank',
+]);
 
-function optionalText(value) {
-  if (value == null) return null;
-  if (typeof value !== "string") throw schemaError();
-  return value.trim() || null;
-}
-
-function optionalNonNegativeNumber(value) {
-  if (value == null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw schemaError();
-  return value;
-}
-
-function normalizeCategory(value) {
-  const text = optionalText(value);
-  return text?.replace(/\s*\(Rank:\s*\d+\)\s*$/i, "").trim() || "类目名称暂缺";
-}
-
-function normalizePackageSize(value) {
-  const text = optionalText(value);
-  if (!text) return "—";
-  return /\bcm\b/i.test(text) ? text : `${text} cm`;
-}
-
-function normalizeImages(value) {
-  if (value == null) return [];
-  if (typeof value !== "string" && !Array.isArray(value)) throw schemaError();
-  if (Array.isArray(value) && value.some(item => item != null && typeof item !== "string")) {
-    throw schemaError();
-  }
-  return parseImageList(value);
+export function asinsNeedingSorftimeCatalogSync(asins, { catalogProducts = [], marketplace = 'US' } = {}) {
+  return asins.filter(asin => {
+    const entry = catalogProducts.find(item => item.asin === asin);
+    return !entry || entry.catalogSource === 'sorftime-fallback'
+      && entry.marketplace === marketplace.trim().toUpperCase()
+      && !(Number.isInteger(entry.catalogProfileVersion) && entry.catalogProfileVersion >= SORFTIME_CATALOG_PROFILE_VERSION);
+  });
 }
 
 export function buildCatalogEntryFromSorftime({ asin, marketplace, detail }) {
-  if (!detail || typeof detail !== "object" || Array.isArray(detail)) throw schemaError();
-  if (typeof asin !== "string" || !/^[A-Z0-9]{10}$/.test(asin)) throw schemaError();
-  if (typeof marketplace !== "string" || !marketplace.trim()) throw schemaError();
-
-  const detailAsin = optionalText(detail.asin);
-  if (detailAsin && detailAsin.toUpperCase() !== asin) {
-    throw new TypeError("Sorftime catalog ASIN mismatch");
-  }
-
-  const title = optionalText(detail.title) ?? asin;
-  const images = normalizeImages(detail.main_image);
-  const fbaFee = optionalNonNegativeNumber(detail.fba_fee);
-  const packageSize = normalizePackageSize(detail.package_size_cm);
-  optionalText(detail.node_id);
-  const rankCategory = normalizeCategory(detail.top_category);
-  const subRankCategory = normalizeCategory(detail.subcategory);
+  const profile = normalizeSorftimeProfile(detail, { asin, marketplace });
+  const { fbaFee } = profile;
+  const catalogFieldSources = Object.fromEntries(SORFTIME_CATALOG_PROFILE_FIELDS.filter(field => profile[field] != null).map(field => [field, 'sorftime']));
 
   return {
     asin,
     marketplace: marketplace.trim().toUpperCase(),
     catalogSource: "sorftime-fallback",
-    brand: "品牌暂缺（Sorftime 未验证）",
-    image: images[0] ?? "",
-    title,
-    price: null,
+    catalogProfileVersion: SORFTIME_CATALOG_PROFILE_VERSION,
+    catalogFieldSources,
+    brand: profile.brand ?? "品牌暂缺（Sorftime 未验证）",
+    image: profile.image ?? "",
+    title: profile.title ?? asin,
+    price: profile.price,
     sales: null,
-    rating: null,
-    reviews: null,
+    rating: profile.rating,
+    reviews: profile.reviews,
     rank: null,
-    subRank: null,
-    rankCategory,
-    subRankCategory,
-    buyBoxSeller: "暂缺（SellerSprite）",
-    fulfillment: "暂缺（SellerSprite）",
-    packageSize,
-    packageWeight: "—",
+    subRank: profile.subRank,
+    rankCategory: profile.rankCategory ?? '类目名称暂缺',
+    subRankCategory: profile.subRankCategory ?? '类目名称暂缺',
+    buyBoxSeller: profile.buyBoxSeller ?? "暂缺（SellerSprite）",
+    fulfillment: profile.fulfillment ?? "暂缺（SellerSprite）",
+    packageSize: profile.packageSize ?? '—',
+    packageWeight: profile.packageWeight ?? "—",
     specifications: [
       "Sorftime 基础商品兜底",
       ...(fbaFee == null ? [] : [`Sorftime FBA 费用估算：$${fbaFee.toFixed(2)}`]),
     ],
-    launch: "—",
+    launch: profile.launch ?? "—",
     format: "—",
-    variants: "—",
+    variants: profile.variants ?? "—",
     history: [],
     prices: [],
     ranks: [],

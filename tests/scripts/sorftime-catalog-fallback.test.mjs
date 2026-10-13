@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 
 import { syncCatalogAsinsFromSorftime } from "../../scripts/build-catalog-from-sorftime.mjs";
 import { buildCatalogEntryFromSorftime } from "../../scripts/lib/sorftime-catalog-fallback.mjs";
@@ -39,14 +40,14 @@ test("projects only locally evidenced Sorftime product-detail fields", () => {
   assert.match(entry.specifications.join("\n"), /Sorftime FBA 费用估算：\$4\.20/);
 });
 
-test("keeps unproven and SellerSprite-only fields unavailable", () => {
+test("projects verified profile fields while keeping unknown fields unavailable", () => {
   const entry = buildCatalogEntryFromSorftime({
     asin,
     marketplace: "US",
     detail: {
       asin,
       title: "Fixture product",
-      brand: "must-not-project",
+      brand: "Verified brand",
       price: 29.99,
       star_rating: 4.5,
       review_count: 120,
@@ -57,16 +58,51 @@ test("keeps unproven and SellerSprite-only fields unavailable", () => {
     },
   });
 
-  assert.equal(entry.brand, "品牌暂缺（Sorftime 未验证）");
-  assert.equal(entry.price, null);
-  assert.equal(entry.rating, null);
-  assert.equal(entry.reviews, null);
+  assert.equal(entry.brand, "Verified brand");
+  assert.equal(entry.price, 29.99);
+  assert.equal(entry.rating, 4.5);
+  assert.equal(entry.reviews, 120);
   assert.equal(entry.launch, "—");
   assert.equal(entry.variants, "—");
   assert.equal(entry.buyBoxSeller, "暂缺（SellerSprite）");
   assert.equal(entry.packageWeight, "—");
-  assert.equal(JSON.stringify(entry).includes("must-not-project"), false);
+  assert.equal(entry.catalogFieldSources.brand, "sorftime");
   assert.equal(JSON.stringify(entry).includes("must-not-persist"), false);
+});
+
+const publicDetails = JSON.parse(fs.readFileSync(new URL('../fixtures/sorftime/balance-board-product-details.json', import.meta.url), 'utf8'));
+
+test('replays current public balance-board profiles with explicit field provenance', () => {
+  const entries = publicDetails.map(response => buildCatalogEntryFromSorftime({ asin: response.data.asin, marketplace: 'US', detail: response }));
+  assert.equal(entries[0].packageSize, '76.2 x 30.48 x 14.61 cm');
+  assert.equal(entries[0].packageWeight, '4627 g');
+  assert.equal(entries[0].buyBoxSeller, 'ZUKAM Direct');
+  assert.equal(entries[0].fulfillment, 'Amazon 配送（FBA）');
+  assert.equal(entries[0].variants, '3个变体');
+  assert.equal(entries[0].subRankCategory, 'Balance Boards');
+  assert.equal(entries[0].rankCategory, 'Sports & Outdoors');
+  assert.equal(entries[2].fulfillment, '卖家自配送（FBM）');
+  assert.equal(entries[2].specifications.some(value => value.includes('FBA 费用估算')), false);
+  assert.equal(entries[3].launch, '2026-07-13');
+  assert.equal(entries[3].packageWeight, '—');
+  assert.equal(entries[3].catalogFieldSources.packageWeight, undefined);
+  for (const entry of entries) {
+    assert.equal(entry.synced, false);
+    assert.equal(entry.catalogProfileVersion, 1);
+    assert.equal(entry.format, '—');
+    assert.equal(entry.catalogFieldSources.format, undefined);
+    assert.equal(entry.catalogFieldSources.launch, 'sorftime');
+    assert.equal(entry.productDimensions, undefined);
+  }
+});
+
+test('rejects malformed and cross-market profile identities and non-sentinel negatives', () => {
+  for (const detail of [{ asin: false }, { asin: 'broken' }, { asin, amz_site: 'UK' }, { asin, marketplace: {} }, { asin, fba_fee: -2 }, { asin, weight_g: -2 }]) {
+    assert.throws(() => buildCatalogEntryFromSorftime({ asin, marketplace: 'US', detail }), TypeError);
+  }
+  for (const detail of [{ isError: true }, { error: { code: 'tool-error' } }, { doc: {}, data: {} }, { code: 'MCP_TOOL_ERROR', message: 'tool failed' }]) {
+    assert.throws(() => buildCatalogEntryFromSorftime({ asin, marketplace: 'US', detail }), TypeError);
+  }
 });
 
 test("accepts a partial evidenced response and uses explicit unavailable values", () => {
