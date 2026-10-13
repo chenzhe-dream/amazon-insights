@@ -70,10 +70,11 @@ test('a previous-job scoped rating is acquired again and survives current-job pa
   assert.equal(calls.length, 1);
   assert.equal(records[asin].rating, 4.8);
   assert.equal(records[asin].provenance.jobId, 'fixture-rating-job');
-  const projected = projectStageOutput('reviews', [asin], { stageStatus: 'partial', readyAsins: [], jobId: 'fixture-rating-job', marketplace: 'US',
+  const projected = projectStageOutput('reviews', [asin], { stageStatus: 'partial', dataAsins: [], jobId: 'fixture-rating-job', marketplace: 'US',
     readExport: (_file, name) => name === 'sorftimeRatingData' ? records : {} });
   assert.deepEqual(projected.data.ratingByAsin[asin], records[asin]);
   assert.deepEqual(projected.data.analysisByAsin, {});
+  assert.equal(projected.gap.items.some(item => item.asin === asin && item.causeCode === 'UPSTREAM_EMPTY'), true);
 });
 
 test('a healthy current-job scoped rating remains reusable without another provider call', async t => {
