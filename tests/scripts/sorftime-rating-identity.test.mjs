@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { readCachedDataExport } from '../../scripts/lib/sync-cache.mjs';
+import { projectStageOutput } from '../../scripts/lib/sync-stage-output.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const asin = 'B0BT9F1F72';
@@ -58,6 +59,29 @@ test('healthy legacy ready cache retains original scope without provider call or
   const original = { asin, marketplace: 'US', fetchedAt: '2026-09-02', status: 'ready', rating: 4.7, reviewCount: 183 };
   const { records, calls } = await runRating(t, { raw: { isError: true }, existing: { [asin]: original } });
   assert.deepEqual(records[asin], original);
+  assert.deepEqual(calls, []);
+});
+
+test('a previous-job scoped rating is acquired again and survives current-job partial review capture', async t => {
+  const previous = { asin, marketplace: 'US', fetchedAt: '2026-09-02', status: 'ready', rating: 4.7, reviewCount: 183,
+    source: 'Sorftime', provenance: { jobId: 'previous-job', asin, marketplace: 'US', fetchedAt: '2026-09-02',
+      connector: 'sorftime', stageId: 'rating', operation: 'product_detail', tool: 'product_detail' } };
+  const { records, calls } = await runRating(t, { raw: { data: { asin, star_rating: 4.8, review_count: 185 } }, existing: { [asin]: previous } });
+  assert.equal(calls.length, 1);
+  assert.equal(records[asin].rating, 4.8);
+  assert.equal(records[asin].provenance.jobId, 'fixture-rating-job');
+  const projected = projectStageOutput('reviews', [asin], { stageStatus: 'partial', readyAsins: [], jobId: 'fixture-rating-job', marketplace: 'US',
+    readExport: (_file, name) => name === 'sorftimeRatingData' ? records : {} });
+  assert.deepEqual(projected.data.ratingByAsin[asin], records[asin]);
+  assert.deepEqual(projected.data.analysisByAsin, {});
+});
+
+test('a healthy current-job scoped rating remains reusable without another provider call', async t => {
+  const record = { asin, marketplace: 'US', fetchedAt: '2026-09-02', status: 'ready', rating: 4.7, reviewCount: 183,
+    source: 'Sorftime', provenance: { jobId: 'fixture-rating-job', asin, marketplace: 'US', fetchedAt: '2026-09-02',
+      connector: 'sorftime', stageId: 'rating', operation: 'product_detail', tool: 'product_detail' } };
+  const { records, calls } = await runRating(t, { raw: { isError: true }, existing: { [asin]: record } });
+  assert.deepEqual(records[asin], record);
   assert.deepEqual(calls, []);
 });
 

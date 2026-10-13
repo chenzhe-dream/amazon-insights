@@ -40,7 +40,14 @@ export function buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating
   return { asin, marketplace, fetchedAt, status: "ready", rating, reviewCount };
 }
 
-export function shouldReuseSorftimeRatingRecord({ record, catalog, asin, marketplace, forceRefresh }) {
+export function shouldReuseSorftimeRatingRecord({ record, catalog, asin, marketplace, forceRefresh, jobId }) {
+  if (jobId && record?.provenance != null) {
+    const provenance = record.provenance;
+    if (record.source !== "Sorftime" || provenance.jobId !== jobId || provenance.asin !== asin
+      || provenance.marketplace !== marketplace || provenance.connector !== "sorftime"
+      || provenance.operation !== "product_detail" || provenance.tool !== "product_detail"
+      || provenance.fetchedAt !== record.fetchedAt) return false;
+  }
   return record?.asin === asin &&
     record?.marketplace === marketplace &&
     shouldUseCachedRecord(record, { forceRefresh }) &&
@@ -67,6 +74,7 @@ async function main() {
       asin,
       marketplace,
       forceRefresh: force,
+      jobId,
     })) {
       logCacheHit(asin, existing[asin]);
       continue;
@@ -110,6 +118,7 @@ async function main() {
         asin,
         marketplace,
         forceRefresh: force,
+        jobId,
       })) {
         console.log(`failed · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
