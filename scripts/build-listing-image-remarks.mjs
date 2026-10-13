@@ -18,7 +18,7 @@ import {
   requestImageRemark,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
-import { readListingInputFile } from "./lib/image-remark-listing-input.mjs";
+import { imageRemarkCaptureScope, readListingInputFile } from "./lib/image-remark-listing-input.mjs";
 import { createImageRemarkCandidate, writeImageRemarkCandidate } from "./lib/image-remark-job-candidate.mjs";
 
 loadLocalEnv();
@@ -230,19 +230,28 @@ async function writeRemarksFile({
 }
 
 async function main() {
-  const asins =
+  const analysisAsins =
     process.env.REMARK_ASINS?.split(",")
       .map(item => item.trim())
       .filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
   const jobId = process.env.AGENT_SYNC_JOB_ID?.trim();
   const candidateFile = process.env.AGENT_SYNC_IMAGE_CANDIDATE_FILE?.trim();
+  const captureValue = process.env.AGENT_SYNC_IMAGE_CAPTURE_ASINS;
+  const asins = captureValue !== undefined
+    ? imageRemarkCaptureScope(process.env.REMARK_ASINS === undefined ? null : analysisAsins,
+      captureValue.split(",").map(item => item.trim()).filter(Boolean), {
+        jobId, candidateFile, listingFile: process.env.AGENT_SYNC_LISTING_STAGE_FILE,
+        listingHash: process.env.AGENT_SYNC_LISTING_STAGE_HASH,
+      })
+    : analysisAsins;
+  const dispatch = new Set(analysisAsins);
   if (candidateFile && (!jobId || !process.env.AGENT_SYNC_LISTING_STAGE_FILE ||
       !/^[a-f0-9]{64}$/.test(process.env.AGENT_SYNC_LISTING_STAGE_HASH ?? ""))) {
     throw new Error("Image candidate requires a scoped persisted listing");
   }
   const listing = process.env.AGENT_SYNC_LISTING_STAGE_FILE
-    ? readListingInputFile(process.env.AGENT_SYNC_LISTING_STAGE_FILE, jobId, asins)
+    ? readListingInputFile(process.env.AGENT_SYNC_LISTING_STAGE_FILE, jobId, asins, process.env.AGENT_SYNC_LISTING_STAGE_HASH)
     : readCachedDataExport(listingPath, "sorftimeListingContentData");
   const existing = readCachedDataExport(outPath, "listingImageRemarks");
   const existingMeta = readCachedDataExport(outPath, "listingImageRemarksMeta");
@@ -292,7 +301,7 @@ async function main() {
     const alignedOutcomes = reconcileListingImageRemarks(previousUrls, record.galleryImages, existingMeta.imageOutcomesByAsin?.[asin]);
     remarks[asin] = reconcileListingImageRemarks(previousUrls, record.galleryImages, previousRemarks)
       .map((remark, slotIndex) => remark ? { ...remark, imageUrl: record.galleryImages[slotIndex] } : null);
-    if (explicitImageAction) {
+    if (explicitImageAction && dispatch.has(asin)) {
       const aligned = Array.from({length:Math.max(previousRemarks.length,record.galleryImages.length)},(_,slotIndex)=>({asin,slotIndex,remark:remarks[asin][slotIndex] ?? null}));
       remarkUpdates.push(...aligned);
       await writeRemarksFile({ownedAsins:[asin],remarkUpdates:aligned,fetchedAt,listingByAsin:listing});
@@ -310,7 +319,7 @@ async function main() {
       const url = gallery[slotIndex];
       if (isVideoThumb(url)) {
         imageOutcomesByAsin[asin][slotIndex] = null;
-        if (!remarks[asin][slotIndex]) {
+        if (!remarks[asin][slotIndex] && dispatch.has(asin)) {
           remarks[asin][slotIndex] = {
             remark: "Listing 视频位缩略图，非静态辅图分析范围。",
             imageUrl: url,
@@ -322,6 +331,14 @@ async function main() {
         continue;
       }
       totalStaticImages += 1;
+      if (!dispatch.has(asin)) {
+        const prior = alignedOutcomes[slotIndex];
+        imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(prior?.status ??
+          (remarks[asin][slotIndex]?.remark ? "ready" : "upstream-empty"), prior ?? {});
+        completedStaticImages += 1;
+        counts[imageOutcomesByAsin[asin][slotIndex].status] += 1;
+        continue;
+      }
       if (!force && !explicitImageAction && remarks[asin][slotIndex]?.remark) {
         imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("ready");
         completedStaticImages += 1;
@@ -361,6 +378,7 @@ async function main() {
     })}`);
   };
   emitProgress();
+  persistCandidate();
 
   const imageResults = await runImageRemarkQueue(imageTasks, async (task, { signal }) => {
     const result = await analyzeWithOpenAI(task.url, task.slotIndex, task.asin, signal);
@@ -400,7 +418,7 @@ async function main() {
     imageOutcomesByAsin[task.asin][task.slotIndex] = imageResults[index];
   });
   const currentAttemptComplete = asin => remarksComplete(asin, listing[asin], remarks) &&
-    (!explicitImageAction || (imageOutcomesByAsin[asin] ?? []).filter(Boolean).every(outcome => outcome.status === "ready"));
+    (imageOutcomesByAsin[asin] ?? []).filter(Boolean).every(outcome => outcome.status === "ready");
   const imageStatusByAsin = Object.fromEntries(asins.map(asin => [
     asin,
     aggregateImageRemarkResults(
@@ -416,21 +434,21 @@ async function main() {
     const record = listing[asin];
     return record?.status === "ready" && !currentAttemptComplete(asin);
   });
-  await writeRemarksFile({
-    ownedAsins: asins,
+  if (analysisAsins.length) await writeRemarksFile({
+    ownedAsins: analysisAsins,
     remarkUpdates,
     fetchedAt,
     extraMeta: {
       openaiConfigured: hasOpenAI,
       lastAnalyzedCount: analyzed,
-      pendingAsins,
+      pendingAsins: pendingAsins.filter(asin => dispatch.has(asin)),
       pendingReason: !hasOpenAI && pendingAsins.length
         ? "missing_openai_key"
         : pendingAsins.length
           ? "analysis_incomplete"
           : null,
-      imageStatusByAsin,
-      imageOutcomesByAsin,
+      imageStatusByAsin: Object.fromEntries(Object.entries(imageStatusByAsin).filter(([asin]) => dispatch.has(asin))),
+      imageOutcomesByAsin: Object.fromEntries(Object.entries(imageOutcomesByAsin).filter(([asin]) => dispatch.has(asin))),
     },
     listingByAsin: listing,
   });

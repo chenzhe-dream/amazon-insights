@@ -390,11 +390,15 @@ test("release runner activates the image remarks child and reconciles authoritat
   const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
   assert.match(source, /readImageRemarkStatuses/);
   assert.match(source, /runImageRemarkProcess/);
-  assert.match(source, /shouldRunSyncStage\(job, "image_remarks"\)/);
+  assert.match(source, /imageRemarkScheduling\(job, imageStageJob, asins/);
+  assert.match(source, /if \(imageSchedule\.shouldRun\)/);
   assert.match(source, /args: \["run", "image-remarks:sync"\]/);
   assert.match(source, /dispatchImageProcess = async \(readyAsins\)/);
   assert.match(source, /REMARK_ASINS: readyAsins\.join\(","\)/);
-  assert.match(source, /partitionImageListingInput\(persistedImageJob, imageAsins\)/);
+  assert.match(source, /AGENT_SYNC_IMAGE_CAPTURE_ASINS: galleryReadyAsins\.join\(","\)/);
+  assert.match(source, /ready\.filter\(asin => imageAsins\.includes\(asin\)\)/);
+  assert.match(source, /readImageRemarkCandidate\(imageCandidateFile, \{ job: persistedImageJob, asins: galleryReadyAsins \}\)/);
+  assert.match(source, /partitionImageListingInput\(persistedImageJob, asins\)/);
   assert.match(source, /AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1"/);
   assert.match(source, /resultStatusesByAsin: scopedImageStatuses/);
   assert.match(source, /readImageRemarkCandidate\(imageCandidateFile/);
@@ -411,7 +415,7 @@ test("image remarks run after terminal traffic and before build or publication",
   const source = await readFile(new URL("../../scripts/run-asin-sync-job.mjs", import.meta.url), "utf8");
   const main = source.slice(source.indexOf("async function main()"));
   const traffic = main.indexOf('shouldRunSyncStage(job, "traffic")');
-  const image = main.indexOf('shouldRunSyncStage(job, "image_remarks")');
+  const image = main.indexOf('imageRemarkScheduling(job, imageStageJob, asins');
   const build = main.indexOf('shouldRunSyncStage(job, "build")');
   assert.ok(traffic >= 0 && traffic < image);
   assert.ok(image < build);
@@ -538,4 +542,149 @@ test("sequential traffic completion retains earlier ready data and unprojected f
   ].sort((a, b) => a.asin.localeCompare(b.asin)));
   assert.equal(job.asinProgress[asins[0]].traffic.status, "ready");
   assert.deepEqual(job.outputs[0].data.listingByAsin, { [asins[0]]: { total: 7, natural: 5, advertising: 2 } });
+});
+
+import { imageCandidateReadiness, imageCandidateResultStatuses, validatePersistedImageStageOutput } from '../../scripts/lib/image-remark-job-candidate.mjs';
+test('actual runner image finalizer preserves nine cached families and five recovered target notes when one slot fails',()=>{
+  for(const cachedState of ['pending','ready']) {
+  const asins=Array.from({length:10},(_,i)=>`B00000000${i}`);const target=asins[9];
+  const scope={organizationId:'org',projectId:'project',runId:'run'};
+  const listing=Object.fromEntries(asins.map(a=>[a,{status:'ready',galleryImages:Array.from({length:6},(_,i)=>`https://images.test/${a}/${i}`)}]));
+  for(const a of asins.slice(0,5)) listing[a].galleryImages.push(`https://images.test/${a}/PKplay-button-video`);
+  const notes=a=>listing[a].galleryImages.map(imageUrl=>({remark:`saved ${imageUrl}`,imageUrl}));
+  const previousData={remarksByAsin:Object.fromEntries(asins.slice(0,9).map(a=>[a,notes(a)])),outcomesByAsin:Object.fromEntries(asins.slice(0,9).map(a=>[a,listing[a].galleryImages.map(url=>url.includes('PKplay-button')?null:{status:'ready'})]))};
+  const initialJob={jobId:'mixed-image-job',asins,scope,asinProgress:Object.fromEntries(asins.map(a=>[a,{image_remarks:{status:a===target?'pending':cachedState}}])),outputs:[projectStageOutput('listing',asins,{...scope,readExport:()=>listing}),projectStageOutput('image_remarks',asins,{...scope,stageStatus:'partial',dataAsins:asins.slice(0,9),imageRemarksData:previousData})]};
+  const current=structuredClone(initialJob);
+  const candidate={remarksByAsin:{[target]:notes(target).map((n,i)=>i===4?null:n)},outcomesByAsin:{[target]:Array.from({length:6},(_,i)=>i===4?{status:'connector-failed',body:'injected-secret',diagnostic:{stage:'response-output',httpStatus:200,errorClass:'invalid-output',token:'injected-secret'}}:{status:'ready'})}};
+  let committed;
+  finalizeProcessedStageCohort(current.jobId,'image_remarks',[target],asins,{
+    initialJob,commandSucceeded:false,imageRemarksData:candidate,
+    readReadiness:(_stage,cohort)=>imageCandidateReadiness(candidate,listing,cohort),
+    resultStatusesByAsin:imageCandidateResultStatuses(candidate,listing,[target]),
+    readJob:()=>current,
+    markModule:(_job,a,_stage,patch)=>{current.asinProgress[a].image_remarks=patch;},
+    commitStage:(_job,input)=>{committed=input.output;current.outputs=current.outputs.filter(o=>o.stage!=='image_remarks').concat(committed);},
+    projectOutput:(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,...scope,readExport:()=>{throw Error('global cache forbidden');}}),
+  });
+  assert.equal(committed.stageStatus,'partial');
+  assert.equal(Object.keys(committed.data.remarksByAsin).length,10);
+  assert.equal(Object.values(committed.data.outcomesByAsin).flat().filter(o=>o?.status==='ready').length,59);
+  assert.equal(Object.values(committed.data.remarksByAsin).flat().filter(Boolean).length,64);
+  assert.equal(Object.values(committed.data.outcomesByAsin).flat().filter(o=>o===null).length,5);
+  for(const a of asins.slice(0,9)){assert.equal(current.asinProgress[a].image_remarks.status,'ready');assert.deepEqual(committed.data.remarksByAsin[a],previousData.remarksByAsin[a]);}
+  assert.equal(current.asinProgress[target].image_remarks.status,'connector-failed');
+  assert.equal(committed.data.outcomesByAsin[target][4].status,'connector-failed');
+  assert.equal(committed.gap.items?.find(item=>item.asin===target)?.causeCode,'CONNECTOR_FAILED');
+  assert.deepEqual(committed.data.outcomesByAsin[target][4].diagnostic,{stage:'response-output',httpStatus:200,errorClass:'invalid-output'});
+  assert.equal(JSON.stringify(committed.data.outcomesByAsin).includes('injected-secret'),false);
+  assert.doesNotThrow(()=>validatePersistedImageStageOutput(current,committed));
+  for(const fault of ['hash','scope']) {
+    const invalid=structuredClone(initialJob);
+    if(fault==='hash')invalid.outputs[1].contentHash='0'.repeat(64);
+    else invalid.outputs[1].runId='wrong-run';
+    assert.throws(()=>finalizeProcessedStageCohort(invalid.jobId,'image_remarks',[target],asins,{
+      initialJob:invalid,imageRemarksData:candidate,readJob:()=>invalid,
+      markModule:()=>{throw Error('must reject source before progress writes');},
+      commitStage:()=>{throw Error('must reject source before output writes');},
+    }),fault==='hash'?/hash mismatch/:/scope mismatch/);
+  }
+  }
+});
+
+test('actual runner sales partial postcondition retains three successful metrics and failed rank evidence',()=>{
+  const asins=Array.from({length:10},(_,i)=>`B00000000${i}`);const target=asins[9];
+  const points=Array.from({length:11},(_,i)=>({month:`2026-${String(i+1).padStart(2,'0')}`,value:i+1}));
+  const fetchedAt='2026-10-12T12:20:00.000Z';
+  const partial={asin:target,marketplace:'US',status:'error',fetchedAt,volume:points,amount:points,price:points,rank:[],fieldFetchedAt:{volume:'2026-10-01',amount:fetchedAt,price:fetchedAt},observationOutcomes:{rank:{category:'request-failed',fetchedAt}},observationErrors:{rank:'request-failed'}};
+  const records=Object.fromEntries(asins.map(a=>[a,a===target?partial:{asin:a,marketplace:'US',status:'ready',fetchedAt,volume:points,amount:points,price:points,rank:points}]));
+  const initialJob={jobId:'mixed-sales-job',asins,asinProgress:Object.fromEntries(asins.map(a=>[a,{sales_trend:{status:a===target?'pending':'ready'}}])),outputs:[]};
+  const current=structuredClone(initialJob);let committed;
+  finalizeProcessedStageCohort(current.jobId,'sales_trend',[target],asins,{
+    initialJob,commandSucceeded:false,resultStatusesByAsin:{[target]:'connector-failed'},
+    diagnostics:[{asin:target,stage:'sales_trend',causeCode:'CONNECTOR_FAILED',operation:'product_trend',boundary:'tool-content'}],
+    readReadiness:(_stage,cohort)=>({items:cohort.map(asin=>({asin,sales:asin===target?'missing':'ready'})),ready:false,missingAsins:[target]}),
+    readJob:()=>current,markModule:(_job,a,_stage,patch)=>{current.asinProgress[a].sales_trend=patch;},
+    commitStage:(_job,input)=>{committed=input.output;},
+    projectOutput:(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,readExport:()=>records}),
+  });
+  assert.equal(committed.stageStatus,'partial');
+  assert.deepEqual(committed.data.trendByAsin[target],partial);
+  for(const metric of ['volume','amount','price'])assert.equal(committed.data.trendByAsin[target][metric].length,11);
+  assert.deepEqual(committed.data.trendByAsin[target].rank,[]);
+  assert.equal(committed.gap.items.find(item=>item.asin===target).causeCode,'CONNECTOR_FAILED');
+  assert.equal(Object.keys(committed.data.trendByAsin).length,10);
+});
+
+test('image cohort keeps explicit processed failure status and ignores sibling status injection',()=>{
+  for(const [failure,cause] of [['connector-failed','CONNECTOR_FAILED'],['timeout','CONNECT_TIMEOUT']]) {
+    const cached='B000000001';const target='B000000002';const asins=[cached,target];
+    const scope={organizationId:'org',projectId:'project',runId:'run'};
+    const listing=Object.fromEntries(asins.map(a=>[a,{status:'ready',galleryImages:[`https://images.test/${a}`]}]));
+    const data={remarksByAsin:{[cached]:[{remark:'Keep cached',imageUrl:listing[cached].galleryImages[0]}]},outcomesByAsin:{[cached]:[{status:'ready'}]}};
+    const initialJob={jobId:'failed-image-job',asins,scope,asinProgress:Object.fromEntries(asins.map(a=>[a,{image_remarks:{status:'pending'}}])),outputs:[projectStageOutput('listing',asins,{...scope,readExport:()=>listing}),projectStageOutput('image_remarks',asins,{...scope,stageStatus:'partial',dataAsins:[cached],imageRemarksData:data})]};
+    const current=structuredClone(initialJob);let committed;
+    finalizeProcessedStageCohort(current.jobId,'image_remarks',[target],asins,{
+      initialJob,commandSucceeded:false,imageRemarksData:{remarksByAsin:{},outcomesByAsin:{}},
+      resultStatusesByAsin:{[target]:failure,[cached]:'timeout',B000000003:'timeout'},
+      readJob:()=>current,markModule:(_job,a,_stage,patch)=>{current.asinProgress[a].image_remarks=patch;},
+      commitStage:(_job,input)=>{committed=input.output;},
+      projectOutput:(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,...scope,readExport:()=>{throw Error('global cache forbidden');}}),
+    });
+    assert.equal(current.asinProgress[target].image_remarks.status,failure);
+    assert.equal(current.asinProgress[cached].image_remarks.status,'ready');
+    assert.equal(committed.gap.items?.find(item=>item.asin===target)?.causeCode,cause);
+    assert.deepEqual(committed.data.remarksByAsin[cached],data.remarksByAsin[cached]);
+    assert.equal(committed.gap.items?.some(item=>item.asin===cached),false);
+    assert.doesNotThrow(()=>validatePersistedImageStageOutput(current,committed));
+  }
+});
+
+test('fresh cached-only image stage defers early projection and schedules capture without model analysis',()=>{
+  const asins=['B000000001','B000000002'];
+  const scope={organizationId:'org',projectId:'project',runId:'run'};
+  const listing=Object.fromEntries(asins.map(a=>[a,{status:'ready',galleryImages:[`https://images.test/${a}`]}]));
+  const job={jobId:'fresh-cached-only',asins,scope,stages:[{id:'image_remarks',status:'pending',repairAsins:[]}],asinProgress:Object.fromEntries(asins.map(a=>[a,{image_remarks:{status:'pending'},traffic:{status:'ready'}}])),outputs:[projectStageOutput('listing',asins,{...scope,readExport:()=>listing})]};
+  const finalized=[];
+  runner.finalizeRepairCachedStages(job.jobId,job,(...args)=>finalized.push(args));
+  assert.deepEqual(finalized,[]);
+  const plan=runner.imageRemarkScheduling(job,job,asins);
+  assert.deepEqual(plan.analysisAsins,[]);assert.equal(plan.captureNeeded,true);assert.equal(plan.shouldRun,true);
+  const partialStage=structuredClone(job);partialStage.stages[0].status='partial';
+  const captureOnly=runner.imageRemarkScheduling(partialStage,partialStage,asins);assert.equal(captureOnly.shouldRun,true);assert.deepEqual(captureOnly.analysisAsins,[]);
+  const unfinished=structuredClone(job);unfinished.asinProgress[asins[0]].traffic.status='pending';
+  assert.equal(runner.imageRemarkScheduling(unfinished,unfinished,asins).shouldRun,false);
+  const resumed=structuredClone(job);resumed.resumeStages=['sales_trend'];
+  assert.equal(runner.imageRemarkScheduling(resumed,resumed,asins).shouldRun,false);
+  const noGalleries=structuredClone(job);noGalleries.outputs=[projectStageOutput('listing',asins,{...scope,stageStatus:'partial',dataAsins:[],readExport:()=>listing})];
+  assert.equal(runner.imageRemarkScheduling(noGalleries,noGalleries,asins).shouldRun,true);
+  noGalleries.asinProgress[asins[0]].traffic.status='pending';
+  assert.equal(runner.imageRemarkScheduling(noGalleries,noGalleries,asins).shouldRun,false);
+  const corrupted=structuredClone(job);corrupted.outputs[0].contentHash='0'.repeat(64);
+  assert.throws(()=>runner.imageRemarkScheduling(corrupted,corrupted,asins),/hash mismatch/);
+  const failedRefresh=structuredClone(job);failedRefresh.stages[0].repairAsins=[asins[1]];failedRefresh.stages[0].imageAction='refresh';failedRefresh.asinProgress[asins[1]].listing={status:'connector-failed'};failedRefresh.asinProgress[asins[1]].image_remarks.status='connector-failed';
+  failedRefresh.outputs[0]=projectStageOutput('listing',asins,{...scope,stageStatus:'partial',dataAsins:[asins[0]],readExport:()=>listing});
+  failedRefresh.outputs.push(projectStageOutput('image_remarks',asins,{...scope,stageStatus:'partial',dataAsins:[],imageRemarksData:{remarksByAsin:{},outcomesByAsin:{}}}));
+  const refreshed=runner.imageRemarkScheduling(job,failedRefresh,asins);
+  assert.deepEqual(refreshed.analysisAsins,[]);assert.equal(refreshed.captureNeeded,true);assert.equal(refreshed.shouldRun,true);
+});
+
+
+test('zero-gallery runner scheduling finalizes terminal gaps without subprocess or candidate',async()=>{
+  const asins=['B000000001','B000000002'];const scope={organizationId:'org',projectId:'project',runId:'run'};
+  const job={jobId:'zero-gallery-job',asins,scope,stages:[{id:'image_remarks',status:'pending',repairAsins:[]}],asinProgress:{[asins[0]]:{traffic:{status:'ready'},image_remarks:{status:'pending'}},[asins[1]]:{traffic:{status:'ready'},image_remarks:{status:'connector-failed'}}},outputs:[projectStageOutput('listing',asins,{...scope,stageStatus:'partial',dataAsins:[],readExport:()=>({})})]};
+  const plan=runner.imageRemarkScheduling(job,job,asins);assert.equal(plan.shouldRun,true);assert.deepEqual(plan.analysisAsins,[]);assert.deepEqual(plan.captureAsins,[]);
+  const partition=await runner.runGalleryReadyImageProcess(job,asins,()=>{throw Error('zero-gallery must not launch a subprocess or candidate');});assert.equal(partition.process.succeeded,true);
+  const emptyData={remarksByAsin:{},outcomesByAsin:{}};
+  const statuses=imageCandidateResultStatuses(emptyData,partition.listingByAsin,asins);
+  for(const asin of partition.missingAsins) {const previous=job.asinProgress[asin].image_remarks.status;if(['connector-failed','timeout'].includes(previous))statuses[asin]=previous;}
+  const current=structuredClone(job);let committed;
+  finalizeProcessedStageCohort(job.jobId,'image_remarks',asins,asins,{initialJob:job,commandSucceeded:partition.process.succeeded,imageRemarksData:emptyData,resultStatusesByAsin:statuses,readJob:()=>current,markModule:(_j,a,_s,patch)=>{current.asinProgress[a].image_remarks=patch;},commitStage:(_j,input)=>{committed=input.output;current.outputs.push(committed);},projectOutput:(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,...scope,readExport:()=>{throw Error('global projection forbidden');}})});
+  assert.equal(committed.stageStatus,'partial');assert.deepEqual(committed.data,emptyData);
+  assert.equal(current.asinProgress[asins[0]].image_remarks.status,'upstream-empty');assert.equal(current.asinProgress[asins[1]].image_remarks.status,'connector-failed');
+  assert.deepEqual(committed.gap.items.map(i=>[i.asin,i.causeCode]),[[asins[0],'UPSTREAM_EMPTY'],[asins[1],'CONNECTOR_FAILED']]);
+  assert.doesNotThrow(()=>validatePersistedImageStageOutput(current,committed));assert.equal(runner.imageRemarkScheduling(job,current,asins).shouldRun,false);
+  const waiting=structuredClone(job);waiting.asinProgress[asins[0]].traffic.status='pending';assert.equal(runner.imageRemarkScheduling(waiting,waiting,asins).shouldRun,false);
+  const failed=structuredClone(current);for(const asin of asins)failed.asinProgress[asin].image_remarks.status='connector-failed';
+  failed.outputs=failed.outputs.filter(o=>o.stage!=='image_remarks').concat(projectStageOutput('image_remarks',asins,{...scope,stageStatus:'failed',gapReasonCode:'CONNECTOR_FAILED'}));
+  assert.equal(runner.imageRemarkScheduling(job,failed,asins).shouldRun,false);
 });

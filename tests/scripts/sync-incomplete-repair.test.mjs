@@ -61,7 +61,7 @@ test("Xiyou repair retains full job authority while collecting only the missing 
   const result = await runOptionalXydcVariantEnrichment({ ...invocation,
     env: { ...process.env, NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(preload)}` },
   });
-  assert.deepEqual(result, { succeeded: true, repairStatuses: { [asins[2]]: "ready" } });
+  assert.deepEqual(result, { succeeded: true, repairStatuses: { [asins[2]]: "ready" }, repairOrders: {}, repairDetails: {} });
 });
 
 test("explicit image actions preserve repair scope and distinguish gallery refresh from analysis",()=>{

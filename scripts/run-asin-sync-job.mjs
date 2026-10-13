@@ -100,6 +100,36 @@ export function imageRemarkRunAsins(job, asins) {
     && (stage?.imageAction || job?.asinProgress?.[asin]?.image_remarks?.status === "pending"));
 }
 
+/** A fresh scoped job must freeze its own URL-validated cache evidence. */
+export function needsImageRemarkCapture(job, asins) {
+  if (!job?.scope?.organizationId) return false;
+  const listing = job.outputs?.find(output => output.stage === "listing")?.data?.contentByAsin ?? {};
+  const expected = asins.filter(asin => listing[asin]?.status === "ready" && listing[asin]?.galleryImages?.length);
+  const saved = job.outputs?.find(output => output.stage === "image_remarks");
+  if (saved?.stageStatus === "failed" && !expected.length && asins.every(asin =>
+    TERMINAL_ASIN_STATUSES.has(job.asinProgress?.[asin]?.image_remarks?.status))) return false;
+  return !saved?.data || expected.some(asin => !Array.isArray(saved.data.remarksByAsin?.[asin]) ||
+    !Array.isArray(saved.data.outcomesByAsin?.[asin]));
+}
+
+/** Shared by main's late capture gate; provider selection remains separate. */
+export function imageRemarkScheduling(initialJob, currentJob, asins, reactivated = false) {
+  const stage = currentJob?.stages?.find(item => item.id === "image_remarks");
+  const resumeAllowed = !Array.isArray(initialJob?.resumeStages) || initialJob.resumeStages.includes("image_remarks");
+  const providerAllowed = resumeAllowed && (shouldRunSyncStage(initialJob, "image_remarks") || reactivated);
+  const analysisAsins = providerAllowed ? imageRemarkRunAsins(currentJob, asins) : [];
+  const captureNeeded = needsImageRemarkCapture(currentJob, asins);
+  const captureAsins = currentJob?.scope?.organizationId && resumeAllowed
+    ? partitionImageListingInput(currentJob, asins).readyAsins : asins;
+  const hasWork = analysisAsins.length > 0 || (resumeAllowed && captureNeeded && asins.length > 0);
+  const trafficCohort = captureAsins.length === 0 ? asins : captureNeeded ? captureAsins : analysisAsins;
+  const trafficTerminal = (captureAsins.length > 0 && Boolean(stage?.imageAction)) || trafficCohort.every(asin => {
+    const progress = currentJob?.asinProgress?.[asin];
+    return TERMINAL_ASIN_STATUSES.has(progress?.traffic?.status ?? progress?.traffic);
+  });
+  return { analysisAsins, captureAsins, captureNeeded, shouldRun: hasWork && trafficTerminal };
+}
+
 /** Only the validated gallery cohort may reach the image subprocess. */
 export async function runGalleryReadyImageProcess(job, asins, dispatch) {
   const partition = partitionImageListingInput(job, asins);
@@ -194,6 +224,7 @@ export function repairProviderEnvironment(job, stageId, env = {}) {
 export function finalizeRepairCachedStages(jobId, job, finalize = finalizeCachedStage) {
   for (const stage of job?.stages ?? []) {
     if (Array.isArray(stage.repairAsins) && stage.repairAsins.length === 0) {
+      if (stage.id === "image_remarks" && needsImageRemarkCapture(job, job.asins)) continue;
       finalize(jobId, stage.id, job.asins);
     }
   }
@@ -448,6 +479,9 @@ export function applyPersistedStagePostcondition(
     imageRemarksData = null,
   } = {},
 ) {
+  // Validate old frozen image coverage against the progress it accompanied,
+  // before this cohort's newly captured successes change module readiness.
+  const imageSourceJob = stageId === "image_remarks" ? structuredClone(readJob(jobId)) : null;
   const readiness = markPersistedStageProgress(jobId, stageId, asins, { readReadiness, markModule });
 
   for (const asin of asins) {
@@ -556,7 +590,7 @@ export function applyPersistedStagePostcondition(
         updatedAt: completedAt,
         ...(stageId === "image_remarks"
           ? { imageRemarksData: mergeImageRemarkStageData(
-            currentJob, previousOutput, asins,
+            imageSourceJob ?? currentJob, previousOutput, asins,
             imageRemarksData ?? { remarksByAsin: {}, outcomesByAsin: {} },
           ) }
           : {}),
@@ -620,6 +654,31 @@ export function finalizeProcessedStageCohort(
   );
   const cohortAsins = [...new Set([...processedAsins, ...cachedAsins])];
   if (!cohortAsins.length) return null;
+  if (stageId === "image_remarks" && finalizeProjectable === applyPersistedStagePostcondition) {
+    // The reporting cohort includes cached families, but only the dispatched
+    // ASINs replace their frozen image entries. Reconcile from scoped evidence
+    // before readiness marking so cached families cannot become false gaps.
+    const currentJob = (processedOptions.readJob ?? readSyncJob)(jobId);
+    const previous = currentJob?.outputs?.find(output => output.stage === stageId);
+    const data = mergeImageRemarkStageData(currentJob, previous, processedAsins,
+      processedOptions.imageRemarksData ?? { remarksByAsin: {}, outcomesByAsin: {} });
+    const savedAsins = Object.keys(data.remarksByAsin);
+    const listing = savedAsins.length ? listingInputFromPersistedJob(currentJob, savedAsins) : {};
+    const cohort = new Set(cohortAsins);
+    const scopedData = Object.fromEntries(Object.entries(data).map(([field, entries]) =>
+      [field, Object.fromEntries(Object.entries(entries).filter(([asin]) => cohort.has(asin)))]));
+    const statuses = imageCandidateResultStatuses(data, listing, cohortAsins);
+    for (const asin of processedAsins) {
+      const reported = processedOptions.resultStatusesByAsin?.[asin];
+      if (["ready", "upstream-empty", "timeout", "connector-failed"].includes(reported)) statuses[asin] = reported;
+    }
+    return finalizeProjectable(jobId, stageId, cohortAsins, {
+      ...processedOptions,
+      imageRemarksData: scopedData,
+      readReadiness: (_stage, cohort) => imageCandidateReadiness(data, listing, cohort),
+      resultStatusesByAsin: statuses,
+    });
+  }
   return finalizeProjectable(jobId, stageId, cohortAsins, processedOptions);
 }
 
@@ -1408,11 +1467,9 @@ async function main() {
     }
 
     const imageStageJob = readSyncJob(jobId);
-    const imageAsins = imageRemarkRunAsins(imageStageJob, asins);
-    const trafficIsTerminal = imageAsins.length > 0 && (Boolean(explicitImageStage?.imageAction) || imageAsins.every(asin =>
-      trafficIsTerminalBeforeImageRemarks(imageStageJob?.asinProgress?.[asin])
-    ));
-    if ((shouldRunSyncStage(job, "image_remarks") || reactivatedImageAsins.length > 0) && trafficIsTerminal) {
+    const imageSchedule = imageRemarkScheduling(job, imageStageJob, asins, reactivatedImageAsins.length > 0);
+    const imageAsins = imageSchedule.analysisAsins;
+    if (imageSchedule.shouldRun) {
       activateStage(jobId, "image_remarks");
       setStage(jobId, "image_remarks", {
         status: "active",
@@ -1426,10 +1483,12 @@ async function main() {
       let imageCandidateFile;
       let imageListingByAsin;
       let galleryReadyAsins = imageAsins;
+      let imageCaptureCohort = imageAsins;
       let missingGalleryAsins = [];
       if (persistedImageJob?.scope?.organizationId) {
         // Verify provenance before handing the captured gallery to the image subprocess.
-        const partition = partitionImageListingInput(persistedImageJob, imageAsins);
+        const partition = partitionImageListingInput(persistedImageJob, asins);
+        imageCaptureCohort = asins;
         imageListingByAsin = partition.listingByAsin;
         galleryReadyAsins = partition.readyAsins;
         missingGalleryAsins = partition.missingAsins;
@@ -1458,6 +1517,7 @@ async function main() {
           ...(imageListingInputFile ? { AGENT_SYNC_LISTING_STAGE_FILE: imageListingInputFile } : {}),
           ...(imageCandidateFile ? {
             AGENT_SYNC_IMAGE_CANDIDATE_FILE: imageCandidateFile,
+            AGENT_SYNC_IMAGE_CAPTURE_ASINS: galleryReadyAsins.join(","),
             AGENT_SYNC_LISTING_STAGE_HASH: persistedImageJob.outputs.find(output => output.stage === "listing").contentHash,
           } : {}),
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
@@ -1472,7 +1532,7 @@ async function main() {
         onOutput: text => process.stdout.write(sanitizeCommandOutput(text)),
         });
         imageProcess = persistedImageJob?.scope?.organizationId
-          ? (await runGalleryReadyImageProcess(persistedImageJob, imageAsins, dispatchImageProcess)).process
+          ? (await runGalleryReadyImageProcess(persistedImageJob, asins, ready => dispatchImageProcess(ready.filter(asin => imageAsins.includes(asin))))).process
           : await dispatchImageProcess(imageAsins);
         let imageRemarksData = { remarksByAsin: {}, outcomesByAsin: {} };
         if (imageCandidateFile && fs.existsSync(imageCandidateFile)) {
@@ -1481,9 +1541,13 @@ async function main() {
           throw new Error("Successful image worker did not persist its job candidate");
         }
         const scopedImageStatuses = imageCandidateFile
-          ? imageCandidateResultStatuses(imageRemarksData, imageListingByAsin, imageAsins)
+          ? imageCandidateResultStatuses(imageRemarksData, imageListingByAsin, imageCaptureCohort)
           : readImageRemarkStatuses();
-        finalizeProcessedStageCohort(jobId, "image_remarks", imageAsins, asins, {
+        for (const asin of missingGalleryAsins) {
+          const previousFailure = persistedImageJob?.asinProgress?.[asin]?.image_remarks?.status;
+          if (["connector-failed", "timeout"].includes(previousFailure)) scopedImageStatuses[asin] = previousFailure;
+        }
+        finalizeProcessedStageCohort(jobId, "image_remarks", imageCaptureCohort, asins, {
           initialJob: job,
           commandSucceeded: imageProcess.succeeded,
           ...(imageCandidateFile ? {

@@ -37,12 +37,14 @@ export function listingInputFromPersistedJob(job, asins) {
   return result;
 }
 
-export function readListingInputFile(filePath, jobId, asins) {
+export function readListingInputFile(filePath, jobId, asins, expectedHash) {
   const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (payload?.jobId !== jobId || !payload?.job || !Array.isArray(asins)) {
     throw new Error("Image listing input identity mismatch");
   }
-  return listingInputFromPersistedJob(payload.job, asins);
+  const listing = listingInputFromPersistedJob(payload.job, asins);
+  if (expectedHash && payload.job.outputs.find(output => output.stage === "listing").contentHash !== expectedHash) throw new Error("Image listing input content hash mismatch");
+  return listing;
 }
 
 /** Validate the immutable source first; absence of a usable gallery is a local gap. */
@@ -59,4 +61,16 @@ export function partitionImageListingInput(job, asins) {
     }
   }
   return { listingByAsin, readyAsins: asins.filter(asin => !missingAsins.includes(asin)), missingAsins };
+}
+
+/** Capturing cache evidence never authorizes analysis outside the dispatch scope. */
+export function imageRemarkCaptureScope(analysisAsins, captureAsins, options = {}) {
+  if (!Array.isArray(analysisAsins) || !Array.isArray(captureAsins) ||
+      [analysisAsins, captureAsins].some(asins => new Set(asins).size !== asins.length || asins.some(asin => !/^[A-Z0-9]{10}$/.test(asin)))) {
+    throw new Error("Image capture ASIN scope is invalid");
+  }
+  if (!options.jobId || !options.candidateFile || !options.listingFile || !/^[a-f0-9]{64}$/.test(options.listingHash ?? "")) throw new Error("Image capture requires a scoped job candidate and persisted listing");
+  const captured = new Set(captureAsins);
+  if (analysisAsins.some(asin => !captured.has(asin))) throw new Error("Image analysis ASIN is outside capture scope");
+  return [...captureAsins];
 }

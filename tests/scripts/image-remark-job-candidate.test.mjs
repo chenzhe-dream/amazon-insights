@@ -154,3 +154,13 @@ test('frozen stage projection retains safe diagnostics from cache and removes se
   assert.deepEqual(result.data.outcomesByAsin[asin][0].diagnostic,diagnostic);
   assert.equal(JSON.stringify(result).includes('secret'),false);
 });
+
+import { imageRemarkCaptureScope } from '../../scripts/lib/image-remark-listing-input.mjs';
+test('capture scope requires immutable job context and explicit dispatch subset, including empty dispatch',()=>{
+  const context={jobId:'capture-job',candidateFile:'candidate.json',listingFile:'listing.json',listingHash:'a'.repeat(64)};
+  assert.deepEqual(imageRemarkCaptureScope([], [asin], context),[asin]);
+  assert.throws(()=>imageRemarkCaptureScope(null,[asin],context),/scope/);
+  assert.throws(()=>imageRemarkCaptureScope([asin],[],context),/outside capture/);
+  assert.throws(()=>imageRemarkCaptureScope([asin],[asin,asin],context),/scope/);
+  for(const field of ['jobId','candidateFile','listingFile','listingHash'])assert.throws(()=>imageRemarkCaptureScope([asin],[asin],{...context,[field]:''}),/scoped job candidate/);
+});

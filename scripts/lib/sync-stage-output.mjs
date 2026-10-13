@@ -131,6 +131,12 @@ export function projectStageOutput(stageId, asins, {
       if (hasEvidence || record.observationOutcomes || record.observationErrors) data.trendByAsin[asin] = record;
     }
   }
+  if (stageStatus === "partial" && stageId === "image_remarks" && imageRemarksData) {
+    // Partial notes and their diagnostics are evidence, not ready-ASIN claims.
+    // Keep the ready-only set used by boundedGap unchanged while retaining the
+    // scoped incomplete family's successfully analyzed image identities.
+    Object.assign(data, projectDoneData(stageId, source, requestedAsins, readExport, imageRemarksData));
+  }
   if (stageStatus === "partial") {
     const reasonCode = gapReasonCodes.has(gapReasonCode) ? gapReasonCode : "UPSTREAM_EMPTY";
     const gap = boundedGap("partial", reasonCode, gapItems, requestedAsins, readyAsins);
@@ -175,7 +181,7 @@ function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {
   };
   if (stageId === "image_remarks") return imageRemarksData ? {
     remarksByAsin: pickRequestedAsins(imageRemarksData.remarksByAsin, asins),
-    outcomesByAsin: pickRequestedAsins(imageRemarksData.outcomesByAsin, asins),
+    outcomesByAsin: pickRequestedAsins(sanitizeImageOutcomes(imageRemarksData.outcomesByAsin), asins),
   } : {
     remarksByAsin: pickRequestedAsins(readSource(source.remarks, readExport), asins),
     outcomesByAsin: pickRequestedAsins(readImageOutcomes(source.outcomes, readExport), asins),
@@ -240,8 +246,14 @@ function sanitizeShape(raw) {
 function readImageOutcomes(source, readExport) {
   const meta = readSource(source, readExport);
   return meta && typeof meta === "object" && !Array.isArray(meta)
-    ? Object.fromEntries(Object.entries(meta.imageOutcomesByAsin ?? {}).map(([asin, slots]) => [asin, Array.isArray(slots) ? slots.map(outcome => outcome == null ? null : imageRemarkOutcome(outcome.status, outcome)) : []]))
+    ? sanitizeImageOutcomes(meta.imageOutcomesByAsin)
     : {};
+}
+
+function sanitizeImageOutcomes(outcomes) {
+  return Object.fromEntries(Object.entries(outcomes ?? {}).map(([asin, slots]) => [asin,
+    Array.isArray(slots) ? slots.map(outcome => outcome == null ? null : imageRemarkOutcome(outcome.status, outcome)) : [],
+  ]));
 }
 
 function readSource(source, readExport) {
