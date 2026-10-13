@@ -394,3 +394,11 @@ The system SHALL adopt saved theme conditions once for a successful explicit res
 - **WHEN** a saved task is explicitly restored or its deep link has an empty category
 - **THEN** saved conditions are adopted only if the request is still current and the operator has not edited query inputs since the adoption intent was captured
 - **AND** site, category, month and sample edits protect their newer values; report reads cause no collection/model calls
+
+
+### Requirement: Background linkage uses existing navigation
+The system SHALL synchronize and launch the research modules in the background without adding a normal-state linkage card or duplicate view buttons. Existing module navigation SHALL expose synchronized results while preserving active edits and independent scope changes.
+
+#### Scenario: Submit and open results through existing menus
+- **WHEN** a user submits an overview category and navigates between existing module menus
+- **THEN** the remaining module conditions and runs are synchronized without a linkage card, duplicate collection, or overwriting an actively edited module

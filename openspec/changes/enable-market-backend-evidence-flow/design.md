@@ -171,3 +171,7 @@ Implement the bounded design and file/test ownership in reliability-implementati
 User authorized repair followed by formal browser acceptance after F-01 was reproduced on the logged-in page. Explicit UUID restore adopts only the saved shape marketplace, category path and month range after a successful read. A task deep link with an empty category adopts the same saved scope after parent URL hydration. Fully specified query drafts remain independent when refreshing or returning to the module. Each restoration owns a single intent tied to its task and the current selection revision; edits while reading invalidate scope adoption, and aborted/older reads cannot consume a newer restoration intent. Ordinary polling never adopts scope. The existing parent callback writes only marketShape* keys, preserving other module inputs. Reading, refresh and confirmation cancellation remain GET-only and do not create supplier/model work.
 
 No source, scoring, ZIP formula, saved report, migration or cross-module linking changes are included. This narrow fix will be updated through the managed formal publisher for real-page acceptance, as explicitly requested; the older whole-change pre-publication restriction does not prevent this scoped authorized update. This does not close composite task 10.11 or imply user business acceptance of all four modules. The five data/score/prose findings remain deferred.
+
+
+### 2026-10-13 交互简化
+用户明确取消新增的四模块联动卡片和查看入口。正常提交在后台同步类目、站点和月份并启动任务，仍使用现有模块菜单查看；不展示额外联动说明或成功状态卡。异常时保留简短错误和失败恢复操作，避免启动失败无提示。后台迟到结果不打断当前编辑，离开该模块后可通过原菜单读取已生成任务；独立修改条件继续受保护。
