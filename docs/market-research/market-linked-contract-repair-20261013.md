@@ -73,3 +73,15 @@
 金额失败根因为product_trend旧请求参数product_trend_type被当前接口忽略并默认返回SalesVolume；改用type并保留响应指标校验。正确请求取得同一商品2026-09销量18402与销售额1195945.98 USD。修复后仍有13次连接器层间歇异常（10 malformed-response、3 upstream-permanent），最后一次显式定向重试13/13成功。原异常body未保存，不能宣称确认限流或额度耗尽。所有轮次证据保留，不隐藏首次失败。
 
 最后一轮保护295个已成功/空结果步骤的status、attempt及hash和294份source hash均不变；13个失败各增加1次attempt。此前两轮分别保留shape-batch-retry-proof.json、shape-batch-retry-round2-proof.json，最终shape-batch-retry-round3-proof.json；关键词另有keyword-batch-retry-proof.json。最终typecheck与build exit0，新增18/18请求/历史回归和5/5 PG集成（含300商品/24月）通过，最终只读复核无阻断发现。准备依用户“32900测试后发布31900”授权受管发布；这不代表整个OpenSpec归档或10.11所有跨窗口/翻译/权限验收完成。
+
+### 31900 受管发布结果
+
+用户授权的条件发布已执行：候选提交db4d7aa0移入干净正式工作树，正式提交f0d56484673dbcae209d5ff1915fbc45878a854b。受管manage-formal-stack -PublishCode退出0；Web/Agent均healthy、源码身份一致：sourceHash=f452da40add0d740cab59a67097c2c8ee4bfb85fb0f721df44bf27ab16dbb9ee，artifactId=6685b0211fff3b25bc57c8361a19dcec3b2177f1494fabd61f300617002c40fd。0065联动表已在正式库可查询，正式联动批次尚0，候选测试记录未导入正式。
+
+发布前正式数据库备份pre-release-formal.dump，SHA256=6C4911387B912F593BFCB1276E94FF7A24908BA4483862AEA06B70C1C7F0B770。原正式提交f3b331ae260d3a51048f6c7c89c2cf3f555152ce保留可回退。
+
+发布后浏览器正式标签显示“登录已失效”，尚不能宣称正式登录页面验收完成；已请用户在31900重新登录。32900真实四模块验收通过不等于31900发布后完整浏览器验收，OpenSpec12.6保持未勾选，不整体归档。Chrome自动化连接当前不可用，实际验收使用Codex内置浏览器，不能记为Chrome自动化通过。
+
+### 31900 登录后复核完成
+
+用户完成正式登录后刷新原报告，fa3b0692-81ac-4771-ba53-4f43ce24de43 的Floor Lamps总览2026-06至2026-08可读，无任务无效/读取失败。新联动提示可见；形态、关键词、评论入口依次访问正常，再回总览报告仍保留。导航前后正式联动批次/模块任务/步骤尝试计数均0/77/9752，未新增采集。正式本次仅做发布后页面冒烟复核，没有再创建一套重复的真实供应商联动采集；完整真实联动证据在32900隔离库。故12.6中“正式真实四模块全流程”保留未完成，不能误写整个OpenSpec已完成/已归档。
