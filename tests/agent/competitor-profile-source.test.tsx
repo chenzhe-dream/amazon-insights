@@ -88,3 +88,26 @@ test("retained specs reject invalid independent provenance instead of borrowing 
     assert.doesNotMatch(render(product, extra({ ...record, specificationsProvenance: { ...specificationsProvenance, ...changed } })), /Retained exact specification/);
   }
 });
+
+test("selling points use one initially collapsed toggle for nine columns and remain full in snapshots", () => {
+  const products = Array.from({ length: 9 }, (_, index) => ({ ...product, asin: `B00000000${index}` }));
+  const common = { products, market: "US" as const, slugParam: null, salesTrendByAsin: {}, ratingByAsin: {},
+    fbaFeeByAsin: {}, childSalesByAsin: {}, priceStrategyByAsin: {} };
+  const page = renderToStaticMarkup(<CompetitorOverviewMatrix {...common} presentation="page" translationProjectId={null} translationKey="scope" />);
+  const row = page.match(/<tr class="selling-points-row[^"]*">[\s\S]*?<\/tr>/)?.[0] ?? "";
+  assert.match(row, /展开主要卖点/);
+  assert.equal((row.match(/<button /g) ?? []).length, 1);
+  assert.match(row, /aria-expanded="false"/);
+  const ids = row.match(/aria-controls="([^"]+)"/)?.[1].split(" ") ?? [];
+  assert.equal(ids.length, 9);
+  for (const id of ids) assert.ok(row.includes(`id="${id}" class="selling-points-details" hidden=""`));
+  assert.equal((row.match(/请先打开来源项目/g) ?? []).length, 9, "hidden children stay mounted with their existing states");
+  const snapshot = renderToStaticMarkup(<CompetitorOverviewMatrix {...common} presentation="snapshot" categoryTrendByNode={{}}
+    sellingTranslationsByAsin={Object.fromEntries(products.map(item => [item.asin, { asin: item.asin, sourceHash: "fixture", state: "ready" as const,
+      points: ["完整中文卖点一", "完整中文卖点二"], original: ["Complete original"], sourceComplete: true, message: null }]))} />);
+  const snapshotRow = snapshot.match(/<tr class="selling-points-row[^"]*">[\s\S]*?<\/tr>/)?.[0] ?? "";
+  assert.doesNotMatch(snapshotRow, /<button|hidden=""/);
+  for (const content of ["完整中文卖点一", "完整中文卖点二", "Complete original"]) {
+    assert.equal(snapshotRow.split(content).length - 1, 9);
+  }
+});

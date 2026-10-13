@@ -501,6 +501,8 @@ button.nav-item {
 .price-strategy-details>small { display:block; padding-top:5px; border-top:1px dashed #e0e7ef; }
 .price-strategy-cell .price-strategy-summary { margin-bottom:0; }
 .price-strategy-details { margin-top:10px; }
+.selling-points-details[hidden] { display:none; }
+.selling-points-summary { margin:0; }
 @media (min-width:761px) {
   .app-shell.sidebar-collapsed { --sidebar-w:72px; }
   .sidebar-collapsed .sidebar { padding:18px 9px; }

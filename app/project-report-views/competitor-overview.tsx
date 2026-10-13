@@ -640,6 +640,25 @@ function CachedSellingTranslation({result}: {result: SellingTranslationResult | 
   </div>;
 }
 
+function SellingPointsRow(props: MatrixProps) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  const showFull = props.presentation === "snapshot" || expanded;
+  return <tr className={`selling-points-row${showFull ? " expanded" : ""}`}><th>主要卖点<small className="insight-source">亚马逊商品卖点中文翻译</small>
+    {props.presentation === "page" ? <button type="button" className="price-strategy-toggle selling-points-toggle" aria-expanded={expanded}
+      aria-controls={props.products.map(product => `${id}-${product.asin}`).join(" ")} onClick={() => setExpanded(value => !value)}>
+      {expanded ? "收起主要卖点 ▴" : "展开主要卖点 ▾"}
+    </button> : null}
+  </th>{props.products.map(product => <td key={product.asin} className="selling-points-cell">
+    {!showFull ? <p className="selling-points-summary muted">展开查看中文卖点及原文</p> : null}
+    <div id={`${id}-${product.asin}`} className="selling-points-details" hidden={!showFull}>
+      {props.presentation === "snapshot" ? <CachedSellingTranslation result={props.sellingTranslationsByAsin[product.asin] ?? null} />
+        : <SellingPointTranslation key={`${props.translationKey}:${product.asin}`} projectId={props.translationProjectId}
+          versionId={props.translationVersionId} asin={product.asin} />}
+    </div>
+  </td>)}</tr>;
+}
+
 export function PriceStrategyRow({ products, priceStrategyByAsin, presentation }: Pick<CompetitorOverviewData, "products" | "priceStrategyByAsin"> & { presentation: "page" | "snapshot" }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
@@ -667,10 +686,6 @@ function ProductSpecifications({ product, listing, market }: { product: Product;
 
 export function CompetitorOverviewMatrix(props: MatrixProps) {
   const {products, market, slugParam, salesTrendByAsin, ratingByAsin, fbaFeeByAsin, childSalesByAsin, priceStrategyByAsin, presentation} = props;
-  const sellingTranslationsByAsin = presentation === "snapshot" ? props.sellingTranslationsByAsin : {};
-  const translationKey = presentation === "page" ? props.translationKey : "";
-  const translationProjectId = presentation === "page" ? props.translationProjectId : null;
-  const translationVersionId = presentation === "page" ? props.translationVersionId ?? null : null;
   return <ComparisonOverviewCard description={<>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</>} badge={<span className="source-badge">MCP 综合</span>} presentation={presentation}><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
           <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}>{presentation === "snapshot" ? <SnapshotSalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/> : <SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/>}</td>)}</tr>
@@ -684,7 +699,7 @@ export function CompetitorOverviewMatrix(props: MatrixProps) {
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="launch" /></td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}><VariationTheme product={p} childVariants={childSalesByAsin[p.asin]?.map(item => item.variant)} /></td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="variants" /></td>)}</tr>
           <tr><th>近期披露子体销量<small className="insight-source">Sorftime · 页面披露口径</small><small className="insight-source">统计周期未提供</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant));return <td key={p.asin}><ChildSalesBars items={items.slice(0,5)}/>{presentation === "snapshot" && items.length > 5 ? <details><summary>查看其余 {items.length - 5} 个子体</summary><ChildSalesBars items={items.slice(5)}/></details> : null}</td>})}</tr>
           <PriceStrategyRow products={products} priceStrategyByAsin={priceStrategyByAsin} presentation={presentation} />
-          <tr><th>主要卖点<small className="insight-source">亚马逊商品卖点中文翻译</small></th>{products.map(p=><td key={p.asin} className="selling-points-cell">{presentation === "snapshot" ? <CachedSellingTranslation result={sellingTranslationsByAsin[p.asin] ?? null} /> : <SellingPointTranslation key={`${translationKey}:${p.asin}`} projectId={translationProjectId} versionId={translationVersionId} asin={p.asin} /> }</td>)}</tr>
+          <SellingPointsRow {...props} />
         </tbody></table></div></ComparisonOverviewCard>;
 }
 
