@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {chromium} from 'playwright';
+import {createServer} from 'vite';
+import react from '@vitejs/plugin-react';
+const harness=`import React from 'react';import{createRoot}from'react-dom/client';import{MarketThemePendingReport}from'/app/market-theme-section';import{themeRun}from'/tests/agent/helpers/market-theme-page-fixture';import '/app/globals.css';import '/app/comparison-layout.css';import '/app/market-research.css';const run=themeRun().run;run.status='failed';run.currentReport=null;run.latestSavedReport=null;run.history=[];run.steps=Array.from({length:20},(_,i)=>({...run.steps[0],id:'failed-'+i,asin:'B'+String(i+1).padStart(9,'0'),status:'failed',errorCode:'invalid-data',canRetry:false}));createRoot(document.getElementById('root')).render(<div className="market-ui-reference" style={{padding:16}}><section className="card" style={{padding:16}}><MarketThemePendingReport run={run} runId={run.id} node="1063294" readError={null}/></section><div id="next-section">下一章节</div></div>);`;
+test('twenty failed samples stay inside a scrollable status card on desktop and narrow screens',{timeout:90000},async t=>{
+ const server=await createServer({configFile:false,cacheDir:'test-results/theme-pending-vite',define:{'process.env':'{}'},plugins:[{name:'pending-harness',resolveId(id){if(id==='/pending-harness.tsx')return id},load(id){if(id==='/pending-harness.tsx')return harness}},react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();
+ await page.route('**/*',async route=>{const request=route.request();if(new URL(request.url()).origin!==origin)return route.abort();if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:'<div id="root"></div><script type="module" src="/pending-harness.tsx"></script>'});return route.continue()});
+ for(const width of [1440,390]){await page.setViewportSize({width,height:900});await page.goto(origin);await page.getByText('主题分析失败',{exact:true}).waitFor();
+  const box=page.locator('.pending-box');const bounds=await box.evaluate(el=>{const list=el.querySelector('ul')!,card=el.closest('section')!,next=document.querySelector('#next-section')!;return {listHeight:list.clientHeight,scrollHeight:list.scrollHeight,boxBottom:el.getBoundingClientRect().bottom,cardBottom:card.getBoundingClientRect().bottom,nextTop:next.getBoundingClientRect().top,bodyWidth:document.documentElement.scrollWidth,width:innerWidth}});
+  assert.ok(bounds.listHeight<=280,JSON.stringify(bounds));assert.ok(bounds.scrollHeight>bounds.listHeight,JSON.stringify(bounds));assert.ok(bounds.boxBottom<=bounds.cardBottom);assert.ok(bounds.cardBottom<=bounds.nextTop);assert.ok(bounds.bodyWidth<=bounds.width);
+  await page.screenshot({path:`test-results/theme-pending-${width}.png`,fullPage:true});
+ }
+});
+import {themeRun as makeThemeRun} from './helpers/market-theme-page-fixture';
+test('failed pool opens task progress and recovered report preserves that open panel without recollection',{timeout:90000},async t=>{
+ const harness=`import React from 'react';import{createRoot}from'react-dom/client';import{MarketThemeSection}from'/app/market-theme-section';createRoot(document.getElementById('root')).render(<MarketThemeSection maxMonth="2026-09"/>);`;
+ const server=await createServer({configFile:false,cacheDir:'test-results/theme-pending-state-vite',define:{'process.env':'{}'},plugins:[{name:'pending-harness',resolveId(id){if(id==='/pending-harness.tsx')return id},load(id){if(id==='/pending-harness.tsx')return harness}},react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage(),saved=makeThemeRun();
+ let value=structuredClone(saved),writes=0;value.run.status='failed';value.run.currentReport=null;value.run.latestSavedReport=null;value.run.history=[];value.run.steps[0]={...value.run.steps[0],kind:'collect-shape-pool',asin:null,errorCode:'invalid-data',canRetry:false};
+ await page.route('**/*',async route=>{const request=route.request(),url=new URL(request.url());if(url.origin!==origin)return route.abort();if(request.isNavigationRequest())return route.fulfill({contentType:'text/html',body:'<div id="root"></div><script type="module" src="/pending-harness.tsx"></script>'});if(!url.pathname.startsWith('/api/'))return route.continue();if(request.method()!=='GET')writes++;return route.fulfill(url.pathname.endsWith('/runs/'+saved.run.id)?{json:value}:{status:404,json:{}})});
+ await page.goto(`${origin}/?themeRun=${saved.run.id}`);await page.getByText('主题分析失败',{exact:true}).waitFor();await page.getByRole('button',{name:'刷新状态',exact:true}).waitFor();
+ const panel=page.getByRole('button',{name:'刷新状态',exact:true}).locator('xpath=ancestor::details[1]');assert.equal(await panel.evaluate(el=>(el as HTMLDetailsElement).open),true);
+ value=saved;await page.getByRole('button',{name:'刷新状态',exact:true}).click();await page.getByLabel('报告版本').waitFor();assert.equal(await panel.evaluate(el=>(el as HTMLDetailsElement).open),true);assert.equal(writes,0);
+});

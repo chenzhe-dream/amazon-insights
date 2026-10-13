@@ -1,3 +1,4 @@
+import {categoryProductsFixture} from './helpers/category-products-fixture';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -26,10 +27,10 @@ test('v4 manual revisions freeze source data across newer attempts and enforce a
  const seller:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('unused')},execute:async()=>{throw Error('Unexpected SellerSprite call')}};
  const sorftime:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>{
   calls++;
-  if(r.input.product_trend_type==='SalesAmount'&&failAmount)throw new ConnectorError('sorftime','upstream-permanent',false);
+  if(r.input.type==='SalesAmount'&&failAmount)throw new ConnectorError('sorftime','upstream-permanent',false);
   if(r.operation==='product_detail'&&failImage)throw new ConnectorError('sorftime','upstream-permanent',false);
-  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,gross_profit_rate:75,price:30,main_image:'https://m.media-amazon.com/images/I/after-retry.jpg'}}:r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:null,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
-  return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,gross_profit_rate:75,price:30,main_image:'https://m.media-amazon.com/images/I/after-retry.jpg'}}:(r.operation==='category_report'||r.operation==='category_products')?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:30,monthly_sales_volume:100,monthly_sales_amount:3000,gross_profit_margin:null,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.type==='SalesAmount'?['2026-07=0','2026-08=30.25']:['2026-07=0','2026-08=10']};
+  return {data:r.operation==='category_products'?categoryProductsFixture(data,r.input.node_id):data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
  const study=await service.createStudy(f.actor,{marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,fromMonth:'2026-07',toMonth:'2026-08'},randomUUID());

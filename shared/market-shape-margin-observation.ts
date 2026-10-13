@@ -7,7 +7,9 @@ const number=(v:unknown)=>typeof v==='number'||typeof v==='string'&&/^-?\d+(?:\.
 export function parseSorftimeMarginObservation(raw:unknown,asin:string){
  const envelope=object(raw),data=object(envelope.data??raw);
  if(data.asin!==asin)return null;
- const grossProfitMargin=number(data.gross_profit_rate),price=number(data.price);
+ // Both supplier contracts declare percentage points; conflicting aliases are not interchangeable.
+ if(Object.hasOwn(data,'gross_profit_rate')&&Object.hasOwn(data,'profit_rate')&&number(data.gross_profit_rate)!==number(data.profit_rate))return null;
+ const grossProfitMargin=number(Object.hasOwn(data,'gross_profit_rate')?data.gross_profit_rate:data.profit_rate),price=number(data.price);
  if(!Number.isFinite(grossProfitMargin)||grossProfitMargin < -1000||grossProfitMargin>100||!Number.isFinite(price)||price<=0||price>Number.MAX_SAFE_INTEGER)return null;
  return {grossProfitMargin,price};
 }

@@ -86,3 +86,24 @@
   .market-ui-reference .market-theme-page .category-cs-asin-table { min-width: 820px; }
   .market-ui-reference .market-keyword-page .kw-launch-section-table { min-width: 620px; }
 }
+
+/* A failed sample list must grow or scroll, never escape the report card. */
+.pending-box.market-theme-pending,
+.market-ui-reference .pending-box.market-theme-pending {
+  height: auto;
+  min-height: 120px;
+  min-width: 0;
+  padding: 16px;
+  gap: 12px;
+  justify-items: stretch;
+  text-align: left;
+  color: #526074;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.market-theme-pending > .market-theme-steps {
+  max-height: 260px;
+  overflow-y: auto;
+  min-width: 0;
+  margin: 0;
+}

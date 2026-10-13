@@ -142,7 +142,7 @@ function evidence(scope: MarketAnalysisScope, operation: Operation, keyword: str
       recommendedCpcUsd: { status: "known", unit: "currency", rawUnit: "USD", currency: "USD" },
     } : {
       searchVolume: countUnit, searchRank: countUnit,
-      recommendedBid: { status: "unknown", rawUnit: "CPC recommended bid", reason: "keyword_trend documentation does not state currency" },
+      recommendedBid: { status: "unknown", rawUnit: "CPC recommended bid", reason: object(payload.data) && Object.hasOwn(payload.data, "cpc_trend") ? "cpc_trend amount scale is ambiguous between documented cents and returned values" : "keyword_trend documentation does not state currency" },
       yoyGrowth: { status: "known", unit: "ratio", rawUnit: "fractional change" },
       recentGrowth: { status: "known", unit: "ratio", rawUnit: "fractional change" },
     },
@@ -187,7 +187,17 @@ function parseSeries(raw: MarketJsonValue | undefined, field: string, label: str
   const unavailableBidPattern = field === "recommended_bid_trend"
     ? /^(20\d{2}-(?:0[1-9]|1[0-2])) CPC recommended bid -1(?:\.0+)?$/ : null;
   const points = new Map<string, { value: number | null; index: number; conflict: boolean }>();
-  raw.forEach((item, index) => {
+  // Current Sorftime monthly format alternates yyyyMM and a numeric string.
+  // Preserve legacy text parsing byte-for-byte for frozen historical evidence.
+  const pairs = raw.length > 0 && typeof raw[0] === 'string' && /^\d{6,8}$/.test(raw[0]);
+  if (pairs && raw.length % 2 !== 0) { issues.push({ code: 'invalid', path: ['data', field] }); return []; }
+  const entries = pairs ? Array.from({ length: raw.length / 2 }, (_, pair) => {
+    const index = pair * 2, month = raw[index], value = raw[index + 1];
+    const item = typeof month === 'string' && /^20\d{2}(?:0[1-9]|1[0-2])$/.test(month) && typeof value === 'string'
+      ? `${month.slice(0, 4)}-${month.slice(4)} ${label} ${value}` : null;
+    return { item, index };
+  }) : raw.map((item, index) => ({ item, index }));
+  entries.forEach(({ item, index }) => {
     const unavailableBid = typeof item === "string" ? unavailableBidPattern?.exec(item) : null;
     const match = unavailableBid ?? (typeof item === "string" ? pattern.exec(item) : null);
     const value = match && !unavailableBid ? (integer ? Number(match[2]) : decimalValue(match[2])) : null;
@@ -230,7 +240,7 @@ export async function collectMarketKeywordTrend(input: CollectMarketKeywordTrend
   const request = parsed.data;
   let response: ConnectorResult;
   try {
-    response = await executeOnce(input.connector, { operation, input: { keyword: request.keyword, keyword_support_site: sorftimeMarketSite(request.scope.marketplace) }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
+    response = await executeOnce(input.connector, { operation, input: { keyword: request.keyword, keyword_support_site: sorftimeMarketSite(request.scope.marketplace), type: 2 }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
   } catch (error) { return transportFailure(operation, error); }
   const raw = copyPayload(own(response, "data"));
   if (raw === undefined) return failed(operation, "malformed-response");
@@ -241,10 +251,12 @@ export async function collectMarketKeywordTrend(input: CollectMarketKeywordTrend
   if (!identity.success || identity.data !== request.keyword) return failed(operation, "identity-conflict", raw);
   const issues: MarketKeywordIssue[] = [];
   const completeBefore = timestamp.slice(0, 7);
+  const rankField = Object.hasOwn(raw.data, 'rank_trend') ? 'rank_trend' : 'search_rank_trend';
+  const unknownCpc = Object.hasOwn(raw.data, 'cpc_trend');
   const series = {
     searchVolume: parseSeries(raw.data.search_volume_trend, "search_volume_trend", "search volume", true, completeBefore, issues),
-    searchRank: parseSeries(raw.data.search_rank_trend, "search_rank_trend", "search rank", true, completeBefore, issues),
-    recommendedBid: parseSeries(raw.data.recommended_bid_trend, "recommended_bid_trend", "CPC recommended bid", false, completeBefore, issues),
+    searchRank: parseSeries(raw.data[rankField], rankField, "search rank", true, completeBefore, issues),
+    recommendedBid: unknownCpc ? [] : parseSeries(raw.data.recommended_bid_trend, "recommended_bid_trend", "CPC recommended bid", false, completeBefore, issues),
   };
   if (issues.some(issue => issue.code === "invalid")) return failed(operation, "malformed-response", raw, issues);
   const observedCompleteMonths = [...new Set(Object.values(series).flat().filter(point => point.measurement.value !== null).map(point => point.month))].sort();
@@ -263,7 +275,7 @@ export async function collectMarketKeywordTrend(input: CollectMarketKeywordTrend
     months.push({ month, searchVolume, searchRank: maps.searchRank.get(month) ?? missing<number>(), recommendedBid: maps.recommendedBid.get(month) ?? missing<number>(),
       yoyGrowth: growth(searchVolume.value, month, -12, maps.searchVolume), recentGrowth: growth(searchVolume.value, month, -1, maps.searchVolume) });
   }
-  issues.push({ code: "unknown-unit", path: ["data", "recommended_bid_trend"] });
+  issues.push({ code: "unknown-unit", path: ["data", unknownCpc ? "cpc_trend" : "recommended_bid_trend"] });
   return { status: months.every(month => month.searchVolume.value === null) ? "empty" : "partial", operation, keyword: request.keyword, memberId: memberId(request.scope, request.keyword), cpcCurrency: null,
     series, observedCompleteMonths, months, evidence: source, issues };
 }

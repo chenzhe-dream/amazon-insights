@@ -26,6 +26,14 @@ export function themeRunLabel(run:Run) {
   if(run.currentReport){const report=run.currentReport.report,status=themeSavedReportStatus(report);return status==='complete'?report.semanticStatus==='skipped'?'规则报告已保存':'报告已保存':status==='partial'?report.semanticStatus==='skipped'?'部分规则报告已保存':'部分报告已保存':'暂无可用主题';}
   return run.steps.some(s=>s.current&&s.status==='failed')?'分析未完成':'等待后续处理';
 }
+export function MarketThemePendingReport({run,runId,node,readError}:{run:Run|null;runId:string|null;node:string;readError:string|null}) {
+ const failed=run?.steps.filter(s=>s.current&&s.status==='failed')??[];
+ const active=!!run&&themeRunActive(run),cancelled=run?.status==='cancelled';
+ const title=readError?'任务读取失败':cancelled?'分析已取消':active?themeRunLabel(run!):failed.length?'主题分析失败':run?'分析已结束，未生成报告':runId?'正在读取主题任务…':node?'等待拉取见解':'等待指定类目节点';
+ const visibleSteps=readError||cancelled?[]:active?run!.steps.filter(s=>s.current&&s.status==='running'):failed;
+ const detail=readError?'请刷新状态；当前任务进度尚未确认。':cancelled?'本次分析已停止，可重新拉取创建新任务。':active?(visibleSteps.length?'正在执行下列步骤，完成后自动展示报告。':'任务已排队，等待后台执行。'):failed.length?(failed.some(s=>s.canRetry)?'可在下方重试失败步骤，已保存的数据保留。':'当前失败步骤不能直接重试；修复后点击上方“重新拉取”创建新任务，原任务保留。'):run?'请查看下方任务进度，确认未生成报告的原因。':runId?'正在读取已保存状态。':'选择类目后点击“拉取见解”。';
+ return <div className="pending-box market-theme-pending" role="status"><strong>{title}</strong><span>{detail}</span>{visibleSteps.length>0&&<ul className="market-theme-steps">{visibleSteps.map(s=><li key={s.id}><MarketThemeStepStatus step={s}/></li>)}</ul>}</div>;
+}
 export function themeRunFromUrl() {if(typeof window==='undefined')return null;const result=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('themeRun'));return result.success?result.data:null;}
 function rememberRun(id:string) {const url=new URL(window.location.href);url.searchParams.set('themeRun',id);url.searchParams.set('themeView','themes');window.history.replaceState(window.history.state,'',url);}
 
@@ -39,6 +47,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const [runId,setRunId]=useState<string|null>(null),[restoreId,setRestoreId]=useState(''),[run,setRun]=useState<Run|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
   const [reportChoice,setReportChoice]=useState('latest');
+  const [workflowOpen,setWorkflowOpen]=useState(false);
   const [retainedReport,setRetainedReport]=useState<Run['currentReport']>(null),[priorRuns,setPriorRuns]=useState<string[]>([]);
   const owner=useRef<AbortController|null>(null),writing=useRef(false),revision=useRef(0);
   const mutationOwner=useRef<AbortController|null>(null);
@@ -126,6 +135,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
       const next=await readThemeRun(id,signal);if(!signal.aborted){setRun(next);setReadError(null);}});
   }
   const selected=run?(reportChoice==='latest'?(run.currentReport??run.latestSavedReport??retainedReport):run.history.find(e=>e.attemptId===reportChoice)??null):null;
+  useEffect(()=>{if(run&&!selected)setWorkflowOpen(true);},[run?.id,!!selected]);
   return <div className="market-research-page market-theme-page">
     <section className="card ss-market-query ss-market-query--lilac">
       <form onSubmit={e=>void submit(e)}><fieldset disabled={busy||reportSaving} style={{minWidth:0}}><legend className="market-research-sr-only">类目主题分析条件</legend>
@@ -141,8 +151,8 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     {readError&&<p className="market-research-error" role="alert">状态读取失败：{readError}。{run?'下方为上次取得的结果，未确认最新状态。':'未读取到任务。'}</p>}
     {run&&(run.scope.marketplace!==(selection?.marketplace??localSite)||run.scope.nodeIdPath!==node||run.scope.fromMonth!==(selection?.fromMonth??month)||run.scope.toMonth!==month||run.params.memberCount!==members||run.params.poolSize!==pool)&&<p className="market-research-notice">查询条件与下方任务不同；下方仍是类目 {run.scope.nodeIdPath}、{run.scope.fromMonth} 至 {run.scope.toMonth} 的已保存结果。</p>}
     {!run?.currentReport&&selected&&<p className="market-research-notice">当前分析尚无新报告，以下保留的历史报告不代表本轮结果。</p>}
-    {selected?<MarketThemeReport entry={selected} writesDisabled={targetLoading||busy} onWriteState={onReportWrite}/>:<MarketThemeLaunchSection title="类目买家评论见解" description={(selection?.marketplace??localSite)+" · 基于样本链接的 Amazon Customers Say 聚合"}><div className="pending-box" role="status"><strong>{readError?'任务读取失败':runId?'主题报告尚未生成':node?'等待拉取见解':'等待指定类目节点'}</strong><span>{readError?'请在下方刷新状态或检查任务编号。':run?.steps.some(s=>s.current&&s.status==='failed')?'部分步骤失败。已保存输入保留，可在下方重试对应步骤。':runId?'后台正在处理，真实阶段和缺口见下方任务进度。':'本模块独立输入 Node ID；Customers Say 按主题提及次数计算份额。'}</span></div></MarketThemeLaunchSection>}
-    <section className="card market-insights-workflow" aria-label="主题任务与报告"><details className="market-research-boundaries"><summary>任务进度、重试与历史报告</summary>
+    {selected?<MarketThemeReport entry={selected} writesDisabled={targetLoading||busy} onWriteState={onReportWrite}/>:<MarketThemeLaunchSection title="类目买家评论见解" description={(selection?.marketplace??localSite)+" · 基于样本链接的 Amazon Customers Say 聚合"}><MarketThemePendingReport run={run} runId={runId} node={node} readError={readError}/></MarketThemeLaunchSection>}
+    <section className="card market-insights-workflow" aria-label="主题任务与报告"><details className="market-research-boundaries" open={workflowOpen} onToggle={e=>setWorkflowOpen(e.currentTarget.open)}><summary>任务进度、重试与历史报告</summary>
       <div className="market-theme-actions"><button type="button" className="ghost-btn" disabled={!runId||busy||targetLoading} onClick={()=>setReload(n=>n+1)}>刷新状态</button>{run&&themeRunActive(run)&&<button type="button" className="ghost-btn" disabled={busy||reportSaving||targetLoading||!!readError} onClick={()=>void action('cancel')}>取消本次分析</button>}</div>
       {!run?<p role="status">{readError?'未能读取任务，请刷新状态或检查任务编号。':runId?'正在读取主题任务…':'尚未开始主题分析。可新建分析或恢复已有任务。'}</p>:<>
         <div className="market-research-job-heading"><h3>{!readError&&themeRunActive(run)&&<span className="market-theme-spinner" aria-hidden="true"/>}{readError?'最新状态待确认':themeRunLabel(run)}</h3><small>任务：{run.id}</small></div>

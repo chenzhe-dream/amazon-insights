@@ -7,7 +7,7 @@ import type { restoreMarketThemeDetails } from './customer-theme-details';
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const text=(v:unknown)=>typeof v==='string'&&v.trim()?v.trim():null;
 /** Projection only: absence never triggers enrichment or changes numeric evidence. */
-export function projectThemeSample(input:{asin:string;sourceIndex:number;product:unknown;productSource:{ref:string;snapshotId:string;payload:unknown};summarySource?:{ref:string;snapshotId:string;payload:unknown};provider?:'sorftime'|'sellerSprite';imageSource?:{ref:string;snapshotId:string;payload:unknown};imageMissingReason?:string}){
+export function projectThemeSample(input:{asin:string;sourceIndex:number;product:unknown;productSource:{ref:string;snapshotId:string;payload:unknown;operation?:'category_report'|'category_products';nodeId?:string};summarySource?:{ref:string;snapshotId:string;payload:unknown};provider?:'sorftime'|'sellerSprite';imageSource?:{ref:string;snapshotId:string;payload:unknown};imageMissingReason?:string}){
  if(input.provider==='sorftime')return projectSorftimeThemeSample(input);
  const {asin,sourceIndex,productSource,summarySource}=input,rows=obj(productSource.payload).data,p=obj(input.product),row=obj(Array.isArray(rows)?rows[sourceIndex]:null);
  if(MarketSourceIdentityValueSchemas.asin.parse(row.asin)!==asin||p.asin!==asin||text(row.title)!==p.title)throw new TypeError('Sample metadata differs from the frozen ASIN row');

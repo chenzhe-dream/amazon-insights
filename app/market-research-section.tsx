@@ -21,6 +21,9 @@ import {MarketKeywordSection} from './market-keyword-section';
 import {MarketOverviewQuery} from "./market-overview-query";
 import {LaunchSection} from "./launch-section";
 import {matchesOverviewBasicScope,type OverviewBasicContext} from './lib/market-overview-basic-scope';
+import {MarketLinkedStatus} from './market-linked-status';
+import {useMarketLinkedAnalysis} from './lib/use-market-linked-analysis';
+import {linkedModules,type MarketLinkedRequest,type LinkedModule} from '../shared/market-linked-contracts';
 
 const statusLabels: Record<MarketResearchJob["status"], string> = {
   queued: "排队中", running: "采集中", succeeded: "采集完成", partial: "部分数据可用", failed: "采集失败",
@@ -73,7 +76,7 @@ export function MarketOverviewResult({ report, onOpenReport }: { report: MarketO
   </section>;
 }
 
-function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAuditDetails=false}:{scope:MarketResearchScope;setScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>;fromMonth:string;setFromMonth:(month:string)=>void;showAuditDetails?:boolean}) {
+function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAuditDetails=false,onLinkedSubmit,linkedBusy=false}:{scope:MarketResearchScope;setScope:React.Dispatch<React.SetStateAction<MarketResearchScope>>;fromMonth:string;setFromMonth:(month:string)=>void;showAuditDetails?:boolean;onLinkedSubmit?:(request:MarketLinkedRequest)=>Promise<void>;linkedBusy?:boolean}) {
   const overviewController=useRef<MarketOverviewController|null>(null);
   const [jobs, setJobs] = useState<MarketResearchJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -129,6 +132,7 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
     event.preventDefault();
     const parsed = MarketResearchScopeSchema.safeParse(scope);
     if (!parsed.success || scope.month!=='last30'&&scope.month > previousCompleteMonth()) { setError("请输入有效的数字类目节点或冒号分隔的路径，并选择最近30天或已结束的月份。"); return; }
+    if(onLinkedSubmit){try{setError(null);await onLinkedSubmit({scope:parsed.data,fromMonth:fromMonth>parsed.data.month?parsed.data.month:fromMonth});}catch{/* The linked panel owns submission errors. */}return;}
     const serialized = JSON.stringify(parsed.data);
     await mutate(signal => {
       if (submission.current?.scope !== serialized) submission.current = { scope: serialized, key: browserRequestId() };
@@ -164,7 +168,8 @@ function MarketResearchWorkspace({scope,setScope,fromMonth,setFromMonth,showAudi
   const activeReport=!explicit&&reportContext.status==='ready'&&reportContext.report?reportContext.report:selected?.report;
   const mismatched=!!selected&&reportContext.status==='ready'&&!matchesOverviewBasicScope(selected,reportContext.scope);
   return <div className="market-research-page">
-    <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
+    <MarketOverviewQuery scope={scope} onChange={change=>setScope(current=>({...current,...change}))} latest={previousCompleteMonth()} busy={submitting||linkedBusy} onSubmit={event=>void submit(event)} onReset={()=>{setScope({marketplace:'US',nodeQuery:'',month:previousCompleteMonth(),headTopN:10,newProductMonths:6});setFromMonth(previousCompleteMonth());setError(null);}} error={error}/>
+    {onLinkedSubmit&&<p className="market-research-note" role="note">点击“筛选市场”将同步站点、类目与研究月份，并启动四个模块。联动支持完整自然月；“最近30天”请在总览分析设置中单独分析。</p>}
     <LaunchSection title="类目节点市场概览" description={selected?`${selected.scope.marketplace} · ${overviewMonthLabel(selected.scope.month)} · Node ${selected.scope.nodeQuery} · 头部 Top${selected.scope.headTopN}`:'在上方选择月份和类目后点击「筛选市场」，支持最近30天或完整自然月。'} badge={<span className="source-badge">卖家精灵 MCP</span>}>
       {mismatched&&<MarketAdminContent><div className="market-research-notice" role="status"><strong>基础概览与下方总览报告范围不同</strong><p>你正在查看其他基础采集记录，下方历史报告保持原样。</p><button className="ghost-btn" type="button" onClick={()=>setBasicOverride(null)}>返回报告对应概览</button></div></MarketAdminContent>}
       {selected&&reportContext.status==='failed'&&<p className="market-research-notice">未能确认历史报告范围，当前仅展示手动选择的基础记录。</p>}
@@ -197,6 +202,27 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     keywords:emptyMarketModuleSelection(previousCompleteMonth()),
     themes:emptyMarketModuleSelection(previousCompleteMonth()),
   }));
+  const linkedApplied=useRef(new Map<string,{initial:Record<string,string|null>;applied:string[]}>());
+  const linked=useMarketLinkedAnalysis(sessionIdentity,(batch,apply)=>{
+    const url=new URL(window.location.href),params=url.searchParams;
+    const selection={marketplace:batch.request.scope.marketplace,nodeIdPath:batch.resolvedNodeIdPath??batch.request.scope.nodeQuery,fromMonth:batch.request.fromMonth,toMonth:batch.request.scope.month};
+    const keys={overview:'overviewRun',shapes:'shapeRun',keywords:'keywordRun',themes:'themeRun'} as const;let changed=false;
+    const storageKey=`market-linked-view:${sessionIdentity}:${batch.id}`;
+    type Applied={initial:Record<string,string|null>;applied:string[]};let saved:Applied|null=linkedApplied.current.get(batch.id)??null;
+    if(!saved)try{saved=JSON.parse(sessionStorage.getItem(storageKey)??'null');}catch{}
+    if(apply&&!saved){const alreadyApplied=params.get('linkedScopeApplied')===batch.id;saved={initial:Object.fromEntries(linkedModules.map(module=>[module,params.get(keys[module])])),applied:alreadyApplied?linkedModules.filter(module=>params.has(keys[module])):[]};if(!alreadyApplied){for(const module of ['shapes','keywords','themes'] as const)writeMarketModuleSelection(params,module,selection);setModuleSelections({shapes:selection,keywords:selection,themes:selection});params.set('linkedScopeApplied',batch.id);}}
+    for(const module of linkedModules){
+      const runId=batch.modules[module].runId,key=keys[module];if(!runId||saved?.applied.includes(module))continue;
+      const current=module==='overview'?{marketplace:params.get('marketSite'),nodeIdPath:params.get('marketNode'),fromMonth:params.get('marketFrom')??batch.request.fromMonth,toMonth:params.get('marketMonth')}:readMarketModuleSelection(params,module,previousCompleteMonth(),false);
+      const matches=current.marketplace===selection.marketplace&&(current.nodeIdPath===selection.nodeIdPath||current.nodeIdPath===batch.request.scope.nodeQuery)&&current.fromMonth===selection.fromMonth&&current.toMonth===selection.toMonth;
+      const unchanged=saved?params.get(key)===saved.initial[module]:!params.has(key);
+      if(matches&&unchanged&&(module==='overview'||module!==view)&&params.get(key)!==runId){params.set(key,runId);changed=changed||module===view;if(module==='overview'){params.set('marketNode',selection.nodeIdPath);setScope(current=>({...current,nodeQuery:selection.nodeIdPath}));}else{writeMarketModuleSelection(params,module,selection);setModuleSelections(current=>({...current,[module]:selection}));}}
+      if(saved)saved.applied.push(module);
+    }
+    if(saved){linkedApplied.current.set(batch.id,saved);try{sessionStorage.setItem(storageKey,JSON.stringify(saved));}catch{}}
+    window.history.replaceState(window.history.state,'',url);
+    if(changed)setRestoreVersion(value=>value+1);
+  });
   useEffect(()=>{const url=new URL(window.location.href),params=url.searchParams;setView(marketViewFromParam(params.get('themeView')));
     setViewRestored(true);
     const initialView=marketViewFromParam(params.get('themeView'));
@@ -251,9 +277,18 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     onViewChange?.(favorite.module);
     // The URL carries the saved run identity; do not invoke a collection action here.
   }
+  function openLinked(module:LinkedModule){
+    const batch=linked.batch,runId=batch?.modules[module].runId;if(!batch||!runId)return;
+    const url=new URL(window.location.href),params=url.searchParams,keys={overview:'overviewRun',shapes:'shapeRun',keywords:'keywordRun',themes:'themeRun'} as const;
+    params.set('themeView',module);params.set(keys[module],runId);
+    if(module==='overview'){const next={...batch.request.scope,nodeQuery:batch.resolvedNodeIdPath??batch.request.scope.nodeQuery};setScope(next);setFromMonth(batch.request.fromMonth);params.set('marketSite',next.marketplace);params.set('marketNode',next.nodeQuery);params.set('marketMonth',next.month);params.set('marketFrom',batch.request.fromMonth);params.set('marketHead',String(next.headTopN));params.set('marketNew',String(next.newProductMonths));}
+    else{const selection={marketplace:batch.request.scope.marketplace,nodeIdPath:batch.resolvedNodeIdPath??batch.request.scope.nodeQuery,fromMonth:batch.request.fromMonth,toMonth:batch.request.scope.month};writeMarketModuleSelection(params,module,selection);setModuleSelections(current=>({...current,[module]:selection}));}
+    window.history.replaceState(window.history.state,'',url);setView(module);setRestoreVersion(value=>value+1);onViewChange?.(module);
+  }
   return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
     <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
-    <div key={restoreVersion}><MarketAdminTools key={view} enabled={showAuditDetails&&(view==='overview'||view==='shapes')}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection showAuditDetails={showAuditDetails} cacheIdentity={sessionIdentity} maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</MarketAdminTools></div></div>;
+    <MarketLinkedStatus batch={linked.batch} error={linked.error} busy={linked.busy} onOpen={openLinked} onRetry={module=>void linked.retry(module)}/>
+    <div key={restoreVersion}><MarketAdminTools key={view} enabled={showAuditDetails&&(view==='overview'||view==='shapes')}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails} onLinkedSubmit={linked.start} linkedBusy={linked.busy||linked.batch?.status==='pending'}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection showAuditDetails={showAuditDetails} cacheIdentity={sessionIdentity} maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</MarketAdminTools></div></div>;
 }
 export function MarketResearchSection({ sessionIdentity, showAuditDetails=false, ...navigation }: { sessionIdentity: string; showAuditDetails?:boolean } & MarketNavigationProps) {
   return <MarketResearchModules key={sessionIdentity} sessionIdentity={sessionIdentity} showAuditDetails={showAuditDetails} {...navigation} />;

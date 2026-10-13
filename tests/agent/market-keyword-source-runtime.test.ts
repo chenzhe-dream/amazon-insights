@@ -211,3 +211,52 @@ test('automatic keyword flow persists partial sources, resumes after restart and
     assert.ok(fallbackView.steps.every(s => s.status === 'succeeded'));
   } finally { await agentService.stop(); }
 });
+
+test('malformed trend can be manually retried without recollecting successful and empty keywords', { timeout: 120000 }, async t => {
+  const pg = await startPostgresTestContainer(); t.after(() => pg.close()); await runPostgresMigrations(pg.pool);
+  const context = new PostgresQueryContext(pg.pool), steps = new PostgresMarketModuleExecutionStore(context);
+  const snapshots = new PostgresMarketAnalysisSnapshotStore(context);
+  const actor = { organizationId: randomUUID(), userId: randomUUID() };
+  await pg.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Keyword retry fixture','member','active',clock_timestamp(),clock_timestamp())", [actor.userId, actor.organizationId, `${actor.userId}@example.com`]);
+  const scope = { organizationId: actor.organizationId, researchId: randomUUID(), marketplace: 'US' as const, nodeIdPath: '12:34', fromMonth: '2026-08', toMonth: '2026-08', currency: 'USD' as const };
+  await snapshots.createStudy({ actor, scope, idempotencyKey: randomUUID(), now: new Date().toISOString() });
+  const request = { actor, scope, moduleKind: 'keywords' as const,
+    params: { plannedPages: [{ seed: 'lamp', page: 1 }], maxMembers: 20, catalog, flow: MARKET_KEYWORD_FLOW_VERSION },
+    versions: { source: MARKET_SOURCE_HANDLER_VERSION, rule: 'market-keyword-pool/v1', mapping: catalog.dictionaryVersion, planner: MARKET_KEYWORD_FLOW_VERSION, model: null, prompt: null, configuration: null },
+    collectionRevision: 'initial/v1', idempotencyKey: randomUUID() };
+  const created = await steps.createModuleRun({ ...request, initialSteps: marketKeywordFlowInitialSteps(request) });
+  const calls: string[] = []; let failing = true;
+  const connector: RemoteMcpConnector = { id: 'sorftime', probe: async () => { throw Error('unused'); }, execute: async r => {
+    const key = r.operation === 'keyword_extends' ? 'page' : String(r.input.keyword); calls.push(key);
+    const data = key === 'page' ? { data: ['good lamp', 'empty lamp', 'failed lamp'].map(keyword => ({ keyword, monthly_search_volume: 10 })) }
+      : key === 'failed lamp' && failing ? { unexpected: 'synthetic temporary malformed body' }
+      : { data: { keyword: key, search_volume_trend: key === 'empty lamp' ? [] : ['202608', '20'], rank_trend: [], cpc_trend: [] } };
+    return { data, source: { connectorId: 'sorftime', operation: r.operation, fetchedAt: new Date().toISOString(), attemptCount: 1 } };
+  } };
+  const worker = new MarketModuleStepWorker({ steps, handlers: { ...createMarketSourceStepHandlers({ context, connectors: { sorftime: connector, sellerSprite: { ...connector, id: 'sellerSprite' } } }), 'prepare-keyword-pool': createMarketKeywordPoolStep(context) } });
+  t.after(() => worker.stop());
+  const drain = async () => { for (let i = 0; i < 30; i++) if (!await worker.tick()) return; assert.fail('did not settle'); };
+  await drain();
+  const before = (await steps.findModuleRun({ actor, moduleRunId: created.run.id }))!;
+  const failed = before.steps.find(s => s.kind === 'collect-keyword-trend' && s.status === 'failed')!; assert.ok(failed);
+  const failedAttempt = before.attempts.find(a => a.id === failed.latestAttemptId)!;
+  assert.deepEqual(failedAttempt.error, { code: 'invalid-data', retryable: false });
+  assert.equal((await pg.pool.query('SELECT diagnostic_json FROM market_analysis_step_attempts WHERE id=$1', [failedAttempt.id])).rows[0].diagnostic_json.sourceCode, 'malformed-response');
+  const untouched = before.steps.filter(s => s.status === 'succeeded' || s.status === 'empty').map(s => ({ id: s.id, latestAttemptId: s.latestAttemptId, attemptCount: s.attemptCount }));
+  const service = new MarketModuleService({ context, modelIdentity: () => null });
+  const publicBefore = await service.findKeywords(actor, created.run.id);
+  assert.equal(publicBefore.run.steps.find(s => s.id === failed.id)?.canRetry, true);
+  const retry = { steps: [{ stepId: failed.id, failedAttemptId: failed.latestAttemptId! }] }, key = randomUUID();
+  failing = false;
+  await service.retry(actor, created.run.id, retry, key);
+  await service.retry(actor, created.run.id, retry, key);
+  await drain();
+  const after = (await steps.findModuleRun({ actor, moduleRunId: created.run.id }))!;
+  assert.equal(after.steps.find(s => s.id === failed.id)!.status, 'succeeded');
+  assert.equal(after.steps.find(s => s.id === failed.id)!.attemptCount, 2);
+  for (const old of untouched) { const current = after.steps.find(s => s.id === old.id)!; assert.equal(current.latestAttemptId, old.latestAttemptId); assert.equal(current.attemptCount, old.attemptCount); }
+  for (const name of ['page', 'good lamp', 'empty lamp']) assert.equal(calls.filter(c => c === name).length, 1);
+  assert.equal(calls.filter(c => c === 'failed lamp').length, 2);
+  assert.deepEqual(after.attempts.find(a => a.id === failedAttempt.id), failedAttempt);
+  assert.equal((await service.findKeywords(actor, created.run.id)).run.steps.find(s => s.id === failed.id)?.canRetry, false);
+});

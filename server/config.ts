@@ -1026,10 +1026,10 @@ function assertPrivateNetworkCompatibilityAllowed(
 
   const agentHost = env.AGENT_SERVICE_HOST ?? "127.0.0.1";
   if (!isLoopbackHost(agentHost)) fail();
-  if (
-    env.WEB_PORT !== "31900" ||
-    env.AGENT_SERVICE_PORT !== "31901"
-  ) {
+  const supportedPortPair =
+    (env.WEB_PORT === "31900" && env.AGENT_SERVICE_PORT === "31901") ||
+    (env.WEB_PORT === "32900" && env.AGENT_SERVICE_PORT === "32901");
+  if (!supportedPortPair) {
     fail();
   }
 

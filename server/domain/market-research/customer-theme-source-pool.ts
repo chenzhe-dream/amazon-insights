@@ -44,8 +44,8 @@ export function selectMarketThemeMembers(options: { snapshot: MarketInputSnapsho
     const data = obj(record.data), product = obj(data.product), ref = z.string().parse(data.sourceRef);
     const source = checkedSources.get(ref) ?? evidence(s.scope, ref, options.sources); checkedSources.set(ref, source);
     if (data.collection === 'sorftime-shape-pool') {
-      if(source.provider!=='sorftime'||source.operation!=='category_report')throw new TypeError('Invalid Sorftime selection source');
-      const parsed=sorftimeRows.get(ref)??normalizeSorftimeShapePool(source.payload,'category_report');sorftimeRows.set(ref,parsed);
+      if(source.provider!=='sorftime'||!['category_report','category_products'].includes(source.operation))throw new TypeError('Invalid Sorftime selection source');
+      const parsed=sorftimeRows.get(ref)??normalizeSorftimeShapePool(source.payload,source.operation as 'category_report'|'category_products',undefined,300,s.scope.nodeIdPath.split(':').at(-1));sorftimeRows.set(ref,parsed);
       const index=z.number().int().nonnegative().parse(product.sourceIndex),expected=parsed.products.find(p=>p.sourceIndex===index);
       if(!expected||indices.has(index)||Date.parse(source.fetchedAt)>Date.parse(s.collectedAt))throw new TypeError('Invalid Sorftime source partition');
       same(expected,product);same(expected.asin,record.id);refs.add(ref);indices.add(index);return {record,index};
@@ -84,7 +84,20 @@ export function assembleMarketThemePool(options: { selection: MarketInputSnapsho
   if (new Set(selectedAsins).size !== selectedAsins.length) throw new TypeError('Duplicate selected ASIN');
   same([...selectedAsins].sort(), [...selection.expectedRecordIds].sort());
   if (selection.coverage.status !== 'complete') throw new TypeError('Selected membership is incomplete');
-  same(selectedAsins, [...selection.records].sort((a, b) => z.number().int().parse(obj(obj(a.data).product).sourceIndex) - z.number().int().parse(obj(obj(b.data).product).sourceIndex)).map(r => r.id));
+  // Snapshots canonicalize records by ASIN. Reconstruct the selection order using
+  // the same category-rank ordering as the Sorftime anchor, not its raw row index.
+  const sorftimeSelection = selection.records.every(r => obj(r.data).collection === 'sorftime-shape-pool');
+  const orderedSelection = [...selection.records].sort((a, b) => {
+    const left = obj(obj(a.data).product), right = obj(obj(b.data).product);
+    const leftIndex = z.number().int().parse(left.sourceIndex), rightIndex = z.number().int().parse(right.sourceIndex);
+    if (sorftimeSelection) {
+      const leftRank = z.number().nullable().parse(left.sourceRank), rightRank = z.number().nullable().parse(right.sourceRank);
+      const leftUnits = z.number().nullable().parse(left.units), rightUnits = z.number().nullable().parse(right.units);
+      return (leftRank ?? leftIndex + 1) - (rightRank ?? rightIndex + 1) || (rightUnits ?? -1) - (leftUnits ?? -1) || leftIndex - rightIndex;
+    }
+    return leftIndex - rightIndex;
+  });
+  same(selectedAsins, orderedSelection.map(r => r.id));
   const catalog = MarketThemePoolCatalogSchema.parse(options.catalog), cutoff = z.string().datetime().parse(options.dataCutoffAt);
   if (Date.parse(cutoff) > Date.now() || Date.parse(selection.collectedAt) > Date.parse(cutoff)) throw new TypeError('Invalid theme pool cutoff');
   const seen = new Set<string>(), results: CustomerThemesAsinInput[] = [], semanticRows: MarketInputSnapshot['records'][number][] = [];

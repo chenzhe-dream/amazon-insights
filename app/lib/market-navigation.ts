@@ -18,7 +18,7 @@ export function marketViewHref(view: MarketView, current: { toString(): string }
   const params = new URLSearchParams({ tab: "market-overview" });
   if (view !== "overview") params.set("themeView", view);
   // Market navigation is independent of competitor projects and sync jobs.
-  for (const key of ["webArtifact", "marketNode", "marketMonth", "marketFrom", "marketHead", "marketNew", "marketSite", ...marketModuleSelectionQueryKeys, "overviewRun", "shapeRun", "keywordRun", "themeRun"]) {
+  for (const key of ["webArtifact", "marketNode", "marketMonth", "marketFrom", "marketHead", "marketNew", "marketSite", ...marketModuleSelectionQueryKeys, "overviewRun", "shapeRun", "keywordRun", "themeRun", "linkedBatch", "linkedApply", "linkedScopeApplied"]) {
     const value = source.get(key);
     if (value !== null) params.set(key, value);
   }

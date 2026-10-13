@@ -4,6 +4,49 @@
 
 ## ADDED Requirements
 
+### Requirement: Explicit overview submission starts linked module analysis
+The system SHALL synchronize the submitted category and marketplace into all four modules and start their analyses from one explicit overview action using durable, idempotent commands. Supported month ranges SHALL be shared; unsupported rolling-period mappings SHALL be disclosed or rejected before dispatch. Saved reports SHALL retain their frozen scope.
+
+#### Scenario: Operator submits a category once
+- **WHEN** a valid overview query is submitted
+- **THEN** overview, shape, keyword and customer-theme tasks are started or reused and each accepted task ID remains recoverable
+- **AND** keyword analysis uses a verified category name rather than its numeric identifier
+
+#### Scenario: A module fails or the response is interrupted
+- **WHEN** linked startup is only partially acknowledged
+- **THEN** completed siblings remain available, per-module failures are visible, and repeating the same command cannot create duplicate runs
+
+#### Scenario: Operator navigates or reopens results
+- **WHEN** the operator changes tabs, reloads, or restores historical results
+- **THEN** saved tasks are read without starting collection, and independent manual module edits do not mutate other reports
+
+### Requirement: Current Sorftime contracts retain historical compatibility
+The system SHALL support verified category_products product lists and monthly flat keyword trend arrays while preserving frozen legacy evidence replay and strict source identity checks.
+
+#### Scenario: New product list and trend formats arrive
+- **WHEN** current supplier payloads contain product arrays and month-value trend tuples
+- **THEN** valid source products, search volume and rank are admitted with their original evidence
+- **AND** ambiguous CPC units remain explicitly unknown rather than converted by assumption
+
+#### Scenario: Old reports or malformed payloads are read
+- **WHEN** legacy saved evidence is replayed or malformed current tuples are encountered
+- **THEN** legacy hashes remain unchanged and malformed values cannot silently become zero or valid evidence
+
+### Requirement: Missing report and audience states are truthful
+The system SHALL show collection stages before totals exist, make failed theme startup visible, and distinguish absent audience evidence from a demographic conclusion.
+
+#### Scenario: Trend steps have not been planned
+- **WHEN** the keyword task is queued or still collecting its pool
+- **THEN** the summary describes that stage rather than displaying completed 0/0
+
+#### Scenario: Theme collection fails before ASIN analysis
+- **WHEN** the product pool cannot be acquired
+- **THEN** the report area identifies the failed stage and offers the supported recovery path, without claiming background processing is ongoing
+
+#### Scenario: No explicit audience keywords exist
+- **WHEN** the keyword sample has no supported Who assignment
+- **THEN** the UI states insufficient audience evidence without inventing a household, age or gender distribution
+
 ### Requirement: Provider response coverage stays distinct from selected product membership
 The system SHALL accept bounded provider responses larger than the requested product pool, preserving full raw evidence and source indexes while enforcing local selection membership.
 

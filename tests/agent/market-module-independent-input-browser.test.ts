@@ -71,21 +71,21 @@ test('each market module keeps its own category through navigation and refresh',
   assert.equal(writes.length, 0);
 
   await page.getByRole('button', { name: '筛选市场' }).click();
-  await page.getByRole('alert').waitFor();
-  assert.equal(writes.at(-1)?.body.nodeQuery, '111111');
+  await page.getByRole('alert').last().waitFor();
+  assert.equal((writes.at(-1)?.body.scope as {nodeQuery:string})?.nodeQuery, '111111');
   await nav.getByRole('button', { name: '商品形态及价格带' }).click();
   await page.getByRole('button', { name: '筛选市场', exact: true }).click();
-  await page.getByRole('alert').waitFor();
+  await page.getByRole('alert').last().waitFor();
   assert.equal((writes.at(-1)?.body.scope as {nodeIdPath:string})?.nodeIdPath, '222222');
   await nav.getByRole('button', { name: '类目关键词洞察' }).click();
   await page.getByLabel('产品核心名').fill('floor lamp');
   await page.getByLabel('类目说明').fill('落地灯');
   await page.getByRole('button', { name: '查询关键词' }).click();
-  await page.getByRole('alert').waitFor();
+  await page.getByRole('alert').last().waitFor();
   assert.equal(writes.at(-1)?.body.nodeIdPath, '333333');
   await nav.getByRole('button', { name: '类目买家评论见解' }).click();
   await page.getByRole('button', { name: '拉取见解' }).click();
-  await page.getByRole('alert').waitFor();
+  await page.getByRole('alert').last().waitFor();
   assert.equal(writes.at(-1)?.body.nodeIdPath, '444444');
   assert.equal(writes.length, 4, 'each module starts only its own study');
 

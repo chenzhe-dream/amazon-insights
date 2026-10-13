@@ -17,6 +17,14 @@ function formatPct(value: number | null | undefined, digits = 1) {
   return `${value.toFixed(digits)}%`;
 }
 
+// Present bounded audience conclusions without rewriting immutable ZIP-era reports.
+function audienceConclusion(dimension: KeywordDemandDimensionSummary): string {
+  if (!dimension.rows.length) return '人群证据不足：当前样本未识别到明确人群词，无法判断年龄、性别或家庭定位；可在人工分类中补充已核实的人群证据。';
+  const share = dimension.rows.reduce((sum, row) => sum + row.sharePct, 0);
+  if (share < 5) return `人群证据不足：仅见「${dimension.rows[0].label}」等零散人群词（合计不足 5%），不能据此确定整体用户定位。`;
+  return dimension.conclusion;
+}
+
 function DimensionSection({ dimension }: { dimension: KeywordDemandDimensionSummary }) {
   return (
     <LaunchSection
@@ -26,7 +34,7 @@ function DimensionSection({ dimension }: { dimension: KeywordDemandDimensionSumm
     >
       <p className="launch-conclusion-lead">
         <strong>结论：</strong>
-        {dimension.conclusion}
+        {dimension.id === "W2" ? audienceConclusion(dimension) : dimension.conclusion}
       </p>
       {dimension.rows.length ? (
         <LaunchTable className="launch-conclusion-table kw-launch-section-table">
@@ -116,7 +124,7 @@ function BusinessOutputSection({ report }: { report: AmazonKeywordDemandReport }
             <tr key={output.id}>
               <th>{output.label}</th>
               <td>{output.status === "ready" ? "已有关键词证据" : "待验证"}</td>
-              <td>{output.conclusion}</td>
+              <td>{output.id === "target-audience" ? audienceConclusion(report.dimensions.w2) : output.conclusion}</td>
               <td className="launch-muted">
                 {output.status === "ready"
                   ? `来源：${output.sourceRefs.join("；")}`
@@ -175,7 +183,7 @@ function ArchiveDemandSummary({ report }: { report: AmazonKeywordDemandReport })
         </p>
         <ul className="launch-reason-list">
           {synthesis.bullets.map(bullet => (
-            <li key={bullet}>{bullet}</li>
+            <li key={bullet}>{bullet.startsWith("W2：") ? `W2：${audienceConclusion(dimensions.w2)}` : bullet}</li>
           ))}
         </ul>
       </LaunchSection>

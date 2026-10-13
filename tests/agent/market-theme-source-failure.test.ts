@@ -1,3 +1,4 @@
+import {categoryProductsFixture} from './helpers/category-products-fixture';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
@@ -26,9 +27,9 @@ test('all-invalid theme counts explain the failed ASIN; retry preserves successf
  let repaired=false;const calls:string[]=[];
  const connector=(id:'sorftime'|'sellerSprite'):RemoteMcpConnector=>({id,probe:async()=>{throw new Error('unused');},execute:async r=>{
   calls.push(r.operation+':'+(r.input.asin??''));
-  const data=r.operation==='category_report'?{data:{top100_products:[{asin:'B099WTN2TR',title:'Lamp 1',category_rank:1,main_image:'https://m.media-amazon.com/images/I/lamp-1.jpg'},{asin:'B07Z5NQPDS',title:'Lamp 2',category_rank:2,main_image:'https://m.media-amazon.com/images/I/lamp-2.jpg'}]}}:
+  const data=(r.operation==='category_report'||r.operation==='category_products')?{data:{top100_products:[{asin:'B099WTN2TR',title:'Lamp 1',category_rank:1,main_image:'https://m.media-amazon.com/images/I/lamp-1.jpg'},{asin:'B07Z5NQPDS',title:'Lamp 2',category_rank:2,main_image:'https://m.media-amazon.com/images/I/lamp-2.jpg'}]}}:
    r.input.asin==='B07Z5NQPDS'&&!repaired?invalid:{data:{details:[{keyword:'assembly',content:'Easy assembly',mention:10,positive:8,negative:2,update_time:'2026-08-01'}]}};
-  return {data,source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  return {data:r.operation==='category_products'?categoryProductsFixture(data,r.input.node_id):data,source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }});
  const worker=new MarketModuleStepWorker({steps,handlers:{...createMarketSourceStepHandlers({context,connectors:{sorftime:connector('sorftime'),sellerSprite:connector('sellerSprite')}}),'prepare-members':createMarketSourceProjectionStep(context),rules:createMarketThemeRulesStep(context),report:createMarketThemeReportStep(context)}});t.after(()=>worker.stop());
  async function drain(){for(let i=0;i<30;i++)if(!await worker.tick())return;assert.fail('Did not quiesce');}

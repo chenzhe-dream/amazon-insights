@@ -10,11 +10,25 @@ import {DeadlineError,executeOnce} from './market-keyword-collector';
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const index=(s:string)=>Number(s.slice(0,4))*12+Number(s.slice(5))-1;
 const format=(n:number)=>`${Math.floor(n/12)}-${String(n%12+1).padStart(2,'0')}`;
+function historyValue(payload:unknown,metric:'SalesVolume'|'SalesAmount'){
+ const envelope=obj(payload),data=obj(envelope.data);
+ if(Object.hasOwn(data,'type')){
+  if(data.type!==metric||!Array.isArray(data.data)||data.data.length%2||data.data.length>4000)throw new TypeError('Invalid monthly product trend');
+  const rows:string[]=[];
+  for(let i=0;i<data.data.length;i+=2){
+   const month=String(data.data[i]),value=data.data[i+1];
+   if(!/^20\d{2}(0[1-9]|1[0-2])$/.test(month)||value!==null&&typeof value!=='number'&&typeof value!=='string')throw new TypeError('Invalid monthly product trend row');
+   rows.push(`${month.slice(0,4)}-${month.slice(4)}=${value??''}`);
+  }
+  return rows;
+ }
+ return typeof payload==='string'||Array.isArray(payload)?payload:envelope.data??envelope.content;
+}
 
 /** Original provider format, with strict months/values instead of Number('')=0 or silent duplicate summation. */
 export function normalizeProductHistory(raw:unknown,referenceMonth:string):ProductHistoryPoint[]{
  const payload=MarketInputRecordSchema.shape.data.parse(raw),envelope=obj(payload);
- const value=typeof payload==='string'||Array.isArray(payload)?payload:envelope.data??envelope.content;
+ const value=historyValue(payload,'SalesVolume');
  if(typeof value!=='string'&&!Array.isArray(value))throw new TypeError('Unsupported product history payload');
  const parts=typeof value==='string'?(value.trim()?value.split(','):[]):value;
  if(parts.length>2000)throw new TypeError('History point limit exceeded');
@@ -37,7 +51,7 @@ export function normalizeProductHistory(raw:unknown,referenceMonth:string):Produ
 /** Monetary history accepts finite decimal values but never invents values for malformed rows. */
 export function normalizeProductAmountHistory(raw:unknown,referenceMonth:string):ProductAmountHistoryPoint[]{
  const payload=MarketInputRecordSchema.shape.data.parse(raw),envelope=obj(payload);
- const value=typeof payload==='string'||Array.isArray(payload)?payload:envelope.data??envelope.content;
+ const value=historyValue(payload,'SalesAmount');
  if(typeof value!=='string'&&!Array.isArray(value))throw new TypeError('Unsupported product amount history payload');
  const parts=typeof value==='string'?(value.trim()?value.split(','):[]):value;
  if(parts.length>2000)throw new TypeError('History point limit exceeded');
@@ -97,17 +111,26 @@ export async function collectMarketProductHistory(input:Input):Promise<VolumeRes
  if(input.connector.id!=='sorftime'||scope.toMonth>=now().toISOString().slice(0,7))return {status:'failed',failure:{code:'configuration',retryable:false}};
  let response;
  try{
-  response=await executeOnce(input.connector,{operation:'product_trend',input:{asin,amz_site:sorftimeMarketSite(scope.marketplace),product_trend_type:metric},governorScope:{organizationId:scope.organizationId,jobId:input.jobId}},input.timeoutMs??60000,input.signal);
+  response=await executeOnce(input.connector,{operation:'product_trend',input:{asin,amz_site:sorftimeMarketSite(scope.marketplace),type:metric},governorScope:{organizationId:scope.organizationId,jobId:input.jobId}},input.timeoutMs??60000,input.signal);
  }catch(error){return {status:'failed',failure:{code:error instanceof ConnectorError||error instanceof DeadlineError?error.code:'upstream-temporary',retryable:error instanceof ConnectorError?error.retryable:error instanceof DeadlineError?error.code==='timeout':true}}}
  try{
   const timestamp=z.object({connectorId:z.literal('sorftime'),operation:z.literal('product_trend'),fetchedAt:z.string().datetime(),attemptCount:z.number().int().positive()}).parse(response.source).fetchedAt;
   const payload=MarketInputRecordSchema.shape.data.parse(response.data),envelope=obj(payload);
   // Error envelopes cannot masquerade as an empty history.
   if(envelope.error||envelope.success===false||envelope.code!==undefined&&!['OK',200,'200',0,'0'].includes(envelope.code as string|number))throw new TypeError('Upstream error envelope');
+  const modern=obj(envelope.data);
+  if(Object.hasOwn(modern,'type')&&(modern.asin!==asin||modern.type!==metric||metric==='SalesAmount'&&scope.currency!=='USD'))throw new TypeError('Product trend identity, dimension or currency differs');
   const points=metric==='SalesAmount'?normalizeProductAmountHistory(payload,scope.toMonth):normalizeProductHistory(payload,scope.toMonth);
   const paths:Record<string,MarketSourcePayloadPath[]>={asin:[['asin']],marketplace:[['amz_site']]};
   for(const [field,aliases] of Object.entries(metric==='SalesAmount'?{asin:['asin','ASIN'],marketplace:['amz_site','site','marketplace'],currency:['currency','currency_code','currencyCode']}:{asin:['asin','ASIN'],marketplace:['amz_site','site','marketplace']})){
    const found=aliases.filter(key=>Object.hasOwn(envelope,key)).map(key=>[key]);if(found.length)paths[field]=found;
+  }
+  if(Object.hasOwn(modern,'type')){
+   paths.asin=[...(paths.asin??[]),['data','asin']];
+   for(const [field,aliases] of Object.entries({marketplace:['amz_site','site','marketplace'],currency:['currency','currency_code','currencyCode']})){
+    const nested=aliases.filter(key=>Object.hasOwn(modern,key)).map(key=>['data',key]);
+    if(nested.length)paths[field]=[...(paths[field]??[]),...nested];
+   }
   }
   const evidence=createMarketSourceEvidence({scope,provider:'sorftime',operation:'product_trend',requestIdentity:{asin,marketplace:scope.marketplace},responseIdentityPaths:paths,payload,fetchedAt:timestamp,
    observationPeriod:points.length?{kind:'calendar-months',fromMonth:points[0].month,toMonth:points.at(-1)!.month}:{kind:'unknown',reason:'No completed historical months returned'},

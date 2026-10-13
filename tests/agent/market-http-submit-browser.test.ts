@@ -6,7 +6,7 @@ import react from "@vitejs/plugin-react";
 import { chromium } from "playwright";
 
 test("market submissions work on insecure HTTP with one node and preserve retry keys", { timeout: 90000 }, async t => {
-  const server = await createServer({ configFile: false, define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0, hmr: false } });
+  const server = await createServer({ configFile: false, define: { "process.env": "{}" }, plugins: [react()], server: { host: "127.0.0.1", port: 0, hmr: false, forwardConsole: false } });
   await server.listen();
   const browser = await chromium.launch();
   t.after(async () => { await browser.close(); await server.close(); });
@@ -42,9 +42,9 @@ test("market submissions work on insecure HTTP with one node and preserve retry 
         await page.getByRole("button", { name: button, exact: true }).click();
         await page.waitForTimeout(350);
         assert.deepEqual(errors, [], "no uncaught submission error");
-        await page.getByRole("alert").filter({ hasText: "测试来源暂时不可用" }).waitFor();
+        await page.getByRole("alert").filter({ hasText: "测试来源暂时不可用" }).last().waitFor();
         assert.equal(writes.length, 1);
-        assert.equal(writes[0].body.nodeQuery ?? writes[0].body.nodeIdPath ?? (writes[0].body.scope as {nodeIdPath?:string}|undefined)?.nodeIdPath, "1069828");
+        assert.equal(writes[0].body.nodeQuery ?? writes[0].body.nodeIdPath ?? (writes[0].body.scope as {nodeIdPath?:string;nodeQuery?:string}|undefined)?.nodeIdPath ?? (writes[0].body.scope as {nodeQuery?:string}|undefined)?.nodeQuery, "1069828");
         assert.match(writes[0].key!, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
         await page.getByRole("button", { name: view === "overview" ? "搜索" : button, exact: true }).click();
         await page.waitForFunction(() => !!document.querySelector('[role="alert"]'));

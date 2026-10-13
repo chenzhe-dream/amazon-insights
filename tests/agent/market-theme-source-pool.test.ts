@@ -44,12 +44,19 @@ test('Sorftime category pool keeps normalized category-rank order when raw rows 
   {asin:asin(1),title:'First',category_rank:'Floor Lamps (Rank: 1)',monthly_sales_volume:100},
   {asin:asin(2),title:'Second',category_rank:'Floor Lamps (Rank: 2)',monthly_sales_volume:200},
  ];
- const collected=await collectSorftimeShapePoolPage({scope,jobId:'synthetic',connector:{id:'sorftime',probe:async()=>{throw new Error('unused');},execute:async()=>({data:{code:'OK',data:{top100_products:rawRows}},source:{connectorId:'sorftime',operation:'category_report',fetchedAt:at,attemptCount:1}})}});
+ const collected=await collectSorftimeShapePoolPage({scope,replayOperation:'category_report',jobId:'synthetic',connector:{id:'sorftime',probe:async()=>{throw new Error('unused');},execute:async()=>({data:{code:'OK',data:{top100_products:rawRows}},source:{connectorId:'sorftime',operation:'category_report',fetchedAt:at,attemptCount:1}})}});
  assert.equal(collected.status,'ready');
  const sourceRef=`market-source:${digest(collected.evidence)}`;
  const snapshot=createMarketInputSnapshot({scope,kind:'products',sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'source-normalization/v1',collectedAt:at,expectedRecordIds:collected.products.map(p=>p.asin),records:collected.products.map(product=>({id:product.asin,scope,data:{collection:'sorftime-shape-pool',product,sourceRef}}))});
- const selected=selectMarketThemeMembers({snapshot,sources:{[sourceRef]:collected.evidence},count:2});
- assert.deepEqual(selected.manifest.selectedAsins,[asin(1),asin(2)]);
+ const selected=selectMarketThemeMembers({snapshot,sources:{[sourceRef]:collected.evidence},count:3});
+ assert.deepEqual(selected.manifest.selectedAsins,[asin(1),asin(2),asin(3)]);
+ const observations=await Promise.all(selected.manifest.selectedAsins.map(id=>theme(id)));
+ const input={selection:selected.snapshot,selectedAsins:selected.manifest.selectedAsins,catalog,dataCutoffAt:at,observations,
+  sources:Object.fromEntries(observations.map(o=>[o.sourceRef,o.source])),failures:[]};
+ const pool=assembleMarketThemePool(input);
+ assert.equal(pool.aggregation.coverage.successfulAsinCount,3);
+ assert.deepEqual(pool.manifest.selectedAsins,[asin(1),asin(2),asin(3)]);
+ assert.throws(()=>assembleMarketThemePool({...input,selectedAsins:[asin(3),asin(1),asin(2)]}));
 });
 test('17/20 keeps empty, failed and missing separate; repeated payloads never become unique review counts', async () => {
   const selected = selectMarketThemeMembers({ ...await products(20), count: 20 }), ids = selected.manifest.selectedAsins;
@@ -64,6 +71,21 @@ test('17/20 keeps empty, failed and missing separate; repeated payloads never be
   assert.ok(a.aggregation.groups.every(g => g.topicShare.denominator === 34 && g.topicShare.metricKind === 'customers_say_topic_share'));
   const plan = await planMarketSemanticBatches({ task: catalog.task, moduleRunId: randomUUID(), snapshot: a.semanticSnapshot, sources, selectionRevision: 'selection/v1', configurationVersion: 'configuration/v1', dataCutoffAt: at }, async () => true);
   assert.equal(plan.expectedMemberIds.length, 17); assert.equal(plan.batches.length, 2);
+});
+
+test('current category_products pool preserves category rank, sales ties and raw-order ties through assembly',async()=>{
+ const rawRows=[{id:3,rank:2,units:10},{id:2,rank:1,units:100},{id:4,rank:1,units:200},{id:1,rank:1,units:200}]
+  .map(row=>({asin:asin(row.id),sub_category:[['Floor Lamps','34',row.rank]],monthly_sales_volume:row.units}));
+ const collected=await collectSorftimeShapePoolPage({scope,jobId:'synthetic',connector:{id:'sorftime',probe:async()=>{throw Error('unused');},execute:async()=>({data:{data:rawRows},source:{connectorId:'sorftime',operation:'category_products',fetchedAt:at,attemptCount:1}})}});
+ assert.equal(collected.status,'ready');
+ const sourceRef=`market-source:${digest(collected.evidence)}`;
+ const snapshot=createMarketInputSnapshot({scope,kind:'products',sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'source-normalization/v1',collectedAt:at,expectedRecordIds:collected.products.map(p=>p.asin),records:collected.products.map(product=>({id:product.asin,scope,data:{collection:'sorftime-shape-pool',product,sourceRef}}))});
+ const selected=selectMarketThemeMembers({snapshot,sources:{[sourceRef]:collected.evidence},count:4});
+ const expected=[asin(4),asin(1),asin(2),asin(3)];assert.deepEqual(selected.manifest.selectedAsins,expected);
+ const observations=await Promise.all(expected.map(id=>theme(id)));
+ const input={selection:selected.snapshot,selectedAsins:expected,catalog,dataCutoffAt:at,observations,sources:Object.fromEntries(observations.map(o=>[o.sourceRef,o.source])),failures:[]};
+ assert.deepEqual(assembleMarketThemePool(input).manifest.selectedAsins,expected);
+ assert.throws(()=>assembleMarketThemePool({...input,selectedAsins:[...expected].sort()}));
 });
 test('zero mentions stay known zero; empty or absent observations do not produce zero totals', async () => {
   const selected = selectMarketThemeMembers({ ...await products(1), count: 20 }), ids = selected.manifest.selectedAsins;

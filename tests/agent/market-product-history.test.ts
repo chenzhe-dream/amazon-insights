@@ -6,7 +6,7 @@ import {ConnectorError, type RemoteMcpConnector} from '../../server/connectors/c
 const scope={organizationId:'org-a',researchId:'a9000000-0000-4000-8000-000000000001',marketplace:'US' as const,nodeIdPath:'1:2:3',fromMonth:'2026-08',toMonth:'2026-08',currency:'USD' as const};
 const cutoff='2026-09-24T00:00:00.000Z',asin='B000000001';
 const connector=(data:unknown):RemoteMcpConnector=>({id:'sorftime',probe:async()=>{throw Error('unused')},execute:async request=>{
- assert.equal(request.operation,'product_trend');assert.deepEqual(request.input,{asin,amz_site:'US',product_trend_type:'SalesVolume'});
+ assert.equal(request.operation,'product_trend');assert.deepEqual(request.input,{asin,amz_site:'US',type:'SalesVolume'});
  assert.deepEqual(request.governorScope,{organizationId:scope.organizationId,jobId:'test-history'});
  return {data:data as Record<string,unknown>,source:{connectorId:'sorftime',operation:'product_trend',fetchedAt:cutoff,attemptCount:1}};
 }});

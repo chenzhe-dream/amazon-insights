@@ -1,3 +1,4 @@
+import {categoryProductsFixture} from './helpers/category-products-fixture';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -24,10 +25,10 @@ test('original theme flow freezes Sorftime sample, enriches only missing images 
  const image='https://m.media-amazon.com/images/I/fixture.jpg',calls:string[]=[];let repaired=false,emptyPool=false,badImage=false,mixed=false;
  const connector:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('No probes')},execute:async r=>{
   calls.push(`${r.operation}:${r.input.asin??''}`);
-  const data=r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps'},top100_products:emptyPool?[]:[{asin:'B099WTN2TR',title:'Lamp A',main_image:image},{asin:'B07Z5NQPDS',title:'Lamp B'}]}}:
+  const data=(r.operation==='category_report'||r.operation==='category_products')?{data:{category_stats_report:{category_name:'Floor Lamps'},top100_products:emptyPool?[]:[{asin:'B099WTN2TR',title:'Lamp A',main_image:image},{asin:'B07Z5NQPDS',title:'Lamp B'}]}}:
    r.operation==='product_detail'?(badImage?{error:'synthetic image failure'}:{data:{asin:r.input.asin,main_image:[image]}}):
    {data:{customer_say:'Customers mention brightness.',details:[...(mixed?[{keyword:'invalid',content:'Bad source row',mention:1,positive:99,negative:0,update_time:'2026-08-01'}]:[]),{keyword:r.input.asin==='B099WTN2TR'?'Brightness':'brightness',content:'Bright light',mention:10,positive:8,negative:!repaired&&r.input.asin==='B07Z5NQPDS'?76:2,update_time:'2026-08-01'}]}};
-  return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  return {data:r.operation==='category_products'?categoryProductsFixture(data,r.input.node_id):data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const forbidden:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('No SellerSprite')},execute:async()=>{throw Error('No SellerSprite')}};
  const worker=new MarketModuleStepWorker({steps,handlers:{...createMarketSourceStepHandlers({context,connectors:{sorftime:connector,sellerSprite:forbidden}}),'prepare-members':createMarketSourceProjectionStep(context),rules:createMarketThemeRulesStep(context),report:createMarketThemeReportStep(context)}});t.after(()=>worker.stop());
@@ -88,6 +89,6 @@ test('original theme flow freezes Sorftime sample, enriches only missing images 
   const fresh=await service.createStudy(actor,{marketplace:'US',nodeIdPath:'1063294',fromMonth:'2026-08',toMonth:'2026-08',currency:'USD'},randomUUID());
   const begun=await service.startThemes(actor,fresh.study.id,{memberCount:20,poolSize:100},randomUUID());await drain();
   const result=(await service.findRun(actor,begun.run.id)).run;assert.equal(result.currentReport!.report.status,'no-data');assert.equal(result.currentReport!.report.counts.selectedCount,0);
-  assert.deepEqual(calls.slice(n),['category_report:']);
+  assert.deepEqual(calls.slice(n),['category_products:']);
  });
 });

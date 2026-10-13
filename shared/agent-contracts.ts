@@ -7,6 +7,7 @@ import { SellingTranslationParams, SellingTranslationEmpty, SellingTranslationRe
 import {MarketShapeStartRequestSchema,MarketShapeRevisionRequestSchema} from './market-shape-price-contracts';
 import {MarketShapeRunResponseSchema,MarketShapeRevisionResponseSchema,MarketShapeRevisionIdSchema} from './market-shape-public-contracts';
 import { MarketResearchScopeSchema, MarketResearchJobResponseSchema, MarketResearchListResponseSchema } from "./market-research-contracts";
+import {MarketLinkedRequestSchema,MarketLinkedResponseSchema,MarketLinkedRetrySchema} from './market-linked-contracts';
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from './market-theme-detail-contracts';
 import { MarketThemeEvidenceQuerySchema, MarketThemeEvidenceResponseSchema } from './market-theme-evidence-contracts';
 import { MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema,MarketThemeTranslationResponseSchema } from './market-theme-translation-contracts';
@@ -1740,6 +1741,9 @@ export const v1Contracts = [
   { method: "GET", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationReadQuery, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
   { method: "POST", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, request: SellingTranslationStartRequest, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
   {method:'POST',path:'/v1/market-analysis/studies/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordStartRequestSchema,response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/linked',request:MarketLinkedRequestSchema,response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/linked/:id',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/linked/:id/retry',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketLinkedRetrySchema,response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/runs/:id/keywords/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordRevisionRequestSchema,response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketKeywordRevisionIdSchema}).strict(),response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},

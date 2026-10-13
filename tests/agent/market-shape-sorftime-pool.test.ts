@@ -20,9 +20,9 @@ test('expansion filters other categories, handles duplicates, preserves source r
 });
 test('pool collector persists recent period and rejects currency/site mismatch',async()=>{
  const requests:unknown[]=[];const connector={id:'sorftime' as const,probe:async()=>{throw Error('unused')},execute:async(r:any)=>{requests.push(r);return {data:{data:{top100_products:[row]}},source:{connectorId:'sorftime' as const,operation:r.operation,fetchedAt:'2026-09-24T01:00:00.000Z',attemptCount:1}}}};
- const got=await collectSorftimeShapePoolPage({scope,jobId:'test',connector});assert.notEqual(got.status,'failed');if(got.status==='failed')return;
+ const got=await collectSorftimeShapePoolPage({scope,jobId:'test',replayOperation:'category_report',connector});assert.notEqual(got.status,'failed');if(got.status==='failed')return;
  assert.equal(got.evidence.observationPeriod.kind,'trailing-days');assert.equal(got.evidence.requestIdentity.month,undefined);assert.equal(got.products.length,1);
- for(const data of [{currency:'EUR',data:{top100_products:[row]}},{data:{amz_site:'DE',top100_products:[row]}},{success:false,data:{top100_products:[row]}}])assert.equal((await collectSorftimeShapePoolPage({scope,jobId:'test',connector:{...connector,execute:async r=>({data,source:{connectorId:'sorftime' as const,operation:r.operation,fetchedAt:'2026-09-24T01:00:00.000Z',attemptCount:1}})}})).status,'failed');
+ for(const data of [{currency:'EUR',data:{top100_products:[row]}},{data:{amz_site:'DE',top100_products:[row]}},{success:false,data:{top100_products:[row]}}])assert.equal((await collectSorftimeShapePoolPage({scope,jobId:'test',replayOperation:'category_report',connector:{...connector,execute:async r=>({data,source:{connectorId:'sorftime' as const,operation:r.operation,fetchedAt:'2026-09-24T01:00:00.000Z',attemptCount:1}})}})).status,'failed');
  assert.equal(requests.length,1);
 });
 

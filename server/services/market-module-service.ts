@@ -79,11 +79,11 @@ export class MarketModuleService {
     if(previous.scope.researchId!==studyId||previous.moduleKind!==moduleKind||canonicalJsonSha256(publicParams)!==canonicalJsonSha256(params))throw new MarketExecutionConflictError();
     return previous;
   }
-  async createStudy(actor: MarketExecutionActor, body: unknown, key: unknown) {
+  async createStudy(actor: MarketExecutionActor, body: unknown, key: unknown, internal?:{verifiedNodePath:true}) {
     const request = MarketStudyRequestSchema.parse(body), id = MarketModuleIdSchema.parse(key), now = this.now();
     if (request.toMonth >= now.slice(0, 7)) throw new MarketModuleServiceError(400, '请选择当前月份之前的完整月份');
     let scope = { ...request };
-    if (!request.nodeIdPath.includes(':') && this.deps.resolveNodePath) {
+    if (!internal?.verifiedNodePath && !request.nodeIdPath.includes(':') && this.deps.resolveNodePath) {
       try {
         scope = { ...scope, nodeIdPath: await this.deps.resolveNodePath({
           marketplace: request.marketplace,

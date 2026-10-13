@@ -1,6 +1,7 @@
 import {createMarketSourceProjectionStep} from './runtime/market-source-projection-step';
 import { MarketResearchService, MarketResearchWorker } from "./services/market-research-service";
 import { MarketModuleService } from './services/market-module-service';
+import {MarketLinkedService} from './services/market-linked-service';
 import { collectMarketOverview } from "./services/market-overview-collector";
 import { createMarketModelRuntime, type MarketModelRuntime } from './runtime/market-model-runtime';
 import { loadMarketModelRuntimeConfig } from './runtime/market-model-config';
@@ -435,9 +436,7 @@ export async function createAgentService(
       execution:{executeBatch:async()=>{throw new MarketModelConfigurationUnavailableError();}},
       onEvent:event=>app.log.info({component:'market-model-unavailable',...event},'Market model unavailable queue iteration'),
     }) : null;
-    const app = buildAgentApp({
-      marketResearchService,
-      marketModuleService: repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
+    const marketModuleService=repository.marketExecutionContext ? new MarketModuleService({ context: repository.marketExecutionContext,
           themeTranslation: createMarketThemeTranslationService(repository, env) ?? undefined,
           resolveShapeCategoryName: input => resolveShapeCategoryName({ ...input, connector: connectors.sorftime }),
         resolveNodePath: input => resolveMarketNodePath({ ...input, connector: connectors.sellerSprite }),
@@ -447,7 +446,12 @@ export async function createAgentService(
         keywordReconciliationModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordReconciliationConfigurationVersion,promptVersion:marketModelRuntime.keywordReconciliationPromptVersion} : null,
         keywordExplicitModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordExplicitConfigurationVersion,promptVersion:marketModelRuntime.keywordExplicitPromptVersion} : null,
         shapeModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.shapeExplanationConfigurationVersion,promptVersion:marketModelRuntime.shapeExplanationPromptVersion} : null,
-        now: options.clock }) : null,
+        now: options.clock }) : null;
+    const marketLinkedService=repository.marketExecutionContext&&marketResearchService&&marketModuleService?new MarketLinkedService({context:repository.marketExecutionContext,research:marketResearchService,modules:marketModuleService,now:options.clock,onError:()=>app.log.warn({component:'market-linked'},'Market linked dispatcher iteration failed')}):null;
+    const app = buildAgentApp({
+      marketResearchService,
+      marketModuleService,
+      marketLinkedService,
       vocAutomationService,
       env,
       logger: options.logger,
@@ -507,6 +511,7 @@ export async function createAgentService(
         }
         manualAlexaVocPublicationRuntime?.start();
         marketResearchWorker?.start();
+        marketLinkedService?.start();
         marketModelRuntime?.start();
         marketCollectionWorker?.start();
         marketUnavailableModelWorker?.start();
@@ -642,6 +647,7 @@ export async function createAgentService(
         stopPromise = stopAgentServiceResources({
           runtimes: [
             marketResearchWorker,
+            marketLinkedService,
             marketModelRuntime,
             marketCollectionWorker,
             marketUnavailableModelWorker,

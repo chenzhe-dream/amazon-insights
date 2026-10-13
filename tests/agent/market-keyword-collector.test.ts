@@ -146,7 +146,7 @@ test("trend parses exact source strings, derives selected complete month and exp
   assert.equal(result.evidence.units.recommendedBid.status, "unknown");
   assert.equal(result.evidence.responseIdentity.keyword.status, "verified");
   assert.deepEqual(result.evidence.observationPeriod, { kind: "calendar-months", fromMonth: "2025-08", toMonth: "2026-08" });
-  assert.deepEqual(upstream.calls[0].input, { keyword: "synthetic lamp", keyword_support_site: "US" });
+  assert.deepEqual(upstream.calls[0].input, { keyword: "synthetic lamp", keyword_support_site: "US", type: 2 });
   assert.equal(upstream.calls.length, 1);
 });
 

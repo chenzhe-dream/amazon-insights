@@ -174,6 +174,37 @@ test("agent authentication accepts the exact private-LAN development matrix", ()
   });
 });
 
+test("candidate private-LAN ports require authenticated sessions and preserve safety checks", () => {
+  const candidateLan = {
+    ...privateLan,
+    WEB_PORT: "32900",
+    AGENT_SERVICE_PORT: "32901",
+    AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:32901",
+    AGENT_SERVICE_TRUSTED_ORIGINS:
+      "http://192.168.1.109:32900,http://127.0.0.1:32900",
+  };
+  const config = loadAgentAuthenticationConfig(candidateLan, assignedLanInterfaces);
+  assert.equal(config.mode, "authenticated");
+  assert.equal(config.cookie.name, "agent_session");
+  assert.equal(config.cookie.secure, false);
+
+  for (const override of [
+    { WEB_PORT: "31900" },
+    { AGENT_SERVICE_PORT: "31901" },
+    { AGENT_SERVICE_INTERNAL_URL: "http://127.0.0.1:31901" },
+    { AGENT_SERVICE_HOST: "0.0.0.0" },
+    { AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK: "1" },
+    { AGENT_AUTH_ALLOW_INSECURE_LOOPBACK_COOKIE: "1" },
+    { AGENT_SERVICE_TRUSTED_ORIGINS: "http://203.0.113.9:32900" },
+    { NODE_ENV: "production" },
+  ]) {
+    assert.throws(
+      () => loadAgentAuthenticationConfig({ ...candidateLan, ...override }, assignedLanInterfaces),
+      /Agent authentication configuration is invalid/,
+    );
+  }
+});
+
 test("agent authentication accepts explicit loopback origins beside the exact LAN origin", () => {
   for (const loopbackOrigin of [
     "http://localhost:31900",

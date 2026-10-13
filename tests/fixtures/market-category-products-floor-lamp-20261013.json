@@ -1,0 +1,4682 @@
+{
+  "data": {
+    "doc": {
+      "asin": "Product ASIN.",
+      "parent_asin": "Parent ASIN; null if no variation parent.",
+      "title": "Product title.",
+      "sub_title": "Product subtitle; null if not exists.",
+      "brand": "Brand name.",
+      "main_image": "Main image url array.",
+      "price": "Current selling price after coupon deduction. (USD).Value -1: no data for that period.",
+      "list_price": "Original list price(strikethrough price). (USD).Value -1: no data for that period.",
+      "coupon": "Coupon discount amount. Positive value = amount(USD), negative = percentage discount.Value -1: no data for that period.",
+      "monthly_sales_volume": "Estimated monthly sales volume.Value -1: no data for that period.",
+      "monthly_sales_amount": "Estimated monthly sales amount. (USD).Value -1: no data for that period.",
+      "yearly_sales_volume": "Estimated yearly sales volume.Value -1: no data for that period.",
+      "delivery_type": "Fulfillment method. One of FBA (seller-shipped via Amazon FBA), AmzFBA (third-party seller, e.g. 1688, shipping via Amazon FBA), or FBM (seller-fulfilled).",
+      "fba_fee": "FBA fee (in USD). Returns 0 when fulfillment is not FBA.Value -1: no data for that period.",
+      "fbm_delivery_fee": "FBM delivery fee (in USD). Returns 0 when fulfillment is not FBM.Value -1: no data for that period.",
+      "ratings": "Product rating, range 0~5.",
+      "rating_count": "Total review count.",
+      "a_plus": "Whether the product has A+ content.",
+      "has_video": "Whether the product has main image video.",
+      "has_brand_store": "Whether the brand has brand store.",
+      "variation_count": "Number of child variations.",
+      "seller_count": "Total seller count for this listing.",
+      "buybox_seller": "Buybox seller name.",
+      "online_date": "Product launch date, format yyyy-MM-dd.",
+      "category": "Primary category object {name, node_id}. (Array: [category name, node_id])",
+      "sub_category": "Sub category object {name, node_id, rank}. (2D array: [[category name, node_id, rank]])",
+      "subcategory_rank": "Sales rank in subcategory.",
+      "peak_season": "Peak season months, e.g. \"11月\"; null if no obvious peak season. (Return \"--\" if there is no obvious peak season)"
+    },
+    "data": [
+      {
+        "asin": "B099WTN2TR",
+        "parent_asin": "B0BTZCTZ7N",
+        "title": "Govee RGBIC Floor Lamp Basic, 1000lm LED Corner Lamp, Black ",
+        "sub_title": "Compatible with Alexa and Matter, Modern Floor Lamp with Music Sync and 16 Million DIY Colors, Standing Lamp for Bedroom",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61Scft3U3TL.jpg",
+          "https://m.media-amazon.com/images/I/61wzsMyVRML.jpg",
+          "https://m.media-amazon.com/images/I/71BJmoB8oiL.jpg",
+          "https://m.media-amazon.com/images/I/71SPKpLOlML.jpg",
+          "https://m.media-amazon.com/images/I/71sYjL6OlfL.jpg",
+          "https://m.media-amazon.com/images/I/71-IxRtDUiL.jpg"
+        ],
+        "price": 69.99,
+        "list_price": 99.99,
+        "coupon": 0,
+        "monthly_sales_volume": 24374,
+        "monthly_sales_amount": 1705936.26,
+        "yearly_sales_volume": 246930,
+        "delivery_type": null,
+        "fba_fee": 20.21,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 11965,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 4,
+        "seller_count": 3,
+        "buybox_seller": "Govee US",
+        "online_date": "2021-07-21",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            1
+          ]
+        ],
+        "subcategory_rank": 25,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F9FG1MJL",
+        "parent_asin": "B0FCM52CPF",
+        "title": "Aokrean Grow Light, Full Spectrum Plant Lights for Indoor Growing with Base ",
+        "sub_title": "48 LEDs Halo Plant Light for Small Plants, Base/Soil Insert, 6.5-26in Adjustable, 3 Spectra, 3/9/12H Timer, 10 Brightness",
+        "brand": "Aokrean",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71KBVOujw8L.jpg",
+          "https://m.media-amazon.com/images/I/61CHzCM0fNL.jpg",
+          "https://m.media-amazon.com/images/I/61fmdBly-cL.jpg",
+          "https://m.media-amazon.com/images/I/81H70TXrDgL.jpg",
+          "https://m.media-amazon.com/images/I/71DfyvDmIqL.jpg",
+          "https://m.media-amazon.com/images/I/716kT1FQ53L.jpg"
+        ],
+        "price": 26.99,
+        "list_price": 0,
+        "coupon": 1.35,
+        "monthly_sales_volume": 23827,
+        "monthly_sales_amount": 610924.28,
+        "yearly_sales_volume": 180832,
+        "delivery_type": null,
+        "fba_fee": 5.33,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 383,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 32,
+        "seller_count": 1,
+        "buybox_seller": "Aokrean-US",
+        "online_date": "2025-06-24",
+        "category": [
+          "Tools & Home Improvement",
+          "lawn-garden"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            48
+          ]
+        ],
+        "subcategory_rank": 83,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B07Z5NQPDS",
+        "parent_asin": "B0BSVHR6DQ",
+        "title": "Modern Floor Lamp Simple Design with White Shade & Foot Pedal Switch ",
+        "sub_title": "60'' Black Floor Lamp(Without Bulb), Tall Lamps for Living Room Bedroom Office Dining Room Kitchen",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/41SBc9K-1QL.jpg",
+          "https://m.media-amazon.com/images/I/91XTfl97sKL.jpg",
+          "https://m.media-amazon.com/images/I/71jDN1-SzkL.jpg",
+          "https://m.media-amazon.com/images/I/61JlCcuXjeL.jpg",
+          "https://m.media-amazon.com/images/I/71CxQ+DxFcL.jpg",
+          "https://m.media-amazon.com/images/I/71+w8Zt3iiL.jpg"
+        ],
+        "price": 19.99,
+        "list_price": 24.99,
+        "coupon": 0,
+        "monthly_sales_volume": 12769,
+        "monthly_sales_amount": 255252.31,
+        "yearly_sales_volume": 256075,
+        "delivery_type": null,
+        "fba_fee": 8.55,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 8458,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 28,
+        "seller_count": 19,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2019-11-02",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            2
+          ]
+        ],
+        "subcategory_rank": 268,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CNW5MX61",
+        "parent_asin": "B0D7HRGMNP",
+        "title": "GOEBLESON 64.6“ Floor Lamp, Pole with Foot Switch, Modern Standing Lamp Lampshade, Minimalist Freestanding Lamp (Bulb Not Included), for Living Room, Bedroom Office ETL Listed, Black and Beige E07LD05",
+        "sub_title": "",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71qnNONzDyL.jpg",
+          "https://m.media-amazon.com/images/I/71E2wN7xi2L.jpg",
+          "https://m.media-amazon.com/images/I/71JFqrsP42L.jpg",
+          "https://m.media-amazon.com/images/I/71UU1TjakkL.jpg",
+          "https://m.media-amazon.com/images/I/619KEgMvWGL.jpg",
+          "https://m.media-amazon.com/images/I/61vGv7gTIGL.jpg"
+        ],
+        "price": 19.99,
+        "list_price": 23.99,
+        "coupon": 0,
+        "monthly_sales_volume": 8592,
+        "monthly_sales_amount": 171754.08,
+        "yearly_sales_volume": 83873,
+        "delivery_type": null,
+        "fba_fee": 8.44,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 2339,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 29,
+        "seller_count": 17,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2024-01-22",
+        "category": [
+          "Our Brands",
+          "private-brands"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            7
+          ]
+        ],
+        "subcategory_rank": 682,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0H392S15N",
+        "parent_asin": "B0HK4TSKY3",
+        "title": "Bright LED RGB+IC Corner Floor Lamp with App, Remote Control Obsidian Black ",
+        "sub_title": "Smart Ambient Lighting Color Changing Standing Lamps with Music Mode, 16 Million DIY Colors,Tall Lamp for Bedroom,Living Room",
+        "brand": "Dailyfun",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61y7ViawkaL.jpg",
+          "https://m.media-amazon.com/images/I/71nS3mfUeAL.jpg",
+          "https://m.media-amazon.com/images/I/71Xl0rCU8XL.jpg",
+          "https://m.media-amazon.com/images/I/71Og0zCbFWL.jpg",
+          "https://m.media-amazon.com/images/I/71oFpXxYgAL.jpg",
+          "https://m.media-amazon.com/images/I/6137QukOo6L.jpg"
+        ],
+        "price": 34.99,
+        "list_price": 49.99,
+        "coupon": 0,
+        "monthly_sales_volume": 7411,
+        "monthly_sales_amount": 259310.89,
+        "yearly_sales_volume": 18659,
+        "delivery_type": null,
+        "fba_fee": 6.19,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 187,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 4,
+        "buybox_seller": "DAILYFUN US",
+        "online_date": "2026-08-14",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            5
+          ]
+        ],
+        "subcategory_rank": 2646,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0D77D5WKD",
+        "parent_asin": "B0D77CS6MT",
+        "title": "Gupuzm Floor Lamp with Shelves, Modern Square Standing Lamp with 3 Color Temperature Bulb, Corner Display Bookshelf Lamp for Living Room, Bedroom and Office (Black)",
+        "sub_title": "",
+        "brand": "Gupuzm",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61m4JpM4hYL.jpg",
+          "https://m.media-amazon.com/images/I/71taXkOtLjL.jpg",
+          "https://m.media-amazon.com/images/I/71MgZj5wl3L.jpg",
+          "https://m.media-amazon.com/images/I/71bAZGCqXZL.jpg",
+          "https://m.media-amazon.com/images/I/71GMdTXSMXL.jpg",
+          "https://m.media-amazon.com/images/I/71T5TH254bL.jpg"
+        ],
+        "price": 35.99,
+        "list_price": 35.99,
+        "coupon": 0,
+        "monthly_sales_volume": 7406,
+        "monthly_sales_amount": 266541.94,
+        "yearly_sales_volume": 62669,
+        "delivery_type": null,
+        "fba_fee": 9.68,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 1764,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 12,
+        "seller_count": 12,
+        "buybox_seller": "Gupuzm",
+        "online_date": "2024-07-18",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            27
+          ]
+        ],
+        "subcategory_rank": 1677,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0HBQCZQRC",
+        "parent_asin": "B0HH3LLS6H",
+        "title": "USTO Dimmable Floor Lamp with Remote,12W Led Bulb and Foot Switch, Black ",
+        "sub_title": "Standing Lamp with Lampshade,Tall Lamp with Remote Custom Color Temperature Pole for Bedroom, Office, Kids & Living Room,",
+        "brand": "USTO",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71bYPXiWTwL.jpg",
+          "https://m.media-amazon.com/images/I/71-IRlX09bL.jpg",
+          "https://m.media-amazon.com/images/I/71209dzD+9L.jpg",
+          "https://m.media-amazon.com/images/I/61DRSm-ZcvL.jpg",
+          "https://m.media-amazon.com/images/I/71yWKZuJSqL.jpg",
+          "https://m.media-amazon.com/images/I/71iFwAdCGNL.jpg",
+          "https://m.media-amazon.com/images/I/71YkhdEQN4L.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 49.99,
+        "coupon": 3,
+        "monthly_sales_volume": 7203,
+        "monthly_sales_amount": 194408.97,
+        "yearly_sales_volume": 12635,
+        "delivery_type": null,
+        "fba_fee": 9.65,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 106,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 9,
+        "seller_count": 4,
+        "buybox_seller": "USTO",
+        "online_date": "2026-08-25",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            8
+          ]
+        ],
+        "subcategory_rank": 1269,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CQY5RK52",
+        "parent_asin": "B0GMQ87KWX",
+        "title": "SUNMORY Floor Lamps for Living Room，LED Standing Lamp with Remote Control ",
+        "sub_title": "32W/3000LM Super Bright, 69'' Tall Floor Lamp with Stepless Dimmable, Modern Torchiere Corner Lamp for Bedroom, Office",
+        "brand": "SUNMORY",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61W7wZE50CL.jpg",
+          "https://m.media-amazon.com/images/I/711EVyjtrYL.jpg",
+          "https://m.media-amazon.com/images/I/71OHT0CuoKL.jpg",
+          "https://m.media-amazon.com/images/I/61OpqC2-sxL.jpg",
+          "https://m.media-amazon.com/images/I/61Aely35jhL.jpg",
+          "https://m.media-amazon.com/images/I/71iO3WtQwjL.jpg",
+          "https://m.media-amazon.com/images/i/41laxhm4rjl.PKplay-button-mb-image-grid-small_.png"
+        ],
+        "price": 43.99,
+        "list_price": 49.99,
+        "coupon": 0,
+        "monthly_sales_volume": 6733,
+        "monthly_sales_amount": 296184.67,
+        "yearly_sales_volume": 85102,
+        "delivery_type": null,
+        "fba_fee": 9.87,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 3100,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 3,
+        "buybox_seller": "TSI Direct",
+        "online_date": "2024-03-08",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            25
+          ]
+        ],
+        "subcategory_rank": 1575,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DRFPCJ49",
+        "parent_asin": "B0GTGS818Z",
+        "title": "OIYN Smart RGBICW LED Corner Floor Lamp - 16 Million DIY Colors, 68+ Scenes, Music Sync, App & Remote Control, Color-Changing Ambient Lighting for Living Rooms, Bedrooms, and Gaming Rooms",
+        "sub_title": "",
+        "brand": "OIYN",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61Z3mufc6lL.jpg",
+          "https://m.media-amazon.com/images/I/61pesOHRAOL.jpg",
+          "https://m.media-amazon.com/images/I/61Vpewrq09L.jpg",
+          "https://m.media-amazon.com/images/I/71Lontd2gBL.jpg",
+          "https://m.media-amazon.com/images/I/71rAwp7is6L.jpg",
+          "https://m.media-amazon.com/images/I/61kUrQdu6UL.jpg",
+          "https://m.media-amazon.com/images/i/51lobx-frpl.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 34.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 6516,
+        "monthly_sales_amount": 227994.84,
+        "yearly_sales_volume": 75818,
+        "delivery_type": null,
+        "fba_fee": 8.02,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 2343,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 5,
+        "buybox_seller": "LightJoy US",
+        "online_date": "2025-01-14",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            9
+          ]
+        ],
+        "subcategory_rank": 1421,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DP7C3XK9",
+        "parent_asin": "B0HL8N47R1",
+        "title": "PACOVY Floor Lamp, Adjustable Height Floor Lamps for Living Room Bedroom, 120 LED Super Bright Standing Lamp Remote & Touch Control Dimmable Gooseneck Tall Stand Reading Lamp for Office Craft, Black",
+        "sub_title": "",
+        "brand": "PACOVY",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/611za3-cjnL.jpg",
+          "https://m.media-amazon.com/images/I/71MQ7SqZrRL.jpg",
+          "https://m.media-amazon.com/images/I/71f+T6Kv26L.jpg",
+          "https://m.media-amazon.com/images/I/71XoiprSWZL.jpg",
+          "https://m.media-amazon.com/images/I/71Mqbepg0-L.jpg",
+          "https://m.media-amazon.com/images/I/71+3ykHY8SL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 5641,
+        "monthly_sales_amount": 169173.59,
+        "yearly_sales_volume": 46930,
+        "delivery_type": null,
+        "fba_fee": 8.14,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 1757,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 12,
+        "buybox_seller": "PACOVY Direct",
+        "online_date": "2025-04-22",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            16
+          ]
+        ],
+        "subcategory_rank": 1839,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0C4DGFFCM",
+        "parent_asin": "B0D17LS4C6",
+        "title": "Ambimall 60“ Modern Floor Lamp with Beige Shade, 9W LED Bulb ",
+        "sub_title": "3 Color Temperatures Bulb, Adjustable Linen Shade, Standing Lamps for Living Room Bedroom Office Classroom Dorm, Black Pole",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81nnY1z088L.jpg",
+          "https://m.media-amazon.com/images/I/71ALKVPe-xL.jpg",
+          "https://m.media-amazon.com/images/I/61q1H1FCSzL.jpg",
+          "https://m.media-amazon.com/images/I/61bGMhWC2FL.jpg",
+          "https://m.media-amazon.com/images/I/714YZY6lDpL.jpg",
+          "https://m.media-amazon.com/images/I/61WnGY+qxRL.jpg"
+        ],
+        "price": 33.99,
+        "list_price": 33.99,
+        "coupon": 6,
+        "monthly_sales_volume": 5613,
+        "monthly_sales_amount": 157107.87,
+        "yearly_sales_volume": 63675,
+        "delivery_type": null,
+        "fba_fee": 9.6,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 5021,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 21,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2023-06-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            13
+          ]
+        ],
+        "subcategory_rank": 1462,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BPLWBPM6",
+        "parent_asin": "B0CLJ98K9C",
+        "title": "Ambimall 64“ Modern Floor Lamp with Remote Control, 9W Bulb Included ",
+        "sub_title": "Floor Lamps for Living Room, Stepless Dimmable Colors Temperature & Brightness, Standing Lamps for Living Room Bedroom Office",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71vFHAa06DL.jpg",
+          "https://m.media-amazon.com/images/I/71X0SF4+q0L.jpg",
+          "https://m.media-amazon.com/images/I/61z-XradbfL.jpg",
+          "https://m.media-amazon.com/images/I/71VNQOGO3qL.jpg",
+          "https://m.media-amazon.com/images/I/71yBYElQp0L.jpg",
+          "https://m.media-amazon.com/images/I/71e-xByzugL.jpg"
+        ],
+        "price": 33.99,
+        "list_price": 33.99,
+        "coupon": 8.5,
+        "monthly_sales_volume": 5520,
+        "monthly_sales_amount": 140704.8,
+        "yearly_sales_volume": 71830,
+        "delivery_type": null,
+        "fba_fee": 8.61,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 3201,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 15,
+        "seller_count": 17,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2023-05-10",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            24
+          ]
+        ],
+        "subcategory_rank": 1876,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B086ZLGLV3",
+        "parent_asin": "B09L4X9BXB",
+        "title": "ROTTOGOON Floor Lamp for Living Room with 3 Color Temperatures LED Bulb, Standing Lamp Tall Industrial Floor Lamp Reading for Bedroom, Office (9W LED Bulb, Beige Lampshade Included) -Black",
+        "sub_title": "",
+        "brand": "ROTTOGOON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61pJwYkeP9L.jpg",
+          "https://m.media-amazon.com/images/I/71608FOHG3L.jpg",
+          "https://m.media-amazon.com/images/I/61pNHWx3BoL.jpg",
+          "https://m.media-amazon.com/images/I/51M7+MB3FlL.jpg",
+          "https://m.media-amazon.com/images/I/71II9xbSx0L.jpg",
+          "https://m.media-amazon.com/images/I/712E8USGddL.jpg"
+        ],
+        "price": 31.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 4725,
+        "monthly_sales_amount": 151152.75,
+        "yearly_sales_volume": 91531,
+        "delivery_type": null,
+        "fba_fee": 10.12,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 10194,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 15,
+        "seller_count": 29,
+        "buybox_seller": "PHILWIN",
+        "online_date": "2020-05-11",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            23
+          ]
+        ],
+        "subcategory_rank": 1695,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GQTGDTF9",
+        "parent_asin": "B0GQTK1V97",
+        "title": "Govee Lantern Floor Lamp, Halo Gradient RGBIC Smart Corner Lamp for Bedroom ",
+        "sub_title": "LuminBlend+, 1000K-10000K, Matter Compatible, 100+ Scene Modes, Music Sync, 1400lm, Modern Floor Lamps for Living Room, Black",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/618zX7pumLL.jpg",
+          "https://m.media-amazon.com/images/I/61yoNN6lsLL.jpg",
+          "https://m.media-amazon.com/images/I/71as6cIc7gL.jpg",
+          "https://m.media-amazon.com/images/I/61jFte7QW0L.jpg",
+          "https://m.media-amazon.com/images/I/71Eqr8rID-L.jpg",
+          "https://m.media-amazon.com/images/I/61TjtwXuq3L.jpg"
+        ],
+        "price": 129.99,
+        "list_price": 0,
+        "coupon": 6.5,
+        "monthly_sales_volume": 4560,
+        "monthly_sales_amount": 563114.4,
+        "yearly_sales_volume": 15775,
+        "delivery_type": null,
+        "fba_fee": 12.81,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.8,
+        "rating_count": 338,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 1,
+        "buybox_seller": "Govee US",
+        "online_date": "2026-04-28",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            3
+          ]
+        ],
+        "subcategory_rank": 856,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CBV5DC7Y",
+        "parent_asin": "B0CNPM1T3N",
+        "title": "Nintiue Upgraded Modern Arc Dimmable Tall Standing Floor Lamp with Linen Shade, 1200 Lumens LED Bulb Included, for Living & Reading Room, Bedroom, Office & Nursery, Gold",
+        "sub_title": "",
+        "brand": "Nintiue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/716sgmljrsL.jpg",
+          "https://m.media-amazon.com/images/I/71+0VM5Y01L.jpg",
+          "https://m.media-amazon.com/images/I/71naF3pceQL.jpg",
+          "https://m.media-amazon.com/images/I/71Uwku2I6qL.jpg",
+          "https://m.media-amazon.com/images/I/71wBN4uW-kL.jpg",
+          "https://m.media-amazon.com/images/I/61oV1vMpUlL.jpg"
+        ],
+        "price": 41.98,
+        "list_price": 49.99,
+        "coupon": 2.1,
+        "monthly_sales_volume": 4555,
+        "monthly_sales_amount": 181653.4,
+        "yearly_sales_volume": 52206,
+        "delivery_type": null,
+        "fba_fee": 9.74,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 2029,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 19,
+        "seller_count": 3,
+        "buybox_seller": "Nintiue, Inc",
+        "online_date": "2023-09-09",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            12
+          ]
+        ],
+        "subcategory_rank": 1471,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F3NZ12GL",
+        "parent_asin": "B0F3NZ12GL",
+        "title": "Govee Uplighter Floor Lamp for Living Room, RGBIC Ripple Projector ",
+        "sub_title": "Compatible with SmartThings, Alexa, and Matter, LED Modern Corner Floor Light, Warm Cool White Standing Lamp for Bedroom",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81bgKHOSSWL.jpg",
+          "https://m.media-amazon.com/images/I/61W5SeyxLbL.jpg",
+          "https://m.media-amazon.com/images/I/71ipSP7Dx5L.jpg",
+          "https://m.media-amazon.com/images/I/61X3l1OLRyL.jpg",
+          "https://m.media-amazon.com/images/I/61QEVYS50cL.jpg",
+          "https://m.media-amazon.com/images/I/61hv634K9ML.jpg"
+        ],
+        "price": 179.99,
+        "list_price": 0,
+        "coupon": 9,
+        "monthly_sales_volume": 4470,
+        "monthly_sales_amount": 764325.3,
+        "yearly_sales_volume": 54414,
+        "delivery_type": null,
+        "fba_fee": 11.65,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 1432,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 0,
+        "seller_count": 2,
+        "buybox_seller": "Govee US",
+        "online_date": "2025-06-04",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            4
+          ]
+        ],
+        "subcategory_rank": 1084,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B07R9FZHLQ",
+        "parent_asin": "B0FRM33MDD",
+        "title": "Globe Electric 67135 72“ Floor Lamp with Adjustable Reading Light, Bright, Easy-to-Assemble Torchiere for Bedroom, Living Room & Office - Space-Saving Slim Design",
+        "sub_title": "",
+        "brand": "Globe Electric",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/412bcfAAj4L.jpg",
+          "https://m.media-amazon.com/images/I/81-zeA-lKGL.jpg",
+          "https://m.media-amazon.com/images/I/71Cq-oc-3AL.jpg",
+          "https://m.media-amazon.com/images/I/111nCjtdB5L.jpg",
+          "https://m.media-amazon.com/images/I/71NsJSy+2XL.jpg",
+          "https://m.media-amazon.com/images/I/51-5WXRnnaL.jpg",
+          "https://m.media-amazon.com/images/I/51QCBFvbfeL.jpg",
+          "https://m.media-amazon.com/images/I/51YETdKX5-L.jpg",
+          "https://m.media-amazon.com/images/I/41b7DkWn65L.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 34.99,
+        "coupon": 0,
+        "monthly_sales_volume": 4424,
+        "monthly_sales_amount": 132675.76,
+        "yearly_sales_volume": 66205,
+        "delivery_type": null,
+        "fba_fee": 10.12,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 9146,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 5,
+        "buybox_seller": "Amazon",
+        "online_date": "2019-05-21",
+        "category": [
+          "Our Brands",
+          "private-brands"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            18
+          ]
+        ],
+        "subcategory_rank": 1135,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CDW797MM",
+        "parent_asin": "B0HCC8ZN3W",
+        "title": "SUNMORY Arc Floor Lamp, Modern Floor Lamp with 3 Color Temperatures Bulb ",
+        "sub_title": "Metal Standing Lamps with Adjustable Hanging Lampshade,Tall Floor Lamps for Living Room, Bedroom, Office, Black",
+        "brand": "SUNMORY",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71A8syjKK6L.jpg",
+          "https://m.media-amazon.com/images/I/71kelFO36TL.jpg",
+          "https://m.media-amazon.com/images/I/611FxbMrEQL.jpg",
+          "https://m.media-amazon.com/images/I/715smxGKAAL.jpg",
+          "https://m.media-amazon.com/images/I/61-M7haEhSL.jpg",
+          "https://m.media-amazon.com/images/I/71uKsD4FzPL.jpg",
+          "https://m.media-amazon.com/images/I/711nawKgBVL.jpg"
+        ],
+        "price": 31.99,
+        "list_price": 35.99,
+        "coupon": 0,
+        "monthly_sales_volume": 4346,
+        "monthly_sales_amount": 139028.54,
+        "yearly_sales_volume": 71332,
+        "delivery_type": null,
+        "fba_fee": 10.44,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 1953,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 3,
+        "buybox_seller": "IDOU Direct",
+        "online_date": "2023-10-12",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            39
+          ]
+        ],
+        "subcategory_rank": 2756,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BVFX154J",
+        "parent_asin": "B0CGQSFHNB",
+        "title": "Floor Lamp with Shelves for Living Room, Shelf Floor Lamp with 3 CCT LED Bulb, Corner Display Standing Column Lamp Etagere Organizer Tower Nightstand with White Linen Shade for Bedroom, Office",
+        "sub_title": "",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71u3LMKkWEL.jpg",
+          "https://m.media-amazon.com/images/I/71eoDiJ3ghL.jpg",
+          "https://m.media-amazon.com/images/I/81KUOfpR09L.jpg",
+          "https://m.media-amazon.com/images/I/712dSnxF2NL.jpg",
+          "https://m.media-amazon.com/images/I/81gOwj8BuLL.jpg",
+          "https://m.media-amazon.com/images/I/81XkStxS1vL.jpg",
+          "https://m.media-amazon.com/images/I/81CEdDD2Z9L.jpg",
+          "https://m.media-amazon.com/images/I/5181+msISkL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 29.99,
+        "coupon": 0,
+        "monthly_sales_volume": 4041,
+        "monthly_sales_amount": 121189.59,
+        "yearly_sales_volume": 70552,
+        "delivery_type": null,
+        "fba_fee": 8.97,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 4423,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 4,
+        "buybox_seller": "BOXT",
+        "online_date": "2023-02-14",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            14
+          ]
+        ],
+        "subcategory_rank": 1514,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B095NXXP8C",
+        "parent_asin": "B0B7JN2LPD",
+        "title": "Nintiue 【Upgraded】 Dimmable Floor Lamp, 1000 Lumens LED Bulb Included, Arc Floor Lamps for Living Room Modern Standing Lamp with Linen Shade, Tall Lamp for Bedroom Office Reading Dining Room- Black",
+        "sub_title": "",
+        "brand": "Nintiue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61MtYoTeUHL.jpg",
+          "https://m.media-amazon.com/images/I/71NpTMCkhSL.jpg",
+          "https://m.media-amazon.com/images/I/61QB4wU80hL.jpg",
+          "https://m.media-amazon.com/images/I/71b9kIjd-PL.jpg",
+          "https://m.media-amazon.com/images/I/71G07u81RuL.jpg",
+          "https://m.media-amazon.com/images/I/61BWMFZ7r2L.jpg",
+          "https://m.media-amazon.com/images/I/614aq+7OHPL.jpg"
+        ],
+        "price": 34.99,
+        "list_price": 39.99,
+        "coupon": 1.75,
+        "monthly_sales_volume": 4020,
+        "monthly_sales_amount": 133624.8,
+        "yearly_sales_volume": 57089,
+        "delivery_type": null,
+        "fba_fee": 9.49,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 7086,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 23,
+        "seller_count": 2,
+        "buybox_seller": "Nintiue-CA",
+        "online_date": "2021-09-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            32
+          ]
+        ],
+        "subcategory_rank": 2384,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CNW45Z6R",
+        "parent_asin": "B0CST1VT84",
+        "title": "64.4” Slim Floor Lamp for Living Room with Magnetic Remote and Foot Switch, Dimmable Standing Tall Lamp Mood for Bedroom Nursery, 3 Color Temperatures, 1-Hour Timer,900LM Bulb Included,Beige E06LD05W1",
+        "sub_title": "",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/817Np7c0hZL.jpg",
+          "https://m.media-amazon.com/images/I/71B6kq+0jnL.jpg",
+          "https://m.media-amazon.com/images/I/71-fMJByW+L.jpg",
+          "https://m.media-amazon.com/images/I/71NRAJZoHiL.jpg",
+          "https://m.media-amazon.com/images/I/71mfsT60w+L.jpg",
+          "https://m.media-amazon.com/images/I/71LWME-cnKL.jpg",
+          "https://m.media-amazon.com/images/I/619Y6rjxeqL.jpg",
+          "https://m.media-amazon.com/images/I/71yPmUvrE4L.jpg",
+          "https://m.media-amazon.com/images/I/717efw6G4qL.jpg"
+        ],
+        "price": 25.98,
+        "list_price": 32.99,
+        "coupon": 0,
+        "monthly_sales_volume": 3982,
+        "monthly_sales_amount": 103452.36,
+        "yearly_sales_volume": 55964,
+        "delivery_type": null,
+        "fba_fee": 8.48,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 1661,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 39,
+        "seller_count": 16,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2024-01-22",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            10
+          ]
+        ],
+        "subcategory_rank": 988,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0D93T78D7",
+        "parent_asin": "B0DFWPZKF1",
+        "title": "Tyute Corner Floor Lamp, RGB LED Corner Lamp with Music Sync, Smart App and Remote Control Color Changing Ambience Light, LED Lamp with 16 Million Colors for Bedroom, Living Room Gaming Room",
+        "sub_title": "",
+        "brand": "Tyute",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61WwgSzdikL.jpg",
+          "https://m.media-amazon.com/images/I/61Ce-hnGkeL.jpg",
+          "https://m.media-amazon.com/images/I/71wMe2hV4dL.jpg",
+          "https://m.media-amazon.com/images/I/71uCz40OalL.jpg",
+          "https://m.media-amazon.com/images/I/716FXy6PdDL.jpg",
+          "https://m.media-amazon.com/images/I/71REam9W5nL.jpg"
+        ],
+        "price": 39.99,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 3968,
+        "monthly_sales_amount": 158680.32,
+        "yearly_sales_volume": 52154,
+        "delivery_type": null,
+        "fba_fee": 6.59,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 1474,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 2,
+        "seller_count": 3,
+        "buybox_seller": "Tyute US",
+        "online_date": "2024-08-24",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            20
+          ]
+        ],
+        "subcategory_rank": 1846,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08Z36X6B4",
+        "parent_asin": "B0H9LCLXRZ",
+        "title": "SUNMORY Floor Lamp with Shelves, Standing Lamps for Living Room, Black ",
+        "sub_title": "3 CCT LED Bulb Include, 4-Tier Display Bookshelf, 63'' Tall Corner Shelf Lamp, Modern Style for Bedroom, Office, Home Decor",
+        "brand": "SUNMORY",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71YNhyHG-IL.jpg",
+          "https://m.media-amazon.com/images/I/713ckbMCzAL.jpg",
+          "https://m.media-amazon.com/images/I/71ltoje4a+L.jpg",
+          "https://m.media-amazon.com/images/I/41rwaPMyeGL.jpg",
+          "https://m.media-amazon.com/images/I/81TR8inJO5S.jpg",
+          "https://m.media-amazon.com/images/I/71UmkZTSkFL.jpg"
+        ],
+        "price": 31.99,
+        "list_price": 45.99,
+        "coupon": 0,
+        "monthly_sales_volume": 3963,
+        "monthly_sales_amount": 126776.37,
+        "yearly_sales_volume": 82369,
+        "delivery_type": null,
+        "fba_fee": 9.98,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 7584,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 4,
+        "buybox_seller": "TSI Direct",
+        "online_date": "2021-03-22",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            26
+          ]
+        ],
+        "subcategory_rank": 1713,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CQY7SW1L",
+        "parent_asin": "B0H553WH5M",
+        "title": "FRIDEKO HOME Floor Lamp, 9W 800LM Color Changing Smart Bulb, Beige Shade ",
+        "sub_title": "Music Sync Light, App & Remote Control, Dimmable & Adjustable Color Temperature Standing Lamp for Living Room Bedroom Gaming",
+        "brand": "FRIDEKO HOME",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/41pCb1qA-FL.jpg",
+          "https://m.media-amazon.com/images/I/41+Xfs5SrLL.PKplay-button-mb-image-grid-small_.jpg",
+          "https://m.media-amazon.com/images/I/41nuqqk7JYL.jpg",
+          "https://m.media-amazon.com/images/I/41D0-x6sapL.jpg",
+          "https://m.media-amazon.com/images/I/41KblgPfWCL.jpg",
+          "https://m.media-amazon.com/images/I/41NkIW+PrCL.jpg",
+          "https://m.media-amazon.com/images/I/41GHd5AJmjL.jpg"
+        ],
+        "price": 39.98,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 3672,
+        "monthly_sales_amount": 146806.56,
+        "yearly_sales_volume": 54607,
+        "delivery_type": null,
+        "fba_fee": 8.41,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 2400,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 1,
+        "buybox_seller": "Easric",
+        "online_date": "2024-02-21",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            19
+          ]
+        ],
+        "subcategory_rank": 1640,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GQT4YJ5F",
+        "parent_asin": "B0GQT4YJ5F",
+        "title": "Govee Floor Lamp 3 with Luminblend+ Technology, 1000K-10000K Standing Lamp ",
+        "sub_title": "Work with Matter, 2100lm Modern Floor Lamps for Living Room, Bedroom, Office, Corner Lamp with Dynamic Scenes, DaySync",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61j-NE3I1DL.jpg",
+          "https://m.media-amazon.com/images/I/81sQYgb+zTL.jpg",
+          "https://m.media-amazon.com/images/I/71ravV+PMeL.jpg",
+          "https://m.media-amazon.com/images/I/71ndn6UUYRL.jpg",
+          "https://m.media-amazon.com/images/I/71z+GS3zZKL.jpg",
+          "https://m.media-amazon.com/images/I/81aZ5WBvCLL.jpg"
+        ],
+        "price": 149.99,
+        "list_price": 169.99,
+        "coupon": 7.5,
+        "monthly_sales_volume": 3272,
+        "monthly_sales_amount": 466227.28,
+        "yearly_sales_volume": 10572,
+        "delivery_type": null,
+        "fba_fee": 11.03,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 223,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 0,
+        "seller_count": 2,
+        "buybox_seller": "Govee US",
+        "online_date": "2026-04-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            6
+          ]
+        ],
+        "subcategory_rank": 957,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FC2CVTV7",
+        "parent_asin": "B0HGQWY6RP",
+        "title": "JOOFO LED Floor Lamp for Living Room, Torchiere Lamp with Compact Remote ",
+        "sub_title": "30W/3000LM Super Bright, 69'' Tall, Stepless Dimming, 3 Color Temperatures, Timer & Memory, Standing Lamp for Bedroom & Office",
+        "brand": "JOOFO",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61BOcSEJ3pL.jpg",
+          "https://m.media-amazon.com/images/I/71IxcCz3PkL.jpg",
+          "https://m.media-amazon.com/images/I/81QulWvPAzL.jpg",
+          "https://m.media-amazon.com/images/I/81-5CVMXNRL.jpg",
+          "https://m.media-amazon.com/images/I/81H3JYr7GXL.jpg",
+          "https://m.media-amazon.com/images/I/71CSP+uStBL.jpg",
+          "https://m.media-amazon.com/images/I/81ug0hHwZHL.jpg",
+          "https://m.media-amazon.com/images/I/71RkIDdWRtL.jpg"
+        ],
+        "price": 39.99,
+        "list_price": 49.99,
+        "coupon": 0,
+        "monthly_sales_volume": 3173,
+        "monthly_sales_amount": 126888.27,
+        "yearly_sales_volume": 44757,
+        "delivery_type": null,
+        "fba_fee": 9.42,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 371,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 2,
+        "seller_count": 1,
+        "buybox_seller": "Luxe-Superior",
+        "online_date": "2025-06-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            15
+          ]
+        ],
+        "subcategory_rank": 1801,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08LVZH9H1",
+        "parent_asin": "B09M3SRDJZ",
+        "title": "Dimmable Floor Lamp, 3 x 800LM LED Edison Bulbs Included, Farmhouse Industrial Floor Lamp Standing Tree Lamp with Elegant Teardrop Cage Tall Lamps for Living Room Bedroom Office Dining Room-Black",
+        "sub_title": "",
+        "brand": "Nintiue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61ZJHqVr7YL.jpg",
+          "https://m.media-amazon.com/images/I/71vc8rzKLML.jpg",
+          "https://m.media-amazon.com/images/I/71j-kU0cUHL.jpg",
+          "https://m.media-amazon.com/images/I/71m3dQ5t1eL.jpg",
+          "https://m.media-amazon.com/images/I/71Z4q5WqWmL.jpg",
+          "https://m.media-amazon.com/images/I/71gbLEUrw+L.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 0,
+        "coupon": 3,
+        "monthly_sales_volume": 3065,
+        "monthly_sales_amount": 174674.35,
+        "yearly_sales_volume": 37459,
+        "delivery_type": null,
+        "fba_fee": 11.18,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 8376,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 2,
+        "buybox_seller": "Nintiue, Inc",
+        "online_date": "2020-10-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            37
+          ]
+        ],
+        "subcategory_rank": 2874,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BDL1K1QQ",
+        "parent_asin": "B0C494JVDT",
+        "title": "Qaubauyt Smart LED Floor Lamp with APP Control & RGB Colors - Dimmable Standing Lamp for Living Room, Bedroom, Gaming - Remote, Timer, 9W Bulb Included, 67“ Modern Tall Lamp (black pole + white shade)",
+        "sub_title": "",
+        "brand": "Qaubauyt",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71ewgPi1cvL.jpg",
+          "https://m.media-amazon.com/images/I/71Lv4rNNuBL.jpg",
+          "https://m.media-amazon.com/images/I/719VxX5pdhL.jpg",
+          "https://m.media-amazon.com/images/I/815Kkut1s8L.jpg",
+          "https://m.media-amazon.com/images/I/716FPkRRqvL.jpg",
+          "https://m.media-amazon.com/images/I/71h7XgyxgAL.jpg"
+        ],
+        "price": 32.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 2963,
+        "monthly_sales_amount": 97749.37,
+        "yearly_sales_volume": 30702,
+        "delivery_type": null,
+        "fba_fee": 8.93,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 2769,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 7,
+        "seller_count": 1,
+        "buybox_seller": "Qaubauyt-Light",
+        "online_date": "2022-10-10",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            38
+          ]
+        ],
+        "subcategory_rank": 3700,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B09H2NPN6X",
+        "parent_asin": "B0DSJ7X74Q",
+        "title": "WORLD WIN 61‘‘ RGB LED Corner Floor Lamp, Unique Hourglass Shade, Round ",
+        "sub_title": "Bluetooth App & Remote, Music Sync, 16 Million DIY Colors, 3 Color Temperatures, Timer, Dimming; Living Room, Bedroom, Gaming",
+        "brand": "WORLD WIN",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71SdbKWO7wL.jpg",
+          "https://m.media-amazon.com/images/I/71z6UjkBUzL.jpg",
+          "https://m.media-amazon.com/images/I/71zggeX7xwL.jpg",
+          "https://m.media-amazon.com/images/I/71o4YEp30cL.jpg",
+          "https://m.media-amazon.com/images/I/718493Ok6hL.jpg",
+          "https://m.media-amazon.com/images/I/81FPKbav2IL.jpg"
+        ],
+        "price": 39.95,
+        "list_price": 49.95,
+        "coupon": 3.99,
+        "monthly_sales_volume": 2837,
+        "monthly_sales_amount": 102018.52,
+        "yearly_sales_volume": 37424,
+        "delivery_type": null,
+        "fba_fee": 7.98,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 1364,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 1,
+        "buybox_seller": "huoyin",
+        "online_date": "2022-01-06",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            59
+          ]
+        ],
+        "subcategory_rank": 4013,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F2SH42R2",
+        "parent_asin": "B0FC62C9FR",
+        "title": "SIBRILLE Floor Lamp with Linen Shade, Dimmable Tall Standing Lamp with Remote Control & 3 Color Temperatures, Modern Floor Lamps for Living Room Bedroom Office Corner, 9W LED Bulb Included",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/610P5qteVHL.jpg",
+          "https://m.media-amazon.com/images/I/71dkpF1wcDL.jpg",
+          "https://m.media-amazon.com/images/I/71MqeHPn-1L.jpg",
+          "https://m.media-amazon.com/images/I/71dEB5vZSFL.jpg",
+          "https://m.media-amazon.com/images/I/71YPDM4kwDL.jpg",
+          "https://m.media-amazon.com/images/I/71pfEBVs0eL.jpg"
+        ],
+        "price": 29.98,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2804,
+        "monthly_sales_amount": 84063.92,
+        "yearly_sales_volume": 37722,
+        "delivery_type": null,
+        "fba_fee": 8.98,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 1050,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 2,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2025-04-16",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            11
+          ]
+        ],
+        "subcategory_rank": 787,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FZGW3MY5",
+        "parent_asin": "B0GWR24WXR",
+        "title": "【Upgraded】 Dimmable Floor Lamp for Living Room,1000 Lumens Bulb Included, Modern Floor Lamps Simple Design with Linen Shade, Tall Standing Lamp for Bedroom Office Dining Room, Black Pole Lamp",
+        "sub_title": "",
+        "brand": "Yemela",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71h+I7WDhOL.jpg",
+          "https://m.media-amazon.com/images/I/7125E9apX6L.jpg",
+          "https://m.media-amazon.com/images/I/71jnLiNdtBL.jpg",
+          "https://m.media-amazon.com/images/I/71vSxS1L9pL.jpg",
+          "https://m.media-amazon.com/images/I/71Aq4mC4G2L.jpg",
+          "https://m.media-amazon.com/images/I/71XqPQ8DbfL.jpg"
+        ],
+        "price": 29.98,
+        "list_price": 39.99,
+        "coupon": 1.5,
+        "monthly_sales_volume": 2697,
+        "monthly_sales_amount": 76810.56,
+        "yearly_sales_volume": 20163,
+        "delivery_type": null,
+        "fba_fee": 9.06,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 352,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 13,
+        "seller_count": 3,
+        "buybox_seller": "Yemela US",
+        "online_date": "2026-01-04",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            28
+          ]
+        ],
+        "subcategory_rank": 1729,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FDFH61KW",
+        "parent_asin": "B0HCNHBGR9",
+        "title": "75“ Tall Dimmable Arc Floor Lamp with Marble Base, Adjustable Height, Beige ",
+        "sub_title": "Rotating Hanging Shade, Arched Lamp for Living Room with Remote & Foot Switch, Adjustable Color Temp., Over Couch Curved Lamp",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/7176UxTcbgL.jpg",
+          "https://m.media-amazon.com/images/I/710YOFtQTaL.jpg",
+          "https://m.media-amazon.com/images/I/716U+2ce24L.jpg",
+          "https://m.media-amazon.com/images/I/718GjvFTnIL.jpg",
+          "https://m.media-amazon.com/images/I/71eA6RIVcsL.jpg",
+          "https://m.media-amazon.com/images/I/71hTi7qwuGL.jpg"
+        ],
+        "price": 53.99,
+        "list_price": 53.99,
+        "coupon": 2.7,
+        "monthly_sales_volume": 2694,
+        "monthly_sales_amount": 138175.26,
+        "yearly_sales_volume": 14448,
+        "delivery_type": null,
+        "fba_fee": 12.07,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.1,
+        "rating_count": 374,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 11,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2025-09-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            30
+          ]
+        ],
+        "subcategory_rank": 2568,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FX57LCXN",
+        "parent_asin": "B0GDTS573L",
+        "title": "Hotsonic 72“ Boho Rattan Tree Floor Lamp, Tall Dimmable Industrial Standing Lamp, Corner Decor Accent Lighting for Living Room, Bedroom, Dining Room, Nursery, Cafe (3 x 800LM Bulbs Included) - Black",
+        "sub_title": "",
+        "brand": "Hotsonic",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71esGfdfmxL.jpg",
+          "https://m.media-amazon.com/images/I/81lrXtp50JL.jpg",
+          "https://m.media-amazon.com/images/I/71F9q9FtwyL.jpg",
+          "https://m.media-amazon.com/images/I/71yx+ik5FIL.jpg",
+          "https://m.media-amazon.com/images/I/719PfJuLsWL.jpg",
+          "https://m.media-amazon.com/images/I/71v10Wkz-+L.jpg"
+        ],
+        "price": 44.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 2637,
+        "monthly_sales_amount": 118638.63,
+        "yearly_sales_volume": 14802,
+        "delivery_type": null,
+        "fba_fee": 11.47,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 537,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 13,
+        "buybox_seller": "Hanguang Lighting",
+        "online_date": "2025-12-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            31
+          ]
+        ],
+        "subcategory_rank": 4837,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DJ7225F3",
+        "parent_asin": "B0DQLFVHV4",
+        "title": "Ambimall 70“ Dimmable Arc Floor Lamp with Remote, Color Temp Adjustable ",
+        "sub_title": "Rotating Head, Foot Switch & Remote, Arched Floor Lamp for Living Room Bedroom Office, Over Couch Arched Light, Beige & Black",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71oxEIQadtL.jpg",
+          "https://m.media-amazon.com/images/I/71UORhTX1-L.jpg",
+          "https://m.media-amazon.com/images/I/71t3YA2RCKL.jpg",
+          "https://m.media-amazon.com/images/I/71jL6ZsHatL.jpg",
+          "https://m.media-amazon.com/images/I/71nEZX2-EjL.jpg",
+          "https://m.media-amazon.com/images/I/71vM-tZvFcL.jpg"
+        ],
+        "price": 52.99,
+        "list_price": 52.99,
+        "coupon": 13.25,
+        "monthly_sales_volume": 2631,
+        "monthly_sales_amount": 104555.94,
+        "yearly_sales_volume": 23075,
+        "delivery_type": null,
+        "fba_fee": 10.61,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 1000,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 16,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2024-12-16",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            42
+          ]
+        ],
+        "subcategory_rank": 3913,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BXWQHYVQ",
+        "parent_asin": "B0HJQZ5VQG",
+        "title": "Miortior Corner Floor Lamp - Smart RGB LED Corner Lamp with App and Remote Control, 16 Million Colors & 68+ Scene, Music Sync, Timer Setting - Ideal for Living Rooms, Bedrooms, and Gaming Rooms",
+        "sub_title": "",
+        "brand": "Miortior",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/614i4JgyiiL.jpg",
+          "https://m.media-amazon.com/images/I/71h+c7PD3LL.jpg",
+          "https://m.media-amazon.com/images/I/71IY0A1ILaL.jpg",
+          "https://m.media-amazon.com/images/I/71QKZitCZ9L.jpg",
+          "https://m.media-amazon.com/images/I/61VhqH0QFwL.jpg",
+          "https://m.media-amazon.com/images/I/71nCfPSdHEL.jpg"
+        ],
+        "price": 35.99,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2585,
+        "monthly_sales_amount": 93034.15,
+        "yearly_sales_volume": 66918,
+        "delivery_type": null,
+        "fba_fee": 6.77,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 4997,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 4,
+        "buybox_seller": "AURASENCE SMART LIMITED",
+        "online_date": "2023-04-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            34
+          ]
+        ],
+        "subcategory_rank": 1821,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CKL4RBY3",
+        "parent_asin": "B0FNMR9WLG",
+        "title": "Yikuneng Dimmable LED Floor Lamp, Super Bright Reading Lamps Floor Standing lamp with Remote & Touch Control, Stepless Dimming & 2700K-6500K Color Temperature, for Living Room Bedroom Office, Black",
+        "sub_title": "",
+        "brand": "Yikuneng",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61m0IP+z2jL.jpg",
+          "https://m.media-amazon.com/images/I/71dC5iud+OL.jpg",
+          "https://m.media-amazon.com/images/I/71gX3duHcOL.jpg",
+          "https://m.media-amazon.com/images/I/71uH2rYqZ6L.jpg",
+          "https://m.media-amazon.com/images/I/81-4KixTbDL.jpg",
+          "https://m.media-amazon.com/images/I/81jDoMDxEaL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 38.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2547,
+        "monthly_sales_amount": 76384.53,
+        "yearly_sales_volume": 22416,
+        "delivery_type": null,
+        "fba_fee": 8.7,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 1007,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 13,
+        "seller_count": 2,
+        "buybox_seller": "Yikuneng",
+        "online_date": "2024-01-15",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            61
+          ]
+        ],
+        "subcategory_rank": 3688,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FPWK9BPK",
+        "parent_asin": "B0HG8RJS48",
+        "title": "EDISHINE LED Floor Lamp 1300LM Super Bright Reading Floor Lamps Black ",
+        "sub_title": "Dimmable, 4CCT, Remote & Touch Control, Adjustable Gooseneck, Dual Timer Design, for Bedroom, Living Room, Office",
+        "brand": "EDISHINE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81nq6-VwxHL.jpg",
+          "https://m.media-amazon.com/images/I/81OknzPGBWL.jpg",
+          "https://m.media-amazon.com/images/I/71AyZp7PlCL.jpg",
+          "https://m.media-amazon.com/images/I/717mkxQt6VL.jpg",
+          "https://m.media-amazon.com/images/I/81W+rymEwCL.jpg",
+          "https://m.media-amazon.com/images/I/71Wvulz9O5L.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 49.99,
+        "coupon": 1.5,
+        "monthly_sales_volume": 2499,
+        "monthly_sales_amount": 71196.51,
+        "yearly_sales_volume": 12040,
+        "delivery_type": null,
+        "fba_fee": 8.7,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 411,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 3,
+        "buybox_seller": "Dewenwils",
+        "online_date": "2025-12-03",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            22
+          ]
+        ],
+        "subcategory_rank": 2563,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FGJFSN72",
+        "parent_asin": "B0G29S3P5S",
+        "title": "VrimNowit LED Floor Lamp for Living Room,Bright Reading Lamps for Office ",
+        "sub_title": "5 Adjustable Colors Temperatures&Brightness, Dual Head Goose-Neck Standing Lamp, Remote Control, Eye Caring Tall Lamp, Black",
+        "brand": "VrimNowit",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71yp0kVYcRL.jpg",
+          "https://m.media-amazon.com/images/I/61xxg0Yo1lL.jpg",
+          "https://m.media-amazon.com/images/I/71UkfoLVMiL.jpg",
+          "https://m.media-amazon.com/images/I/71oE94POMfL.jpg",
+          "https://m.media-amazon.com/images/I/717jXT4crDL.jpg",
+          "https://m.media-amazon.com/images/I/710Id-FhzKL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2409,
+        "monthly_sales_amount": 72245.91,
+        "yearly_sales_volume": 21380,
+        "delivery_type": null,
+        "fba_fee": 9.2,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 989,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 2,
+        "buybox_seller": "VrimNowit",
+        "online_date": "2025-08-15",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            55
+          ]
+        ],
+        "subcategory_rank": 3817,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08XTXM2HS",
+        "parent_asin": "B08XTW8XYV",
+        "title": "Balkwan Sunset Lamp Projection Rotation Rainbow Lamp Led Romantic Visual Led Light Network Red Light with USB Modern Floor Stand Night Light Living Room Bedroom Decor (Sunset Red)",
+        "sub_title": "",
+        "brand": "Balkwan",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51GElU1aE9S.jpg",
+          "https://m.media-amazon.com/images/I/61H3euErz6L.jpg",
+          "https://m.media-amazon.com/images/I/61fYxAyZjpS.jpg",
+          "https://m.media-amazon.com/images/I/51CI0l7SmcL.jpg",
+          "https://m.media-amazon.com/images/I/61vjy7uqlRS.jpg"
+        ],
+        "price": 15.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 2369,
+        "monthly_sales_amount": 37880.31,
+        "yearly_sales_volume": 28922,
+        "delivery_type": null,
+        "fba_fee": 5.36,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 2290,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 2,
+        "buybox_seller": "Balkwan",
+        "online_date": "2021-03-17",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            21
+          ]
+        ],
+        "subcategory_rank": 2757,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0C14D5CX6",
+        "parent_asin": "B0DHCTBYW2",
+        "title": "marctronic Floor Lamp, 18W 1800LM Super Bright LED Floor Lamp with Remote & Works with Smart Plug, Dimmable Timing Eye Caring Reading Lamps Floor Standing for Living Room Bedroom Office",
+        "sub_title": "",
+        "brand": "marctronic",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71rgzD-dk8L.jpg",
+          "https://m.media-amazon.com/images/I/71JIodyYP9L.jpg",
+          "https://m.media-amazon.com/images/I/718f84VCHeL.jpg",
+          "https://m.media-amazon.com/images/I/81akCqi1RVL.jpg",
+          "https://m.media-amazon.com/images/I/81AtSau-J+L.jpg",
+          "https://m.media-amazon.com/images/I/71A9y5xl-qL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 38.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2359,
+        "monthly_sales_amount": 70746.41,
+        "yearly_sales_volume": 40449,
+        "delivery_type": null,
+        "fba_fee": 8.7,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 3346,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 1,
+        "buybox_seller": "Marctronic",
+        "online_date": "2023-08-01",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            45
+          ]
+        ],
+        "subcategory_rank": 3201,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08T1N86Q5",
+        "parent_asin": "B08T1L97Z5",
+        "title": "PESRAE Floor Lamp, Remote Control, Stepless Brightness & Color Temperature ",
+        "sub_title": "LED Bulb Included; 3000K–6000K Adjustment, Torchiere Lamp for Living Room, Bedroom or Office, Matte Black",
+        "brand": "PESRAE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51+IKShrEWL.jpg",
+          "https://m.media-amazon.com/images/I/61c2IiB1kLL.jpg",
+          "https://m.media-amazon.com/images/I/71tgU9q2GKL.jpg",
+          "https://m.media-amazon.com/images/I/71oovLfQ4ZL.jpg",
+          "https://m.media-amazon.com/images/I/31Wm+0xCOOL.jpg",
+          "https://m.media-amazon.com/images/I/61DGcBmcomL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 39.99,
+        "coupon": 3,
+        "monthly_sales_volume": 2313,
+        "monthly_sales_amount": 62427.87,
+        "yearly_sales_volume": 29190,
+        "delivery_type": null,
+        "fba_fee": 9.08,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 5370,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 3,
+        "buybox_seller": "PESRAE",
+        "online_date": "2021-04-05",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            46
+          ]
+        ],
+        "subcategory_rank": 4481,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B073XN8X7Y",
+        "parent_asin": "B078JYD34J",
+        "title": "Brightech Sky LED Floor lamp, Torchiere Super Bright Floor Lamp for Living Room Decor & Office - Dimmable, Tall Standing Torch Lamp with Warm Light for Bedroom & Reading - Gold Brass",
+        "sub_title": "",
+        "brand": "Brightech",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71NIYwkFpNL.jpg",
+          "https://m.media-amazon.com/images/I/81CnG6Z-YTL.jpg",
+          "https://m.media-amazon.com/images/I/81gaN2G6TUL.jpg",
+          "https://m.media-amazon.com/images/I/315yvQrA3DL.jpg",
+          "https://m.media-amazon.com/images/I/71SRruOWRbL.jpg",
+          "https://m.media-amazon.com/images/I/81NKyTRJ00L.jpg",
+          "https://m.media-amazon.com/images/I/31SErWw3g-L.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 69.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 2303,
+        "monthly_sales_amount": 161186.97,
+        "yearly_sales_volume": 25657,
+        "delivery_type": null,
+        "fba_fee": 9.92,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 20475,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 3,
+        "buybox_seller": "Brightech USA",
+        "online_date": "2017-10-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            56
+          ]
+        ],
+        "subcategory_rank": 3910,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0C4H294KQ",
+        "parent_asin": "B0CJDTHDKG",
+        "title": "Coucrek Floor Lamp, LED Standing Lamps with White Plastic Shade, Black Modern Torchiere Floor Lamp, Tall Lamps for Living Room Dorm, Bulb not Included",
+        "sub_title": "",
+        "brand": "Coucrek",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51Rj8re4WiL.jpg",
+          "https://m.media-amazon.com/images/I/718ZRyLqexL.jpg",
+          "https://m.media-amazon.com/images/I/61VtaC33CnL.jpg",
+          "https://m.media-amazon.com/images/I/71FJIYsi3ML.jpg",
+          "https://m.media-amazon.com/images/I/819rW3NG2vL.jpg",
+          "https://m.media-amazon.com/images/I/71ixHh7B43L.jpg"
+        ],
+        "price": 23.99,
+        "list_price": 29.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2251,
+        "monthly_sales_amount": 54001.49,
+        "yearly_sales_volume": 29571,
+        "delivery_type": null,
+        "fba_fee": 8.76,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 2398,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 2,
+        "buybox_seller": "Best HomePro",
+        "online_date": "2023-08-07",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            91
+          ]
+        ],
+        "subcategory_rank": 8253,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F43M9KWW",
+        "parent_asin": "B0F43M9KWW",
+        "title": "Govee Tree Floor Lamp with 3 Rotatable Lights, Compatible with Matter ",
+        "sub_title": "LuminBlend Technology, Standing Lamp with 64 Dynamic Scenes, Music Sync, Smart Floor Lamp for Living Room, Bedroom, Office",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/712q-hM2JbL.jpg",
+          "https://m.media-amazon.com/images/I/71EE+0TOpmL.jpg",
+          "https://m.media-amazon.com/images/I/71vfvypqW2L.jpg",
+          "https://m.media-amazon.com/images/I/61QjC9bBrHL.jpg",
+          "https://m.media-amazon.com/images/I/71nuNvr8-0L.jpg",
+          "https://m.media-amazon.com/images/I/61Kp+-Wp8NL.jpg"
+        ],
+        "price": 144.99,
+        "list_price": 169.99,
+        "coupon": 7.25,
+        "monthly_sales_volume": 2246,
+        "monthly_sales_amount": 309364.04,
+        "yearly_sales_volume": 23526,
+        "delivery_type": null,
+        "fba_fee": 11.35,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 697,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 0,
+        "seller_count": 2,
+        "buybox_seller": "Govee US",
+        "online_date": "2025-06-06",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            17
+          ]
+        ],
+        "subcategory_rank": 2855,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0C854449J",
+        "parent_asin": "B0CCS3LB9L",
+        "title": "Ziisee Industrial Floor Lamp with Glass Shade - Black, LED Bulbs, Foot Pedal Switch, Easy Assembly",
+        "sub_title": "",
+        "brand": "Ziisee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71mR0F7CNeL.jpg",
+          "https://m.media-amazon.com/images/I/61XLei1xUwL.jpg",
+          "https://m.media-amazon.com/images/I/71HctTp4nCL.jpg",
+          "https://m.media-amazon.com/images/I/71x-9MJfL3L.jpg",
+          "https://m.media-amazon.com/images/I/71C9DyqnrkL.jpg",
+          "https://m.media-amazon.com/images/I/71OAplurwgL.jpg"
+        ],
+        "price": 35.99,
+        "list_price": 39.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2242,
+        "monthly_sales_amount": 80689.58,
+        "yearly_sales_volume": 51281,
+        "delivery_type": null,
+        "fba_fee": 9.72,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2339,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 16,
+        "seller_count": 11,
+        "buybox_seller": "Ziisee",
+        "online_date": "2023-08-09",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            79
+          ]
+        ],
+        "subcategory_rank": 5204,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08BY9124H",
+        "parent_asin": "B0B8D1CG8H",
+        "title": "Wio-Mio Floor Lamp, 15W/1000LM Bright LED Floor Lamp with Stepless Dimming ",
+        "sub_title": "Remote and Touch Control, 3000K-6000K Color Temperature, Adjustable Gooseneck Tall Reading Lamp for Living Room, Bedroom",
+        "brand": "Wio-Mio",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51Jg5Qs85VL.jpg",
+          "https://m.media-amazon.com/images/I/71LA7AlTT7L.jpg",
+          "https://m.media-amazon.com/images/I/71hhGjaFkzL.jpg",
+          "https://m.media-amazon.com/images/I/71M+QyS3EXL.jpg",
+          "https://m.media-amazon.com/images/I/71+5HiolxLL.jpg",
+          "https://m.media-amazon.com/images/I/611gH-Hk8FL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 37.99,
+        "coupon": 3,
+        "monthly_sales_volume": 2208,
+        "monthly_sales_amount": 59593.92,
+        "yearly_sales_volume": 44382,
+        "delivery_type": null,
+        "fba_fee": 8.98,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 7420,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 5,
+        "seller_count": 5,
+        "buybox_seller": "ONDARA HOLDINGS",
+        "online_date": "2020-08-29",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            35
+          ]
+        ],
+        "subcategory_rank": 3465,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0C5ZXHQY7",
+        "parent_asin": "B0HMR5P2L8",
+        "title": "EDISHINE 59.84“ Floor Lamps for Living Room, 3000K & Stepless Dimmable,Gold ",
+        "sub_title": "Warm White Light, Foot Switch, Adjustable Height, Modern Slim Tall Floor Lamps for Living Room, Bedroom, Office",
+        "brand": "EDISHINE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71nyeR7h+HL.jpg",
+          "https://m.media-amazon.com/images/I/715bndUW3gL.jpg",
+          "https://m.media-amazon.com/images/I/71tImucF73L.jpg",
+          "https://m.media-amazon.com/images/I/71wBUNR2jNL.jpg",
+          "https://m.media-amazon.com/images/I/71TlW7F9+6L.jpg",
+          "https://m.media-amazon.com/images/I/71YVmAKld-L.jpg"
+        ],
+        "price": 39.98,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2117,
+        "monthly_sales_amount": 84637.66,
+        "yearly_sales_volume": 20556,
+        "delivery_type": null,
+        "fba_fee": 7.83,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 741,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 1,
+        "buybox_seller": "Dewenwils",
+        "online_date": "2024-02-21",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            53
+          ]
+        ],
+        "subcategory_rank": 4396,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B09F9B3BCY",
+        "parent_asin": "B09ZXBVK92",
+        "title": "RUNTOP Floor Lamp with Shelves, Modern Shelf Lamp for Display Storage, 3 Color Temperature Wood Narrow Standing Corner Lamp with 8W Bulb for Living Room Decor, Bedroom, Office, Home Decor(Brown)",
+        "sub_title": "",
+        "brand": "RUNTOP",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61IzUdfkdFL.jpg",
+          "https://m.media-amazon.com/images/I/71oc+ymnchL.jpg",
+          "https://m.media-amazon.com/images/I/712oEShRFaL.jpg",
+          "https://m.media-amazon.com/images/I/418aQVuDQWL.jpg",
+          "https://m.media-amazon.com/images/I/71GhV+nph4L.jpg",
+          "https://m.media-amazon.com/images/I/718Mph79e1L.jpg"
+        ],
+        "price": 35.98,
+        "list_price": 44.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2109,
+        "monthly_sales_amount": 75881.82,
+        "yearly_sales_volume": 28763,
+        "delivery_type": null,
+        "fba_fee": 10.69,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 3178,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 2,
+        "buybox_seller": "RUNTOP US",
+        "online_date": "2021-12-22",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            100
+          ]
+        ],
+        "subcategory_rank": 8028,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B078YR2WYQ",
+        "parent_asin": "B0BQ3DMG4G",
+        "title": "LEPOWER Tripod Floor Lamp Mid Century Modern Standing Lamps for Living Room ",
+        "sub_title": "Light-Diffusing Linen Shade, Premium Rubberwood Tripod with E26 Base, Adding Warmth to Bedroom, Office & Study Corner Brown",
+        "brand": "LEPOWER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51n7e6+slTL.jpg",
+          "https://m.media-amazon.com/images/I/71qp0owmIUL.jpg",
+          "https://m.media-amazon.com/images/I/81ewgQLInlL.jpg",
+          "https://m.media-amazon.com/images/I/81g5OLi8QkL.jpg",
+          "https://m.media-amazon.com/images/I/81baktpbXAL.jpg",
+          "https://m.media-amazon.com/images/I/81ZDGiDd8FL.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 74.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2105,
+        "monthly_sales_amount": 126278.95,
+        "yearly_sales_volume": 21951,
+        "delivery_type": null,
+        "fba_fee": 9.27,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 8052,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 2,
+        "seller_count": 2,
+        "buybox_seller": "LePower",
+        "online_date": "2018-03-02",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            33
+          ]
+        ],
+        "subcategory_rank": 3644,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FP5BTYDC",
+        "parent_asin": "B0GHR8PDVN",
+        "title": "Floor Lamp with Table,Night Stand Lamp,End Side Table for Living Room Brown ",
+        "sub_title": "Small Narrow Coffee Table with Lamp, Modern Standing Lamp with Storage Shelves, 3-CCT LED Bulb, Bedroom Office Home Décor",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71vVpv1MNTL.jpg",
+          "https://m.media-amazon.com/images/I/81yM08xdE-L.jpg",
+          "https://m.media-amazon.com/images/I/71UwEU6-KTL.jpg",
+          "https://m.media-amazon.com/images/I/71HH5A3uIdL.jpg",
+          "https://m.media-amazon.com/images/I/71pY4w6kEdL.jpg",
+          "https://m.media-amazon.com/images/I/81XaCX+AhpL.jpg",
+          "https://m.media-amazon.com/images/i/71cmm7yqotl.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 37.99,
+        "list_price": 37.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2059,
+        "monthly_sales_amount": 78221.41,
+        "yearly_sales_volume": 13535,
+        "delivery_type": null,
+        "fba_fee": 10.48,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 385,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 8,
+        "seller_count": 6,
+        "buybox_seller": "BOXT",
+        "online_date": "2025-09-05",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            66
+          ]
+        ],
+        "subcategory_rank": 5050,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F5WN8N4Q",
+        "parent_asin": "B0GV3838N8",
+        "title": "SIBRILLE Torchiere Floor Lamp - 72“ Tall LED Standing Lamp with Remote/Button Control, 1800Lm, 3000-6500K, 30W Dimmable Modern Corner Floor Light for Living Room Bedroom Office Apartment, Black",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71lMKIri8GL.jpg",
+          "https://m.media-amazon.com/images/I/71h4us3pZ5L.jpg",
+          "https://m.media-amazon.com/images/I/614LlHbAVJL.jpg",
+          "https://m.media-amazon.com/images/I/61YXq5KEzBL.jpg",
+          "https://m.media-amazon.com/images/I/711voGMdCqL.jpg",
+          "https://m.media-amazon.com/images/I/71YiHFHr4yL.jpg",
+          "https://m.media-amazon.com/images/I/81uW7T80-uL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 59.98,
+        "list_price": 74.99,
+        "coupon": 0,
+        "monthly_sales_volume": 2034,
+        "monthly_sales_amount": 121999.32,
+        "yearly_sales_volume": 19021,
+        "delivery_type": null,
+        "fba_fee": 10.99,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 507,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 1,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2025-06-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            44
+          ]
+        ],
+        "subcategory_rank": 3891,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CQK6PCZX",
+        "parent_asin": "B0H71CZMM6",
+        "title": "LED Floor Lamp, 18W/2000LM Bright Reading Floor Lamp for Office with Double Head, Adjustable Gooseneck Dimmable Modern Standing Light for Lash Extension Craft, Eye Caring Floor Lamps for Living Room",
+        "sub_title": "",
+        "brand": "Seaside village",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71fBgkcEVRL.jpg",
+          "https://m.media-amazon.com/images/I/710fklzi45L.jpg",
+          "https://m.media-amazon.com/images/I/71tohIe7kwL.jpg",
+          "https://m.media-amazon.com/images/I/7135dQFRR4L.jpg",
+          "https://m.media-amazon.com/images/I/715O0KLMCEL.jpg",
+          "https://m.media-amazon.com/images/I/71ArQhk5y6L.jpg"
+        ],
+        "price": 32.99,
+        "list_price": 38.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1947,
+        "monthly_sales_amount": 64231.53,
+        "yearly_sales_volume": 36487,
+        "delivery_type": null,
+        "fba_fee": 9.32,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 1807,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 1,
+        "buybox_seller": "Seaside Village",
+        "online_date": "2023-12-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            68
+          ]
+        ],
+        "subcategory_rank": 4040,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B00VJ4SHZG",
+        "parent_asin": "B092LCFGQJ",
+        "title": "Brightech Litespan - Bright LED Floor Reading Lamp for Over Chair Crafts and Reading, Esthetician Light for Lash Extensions, Gooseneck Adjustable Standing Lamp for Living Room, Bedroom, Office - Black",
+        "sub_title": "",
+        "brand": "Brightech",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61kooCytiTL.jpg",
+          "https://m.media-amazon.com/images/I/71xwYH5tTIL.jpg",
+          "https://m.media-amazon.com/images/I/81cRsd5JvoL.jpg",
+          "https://m.media-amazon.com/images/I/81SbqFOZPWL.jpg",
+          "https://m.media-amazon.com/images/I/81E8MqScj6L.jpg",
+          "https://m.media-amazon.com/images/I/71cWXOvaFwL.jpg",
+          "https://m.media-amazon.com/images/I/81kOzMVKx0L.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 64.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1905,
+        "monthly_sales_amount": 123805.95,
+        "yearly_sales_volume": 22198,
+        "delivery_type": null,
+        "fba_fee": 10.22,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 20701,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 5,
+        "buybox_seller": "Brightech USA",
+        "online_date": "2015-06-12",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            76
+          ]
+        ],
+        "subcategory_rank": 5928,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DSLJHYKZ",
+        "parent_asin": "B0H7PYSWLL",
+        "title": "KQW Tall Floor Lamp for Living Room,65‘‘ Modern Standing Lamps with 9W LED Bulb,Elegant Floor Light with Fabric Shade,Gold Tall Lamp for Bedroom Office Study Room Corner Dining Room",
+        "sub_title": "",
+        "brand": "KQW",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61zvO7VJ2yL.jpg",
+          "https://m.media-amazon.com/images/I/71n2qKurAZL.jpg",
+          "https://m.media-amazon.com/images/I/61rhTR8LeAL.jpg",
+          "https://m.media-amazon.com/images/I/71Kef30Q4bL.jpg",
+          "https://m.media-amazon.com/images/I/710Wd5ZbmeL.jpg",
+          "https://m.media-amazon.com/images/I/71gZ6Y9kqAL.jpg",
+          "https://m.media-amazon.com/images/I/91mzc6Xog2L.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 37.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1891,
+        "monthly_sales_amount": 71839.09,
+        "yearly_sales_volume": 17150,
+        "delivery_type": null,
+        "fba_fee": 9.82,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 398,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 1,
+        "buybox_seller": "KQW-Light",
+        "online_date": "2025-02-20",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            36
+          ]
+        ],
+        "subcategory_rank": 4271,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CN8Q9RGP",
+        "parent_asin": "B0GQY7ZR33",
+        "title": "Arc Floor Lamps for Living Room Rattan Boho Floor Lamp with Remote Control,Dimmable LED Floor Lamp Wicker Lamp Shades Black Standing Lamp with 3 Color Temperature Tall Floor Lamps For Bedroom Corner",
+        "sub_title": "",
+        "brand": "ZECOXOL",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81fPAjCCcwL.jpg",
+          "https://m.media-amazon.com/images/I/71rhp1YyyVL.jpg",
+          "https://m.media-amazon.com/images/I/71WPHmBwEbL.jpg",
+          "https://m.media-amazon.com/images/I/71lj8wtiKFL.jpg",
+          "https://m.media-amazon.com/images/I/71i6Q83sXYL.jpg",
+          "https://m.media-amazon.com/images/I/71o+c5n5L2L.jpg",
+          "https://m.media-amazon.com/images/I/51ZRcBvFyoL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 49.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1815,
+        "monthly_sales_amount": 90731.85,
+        "yearly_sales_volume": 20187,
+        "delivery_type": null,
+        "fba_fee": 10.96,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 1111,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 13,
+        "seller_count": 1,
+        "buybox_seller": "ELY LIGHT",
+        "online_date": "2023-12-14",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            41
+          ]
+        ],
+        "subcategory_rank": 4210,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GVPK6J49",
+        "parent_asin": "B0H6NQ8RMY",
+        "title": "Philips Hue Play Floor Lamp, RGBWWIC LED, 53 Inch, 1-Pack, Black ",
+        "sub_title": "White Ambiance, Multicolor Gradients, Sync in Real Time, Smart Lighting, Bluetooth App Control, Modern, Smart Home",
+        "brand": "PHILIPS",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71agfojCtsL.jpg",
+          "https://m.media-amazon.com/images/I/71gEQP+yWsL.jpg",
+          "https://m.media-amazon.com/images/I/81mzy+AR3SL.jpg",
+          "https://m.media-amazon.com/images/I/81UUN07x6wL.jpg",
+          "https://m.media-amazon.com/images/I/81ZJNdDf7GL.jpg",
+          "https://m.media-amazon.com/images/I/81xk5MRxIJL.jpg"
+        ],
+        "price": 149.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1796,
+        "monthly_sales_amount": 269382.04,
+        "yearly_sales_volume": 5635,
+        "delivery_type": null,
+        "fba_fee": 15.76,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 64,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 1,
+        "buybox_seller": "Amazon",
+        "online_date": "2026-05-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            52
+          ]
+        ],
+        "subcategory_rank": 2869,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FX436VLM",
+        "parent_asin": "B0GF7FW1TH",
+        "title": "GOEBLESON Dimmable Floor Lamp for Living Room with Remote & 10W Bulb ",
+        "sub_title": "Modern Standing, Corner Lamp with Foot Switch & 3 Color Temperatures, ETL Listed for Bedroom, Office Black and Beige E19LD05",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71WGH6f4udL.jpg",
+          "https://m.media-amazon.com/images/I/81kwRqQYSpL.jpg",
+          "https://m.media-amazon.com/images/I/71QrDcSYDWL.jpg",
+          "https://m.media-amazon.com/images/I/81ItQ6gCwsL.jpg",
+          "https://m.media-amazon.com/images/I/71Thla1DMXL.jpg",
+          "https://m.media-amazon.com/images/I/81St3KYhjKL.jpg"
+        ],
+        "price": 27.99,
+        "list_price": 34.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1764,
+        "monthly_sales_amount": 49374.36,
+        "yearly_sales_volume": 10697,
+        "delivery_type": null,
+        "fba_fee": 8.63,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 247,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 22,
+        "seller_count": 9,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2026-01-08",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            51
+          ]
+        ],
+        "subcategory_rank": 4033,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CTH25RZH",
+        "parent_asin": "B0D266HNNW",
+        "title": "PESRAE Floor Lamp with Table, End Tables with Charging Station ",
+        "sub_title": "USB, Type-C & AC Outlet; 3 Color Temperatures 9W LED Bulb, Modern Side Table with 3 Shelves for Living Room, Bedroom",
+        "brand": "PESRAE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/7121jwamt3L.jpg",
+          "https://m.media-amazon.com/images/I/61PluXjV5mL.jpg",
+          "https://m.media-amazon.com/images/I/61xvJbt2xJL.jpg",
+          "https://m.media-amazon.com/images/I/71ogWcebN9L.jpg",
+          "https://m.media-amazon.com/images/I/719XlCdrBQL.jpg",
+          "https://m.media-amazon.com/images/I/71ZSk0rLu5L.jpg"
+        ],
+        "price": 45.99,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1751,
+        "monthly_sales_amount": 80528.49,
+        "yearly_sales_volume": 43117,
+        "delivery_type": null,
+        "fba_fee": 11.14,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 2413,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 4,
+        "buybox_seller": "LUXKINGA",
+        "online_date": "2024-03-21",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            43
+          ]
+        ],
+        "subcategory_rank": 3918,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B09F2PMZ5N",
+        "parent_asin": "B0HGF3LBYK",
+        "title": "Dimmable Floor Lamp, Industrial Floor Lamps for Living Room, Gold Tree Lamp Standing Lamp Tall Lamps with 3 Elegant Teardrop Cage Head & 800 Lumens LED Bulbs for Living room Bedroom Office Dining Room",
+        "sub_title": "",
+        "brand": "Torondo",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71ugdcRli+L.jpg",
+          "https://m.media-amazon.com/images/I/71sXVCw-uML.jpg",
+          "https://m.media-amazon.com/images/I/71Inkv1lENL.jpg",
+          "https://m.media-amazon.com/images/I/71VUjD1-3qL.jpg",
+          "https://m.media-amazon.com/images/I/71RfkRkH0DL.jpg",
+          "https://m.media-amazon.com/images/I/7193SuTY1cL.jpg",
+          "https://m.media-amazon.com/images/I/71sw2xBXZTL.jpg"
+        ],
+        "price": 69.99,
+        "list_price": 0,
+        "coupon": 13,
+        "monthly_sales_volume": 1565,
+        "monthly_sales_amount": 89189.35,
+        "yearly_sales_volume": 24095,
+        "delivery_type": null,
+        "fba_fee": 10.95,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 3409,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 12,
+        "seller_count": 2,
+        "buybox_seller": "Torondo, Inc",
+        "online_date": "2021-11-20",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            92
+          ]
+        ],
+        "subcategory_rank": 8047,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0B95XH99V",
+        "parent_asin": "B0BXPHFSJQ",
+        "title": "Seaside village Arc Floor Lamps for Living Room, Modern Standing Lamp with Adjustable Hanging Drum Shade, Tall Pole Lamp with Foot Switch, Over Couch Arched Reading Light for Bedroom, Office (Black)",
+        "sub_title": "",
+        "brand": "Seaside village",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71P0zwbG4EL.jpg",
+          "https://m.media-amazon.com/images/I/717LnlGpi1L.jpg",
+          "https://m.media-amazon.com/images/I/71nNaPZZhqL.jpg",
+          "https://m.media-amazon.com/images/I/71OYipOJCoL.jpg",
+          "https://m.media-amazon.com/images/I/71pOcFmrjAL.jpg",
+          "https://m.media-amazon.com/images/I/81zbmzF5v2L.jpg",
+          "https://m.media-amazon.com/images/I/A1uFLaChAIL.PKplay-button-mb-image-grid-small_.png"
+        ],
+        "price": 39.89,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1552,
+        "monthly_sales_amount": 61909.28,
+        "yearly_sales_volume": 26291,
+        "delivery_type": null,
+        "fba_fee": 11.64,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 2296,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 9,
+        "seller_count": 1,
+        "buybox_seller": "Seaside Village",
+        "online_date": "2022-08-10",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            63
+          ]
+        ],
+        "subcategory_rank": 5219,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DGQFVRSB",
+        "parent_asin": "B0HFFV5C5Q",
+        "title": "BOBOMOMO 62“ Rustic Floor Lamp for Living Room, Retro Farmhouse Floor Lamp Rotary Switch, Resin Standing Lamp for Living Room, Corner, Dining Room, Bedroom, Home Decor",
+        "sub_title": "",
+        "brand": "BOBOMOMO",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81faAHU1h0L.jpg",
+          "https://m.media-amazon.com/images/I/617TG9Dv3hL.jpg",
+          "https://m.media-amazon.com/images/I/512YbvrSCFL.jpg",
+          "https://m.media-amazon.com/images/I/81SExMexRKL.jpg",
+          "https://m.media-amazon.com/images/I/81S-p1K1vuL.jpg",
+          "https://m.media-amazon.com/images/I/81d9Vpppk3L.jpg"
+        ],
+        "price": 53.99,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1541,
+        "monthly_sales_amount": 83198.59,
+        "yearly_sales_volume": 23492,
+        "delivery_type": null,
+        "fba_fee": 11.43,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 348,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 2,
+        "buybox_seller": "Lingmei Lighting",
+        "online_date": "2025-01-18",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            58
+          ]
+        ],
+        "subcategory_rank": 5557,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FDX1W77M",
+        "parent_asin": "B0FS15J7BR",
+        "title": "OIYN Corner Floor Lamp, RGBICW LED Corner Lamp with 1300lm Smart Modern Floor Lamp,App & Remote Control,Music Sync,Color Changing Standing Lamp for Bedroom Living Room and Gaming Rooms",
+        "sub_title": "",
+        "brand": "OIYN",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61LFAEKkhfL.jpg",
+          "https://m.media-amazon.com/images/I/61oz1FeFw5L.jpg",
+          "https://m.media-amazon.com/images/I/61SLE5M4-aL.jpg",
+          "https://m.media-amazon.com/images/I/71K9xr0urOL.jpg",
+          "https://m.media-amazon.com/images/I/61YOBgxhoML.jpg",
+          "https://m.media-amazon.com/images/I/71qOhjAIpAL.jpg",
+          "https://m.media-amazon.com/images/I/619SQ4nBnVL.jpg"
+        ],
+        "price": 29.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1536,
+        "monthly_sales_amount": 46064.64,
+        "yearly_sales_volume": 17478,
+        "delivery_type": null,
+        "fba_fee": 8.13,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 534,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 2,
+        "seller_count": 2,
+        "buybox_seller": "XIAOBAITECH",
+        "online_date": "2025-08-14",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            47
+          ]
+        ],
+        "subcategory_rank": 5776,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GQXN36K5",
+        "parent_asin": "B0H45DXG1R",
+        "title": "Govee Floor Lamp 3 Lite, Smart RGBIC LED Corner Lamp for Living Room ",
+        "sub_title": "Compatible with Alexa, SmartThings, Matter, 1400lm Dimmable Color Changing Tall Standing Light with Music Sync for Bedroom",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/714FRgmzB2L.jpg",
+          "https://m.media-amazon.com/images/I/61UURaKTkjL.jpg",
+          "https://m.media-amazon.com/images/I/71x20kSh1EL.jpg",
+          "https://m.media-amazon.com/images/I/71RKBASy-zL.jpg",
+          "https://m.media-amazon.com/images/I/813pjnbvfpL.jpg",
+          "https://m.media-amazon.com/images/I/71rt0q844HL.jpg",
+          "https://m.media-amazon.com/images/I/5118fanI3JL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 89.99,
+        "list_price": 119.99,
+        "coupon": 4.5,
+        "monthly_sales_volume": 1524,
+        "monthly_sales_amount": 130286.76,
+        "yearly_sales_volume": 7395,
+        "delivery_type": null,
+        "fba_fee": 9.18,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 178,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 1,
+        "buybox_seller": "Govee US",
+        "online_date": "2026-04-17",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            29
+          ]
+        ],
+        "subcategory_rank": 3050,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DT16VPGC",
+        "parent_asin": "B0GQ63GDMJ",
+        "title": "Oneach Arc Floor Lamp for Living Room,Rattan Boho Floor Lamp Decor with Hand-Woven Shade, Foot Switch,Gold Metal Base & Pole,Farmhouse Standing Lamp for Bedroom Corner,Reading",
+        "sub_title": "",
+        "brand": "Oneach",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81FPwCnG68L.jpg",
+          "https://m.media-amazon.com/images/I/8151CdZGBaL.jpg",
+          "https://m.media-amazon.com/images/I/81zNLASiugL.jpg",
+          "https://m.media-amazon.com/images/I/81UtpzLJZUL.jpg",
+          "https://m.media-amazon.com/images/I/71jLWsg-yWL.jpg",
+          "https://m.media-amazon.com/images/I/61xq8jFj6-L.jpg"
+        ],
+        "price": 49.98,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1507,
+        "monthly_sales_amount": 75319.86,
+        "yearly_sales_volume": 13177,
+        "delivery_type": null,
+        "fba_fee": 11.56,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 427,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 15,
+        "seller_count": 2,
+        "buybox_seller": "OYEARS Lighting",
+        "online_date": "2025-04-07",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            50
+          ]
+        ],
+        "subcategory_rank": 4424,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DRPCXT4H",
+        "parent_asin": "B0HB4YQ1DD",
+        "title": "EJIAXIN Floor Lamps for Living Room - 60“ Farmhouse Floor Lamp with Adjustable Color Temperatures - Vintage Standing Lamp Reading Light with Linen Shade Retro Tall Lamp for Bedroom Office, Black",
+        "sub_title": "",
+        "brand": "EJIAXIN",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71QQOeBVdiL.jpg",
+          "https://m.media-amazon.com/images/I/71miYorNXFL.jpg",
+          "https://m.media-amazon.com/images/I/71nzsNP08BL.jpg",
+          "https://m.media-amazon.com/images/I/71MV-bHnQ-L.jpg",
+          "https://m.media-amazon.com/images/I/71VzHtUAVPL.jpg",
+          "https://m.media-amazon.com/images/I/71zU4gmcWQL.jpg",
+          "https://m.media-amazon.com/images/I/81d3BB4vNDL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 69.97,
+        "list_price": 79.97,
+        "coupon": 0,
+        "monthly_sales_volume": 1474,
+        "monthly_sales_amount": 103135.78,
+        "yearly_sales_volume": 18924,
+        "delivery_type": null,
+        "fba_fee": 11.44,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 783,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 1,
+        "buybox_seller": "EJIAXIN",
+        "online_date": "2025-03-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            83
+          ]
+        ],
+        "subcategory_rank": 9817,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DJ766G34",
+        "parent_asin": "B0H337GG7N",
+        "title": "QIYIZM Gold Floor Lamp for Living Room,Bedroom,Mid Century Modern Standing Lamp with Remote,Dimmable Brass Tall Lamp Green Glass Lamp Vintage Retro Arc Floor Lamps Flower Floor Light Boho Bohemian",
+        "sub_title": "",
+        "brand": "QIYIZM",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71KPiBGumAL.jpg",
+          "https://m.media-amazon.com/images/I/71ITInaHj0L.jpg",
+          "https://m.media-amazon.com/images/I/71952T2COVL.jpg",
+          "https://m.media-amazon.com/images/I/71XHV2HmujL.jpg",
+          "https://m.media-amazon.com/images/I/71mvBtPIJsL.jpg",
+          "https://m.media-amazon.com/images/I/71VTcJW0TbL.jpg",
+          "https://m.media-amazon.com/images/I/71gQhMA-peL.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1472,
+        "monthly_sales_amount": 88305.28,
+        "yearly_sales_volume": 16779,
+        "delivery_type": null,
+        "fba_fee": 11.58,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 760,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 19,
+        "seller_count": 1,
+        "buybox_seller": "TTLight",
+        "online_date": "2024-12-30",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            57
+          ]
+        ],
+        "subcategory_rank": 6294,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0FKGX54CD",
+        "parent_asin": "B0FNVJGHRJ",
+        "title": "GOEBLESON 64.2” Dimmable Floor Lamp for Living Room with Remote and Foot Switch, Corner Floor Lamp for Bedroom, Includes 10W A19 Bulb, Modern Standing Tall Lamp, ETL Listed Beige and Black E17LD05",
+        "sub_title": "",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71OmT1qXyTL.jpg",
+          "https://m.media-amazon.com/images/I/81QRpH07FxL.jpg",
+          "https://m.media-amazon.com/images/I/71rszMxMPHL.jpg",
+          "https://m.media-amazon.com/images/I/81Prswo9kTL.jpg",
+          "https://m.media-amazon.com/images/I/71gTiWnBMpL.jpg",
+          "https://m.media-amazon.com/images/I/81pgQUSdGxL.jpg",
+          "https://m.media-amazon.com/images/I/71+a6Eo9TrL.jpg"
+        ],
+        "price": 25.99,
+        "list_price": 32.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1418,
+        "monthly_sales_amount": 36853.82,
+        "yearly_sales_volume": 14995,
+        "delivery_type": null,
+        "fba_fee": 8.54,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 450,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 15,
+        "seller_count": 13,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2025-08-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            69
+          ]
+        ],
+        "subcategory_rank": 5411,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BS14V9DX",
+        "parent_asin": "B0BV98Z82B",
+        "title": "SIBRILLE 36W LED Tree Floor Lamp, Modern Dimmable Standing Lamp with Remote & Touch Control, 4 Color Temperatures, 3 Rotatable LED Light Floor Lamps for Living Room, Bedroom, Office",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61wZzbvDaIL.jpg",
+          "https://m.media-amazon.com/images/I/71pBRwW-+EL.jpg",
+          "https://m.media-amazon.com/images/I/713w1xuanaL.jpg",
+          "https://m.media-amazon.com/images/I/61jKC9SPPlL.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 74.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1416,
+        "monthly_sales_amount": 84945.84,
+        "yearly_sales_volume": 22744,
+        "delivery_type": null,
+        "fba_fee": 10.49,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2673,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 2,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2023-01-10",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            64
+          ]
+        ],
+        "subcategory_rank": 5695,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B08JSCB6L4",
+        "parent_asin": "B089ZWY13X",
+        "title": "O‘Bright Brook Adjustable Dimmable LED Pharmacy Floor Lamp, Antique Brass ",
+        "sub_title": "Reading and task lamp for sewing and crafts, adjustable height 47 to 55 inches, 360 degree swing arm, 270 degree swivel head",
+        "brand": "O‘Bright",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/41LHBaKObVL.jpg",
+          "https://m.media-amazon.com/images/I/71VBObQKt5L.jpg",
+          "https://m.media-amazon.com/images/I/61mWXgm8++L.jpg",
+          "https://m.media-amazon.com/images/I/51C3XKt08NL.jpg",
+          "https://m.media-amazon.com/images/I/51BaaZ807aL.jpg",
+          "https://m.media-amazon.com/images/I/51pt8FXn+hL.jpg"
+        ],
+        "price": 74.99,
+        "list_price": 74.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1367,
+        "monthly_sales_amount": 102511.33,
+        "yearly_sales_volume": 22623,
+        "delivery_type": null,
+        "fba_fee": 10.55,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 7820,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 3,
+        "seller_count": 24,
+        "buybox_seller": "O’Bright",
+        "online_date": "2020-09-27",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            40
+          ]
+        ],
+        "subcategory_rank": 4977,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GVDQJHWW",
+        "parent_asin": "B0HH44P1GW",
+        "title": "Floor Lamp with Table 2-Pack, Nightstands End Side Table for Living Room ",
+        "sub_title": "Set of 2, Small Narrow Coffee Table with Lamp, Standing Lamp with Storage Shelves, 3CCT Bulb,Bedroom Office Home Décor, Brown",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71ErxFZ0fYL.jpg",
+          "https://m.media-amazon.com/images/I/71kK+8Y1aeL.jpg",
+          "https://m.media-amazon.com/images/I/71HH5A3uIdL.jpg",
+          "https://m.media-amazon.com/images/I/71jfRdrKxiL.jpg",
+          "https://m.media-amazon.com/images/I/81yM08xdE-L.jpg",
+          "https://m.media-amazon.com/images/I/81XaCX+AhpL.jpg",
+          "https://m.media-amazon.com/images/I/71eJDZlN8YL.jpg"
+        ],
+        "price": 79.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1367,
+        "monthly_sales_amount": 109346.33,
+        "yearly_sales_volume": 3381,
+        "delivery_type": null,
+        "fba_fee": 13.44,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 253,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 1,
+        "buybox_seller": "BOXT",
+        "online_date": "2026-06-16",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            73
+          ]
+        ],
+        "subcategory_rank": 8763,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GJZGM1YW",
+        "parent_asin": "B0HD6TSJ6P",
+        "title": "Arc Floor Lamp with Remote and Dimmable Black Floor lamps for Living Room ",
+        "sub_title": "Modern Tall Standing Lamp for Bedroom Corner and Office wiht Adjustable Hanging Drum Shade Over Couch Arched Reading Light",
+        "brand": "Beanliss",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71kYMUzMZhL.jpg",
+          "https://m.media-amazon.com/images/I/71tR+JrtaoL.jpg",
+          "https://m.media-amazon.com/images/I/714fXghSOFL.jpg",
+          "https://m.media-amazon.com/images/I/71mJb8PO6JL.jpg",
+          "https://m.media-amazon.com/images/I/71fV0TuSZKL.jpg",
+          "https://m.media-amazon.com/images/I/61p7O+-7aGL.jpg",
+          "https://m.media-amazon.com/images/I/B1Qsehqc0oL.PKplay-button-mb-image-grid-small_.png"
+        ],
+        "price": 34.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1318,
+        "monthly_sales_amount": 46116.82,
+        "yearly_sales_volume": 6271,
+        "delivery_type": null,
+        "fba_fee": 10.32,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 134,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 2,
+        "buybox_seller": "Beanliss",
+        "online_date": "2026-05-08",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            99
+          ]
+        ],
+        "subcategory_rank": 9086,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0G23KYQ2R",
+        "parent_asin": "B0CM5NRBT4",
+        "title": "Dimmable Floor Lamp for Living Room, 65“ Tall Metal Standing Lamp with LED Bulb, Mid Century Modern Arc Floor Lamp with Linen Shade for Bedroom, Reading Room, Office & Nursery, Gold and Walnut Color",
+        "sub_title": "",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71eAxlEb+pL.jpg",
+          "https://m.media-amazon.com/images/I/71hQtJcEK2L.jpg",
+          "https://m.media-amazon.com/images/I/61V618iGI7L.jpg",
+          "https://m.media-amazon.com/images/I/81+NT+DzYJL.jpg",
+          "https://m.media-amazon.com/images/I/710vqn0cp1L.jpg",
+          "https://m.media-amazon.com/images/I/71Ny3RMT9GL.jpg"
+        ],
+        "price": 49.98,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1290,
+        "monthly_sales_amount": 64474.2,
+        "yearly_sales_volume": 8188,
+        "delivery_type": null,
+        "fba_fee": 11.37,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.2,
+        "rating_count": 441,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 3,
+        "seller_count": 3,
+        "buybox_seller": "BOXT",
+        "online_date": "2026-02-24",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            85
+          ]
+        ],
+        "subcategory_rank": 8675,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DMVN8ZVK",
+        "parent_asin": "B0DRK6DBDD",
+        "title": "GHOOCEMLUX 68“ Industrial Tree Floor Lamp, Dimmable Farmhouse Tall Standing Lamp with Quatrefoil Cutout Shades & Rotary Dimmer Knob, Corner Light for Living Room Bedroom, 3 x800LM Bulbs Included-Black",
+        "sub_title": "",
+        "brand": "GHOOCEMLUX",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/7132ebB4wmL.jpg",
+          "https://m.media-amazon.com/images/I/71fLawmkrYL.jpg",
+          "https://m.media-amazon.com/images/I/71E9SZ-PVAL.jpg",
+          "https://m.media-amazon.com/images/I/71Kdwrybq5L.jpg",
+          "https://m.media-amazon.com/images/I/71mN8gkZuPL.jpg",
+          "https://m.media-amazon.com/images/I/81HGSGndXoL.jpg",
+          "https://m.media-amazon.com/images/I/71yom04fIBL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 39.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1269,
+        "monthly_sales_amount": 50747.31,
+        "yearly_sales_volume": 14981,
+        "delivery_type": null,
+        "fba_fee": 11.57,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 874,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 18,
+        "seller_count": 2,
+        "buybox_seller": "Hanguang Lighting",
+        "online_date": "2024-11-13",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            67
+          ]
+        ],
+        "subcategory_rank": 7790,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B07WFC14VR",
+        "parent_asin": "B0CQ56H8MZ",
+        "title": "JOOFO LED Torchiere Floor Lamp with Remote, Stepless Dimmable Black ",
+        "sub_title": "Super bright uplight fills ceilings and dark corners for living rooms, bedrooms, home offices, reading nooks and apartments",
+        "brand": "JOOFO",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/31B-16fwFzL.jpg",
+          "https://m.media-amazon.com/images/I/414uCNR7-FL.jpg",
+          "https://m.media-amazon.com/images/I/41s2kkPnwML.jpg",
+          "https://m.media-amazon.com/images/I/61khhqZK2lL.PKplay-button-mb-image-grid-small_.jpg",
+          "https://m.media-amazon.com/images/I/41s2cQWZFKL.jpg",
+          "https://m.media-amazon.com/images/I/31rHOSc65eL.jpg",
+          "https://m.media-amazon.com/images/I/51bEpGrkrJL.jpg"
+        ],
+        "price": 56.99,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1255,
+        "monthly_sales_amount": 71522.45,
+        "yearly_sales_volume": 34174,
+        "delivery_type": null,
+        "fba_fee": 9.91,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 15385,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 2,
+        "buybox_seller": "Luxe-Superior",
+        "online_date": "2019-10-17",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            75
+          ]
+        ],
+        "subcategory_rank": 7750,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CSN27RNC",
+        "parent_asin": "B0GZVRC527",
+        "title": "SIBRILLE 36W LED Floor Lamp, Super Bright Standing Lamp, Modern Stepless Dimmable Torchiere Tall Lamp with Remote Control, 350°Rotating Head Reading Floor Lamp for Living Room, Bedroom, Office",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/713-dfUQbDL.jpg",
+          "https://m.media-amazon.com/images/I/71LEM8kAhHL.jpg",
+          "https://m.media-amazon.com/images/I/717dd4uhd8L.jpg",
+          "https://m.media-amazon.com/images/I/710Nt5cswZL.jpg",
+          "https://m.media-amazon.com/images/I/71vqMhIfn5L.jpg",
+          "https://m.media-amazon.com/images/I/617O7UodyQL.jpg"
+        ],
+        "price": 56.99,
+        "list_price": 62.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1237,
+        "monthly_sales_amount": 70496.63,
+        "yearly_sales_volume": 18097,
+        "delivery_type": null,
+        "fba_fee": 10.42,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 897,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 9,
+        "seller_count": 1,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2024-05-03",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            81
+          ]
+        ],
+        "subcategory_rank": 8629,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GJYS3PJF",
+        "parent_asin": "B0H75LCMTW",
+        "title": "MOFFE Mid Century Modern Real Wood Floor Lamp with 2 Shades for Two Looks ",
+        "sub_title": "65'' Tall,Sculptural Teardrop Base,Wooden Pull Chain,Vintage Standing Lamp,Linen Shades,Living Room,Bedroom, Bulb Included",
+        "brand": "MOFFE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71A2g4T8EwL.jpg",
+          "https://m.media-amazon.com/images/I/71aXz4nvu3L.jpg",
+          "https://m.media-amazon.com/images/I/7155D-ThRjL.jpg",
+          "https://m.media-amazon.com/images/I/71OK9vnPX+L.jpg",
+          "https://m.media-amazon.com/images/I/612nfFjny4L.jpg",
+          "https://m.media-amazon.com/images/I/71YBpLmIbJL.jpg"
+        ],
+        "price": 89.99,
+        "list_price": 0,
+        "coupon": 4.5,
+        "monthly_sales_volume": 1179,
+        "monthly_sales_amount": 100792.71,
+        "yearly_sales_volume": 0,
+        "delivery_type": null,
+        "fba_fee": 11.28,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 132,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 3,
+        "seller_count": 1,
+        "buybox_seller": "LumaWood",
+        "online_date": "2026-03-06",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            89
+          ]
+        ],
+        "subcategory_rank": 7768,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DDK8QW39",
+        "parent_asin": "B0DDK8QW39",
+        "title": "Govee RGBIC Floor Lamp Basic 2-Pack, Standing Lamp for Bedroom Living Room ",
+        "sub_title": "Compatible with Matter and Alexa, 1000lm LED Modern Smart Corner Lamp with APP Control, Color Changing and Music Sync, Black",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/710lGm7RW+L.jpg",
+          "https://m.media-amazon.com/images/I/71BJmoB8oiL.jpg",
+          "https://m.media-amazon.com/images/I/71l30fGs6lL.jpg",
+          "https://m.media-amazon.com/images/I/71SPKpLOlML.jpg",
+          "https://m.media-amazon.com/images/I/71SFTDuEzjL.jpg",
+          "https://m.media-amazon.com/images/I/71-IxRtDUiL.jpg"
+        ],
+        "price": 139.99,
+        "list_price": 169.99,
+        "coupon": 7,
+        "monthly_sales_volume": 1138,
+        "monthly_sales_amount": 151342.62,
+        "yearly_sales_volume": 9959,
+        "delivery_type": null,
+        "fba_fee": 10.33,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.7,
+        "rating_count": 530,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 0,
+        "seller_count": 1,
+        "buybox_seller": "Govee US",
+        "online_date": "2024-09-03",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            62
+          ]
+        ],
+        "subcategory_rank": 7897,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0D6W4HCMD",
+        "parent_asin": "B0DDQ9KHYP",
+        "title": "Ambimall Arc Floor Lamp with Remote and Stepless Dimmable Bulb, Colors Temperature & Brightness Adjustable, Gold Floor Lamps for Living Room(Deep Beige Shade & Gold Pole)",
+        "sub_title": "",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/81bvBiT7klL.jpg",
+          "https://m.media-amazon.com/images/I/71iZu5pO-DL.jpg",
+          "https://m.media-amazon.com/images/I/8100K8+6kWL.jpg",
+          "https://m.media-amazon.com/images/I/71RapcMqTCL.jpg",
+          "https://m.media-amazon.com/images/I/71CmLijAxCL.jpg"
+        ],
+        "price": 39.98,
+        "list_price": 49.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1138,
+        "monthly_sales_amount": 45497.24,
+        "yearly_sales_volume": 10581,
+        "delivery_type": null,
+        "fba_fee": 9.35,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 584,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 6,
+        "seller_count": 10,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2024-08-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            95
+          ]
+        ],
+        "subcategory_rank": 12122,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BXL617GF",
+        "parent_asin": "B0HM2ZX1R5",
+        "title": "PARTPHONER Modern Standing Lamp with Lampshade, Minimalist Tall Lamp with Foot Switch for Living, Bedroom, Kids Room, Office",
+        "sub_title": "",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/31zLHzaI+7L.jpg",
+          "https://m.media-amazon.com/images/I/51d4ieCNzPL.jpg",
+          "https://m.media-amazon.com/images/I/51jMmt5UDgL.jpg",
+          "https://m.media-amazon.com/images/I/41iIsmcJ4zL.jpg",
+          "https://m.media-amazon.com/images/I/51uZLB6llVL.jpg",
+          "https://m.media-amazon.com/images/I/4194L4iF+oL.jpg",
+          "https://m.media-amazon.com/images/I/51OjJkdsNaL.jpg"
+        ],
+        "price": 19.99,
+        "list_price": 19.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1129,
+        "monthly_sales_amount": 22568.71,
+        "yearly_sales_volume": 11145,
+        "delivery_type": null,
+        "fba_fee": 7.98,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 929,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 7,
+        "seller_count": 5,
+        "buybox_seller": "BOXT",
+        "online_date": "2023-05-19",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            88
+          ]
+        ],
+        "subcategory_rank": 6347,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DT3ZT2JQ",
+        "parent_asin": "B0FLXNCYRM",
+        "title": "QIYIZM Glass Floor Lamp for Living Room,Bedroom,Gold Dimmable Standing Lamp with Remote,Mid Century Modern Brass Tall Lamp Boho Vintage Retro Floor Lamps Arc Green Flower Floor Light Lamp Bohemian",
+        "sub_title": "",
+        "brand": "QIYIZM",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71KPiBGumAL.jpg",
+          "https://m.media-amazon.com/images/I/71ITInaHj0L.jpg",
+          "https://m.media-amazon.com/images/I/71952T2COVL.jpg",
+          "https://m.media-amazon.com/images/I/71XHV2HmujL.jpg",
+          "https://m.media-amazon.com/images/I/71mvBtPIJsL.jpg",
+          "https://m.media-amazon.com/images/I/71VTcJW0TbL.jpg",
+          "https://m.media-amazon.com/images/I/71gQhMA-peL.jpg"
+        ],
+        "price": 64.71,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 1108,
+        "monthly_sales_amount": 71698.68,
+        "yearly_sales_volume": 16972,
+        "delivery_type": null,
+        "fba_fee": 11.52,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 1105,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 14,
+        "seller_count": 1,
+        "buybox_seller": "TTLight",
+        "online_date": "2025-02-10",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            74
+          ]
+        ],
+        "subcategory_rank": 5837,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DSPK5Q98",
+        "parent_asin": "B0F18SXN4C",
+        "title": "Nintiue Dimmable Gold Floor Lamp, Turkish Marble Base, White Linen Shade ",
+        "sub_title": "Turkish marble base, 0-100% stepless dimming, 11W 2700K bulb, white linen shade, Non-Slip Base, 64.6 in tall, save space",
+        "brand": "Nintiue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71mYrIDBXOL.jpg",
+          "https://m.media-amazon.com/images/I/714-wsW+MqL.jpg",
+          "https://m.media-amazon.com/images/I/71VDFpx3a+L.jpg",
+          "https://m.media-amazon.com/images/I/71O89o2pMLL.jpg",
+          "https://m.media-amazon.com/images/I/71KYwZi6RJL.jpg",
+          "https://m.media-amazon.com/images/I/71PcmAg9XyL.jpg",
+          "https://m.media-amazon.com/images/I/71ZbIOtJ0kL.jpg"
+        ],
+        "price": 39.99,
+        "list_price": 49.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1095,
+        "monthly_sales_amount": 43789.05,
+        "yearly_sales_volume": 8541,
+        "delivery_type": null,
+        "fba_fee": 11.09,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 339,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 2,
+        "buybox_seller": "Nintiue, Inc",
+        "online_date": "2025-02-17",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            65
+          ]
+        ],
+        "subcategory_rank": 6873,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CNVGN29S",
+        "parent_asin": "B0CZ8PFL6F",
+        "title": "EDISHINE 2 Pack 57.5” Floor Lamp with Remote, Dimmable & 7 CCT Adjustable ",
+        "sub_title": "2700-6000K, Sturdy Base, LED Corner Floor Lamps for Living Room, Bedroom, Home Office, Black",
+        "brand": "EDISHINE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71tzV+mqUEL.jpg",
+          "https://m.media-amazon.com/images/I/71JaHKycReL.jpg",
+          "https://m.media-amazon.com/images/I/71x6YqjFI8L.jpg",
+          "https://m.media-amazon.com/images/I/71VOIvTTnyL.jpg",
+          "https://m.media-amazon.com/images/I/71gL8dZHtcL.jpg",
+          "https://m.media-amazon.com/images/I/71m53+-4kvL.jpg"
+        ],
+        "price": 79.99,
+        "list_price": 99.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1079,
+        "monthly_sales_amount": 86309.21,
+        "yearly_sales_volume": 14017,
+        "delivery_type": null,
+        "fba_fee": 14.47,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 723,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 2,
+        "buybox_seller": "Dewenwils",
+        "online_date": "2024-03-21",
+        "category": [
+          "Patio, Lawn & Garden",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            54
+          ]
+        ],
+        "subcategory_rank": 6702,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0B48G18TF",
+        "parent_asin": "B0C1FXHHTG",
+        "title": "Dimmable 3 Lights Floor Lamp - 3000LM Super Bright Arc Floor Lamps for Living Room, Modern Tall Standing Lamp With Beige Shades, Mid Century Tree Floor Lamp for Bedroom Office, 3 LED Bulbs Included",
+        "sub_title": "",
+        "brand": "Nintiue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61guhsI+dfL.jpg",
+          "https://m.media-amazon.com/images/I/71cCffnzmzL.jpg",
+          "https://m.media-amazon.com/images/I/619oU2LtMnL.jpg",
+          "https://m.media-amazon.com/images/I/71DZLtKmyaL.jpg",
+          "https://m.media-amazon.com/images/I/71u6tvzMtzL.jpg",
+          "https://m.media-amazon.com/images/I/71OMeSqUe9L.jpg"
+        ],
+        "price": 66.49,
+        "list_price": 79.99,
+        "coupon": 6.65,
+        "monthly_sales_volume": 1009,
+        "monthly_sales_amount": 60378.56,
+        "yearly_sales_volume": 20101,
+        "delivery_type": null,
+        "fba_fee": 13.14,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2341,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 12,
+        "seller_count": 3,
+        "buybox_seller": "Nintiue-CA",
+        "online_date": "2022-07-25",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            93
+          ]
+        ],
+        "subcategory_rank": 6903,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CSS6SQVD",
+        "parent_asin": "B0HD7QX7K7",
+        "title": "ILLMTW Gold Floor Lamp for Living Room,Bedroom,Mid Century Modern Standing Lamp with Remote,Dimmable Brass Tall Lamp Vintage Retro Green Glass Arc Floor Flower Floor Light Boho Bohemian",
+        "sub_title": "",
+        "brand": "ILLMTW",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71KPiBGumAL.jpg",
+          "https://m.media-amazon.com/images/I/71ITInaHj0L.jpg",
+          "https://m.media-amazon.com/images/I/71952T2COVL.jpg",
+          "https://m.media-amazon.com/images/I/71XHV2HmujL.jpg",
+          "https://m.media-amazon.com/images/I/71mvBtPIJsL.jpg",
+          "https://m.media-amazon.com/images/I/71VTcJW0TbL.jpg",
+          "https://m.media-amazon.com/images/I/71gQhMA-peL.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1007,
+        "monthly_sales_amount": 60409.93,
+        "yearly_sales_volume": 12018,
+        "delivery_type": null,
+        "fba_fee": 11.66,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 467,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 17,
+        "seller_count": 2,
+        "buybox_seller": "HYZM LIGHT",
+        "online_date": "2024-02-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            78
+          ]
+        ],
+        "subcategory_rank": 7745,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F3DBVTDX",
+        "parent_asin": "B0FM8CCM1P",
+        "title": "PARTPHONER Corner Shelf with LED Light, 5 Tier Smart Color Changing Floor Lamp with Remote, 62“ Display Shelf Bookshelf Narrow Storage Rack Standing Lamp for Living Room Bedroom Home Office Décor",
+        "sub_title": "",
+        "brand": "PARTPHONER",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71TYk96HbfL.jpg",
+          "https://m.media-amazon.com/images/I/71M-h-g4VIL.jpg",
+          "https://m.media-amazon.com/images/I/71EE3RQHSCL.jpg",
+          "https://m.media-amazon.com/images/I/81LWbguHpqL.jpg",
+          "https://m.media-amazon.com/images/I/71Pj+X3lSOL.jpg",
+          "https://m.media-amazon.com/images/I/71dOBpkCt0L.jpg"
+        ],
+        "price": 39.99,
+        "list_price": 47.99,
+        "coupon": 0,
+        "monthly_sales_volume": 1001,
+        "monthly_sales_amount": 40029.99,
+        "yearly_sales_volume": 6283,
+        "delivery_type": null,
+        "fba_fee": 10.48,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 278,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 1,
+        "buybox_seller": "BOXT",
+        "online_date": "2025-06-16",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            90
+          ]
+        ],
+        "subcategory_rank": 9103,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DXFJ23N7",
+        "parent_asin": "B0GQSG2RVK",
+        "title": "SIBRILLE Upgraded 2-in-1 Torchiere Floor Lamp, Dimmable Standing Lamp with Remote&Button Control, 34W Brightness Adjustable Floor Reading Light, Black Modern Corner Lamp for Living Room Bedroom Office",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/41VUIERCFnL.jpg",
+          "https://m.media-amazon.com/images/I/51GDpzb7B1L.PKplay-button-mb-image-grid-small_.jpg",
+          "https://m.media-amazon.com/images/I/41XP3bWoiUL.jpg",
+          "https://m.media-amazon.com/images/I/415adcpqILL.jpg",
+          "https://m.media-amazon.com/images/I/41kRZyUWTlL.jpg",
+          "https://m.media-amazon.com/images/I/41kXcxjbX-L.jpg",
+          "https://m.media-amazon.com/images/I/41VzMYPDpwL.jpg"
+        ],
+        "price": 69.99,
+        "list_price": 87.99,
+        "coupon": 0,
+        "monthly_sales_volume": 999,
+        "monthly_sales_amount": 69920.01,
+        "yearly_sales_volume": 15992,
+        "delivery_type": null,
+        "fba_fee": 11.11,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 865,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 8,
+        "seller_count": 1,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2025-04-09",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            72
+          ]
+        ],
+        "subcategory_rank": 7774,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0BQQHXMRY",
+        "parent_asin": "B0HD5K6MC1",
+        "title": "GyroVu Torchiere Floor Lamp for Living Room, LED Standing Reading Light ",
+        "sub_title": "Glass Lampshade,72'' Vintage Tall Lamps for Bedroom Corner Home Office, Bulbs Included",
+        "brand": "GyroVu",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51uLMCRy57L.jpg",
+          "https://m.media-amazon.com/images/I/71IETuCTaqL.jpg",
+          "https://m.media-amazon.com/images/I/61yDCZw5+-L.jpg",
+          "https://m.media-amazon.com/images/I/710xDpzkQwL.jpg",
+          "https://m.media-amazon.com/images/I/71A4yeIF20L.jpg",
+          "https://m.media-amazon.com/images/I/71sBVPmkTlL.jpg",
+          "https://m.media-amazon.com/images/i/91j2uadpeal.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 59.99,
+        "coupon": 3,
+        "monthly_sales_volume": 990,
+        "monthly_sales_amount": 56420.1,
+        "yearly_sales_volume": 13627,
+        "delivery_type": null,
+        "fba_fee": 12.2,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2006,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 8,
+        "seller_count": 9,
+        "buybox_seller": "RAYINIGHT",
+        "online_date": "2023-02-25",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            87
+          ]
+        ],
+        "subcategory_rank": 8830,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0F4VMF3QL",
+        "parent_asin": "B0FF94PHFN",
+        "title": "GOEBLESON 70.9“ Floor Lamp with Shelves, Modern Floor Lamp with 3 Linen Shades and Foot Switch, 3-Light Standing Lamp, for Living Room, Bedroom, Study, Office, Rustic Brown and Beige EF53LD05",
+        "sub_title": "",
+        "brand": "GOEBLESON",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71g9T1uKHDL.jpg",
+          "https://m.media-amazon.com/images/I/71Bx8pY1PYL.jpg",
+          "https://m.media-amazon.com/images/I/71HZc8aouJL.jpg",
+          "https://m.media-amazon.com/images/I/71lwWUCkyvL.jpg",
+          "https://m.media-amazon.com/images/I/71yMnWvHdrL.jpg",
+          "https://m.media-amazon.com/images/I/71y42rYUWlL.jpg",
+          "https://m.media-amazon.com/images/I/A1O1gxCS-iL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 79.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 967,
+        "monthly_sales_amount": 77350.33,
+        "yearly_sales_volume": 9638,
+        "delivery_type": null,
+        "fba_fee": 12.15,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 358,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 10,
+        "seller_count": 1,
+        "buybox_seller": "WILAWELS",
+        "online_date": "2025-05-12",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            94
+          ]
+        ],
+        "subcategory_rank": 8285,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DBMTPTVP",
+        "parent_asin": "B0DXP2FZ58",
+        "title": "O‘Bright Adjustable Floor Lamp with Flexible Gooseneck and Rotatable Shade, E26 Socket, 10-Inch Base - Ideal for Reading, Bedside, Living Room, Brushed Nickel",
+        "sub_title": "",
+        "brand": "O‘Bright",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51-Stj0nB8L.jpg",
+          "https://m.media-amazon.com/images/I/81V4evGgD6L.jpg",
+          "https://m.media-amazon.com/images/I/81OnPMV3MjL.jpg",
+          "https://m.media-amazon.com/images/I/8191T0huA+L.jpg",
+          "https://m.media-amazon.com/images/I/81vZm0lA2ML.jpg",
+          "https://m.media-amazon.com/images/I/81Jvsx9sgvL.jpg",
+          "https://m.media-amazon.com/images/I/91+xtwfrB6L.jpg"
+        ],
+        "price": 54.99,
+        "list_price": 54.99,
+        "coupon": 0,
+        "monthly_sales_volume": 957,
+        "monthly_sales_amount": 52625.43,
+        "yearly_sales_volume": 11585,
+        "delivery_type": null,
+        "fba_fee": 10.19,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 723,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 3,
+        "seller_count": 12,
+        "buybox_seller": "O’Bright",
+        "online_date": "2024-08-08",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            77
+          ]
+        ],
+        "subcategory_rank": 7860,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DX71QB4V",
+        "parent_asin": "B0H4ZFJXP9",
+        "title": "Fansdrick 3 Light Arc Floor Lamp with Remote, Beige Shade Black Pole ",
+        "sub_title": "80'' Dimmable Floor Lamp, 2400LM Super Bright, Independently Controlled 9W LED Energy-Saving Light Bulb, Memory Function",
+        "brand": "Fansdrick",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71-qM3ZV8jL.jpg",
+          "https://m.media-amazon.com/images/I/71Jlmoi5rrL.jpg",
+          "https://m.media-amazon.com/images/I/71GsGScPkKL.jpg",
+          "https://m.media-amazon.com/images/I/71eQamobeGL.jpg",
+          "https://m.media-amazon.com/images/I/71YQbe5ddhL.jpg",
+          "https://m.media-amazon.com/images/I/71EZAhm68yL.jpg"
+        ],
+        "price": 66.49,
+        "list_price": 69.99,
+        "coupon": 9.97,
+        "monthly_sales_volume": 941,
+        "monthly_sales_amount": 53185.32,
+        "yearly_sales_volume": 11158,
+        "delivery_type": null,
+        "fba_fee": 13.45,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 604,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 11,
+        "seller_count": 2,
+        "buybox_seller": "Fansdrick lighting",
+        "online_date": "2025-03-20",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            71
+          ]
+        ],
+        "subcategory_rank": 7449,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B093WBKC9N",
+        "parent_asin": "B0D93Y42BR",
+        "title": "Ambimall 64“ Floor Lamp with 9W LED Bulb & Beige Lampshade ",
+        "sub_title": "3 Color Temperature, Chain Switch, Minimalist Floor Lamp, Tall Pole Lamps, Living Room, Bedrooms, for Study, Office",
+        "brand": "Ambimall",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51gSB---lXL.jpg",
+          "https://m.media-amazon.com/images/I/71c6YIEsRCL.jpg",
+          "https://m.media-amazon.com/images/I/71hNW7Qa-ML.jpg",
+          "https://m.media-amazon.com/images/I/71LE+iMRzuL.jpg",
+          "https://m.media-amazon.com/images/I/81VxdGYNWjL.jpg",
+          "https://m.media-amazon.com/images/I/71lYlH3XXcL.jpg",
+          "https://m.media-amazon.com/images/I/41Tc8r9jqLL.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 33.79,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 896,
+        "monthly_sales_amount": 30275.84,
+        "yearly_sales_volume": 12990,
+        "delivery_type": null,
+        "fba_fee": 8.46,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2544,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 9,
+        "seller_count": 1,
+        "buybox_seller": "Raexpectis",
+        "online_date": "2021-06-15",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            97
+          ]
+        ],
+        "subcategory_rank": 9267,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DT6BSV2Z",
+        "parent_asin": "B0G1S8Y7XY",
+        "title": "QIYIZM Pink Floor Lamp for Living Room,Bedroom,Gold Mid Century Modern Standing Lamp Brass Tree 3 Light Tall Floor Lamps Vintage Retro Floor Lights Glass Flower Lamp Shade Girls Kids Boho Bohemian",
+        "sub_title": "",
+        "brand": "QIYIZM",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71sII3bhAGL.jpg",
+          "https://m.media-amazon.com/images/I/811A0d+D24L.jpg",
+          "https://m.media-amazon.com/images/I/71DR5ti4h6L.jpg",
+          "https://m.media-amazon.com/images/I/715NKCl4mOL.jpg",
+          "https://m.media-amazon.com/images/I/71QVYSPo1cL.jpg",
+          "https://m.media-amazon.com/images/I/71U-3mozbLL.jpg",
+          "https://m.media-amazon.com/images/I/81HcORDhxSL.jpg"
+        ],
+        "price": 69.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 839,
+        "monthly_sales_amount": 58721.61,
+        "yearly_sales_volume": 14209,
+        "delivery_type": null,
+        "fba_fee": 11.65,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 719,
+        "a_plus": true,
+        "has_video": false,
+        "has_brand_store": true,
+        "variation_count": 12,
+        "seller_count": 1,
+        "buybox_seller": "TTLight",
+        "online_date": "2025-03-20",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            84
+          ]
+        ],
+        "subcategory_rank": 7875,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0B71LHCV6",
+        "parent_asin": "B0GVN6N42P",
+        "title": "SIBRILLE LED Floor Lamp - Dimmable Tall Standing Lamp with Remote Control/Button, 3000-6500K, 22W Modern Floor Reading Light, Uplighter Corner Floor Lamp for Living Room Bedroom Office, Black",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61dQMDcMdvL.jpg",
+          "https://m.media-amazon.com/images/I/71uw9totmML.jpg",
+          "https://m.media-amazon.com/images/I/71ZwlhQratL.jpg",
+          "https://m.media-amazon.com/images/I/71Sv6AqKx0L.jpg",
+          "https://m.media-amazon.com/images/I/719IfgHQHJL.jpg"
+        ],
+        "price": 59.99,
+        "list_price": 74.99,
+        "coupon": 0,
+        "monthly_sales_volume": 830,
+        "monthly_sales_amount": 49791.7,
+        "yearly_sales_volume": 13461,
+        "delivery_type": null,
+        "fba_fee": 11.2,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 2031,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 8,
+        "seller_count": 2,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2022-09-01",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            82
+          ]
+        ],
+        "subcategory_rank": 8805,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CTH2QF23",
+        "parent_asin": "B0CYZRKSLR",
+        "title": "Govee Floor Lamp 2, RGBIC Smart Floor Lamp for Living Room, Bedroom ",
+        "sub_title": "1725lm, Warm Cool White LED, 2200K-6500K, Compatible with SmartThings, Matter, Alexa, Music Sync, Scene Modes, Black(1 Pack)",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61X1OBENlqL.jpg",
+          "https://m.media-amazon.com/images/I/616PRkDdjML.jpg",
+          "https://m.media-amazon.com/images/I/71HV46MqawL.jpg",
+          "https://m.media-amazon.com/images/I/614Ev4O7xFL.jpg",
+          "https://m.media-amazon.com/images/I/71mPL-SVucL.jpg",
+          "https://m.media-amazon.com/images/I/71u7x30eb0L.jpg"
+        ],
+        "price": 129.99,
+        "list_price": 159.99,
+        "coupon": 0,
+        "monthly_sales_volume": 829,
+        "monthly_sales_amount": 107761.71,
+        "yearly_sales_volume": 37364,
+        "delivery_type": null,
+        "fba_fee": 9.18,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 2579,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 3,
+        "seller_count": 2,
+        "buybox_seller": "Govee US",
+        "online_date": "2024-04-12",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            49
+          ]
+        ],
+        "subcategory_rank": 7469,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0G1MQP3KB",
+        "parent_asin": "B0H5K7Q4M4",
+        "title": "SIBRILLE 42W 3-Light Torchiere Floor Lamp, LED Tree Standing Lamp ",
+        "sub_title": "Dimmable Bright Floor Lamp with Remote, 2300LM, 4 Color Temperatures, 72'' Tall, for Living Room, Bedroom and Office",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71DwyuzKZJL.jpg",
+          "https://m.media-amazon.com/images/I/71lTQ8mLzTL.jpg",
+          "https://m.media-amazon.com/images/I/61gKV7oEuhL.jpg",
+          "https://m.media-amazon.com/images/I/71EnD3jpstL.jpg",
+          "https://m.media-amazon.com/images/I/711iqbLG3LL.jpg",
+          "https://m.media-amazon.com/images/I/71uFgsY06KL.jpg"
+        ],
+        "price": 70.99,
+        "list_price": 96.99,
+        "coupon": 0,
+        "monthly_sales_volume": 824,
+        "monthly_sales_amount": 58495.76,
+        "yearly_sales_volume": 3289,
+        "delivery_type": null,
+        "fba_fee": 11.34,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 116,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 4,
+        "seller_count": 1,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2026-02-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            86
+          ]
+        ],
+        "subcategory_rank": 8095,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B09BDLV9BV",
+        "parent_asin": "B0HMD9X78N",
+        "title": "Philips Hue Signe Smart Color Changing Floor Lamp, 1-Pack, Black ",
+        "sub_title": "White & Color Ambiance, 2550 Lumens, Works with Alexa Google Assistant & Apple HomeKit, Use with Hue App",
+        "brand": "Philips Hue",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/41e2vH1GKTL.jpg",
+          "https://m.media-amazon.com/images/I/71Gc0hHugDL.jpg",
+          "https://m.media-amazon.com/images/I/61+Mfx8US1L.jpg",
+          "https://m.media-amazon.com/images/I/41UX1ammJoL.jpg",
+          "https://m.media-amazon.com/images/I/61moHjyDgIL.jpg",
+          "https://m.media-amazon.com/images/I/61+QEqABxVL.jpg"
+        ],
+        "price": 233.19,
+        "list_price": 362.99,
+        "coupon": 0,
+        "monthly_sales_volume": 801,
+        "monthly_sales_amount": 186785.19,
+        "yearly_sales_volume": 10909,
+        "delivery_type": null,
+        "fba_fee": 17.29,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 613,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 2,
+        "seller_count": 3,
+        "buybox_seller": "Amazon",
+        "online_date": "2021-09-03",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            60
+          ]
+        ],
+        "subcategory_rank": 8898,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GGRCYSXH",
+        "parent_asin": "B0GXDT192M",
+        "title": "SIBRILLE Floor Lamp with Linen Shade, Arc Dimmable Tall Standing Lamp with Remote Control, Modern Floor Reading Light for Living Room Bedroom Office Corner, 9W LED Bulb Included",
+        "sub_title": "",
+        "brand": "SIBRILLE",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/61MXtULiJ3L.jpg",
+          "https://m.media-amazon.com/images/I/710WwNyKJWL.jpg",
+          "https://m.media-amazon.com/images/I/71TSFItxYML.jpg",
+          "https://m.media-amazon.com/images/I/71dSvSy27DL.jpg",
+          "https://m.media-amazon.com/images/I/71lCz00lniL.jpg",
+          "https://m.media-amazon.com/images/I/71Lyi9ckErL.jpg",
+          "https://m.media-amazon.com/images/I/B1EHAK+H9rL.PKplay-button-mb-image-grid-small_.png"
+        ],
+        "price": 37.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 773,
+        "monthly_sales_amount": 29366.27,
+        "yearly_sales_volume": 0,
+        "delivery_type": null,
+        "fba_fee": 9.35,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.4,
+        "rating_count": 95,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 5,
+        "seller_count": 1,
+        "buybox_seller": "SIBRILLE LAMP US",
+        "online_date": "2026-01-16",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            70
+          ]
+        ],
+        "subcategory_rank": 8887,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0DJ781R37",
+        "parent_asin": "B0GQYKRMZT",
+        "title": "Gold Floor Lamp for Living Room with 3 Color Temperatures,Arc Boho Floor Lamps with Remote Control, Rattan Standing Lamp with Wicker Lamp Shades Dimmable Tall Floor Lamp For Bedroom Living Room Corner",
+        "sub_title": "",
+        "brand": "ZECOXOL",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/71WjYFiyxGL.jpg",
+          "https://m.media-amazon.com/images/I/71u2-v-9YsL.jpg",
+          "https://m.media-amazon.com/images/I/716xhPLtwpL.jpg",
+          "https://m.media-amazon.com/images/I/71xOAqGSpPL.jpg",
+          "https://m.media-amazon.com/images/I/61bwmRxo+IL.jpg",
+          "https://m.media-amazon.com/images/I/71e5WLE19TL.jpg",
+          "https://m.media-amazon.com/images/I/51jcnDK-k8L.PKplay-button-mb-image-grid-small_.jpg"
+        ],
+        "price": 51.99,
+        "list_price": 0,
+        "coupon": 0,
+        "monthly_sales_volume": 764,
+        "monthly_sales_amount": 39720.36,
+        "yearly_sales_volume": 11293,
+        "delivery_type": null,
+        "fba_fee": 10.68,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.5,
+        "rating_count": 522,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 12,
+        "seller_count": 1,
+        "buybox_seller": "ELY LIGHT",
+        "online_date": "2025-01-11",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            96
+          ]
+        ],
+        "subcategory_rank": 12135,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0CJJBG55Z",
+        "parent_asin": "B0F6YDV4RP",
+        "title": "marctronic Floor Lamps for Living Room, 44W/4500LM Super Bright 2 in 1 LED Floor Lamp with Remote, Stepless Dimmable, 69“ Tall Standing Floor Lamp with Bendable Reading Light for Bedroom Office",
+        "sub_title": "",
+        "brand": "marctronic",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/51HG-fW+6qL.jpg",
+          "https://m.media-amazon.com/images/I/71uTk6H7suL.jpg",
+          "https://m.media-amazon.com/images/I/71rNHHZ+DiL.jpg",
+          "https://m.media-amazon.com/images/I/711xjH++iGL.jpg",
+          "https://m.media-amazon.com/images/I/71hEH1VQsrL.jpg",
+          "https://m.media-amazon.com/images/I/71lZLs7k2IL.jpg"
+        ],
+        "price": 49.99,
+        "list_price": 59.99,
+        "coupon": 0,
+        "monthly_sales_volume": 764,
+        "monthly_sales_amount": 38192.36,
+        "yearly_sales_volume": 10019,
+        "delivery_type": null,
+        "fba_fee": 9.99,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.6,
+        "rating_count": 588,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": true,
+        "variation_count": 9,
+        "seller_count": 1,
+        "buybox_seller": "Marctronic",
+        "online_date": "2023-12-25",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            98
+          ]
+        ],
+        "subcategory_rank": 10610,
+        "peak_season": "--"
+      },
+      {
+        "asin": "B0GSW658C2",
+        "parent_asin": "B0GSW658C2",
+        "title": "Govee Uplighter Floor Lamp with Nebula Effect, Projector for Living Room ",
+        "sub_title": "Tri-Zone Warm Cool White light Standing Lamp, DIY Dynamic Nebula Lighting, Compatible with SmartThings, Alexa, and Matter",
+        "brand": "Govee",
+        "main_image": [
+          "https://m.media-amazon.com/images/I/819SCaDpB-L.jpg",
+          "https://m.media-amazon.com/images/I/61NRqLPBkvL.jpg",
+          "https://m.media-amazon.com/images/I/71UYo3OI4AL.jpg",
+          "https://m.media-amazon.com/images/I/61wMaBkQqbL.jpg",
+          "https://m.media-amazon.com/images/I/61reerqWmdL.jpg",
+          "https://m.media-amazon.com/images/I/71qxCgxTPoL.jpg"
+        ],
+        "price": 179.99,
+        "list_price": 179.99,
+        "coupon": 9,
+        "monthly_sales_volume": 554,
+        "monthly_sales_amount": 94728.46,
+        "yearly_sales_volume": 4114,
+        "delivery_type": null,
+        "fba_fee": 11.56,
+        "fbm_delivery_fee": 0,
+        "ratings": 4.3,
+        "rating_count": 80,
+        "a_plus": true,
+        "has_video": true,
+        "has_brand_store": false,
+        "variation_count": 0,
+        "seller_count": 2,
+        "buybox_seller": "Govee US",
+        "online_date": "2026-03-26",
+        "category": [
+          "Tools & Home Improvement",
+          "hi"
+        ],
+        "sub_category": [
+          [
+            "Floor Lamps",
+            "1063294",
+            80
+          ]
+        ],
+        "subcategory_rank": 11700,
+        "peak_season": "--"
+      }
+    ]
+  },
+  "source": {
+    "connectorId": "sorftime",
+    "operation": "category_products",
+    "fetchedAt": "2026-10-13T05:57:26.231Z",
+    "attemptCount": 1
+  }
+}

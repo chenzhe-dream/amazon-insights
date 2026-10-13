@@ -1,3 +1,4 @@
+import {categoryProductsFixture} from './helpers/category-products-fixture';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -17,9 +18,9 @@ for(const configuredModel of [false,true]) test(`Sorftime shape source persists 
  const calls:string[]=[];
  const seller:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('unused')},execute:async()=>{throw Error('Sorftime shape must not call SellerSprite')}};
  const sorftime:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>{
-  calls.push(`${r.operation}:${r.input.product_trend_type??r.input.trend_index??''}`);
-  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,main_image:'https://m.media-amazon.com/images/I/lamp.jpg'}}:r.operation==='category_report'?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:29.99,monthly_sales_volume:100,monthly_sales_amount:2900,gross_profit_margin:70,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.product_trend_type==='SalesAmount'?['2026-06=10.25','2026-07=0','2026-08=20.75']:['2026-06=10','2026-07=0','2026-08=20']};
-  return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  calls.push(`${r.operation}:${r.input.type??r.input.trend_index??''}`);
+  const data=r.operation==='product_detail'?{data:{asin:r.input.asin,main_image:'https://m.media-amazon.com/images/I/lamp.jpg'}}:(r.operation==='category_report'||r.operation==='category_products')?{data:{category_stats_report:{category_name:'Floor Lamps',top100_monthly_sales_volume:100},top100_products:[{asin:'B000000001',title:'Lamp',brand:'Fixture',price:29.99,monthly_sales_volume:100,monthly_sales_amount:2900,gross_profit_margin:70,category_rank:'Floor Lamps (Rank: 1)',online_date:'2025-01-01'}]}}:{data:r.input.type==='SalesAmount'?['2026-06=10.25','2026-07=0','2026-08=20.75']:['2026-06=10','2026-07=0','2026-08=20']};
+  return {data:r.operation==='category_products'?categoryProductsFixture(data,r.input.node_id):data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
  const study=await service.createStudy(f.actor,{marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,fromMonth:'2026-06',toMonth:'2026-08'},randomUUID());
@@ -46,12 +47,12 @@ test('300-product pool expands, completes and restores persisted histories witho
  let calls=0;const pages:number[]=[],sorftime:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>{
   calls++;
   let data:Record<string,unknown>;
-  if(r.operation==='category_report')data={data:{category_stats_report:{category_name:'Floor Lamps'},top100_products:Array.from({length:100},(_,i)=>row(i+1))}};
+  if(r.operation==='category_report'||r.operation==='category_products')data={data:{category_stats_report:{category_name:'Floor Lamps'},top100_products:Array.from({length:100},(_,i)=>row(i+1))}};
   else if(r.operation==='product_search'){const page=Number(r.input.page);pages.push(page);assert.equal(r.input.search_name,'Floor Lamps');assert.equal(r.input.subcategory_sales_volume_rank_max,300);
    const start=101+(page-1)*18;data={data:[row(1),{...row(999),subcategory:'Table Lamps (Rank: 999)'},...Array.from({length:18},(_,i)=>row(start+i))]};
   }else if(r.operation==='product_detail')data={data:{asin:r.input.asin,main_image:'https://m.media-amazon.com/images/I/lamp.jpg'}};
-  else data={data:Array.from({length:24},(_,i)=>`${2024+Math.floor((8+i)/12)}-${String((8+i)%12+1).padStart(2,'0')}=${r.input.product_trend_type==='SalesAmount'?'20.25':'10'}`)};
-  return {data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  else data={data:Array.from({length:24},(_,i)=>`${2024+Math.floor((8+i)/12)}-${String((8+i)%12+1).padStart(2,'0')}=${r.input.type==='SalesAmount'?'20.25':'10'}`)};
+  return {data:r.operation==='category_products'?categoryProductsFixture(data,r.input.node_id):data,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const seller:RemoteMcpConnector={id:'sellerSprite',probe:async()=>{throw Error('unused')},execute:async()=>{throw Error('wrong provider')}};
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null}),study=await service.createStudy(f.actor,{marketplace:'US',currency:'USD',nodeIdPath:f.scope.nodeIdPath,fromMonth:'2026-08',toMonth:'2026-08'},randomUUID());

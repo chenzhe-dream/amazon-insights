@@ -10,7 +10,7 @@ import {createMarketInputSnapshot} from '../../server/domain/market-research/sna
 const scope={organizationId:'org-a',researchId:'a9000000-0000-4000-8000-000000000001',marketplace:'US' as const,nodeIdPath:'1:2:3',fromMonth:'2026-08',toMonth:'2026-08',currency:'USD' as const};
 const asin='B000000001', cutoff='2026-09-24T00:00:00.000Z';
 const collect=(data:unknown)=>collectMarketProductHistory({scope,asin,jobId:'test-amount',metric:'SalesAmount',now:()=>new Date(cutoff),connector:{id:'sorftime',probe:async()=>{throw Error('unused')},execute:async request=>{
- assert.deepEqual(request.input,{asin,amz_site:'US',product_trend_type:'SalesAmount'});
+ assert.deepEqual(request.input,{asin,amz_site:'US',type:'SalesAmount'});
  return {data:data as Record<string,unknown>,source:{connectorId:'sorftime',operation:'product_trend',fetchedAt:cutoff,attemptCount:1}};
 }}});
 

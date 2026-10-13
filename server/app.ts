@@ -25,6 +25,8 @@ import { registerAnalysisRunRoutes } from "./routes/analysis-runs";
 import { createSellingTranslationService, registerSellingTranslationRoutes } from "./routes/selling-point-translations";
 import { registerMarketResearchRoutes } from "./routes/market-research";
 import { registerMarketModuleRoutes } from './routes/market-modules';
+import {registerMarketLinkedRoutes} from './routes/market-linked';
+import type {MarketLinkedService} from './services/market-linked-service';
 import {registerMarketThemeSelectionRoutes} from './routes/market-theme-selection';
 import type { MarketModuleService } from './services/market-module-service';
 import type { MarketResearchService } from "./services/market-research-service";
@@ -102,6 +104,7 @@ type BuildAgentAppOptions = Pick<FastifyServerOptions, "logger"> & {
   vocAutomationService?: VocAutomationService;
   marketResearchService?: MarketResearchService | null;
   marketModuleService?: MarketModuleService | null;
+  marketLinkedService?: MarketLinkedService | null;
   executionContext?: AnalysisExecutionContext;
   dependencyStateProvider?: AnalysisDependencyStateProvider;
   localDataBridgeDeps?: LocalDataBridgeDeps;
@@ -529,6 +532,7 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerSellingTranslationRoutes(app, createSellingTranslationService(options.repository ?? null, env));
   registerMarketResearchRoutes(app, options.marketResearchService ?? null);
   registerMarketModuleRoutes(app, options.marketModuleService ?? null);
+  registerMarketLinkedRoutes(app,options.marketLinkedService??null);
   registerMarketThemeSelectionRoutes(app, options.repository?.marketExecutionContext ?? null);
   registerLegacyProjectOwnershipRoutes(
     app,
