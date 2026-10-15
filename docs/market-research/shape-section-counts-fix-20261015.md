@@ -17,3 +17,14 @@
 - 本次仅修复计数；上轮S-01/S-02/S-03等展示遗漏仍待实施，不将本次修复称为已补齐原版业务。
 
 发布边界：仅32900候选；31900不发布。运行验证在更新后补充。
+
+## 32900更新后真实验收
+
+- typecheck与生产构建退出码均为0；代码提交a7457fd9。
+- 32900/32901健康返回同一sourceCommit a7457fd987f3c8b7d279ae1ad238ba60e564fa19、sourceHash f2c7122a47f4be1afcf5a3630e084315aa1b70d88bd186a9a6bf2874e5f43e1e。
+- 读取原形态任务4e32df59-8e19-4d51-bb52-8fd1a10b9aee，未重新采集、未修改人工标注或商品纳入。
+- 实际TOP表100行核对：未分类87、氛围灯13；新形态价格带下拉分别显示87链接、13链接。
+- 品牌下拉：Ambimall 6、Aokrean 1、BOBOMOMO 1、Brightech 2、GOEBLESON 6、Govee 9，与表格相符。
+- 截图：.runtime/shape-filter-counts-live-20261015.png、.runtime/brand-filter-counts-live-20261015.png。
+- 更新前旧dist备份在candidate-stack/rollback-section-counts-20261015/dist。
+- 31901只读身份仍为253366e876728a6c9bc35bb9dda2c1b00575b87c，31900未发布。
