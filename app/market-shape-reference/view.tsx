@@ -268,5 +268,5 @@ function totalSalesText(value:number|null, rows:ReferenceGroupRow[], period:Peri
 
 function ConclusionScope({slot}:{slot:ReferenceConclusionSlot<unknown>}) {
  if(slot.status!=='ready'||!slot.scope)return null;
- return <div className="shape-summary-warning"><strong>本项有效样本 {slot.scope.included}/{slot.scope.total} 条</strong><p>下方沿用原版分析，销量占比、推荐和置信度仅针对这 {slot.scope.included} 条有效样本；上方原始统计表仍保留全部所选商品，两者分母可能不同。</p><details><summary>未参与本项计算的商品（{slot.scope.excludedAsins.length} 条）</summary><p>{slot.scope.excludedAsins.join('、')}</p></details></div>;
+ return <div className="shape-summary-warning"><strong>本项有效样本 {slot.scope.included}/{slot.scope.total} 条</strong><p>下方沿用原版分析，销量占比、推荐和置信度仅针对这 {slot.scope.included} 条有效样本；上方原始统计表仍保留全部所选商品，两者分母可能不同。</p>{slot.scope.shapeKnown!==undefined&&<p>其中已标注形态 {slot.scope.shapeKnown} 条，其余未分类商品的已知销量仍保留在分母中。</p>}<details><summary>未参与本项计算的商品（{slot.scope.excludedAsins.length} 条）</summary><p>{slot.scope.excludedAsins.join('、')}</p></details></div>;
 }

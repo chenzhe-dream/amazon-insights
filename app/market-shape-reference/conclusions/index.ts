@@ -15,7 +15,7 @@ import { buildTopSalesMarginEntryConclusion, formatOnlineDateYear, formatPriceBa
 import type { SorftimeCategoryDashboardReport as OriginalReport } from "./sorftime-category-dashboard";
 
 export type ReferenceConclusionSlot<T> =
-  | { status: "ready"; result: T; warnings?: readonly string[]; scope?: {included:number;total:number;excludedAsins:string[]} }
+  | { status: "ready"; result: T; warnings?: readonly string[]; scope?: {included:number;total:number;excludedAsins:string[];shapeKnown?:number} }
   | { status: "insufficient"; reason: string };
 export type ReferenceConclusions = {
   listingYear: ReferenceConclusionSlot<ReturnType<typeof analyzeListingAgeSalesShare>>;

@@ -6,7 +6,7 @@ type Key = MarketStructureModuleSection['key'];
 type Gap = {asin:string;fields:string[]};
 export type SynthesisSection = Omit<MarketStructureModuleSection,'score'> & {
   score:number|null;
-  coverage?:{known:number;total:number;sales:number|null};
+  coverage?:{known:number;total:number;sales:number|null;salesKnown?:number};
   gaps?:Gap[];
   notes?:string[];
 };
@@ -53,14 +53,15 @@ export function buildReferenceSynthesisPresentation(report:SorftimeCategoryDashb
   const replay=(pool:typeof products)=>buildMarketStructureSynthesis({...report,stats:{...report.stats,top3ProductSharePct:pool.length===report.products.length?report.stats.top3ProductSharePct:null},products:pool,topLinkCount:pool.length} as Parameters<typeof buildMarketStructureSynthesis>[0],{getProductShape:shape});
   const moduleSections:SynthesisSection[]=dimensions.map(d=>{
     const gaps=products.map(p=>({asin:p.asin,fields:missing(p,d.fields)})).filter(g=>g.fields.length);
-    const excluded=new Set(gaps.map(g=>g.asin));
-    const pool=products.filter(p=>!excluded.has(p.asin));
+    // Unknown shape labels must not remove known sales from the original share denominator.
+    const pool=products.filter(p=>!missing(p,d.fields.filter(field=>field!=='形态')).length);
+    const known=pool.filter(p=>!missing(p,d.fields).length).length;
     const sales=pool.length?pool.reduce((sum,p)=>sum+p.sales.last6Months!,0):null;
-    const base={key:d.key,title:d.title,maxScore:20,coverage:{known:pool.length,total:products.length,sales},gaps};
-    if(!pool.length||!sales)return {...base,score:null,text:pool.length?'有效样本近6个月销量合计为0，无法计算销量份额，暂不生成本维判断。':'本维缺少可计算样本；补齐下列字段后生成原版分析。'};
+    const base={key:d.key,title:d.title,maxScore:20,coverage:{known,total:products.length,sales,salesKnown:pool.length},gaps};
+    if(!known||!sales)return {...base,score:null,text:known?'有效样本近6个月销量合计为0，无法计算销量份额，暂不生成本维判断。':'本维缺少可计算样本；补齐下列字段后生成原版分析。'};
     const section=replay(pool).moduleSections.find(s=>s.key===d.key)!;
     const unclassified=d.key==='marginMarketAccess'?pool.filter(p=>shape(p.asin)==='—').length:0;
-    return {...section,...base,score:gaps.length?null:section.score,notes:unclassified?[`${unclassified} 条有效毛利样本尚未标注形态；总体准入分析保留，形态价格带指导仅覆盖已标注部分。`]:[]};
+    return {...section,...base,score:gaps.length?null:section.score,notes:[...(pool.length>known?[`本维 ${known} 条具备完整字段，另有 ${pool.length-known} 条形态待标注；这些商品的已知销量仍计入 ${pool.length} 条销量样本的分母，不将已标注形态归一化为100%。`]:[]),...(unclassified?[`${unclassified} 条有效毛利样本尚未标注形态；总体准入分析保留，形态价格带指导仅覆盖已标注部分。`]:[])]};
   });
   const missingRecent=products.filter(p=>!finite(p.sales.last3Months)||p.sales.last3Months<0||hasReferencePeriodDateConflict(p,"last3Months",report.calculationVersion));
   const complete=products.length>0&&moduleSections.every(s=>s.score!==null)&&missingRecent.length===0;
@@ -73,8 +74,8 @@ export function buildReferenceSynthesisPresentation(report:SorftimeCategoryDashb
   for(const p of bandPool)bands.set(p.priceBand,(bands.get(p.priceBand)??0)+p.sales.last6Months!);
   const bandSales=bandPool.reduce((sum,p)=>sum+p.sales.last6Months!,0);
   const topBand=bandSales>0?[...bands].sort((a,b)=>b[1]-a[1])[0]?.[0]??null:null;
-  const usable=moduleSections.filter(s=>(s.coverage?.sales??0)>0);
-  const scopeNote=(s:SynthesisSection)=>`${s.title}（有效样本 ${s.coverage!.known}/${products.length}）`;
+  const usable=moduleSections.filter(s=>(s.coverage?.sales??0)>0&&(s.coverage?.known??0)>0);
+  const scopeNote=(s:SynthesisSection)=>`${s.title}（完整字段 ${s.coverage!.known}/${products.length}；销量分母 ${s.coverage!.salesKnown} 条）`;
   const opportunities:string[]=[];
   const risks:string[]=[];
   if(missingRecent.length)risks.push(`跨维品牌趋势还缺 ${missingRecent.length} 条近3个月销量（${missingRecent.map(p=>p.asin).join("、")}）；保留各维近6月分析，完整跨维结论及总分暂缓。`);

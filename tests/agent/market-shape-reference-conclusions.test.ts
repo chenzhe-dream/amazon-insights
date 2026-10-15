@@ -303,3 +303,16 @@ test('shape summary restores rising and declining groups',()=>{
  const html=renderToStaticMarkup(createElement(ReferenceConclusionsView,{result:buildReferenceConclusions(report,{})}));
  assert.match(html,/近6个月销量占比/);assert.match(html,/上升趋势/);assert.match(html,/下滑趋势/);
 });
+
+test('unclassified products retain their known sales in shape denominators',async()=>{
+ const {buildReferenceSynthesisPresentation}=await import('../../app/market-shape-reference/conclusions/synthesis-presentation');
+ const {buildAvailableReferenceConclusions}=await import('../../app/market-shape-reference/conclusions/available-conclusions');
+ const source=structuredClone(report);source.products[1].productShape='未分类';
+ const presentation=buildReferenceSynthesisPresentation(source,{});
+ const direction=presentation.moduleSections.find(s=>s.key==='productShapeDirection')!;
+ assert.equal(direction.coverage!.known,1);
+ assert.equal(direction.coverage!.sales,1800);
+ assert.match(direction.text,/33\.3%/);assert.doesNotMatch(direction.text,/100\.0%/);
+ const shape=buildAvailableReferenceConclusions(source,{}).shapeSales;
+ assert.equal(shape.status,'ready');if(shape.status==='ready')assert.ok(Math.abs(shape.result.insights[0].last6MonthsSharePct!-100/3)<0.1);
+});

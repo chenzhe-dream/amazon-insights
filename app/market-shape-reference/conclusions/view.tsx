@@ -107,5 +107,5 @@ function ReferenceMarginAccessDetail({detail}:{detail:MarginMarketAccessSectionD
 }
 
 function SynthesisSectionEvidence({section}:{section:SynthesisPresentation['moduleSections'][number]}) {
- return <>{section.coverage&&<p className="shape-summary-note">有效样本 {section.coverage.known}/{section.coverage.total} 条 · 本维近6个月已知销量 {number(section.coverage.sales)}。以下占比、分析和建议仅适用于本维有效样本；缺失商品仍保留在原报告。</p>}{section.notes?.map(note=><p className="shape-summary-warning" key={note}>{note}</p>)}{Boolean(section.gaps?.length)&&<details className="shape-summary-source"><summary>本维缺失项（{section.gaps!.length} 条商品）</summary><ul>{section.gaps!.map(gap=><li key={gap.asin}>{gap.asin}：{gap.fields.join('、')}</li>)}</ul></details>}</>;
+ return <>{section.coverage&&<p className="shape-summary-note">完整字段 {section.coverage.known}/{section.coverage.total} 条 · 销量分母 {section.coverage.salesKnown ?? section.coverage.known} 条 · 本维近6个月已知销量 {number(section.coverage.sales)}。以下占比、分析和建议仅适用于本维有效样本；缺失商品仍保留在原报告。</p>}{section.notes?.map(note=><p className="shape-summary-warning" key={note}>{note}</p>)}{Boolean(section.gaps?.length)&&<details className="shape-summary-source"><summary>本维缺失项（{section.gaps!.length} 条商品）</summary><ul>{section.gaps!.map(gap=><li key={gap.asin}>{gap.asin}：{gap.fields.join('、')}</li>)}</ul></details>}</>;
 }

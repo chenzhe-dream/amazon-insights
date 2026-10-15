@@ -18,14 +18,15 @@ export function buildAvailableReferenceConclusions(report:SorftimeCategoryDashbo
       if(key==='margin'&&(typeof p.grossProfitMargin!=='number'||!Number.isFinite(p.grossProfitMargin)))return false;
       if(['margin','shapePrice','brandPrice'].includes(key)&&resolveProductPriceBand(p)==='—')return false;
       if(key==='brandPrice'&&(!p.brand?.trim()||p.brand==='—'))return false;
-      const shape=resolveReferenceProductShape(p,assignments);
-      return !needsShape||(shape!=='—'&&shape!=='未分类'&&(!allowedShapes?.length||allowedShapes.includes(shape)));
+      return true;
     });
-    if(pool.length===all.length)continue;
-    if(!pool.length){if(result[key].status!=='insufficient')result[key]={status:'insufficient',reason:'当前范围没有满足本项必要字段的有效样本（销量、形态等），缺失数据保留未知。'};continue;}
+    const assigned=pool.filter(p=>{const shape=resolveReferenceProductShape(p,assignments);return shape!=='—'&&shape!=='未分类'&&(!allowedShapes?.length||allowedShapes.includes(shape));}).length;
+    if(!pool.length){if(result[key].status!=='insufficient')result[key]={status:'insufficient',reason:'当前范围没有满足本项必要字段的有效样本，缺失数据保留未知。'};continue;}
+    if(needsShape&&!assigned){result[key]={status:'insufficient',reason:'当前范围没有已确认的商品形态；请先标注形态，原始商品和已知销量仍保留。'};continue;}
+    if(pool.length===all.length&&(!needsShape||assigned===pool.length))continue;
     const slot=buildReferenceConclusions(report,assignments,pool.map(p=>p.asin),allowedShapes)[key];
     const included=new Set(pool.map(p=>p.asin));
-    const scoped=slot.status==='ready'?{...slot,scope:{included:pool.length,total:all.length,excludedAsins:all.filter(p=>!included.has(p.asin)).map(p=>p.asin)}}:slot;
+    const scoped=slot.status==='ready'?{...slot,scope:{included:pool.length,total:all.length,excludedAsins:all.filter(p=>!included.has(p.asin)).map(p=>p.asin),...(needsShape?{shapeKnown:assigned}:{})}}:slot;
     // The key and result were obtained together from the same typed builder.
     Object.assign(result,{[key]:scoped});
   }

@@ -221,7 +221,7 @@ test('missing history still renders a factual summary without a full score and l
  assert.doesNotMatch(summary,/阶段总结/);
  assert.match(summary,/新品准入机会/);assert.match(summary,/机会方向/);assert.match(summary,/主要风险/);
  assert.match(summary,/所选 2 条商品保留在报告中/);
- assert.match(summary,/有效样本 0\/2 条/);assert.match(summary,/本维近6个月已知销量 未知/);
+ assert.match(summary,/完整字段 0\/2 条/);assert.match(summary,/本维近6个月已知销量 未知/);
  assert.match(summary,/B000000001/);assert.match(summary,/B000000002/);
  assert.match(summary,/近6个月销量/);
  assert.doesNotMatch(summary,/\d+\/100/);
