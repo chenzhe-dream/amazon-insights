@@ -122,6 +122,14 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
     return (av - bv) * (descending ? -1 : 1) || a.rank - b.rank;
   });
   const toggleSort = (key: typeof sort) => { setDescending(sort === key ? !descending : true); setSort(key); };
+  // Counts describe included products before this section's local filter.
+  const sectionCounts = (get: (p: SorftimeCategoryDashboardProduct) => string) => {
+    const result = new Map<string, number>();
+    for (const product of active) { const label = get(product); result.set(label, (result.get(label) ?? 0) + 1); }
+    return result;
+  };
+  const shapeCounts = sectionCounts(p => shape(assignments, p));
+  const brandCounts = sectionCounts(p => p.brand || "未知");
   const localIds=(filter:TopSalesMultiSelectFilterState,get:(p:SorftimeCategoryDashboardProduct)=>string)=>active.filter(p=>!filter?.length||filter.includes(get(p))).map(p=>p.asin);
   const shapeIds=localIds(localShape,p=>shape(assignments,p)),bandIds=localIds(localBandShape,p=>shape(assignments,p)),brandIds=localIds(localBrand,p=>p.brand||'未知');
   const shapeAnalysis=buildReferenceShapeAnalysis(report,assignments,shapeIds,fixedLabels),bandAnalysis=buildReferenceShapeAnalysis(report,assignments,bandIds,fixedLabels),brandAnalysis=buildReferenceShapeAnalysis(report,assignments,brandIds,fixedLabels);
@@ -198,18 +206,18 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       {conclusions.listingYear.status === "ready" ? <ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
-      <SectionFilter name="形态销量" options={shapes} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage context="形态销量" calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
+      <SectionFilter name="形态销量" options={shapes} optionCounts={shapeCounts} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage context="形态销量" calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
       <AggregateTable sort={shapeSort} onSort={setShapeSort} calculationVersion={analysis.calculationVersion} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
-      <SectionFilter name="形态价格带" options={shapes} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage context="形态价格带" calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
+      <SectionFilter name="形态价格带" options={shapes} optionCounts={shapeCounts} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage context="形态价格带" calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
       <ShapePriceBandTable sort={bandSort} onSort={setBandSort} shapes={sortSectionRows(bandAnalysis.shapes,bandSort)} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
       {bandConclusion.status === "ready" ? <ReferenceShapePriceConclusion result={bandConclusion.result} embedded /> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
-      <SectionFilter name="品牌价格带" options={brands} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage context="品牌价格带" calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
+      <SectionFilter name="品牌价格带" options={brands} optionCounts={brandCounts} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage context="品牌价格带" calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
       <AggregateTable sort={brandSort} onSort={setBrandSort} calculationVersion={analysis.calculationVersion} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
