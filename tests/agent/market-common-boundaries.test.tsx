@@ -19,7 +19,16 @@ test('History rejects every scope mismatch',()=>{const scope={organizationId:'a'
 
 import {overviewContentOpportunity} from '../../server/domain/market-research/overview-content-opportunity';
 test('Content conclusion uses complete disjoint numeric evidence and marks a missing bucket',()=>{
- const rows=['有A+有视频','有A+无视频','无A+有视频','无A+无视频'].map((label,i)=>({label,products:[10,20,10,60][i],unitsShare:[20,20,10,50][i]})) as any;
+ const rows=['有A+有视频','有A+无视频','无A+有视频','无A+无视频'].map((label,i)=>({label,products:[10,20,10,60][i],units:[200,200,100,500][i],unitsShare:[20,20,10,50][i]})) as any;
  const full=overviewContentOpportunity(rows);assert.equal(full.missing.length,0);assert.match(full.conclusion,/A\+覆盖率 30.0%/);assert.match(full.conclusion,/视频覆盖率 20.0%/);assert.match(full.opportunity,/内容补位/);
  const partial=overviewContentOpportunity(rows.slice(1));assert.ok(partial.missing.length>0);assert.match(partial.conclusion,/待验证/);
+});
+
+test('Content shares use four disjoint units, not ambiguous upstream ratios',()=>{
+ const rows=['有A+有视频','有A+无视频','无A+有视频','无A+无视频'].map((label,i)=>({label,products:[83,14,1,2][i],units:[8670,1171,52,107][i],unitsShare:[35.2,60,2,2.8][i]})) as any;
+ assert.match(overviewContentOpportunity(rows).conclusion,/13.3% 销量/);
+ assert.match(overviewContentOpportunity(rows).conclusion,/本次分布样本/);
+ const absent=overviewContentOpportunity(rows.map((r:any)=>({...r,units:null})));
+ assert.match(absent.conclusion,/销量份额待验证/);
+ assert.ok(overviewContentOpportunity([...rows,rows[0]]).missing.length);
 });
