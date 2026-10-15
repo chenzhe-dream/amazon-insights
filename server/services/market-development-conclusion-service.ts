@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {extractDevelopmentObservations} from '../domain/market-research/development-observations';
 import {ConclusionBasisSchema,ConclusionResponseSchema,ConclusionScopeSchema,type ConclusionBasis,type ConclusionEvidence} from '../../shared/market-development-conclusion';
 import {MarketLinkedResponseSchema} from '../../shared/market-linked-contracts';
 import {MarketThemeSelectionStore} from '../db/postgres/market-theme-selection-store';
@@ -72,7 +73,7 @@ export class MarketDevelopmentConclusionService{
   }
   if(!data)return this.missing(module,id,`任务状态 ${run.status}，尚无可复核的形态价格带报告`);
   const summary=buildReferenceSynthesisPresentation(toShapeReferenceReport(data),assignments,selected);
-  return {evidence:{module,runId:id,identity,scope:scope(data.scope),status:summary.score===null?'partial':'ready',facts:[summary.sampleScope,summary.summary,...summary.moduleSections.map(s=>`${s.title}：${s.text}`)],findings:[summary.finalVerdict,...summary.opportunities],gaps:[...summary.risks,...(!run.referenceRevision?['当前使用来源基准，未合入未冻结的工作草稿；人工标注需保存报告版本后参与统一结论']:[])].slice(0,200),refs:[identity!]},payload:{data,assignments,selectedAsins:selected??data.pool.products.map(p=>p.asin),summary}};
+  return {evidence:{module,runId:id,identity,scope:scope(data.scope),status:summary.score===null?'partial':'ready',facts:[summary.sampleScope],findings:[summary.summary,...summary.moduleSections.map(s=>`${s.title}：${s.text}`),summary.finalVerdict,...summary.opportunities],gaps:[...summary.risks,...(!run.referenceRevision?['当前使用来源基准，未合入未冻结的工作草稿；人工标注需保存报告版本后参与统一结论']:[])].slice(0,200),refs:[identity!]},payload:{data,assignments,selectedAsins:selected??data.pool.products.map(p=>p.asin),summary}};
  }
  private missing(module:ConclusionEvidence['module'],runId:string|null,reason:string):Frozen{return {evidence:{module,runId,identity:null,scope:null,status:'missing',facts:[],findings:[],gaps:[reason],refs:[]},payload:null};}
  async read(actor:MarketExecutionActor,rawBasis:unknown,snapshot?:string){
@@ -96,6 +97,10 @@ export class MarketDevelopmentConclusionService{
    catch(error){if(error instanceof MarketModuleServiceError&&error.statusCode===403)throw error;inputs.push(this.missing(module,state.runId,error instanceof MarketModuleServiceError?error.message:'已保存报告校验失败，当前模块未纳入结论，请核对其历史版本'));}
   }
   const target=basis.kind==='reviews'?inputs[0].evidence.scope!:scope({marketplace:batch!.request.scope.marketplace,nodeIdPath:batch!.resolvedNodeIdPath??batch!.request.scope.nodeQuery,fromMonth:batch!.request.fromMonth,toMonth:batch!.request.scope.month});
+  for(const input of inputs)if(input.payload&&input.evidence.identity){
+   try{input.evidence.observations=extractDevelopmentObservations(input.evidence.module,input.payload,input.evidence.identity);}
+   catch{input.evidence.status='partial';input.evidence.gaps=input.evidence.gaps.slice(0,199);input.evidence.gaps.push('已保存字段未通过关联校验；该模块原有分析保留，结构化关联暂不使用，请核对来源版本。');}
+  }
   const conclusion=buildDevelopmentConclusion(basis.kind,target,inputs.map(i=>i.evidence)),contentHash=hash({basis,conclusion,inputs});
   return {response:ConclusionResponseSchema.parse({basis,contentHash,conclusion,savedAt:history.find(h=>h.contentHash===contentHash)?.savedAt??null,history}),inputs};
  }

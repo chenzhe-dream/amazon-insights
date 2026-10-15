@@ -3,6 +3,7 @@ import React,{useEffect,useState} from 'react';
 import {ConclusionBasisSchema,ConclusionResponseSchema,type ConclusionBasis,type ConclusionResponse} from '../shared/market-development-conclusion';
 import {localAgentFetch,localAgentErrorMessage} from './lib/local-agent-browser';
 import {LaunchSection} from './launch-section';
+import {MarketDevelopmentEvidence} from './market-development-evidence';
 const labels={overview:'市场总览',shapes:'形态价格带',keywords:'关键词',themes:'评论'};
 export async function readDevelopmentConclusion(basis:ConclusionBasis,signal:AbortSignal,snapshot?:string){
  const params=new URLSearchParams({basis:JSON.stringify(ConclusionBasisSchema.parse(basis)),...(snapshot?{snapshot}:{})});
@@ -33,6 +34,7 @@ function DevelopmentConclusion({basis,writesDisabled}:{basis:ConclusionBasis;wri
   {report&&<>
    <p className="market-research-note">{report.scope.marketplace} · 类目 {report.scope.nodeIdPath} · {report.scope.fromMonth} 至 {report.scope.toMonth} · {report.version}{value.savedAt?` · 保存于 ${new Date(value.savedAt).toLocaleString('zh-CN')}`:''}</p>
    <h4>{report.headline}</h4>
+   {report.decision&&<MarketDevelopmentEvidence decision={report.decision}/>}
    {report.sections.map((s,i)=><article className="listing-age-conclusion" style={{fontSize:13,lineHeight:1.7}} key={i}><h5>{s.title.replace(/ · (已知依据|分析与候选)$/, "")} · {s.status==='observed'?'已知事实':s.status==='candidate'?'分析与候选':'待验证'}</h5><p style={{whiteSpace:'pre-line'}}>{s.text}</p></article>)}
    <h4>开发优先级与下一步</h4><ul>{report.actions.map((a,i)=><li key={i}><strong>{a.priority} · {a.action}</strong><p>{a.validation}</p></li>)}</ul>
    <details open={report.status==='no-data'}><summary>数据缺口与判断边界（{report.gaps.length}）</summary><ul>{report.gaps.map((g,i)=><li key={i}>{g}</li>)}</ul></details>
