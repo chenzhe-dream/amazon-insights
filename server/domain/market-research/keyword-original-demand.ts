@@ -453,12 +453,12 @@ function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
   const coveredShare = dimensionRows.reduce((sum, row) => sum + row.sharePct, 0);
   const coverageNote = `基于上方 ${rows.length} 条扩展词 · 识别 ${matchedKeywordCount} 条含人群词 · 人群词占样本 ${coveredShare.toFixed(1)}%`;
 
-  let conclusion = "样本几乎无明确人群词，需求默认面向家庭通用用户，不宜强行细分年龄/性别。";
+  let conclusion = "样本未识别到明确人群词，目标用户待验证；不据此推断年龄、性别或家庭定位。";
   if (dimensionRows.length) {
     const top = dimensionRows[0];
     conclusion =
       coveredShare < 5
-        ? `人群信号极弱（合计 < 5%），仅见「${top.label}」等零散词，默认家庭通用定位。`
+        ? `人群信号极弱（合计 < 5%），仅见「${top.label}」等零散词，暂不能确定主要目标人群。`
         : `「${top.label}」人群信号最强（约 ${top.sharePct.toFixed(1)}%）；含人群词合计约 ${coveredShare.toFixed(1)}%，均来自上方同一批扩展词。`;
   }
 
@@ -487,7 +487,7 @@ function buildW3Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
     totalVolume,
   );
 
-  let conclusion = "样本内无明确场景词，Listing 需按通用家居场景表达。";
+  let conclusion = "样本内未识别到明确场景词，使用场景待验证；不能据此推断场景或人群。";
   if (dimensionRows.length) {
     const [top, second] = dimensionRows;
     conclusion = `场景需求清晰：「${top.label}」为首要切入口（约 ${top.sharePct.toFixed(1)}%）。`;
@@ -641,11 +641,11 @@ function buildSynthesis(
   const bullets = [
     `W1：以「${topW1}」为主线，同步覆盖样本内其他同义/上位形态。`,
     w2.rows.length
-      ? `W2：存在「${w2.rows[0].label}」等人群词，但规模有限，默认家庭通用。`
+      ? `W2：存在「${w2.rows[0].label}」等人群词，但规模有限，目标用户待验证。`
       : "W2：无强人群信号，不做儿童/老人等窄人群首推。",
     topW3
       ? `W3：首选「${topW3}」场景切入，场景图与结构需对应使用环境。`
-      : "W3：场景词不足，先用通用家居表达。",
+      : "W3：场景词不足，使用场景待验证。",
     topW4
       ? `W4：优先验证「${topW4}」等功能/属性卖点。`
       : "W4：属性词弱，差异化从 VOC 补证。",

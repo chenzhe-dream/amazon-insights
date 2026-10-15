@@ -1,3 +1,5 @@
+import {MarketDevelopmentConclusionService} from './market-development-conclusion-service';
+import {ConclusionSaveSchema} from '../../shared/market-development-conclusion';
 import {queryStandaloneRun} from './market-standalone-query-service';
 import {MARKET_OVERVIEW_CACHE_TTL_MS} from '../../shared/market-overview-cache-policy';
 import {buildKeywordOriginalEstimate} from '../domain/market-research/keyword-original-estimate';
@@ -56,6 +58,8 @@ const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 
 const unavailable = () => new MarketModuleServiceError(404, '未找到该组织的市场研究或任务');
 
 export class MarketModuleService {
+  async developmentConclusion(actor:MarketExecutionActor,basis:unknown,snapshot?:string){return (await new MarketDevelopmentConclusionService(this.deps.context,this).read(actor,basis,snapshot)).response;}
+  async saveDevelopmentConclusion(actor:MarketExecutionActor,body:unknown){const request=ConclusionSaveSchema.parse(body);return new MarketDevelopmentConclusionService(this.deps.context,this).save(actor,request.basis,request.expectedHash);}
   private readonly snapshots: PostgresMarketAnalysisSnapshotStore;
   private readonly steps: PostgresMarketModuleExecutionStore;
   constructor(private readonly deps: { context: PostgresQueryContext; modelIdentity: () => ModelIdentity | null; overviewSynthesisModelIdentity?: () => ModelIdentity | null; shapeModelIdentity?: () => ModelIdentity | null; keywordModelIdentity?: () => ModelIdentity | null; keywordReconciliationModelIdentity?: () => ModelIdentity | null; keywordExplicitModelIdentity?: () => ModelIdentity | null; themeTranslation?: MarketThemeTranslationService; now?: () => Date; resolveNodePath?: (input: Omit<MarketNodePathResolutionInput, 'connector'>) => Promise<string>; resolveShapeCategoryName?: (input:{marketplace:string;name:string;organizationId:string;jobId:string})=>Promise<string> }) {

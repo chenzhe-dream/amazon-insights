@@ -1,3 +1,4 @@
+import {ConclusionQuerySchema,ConclusionSaveSchema,ConclusionResponseSchema} from './market-development-conclusion';
 import {MarketKeywordQueryRequestSchema,MarketThemeQueryRequestSchema} from './market-standalone-query-contracts';
 import {ProjectCatalogSchema,ProjectCatalogQuerySchema,ProjectHistoryQuerySchema,ProjectHistorySchema} from './market-project-catalog-contracts';
 import {ProjectFavoriteCreateSchema,ProjectFavoriteUpdateSchema,ProjectFavoriteQuerySchema,ProjectFavoriteListSchema,ProjectFavoriteResponseSchema,ProjectFavoriteExportSchema,ProjectGroupSchema,ProjectGroupCreateSchema} from './market-project-favorites-contracts';
@@ -1744,6 +1745,8 @@ export const v1Contracts = [
   { method: "GET", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationReadQuery, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
   { method: "POST", path: "/v1/projects/:projectId/selling-point-translations/:asin", params: SellingTranslationParams, query: SellingTranslationEmpty, request: SellingTranslationStartRequest, response: SellingTranslationResponse, error: ApiErrorResponseSchema },
   {method:'POST',path:'/v1/market-analysis/studies/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordStartRequestSchema,response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-analysis/conclusions',query:ConclusionQuerySchema,response:ConclusionResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/conclusions',request:ConclusionSaveSchema,response:ConclusionResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/linked',request:MarketLinkedRequestSchema,response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/linked/:id',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/linked/:id/retry',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketLinkedRetrySchema,response:MarketLinkedResponseSchema,error:ApiErrorResponseSchema},

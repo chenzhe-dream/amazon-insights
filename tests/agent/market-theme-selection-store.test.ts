@@ -1,3 +1,4 @@
+import {MarketDevelopmentConclusionService} from '../../server/services/market-development-conclusion-service';
 import {categoryProductsFixture} from './helpers/category-products-fixture';
 import { buildAgentApp } from '../../server/app';
 import { createAgentServiceClient } from '../../app/lib/agent-service-client';
@@ -49,6 +50,24 @@ test('immutable selection revisions isolate actors, replay commands and never cr
  const first=await store.save(command);assert.equal(first.created,true);assert.equal(first.view.revision!.result.totals!.mention,10);
  assert.equal((await store.save(command)).created,false);await assert.rejects(store.save({...command,request:{...command.request,excludedAsins:[]}}));
  const parent=first.view.revision!.revisionId;
+ await t.test('review development conclusions freeze baseline and manual evidence without paid work',async()=>{
+  const conclusions=new MarketDevelopmentConclusionService(f.context,service),basis={kind:'reviews' as const,runId:started.run.id,attemptId:base.attemptId,revisionId:null};
+  const initial=await conclusions.read(f.actor,basis);
+  assert.match(initial.response.conclusion.evidence[0].facts[0],/所选 2 个商品/);
+  assert.equal((await pg.pool.query('SELECT count(*) FROM market_development_conclusions')).rows[0].count,'0');
+  await assert.rejects(conclusions.save(f.actor,basis,'0'.repeat(64)));
+  const saved=await conclusions.save(f.actor,basis,initial.response.contentHash);assert.ok(saved.savedAt);
+  assert.equal((await conclusions.save(f.actor,basis,initial.response.contentHash)).contentHash,saved.contentHash);
+  assert.equal((await pg.pool.query('SELECT count(*) FROM market_development_conclusions')).rows[0].count,'1');
+  const manual=await conclusions.read(f.actor,{...basis,revisionId:parent});
+  assert.match(manual.response.conclusion.evidence[0].facts[0],/所选 1 个商品/);assert.notEqual(manual.response.contentHash,saved.contentHash);
+  const spy=t.mock.method(MarketThemeSelectionStore.prototype,'read',async()=>{throw new Error('historical conclusion must not rederive selection');});
+  try {const historical=await conclusions.read(f.actor,basis,saved.contentHash);assert.deepEqual(historical.response.conclusion,saved.conclusion);assert.equal(spy.mock.callCount(),0);}finally{spy.mock.restore();}
+  await assert.rejects(conclusions.read({...f.actor,organizationId:randomUUID()},basis,saved.contentHash));
+  await assert.rejects(pg.pool.query('UPDATE market_development_conclusions SET conclusion_json=conclusion_json'));
+  await assert.rejects(pg.pool.query('DELETE FROM market_development_conclusions'));
+  assert.equal(calls,sourceCalls);assert.deepEqual(await counts(),countBefore);
+ });
  const racing=await Promise.allSettled([[],['B000000001','B000000002']].map(excludedAsins=>store.save({...command,idempotencyKey:randomUUID(),request:{...command.request,expectedParentRevisionId:parent,excludedAsins}})));assert.equal(racing.filter(r=>r.status==='fulfilled').length,1);
  const latest=(await store.read(identity))!;const restored=await store.save({...command,idempotencyKey:randomUUID(),request:{...command.request,expectedParentRevisionId:latest.latestRevisionId,excludedAsins:[]}});assert.equal(restored.view.revision!.result.totals!.mention,20);
  assert.equal((await store.read({...identity,revisionId:parent}))!.revision!.result.totals!.mention,10);
@@ -70,6 +89,13 @@ test('immutable selection revisions isolate actors, replay commands and never cr
   const created=await proxy('POST','',payload,key);assert.equal(created.status,201,await created.clone().text());const excluded=await created.json();assert.equal(excluded.revision.result.totals,null);assert.equal(excluded.revision.result.status,'no-data');
   assert.equal((await proxy('POST','',payload,key)).status,200);assert.equal((await proxy('POST','',{...payload,excludedAsins:[]},key)).status,409);
   assert.equal((await proxy('POST','',{...payload,authorId:randomUUID()})).status,400);
+  const basis={kind:'reviews',runId:started.run.id,attemptId:base.attemptId,revisionId:null};
+  const conclusionPath='/v1/market-analysis/conclusions';
+  async function conclusionProxy(method:string,body?:unknown,cookie=true){const query=method==='GET'?'?'+new URLSearchParams({basis:JSON.stringify(basis)}):'';return proxyAgentRequest(new Request(`${origin}/api/agent${conclusionPath}${query}`,{method,headers:{'content-type':'application/json',...(cookie?{cookie:`agent_session=${token}`}:{})},...(body?{body:JSON.stringify(body)}:{})}),{params:Promise.resolve({path:conclusionPath.slice(1).split('/')})},client);}
+  const cp=await conclusionProxy('GET');assert.equal(cp.status,200,await cp.clone().text());const cv=await cp.json();assert.equal(cv.conclusion.kind,'reviews');
+  assert.equal((await conclusionProxy('POST',{basis,expectedHash:cv.contentHash})).status,200);
+  assert.equal((await conclusionProxy('POST',{basis,expectedHash:'0'.repeat(64)})).status,409);
+  assert.equal((await conclusionProxy('GET',undefined,false)).status,401);
   principal={...principal!,organizationId:randomUUID()};assert.equal((await proxy('GET')).status,404);
   assert.equal(calls,sourceCalls);assert.deepEqual(await counts(),countBefore);assert.equal(JSON.stringify(await service.findRun(f.actor,started.run.id)),before);
  });

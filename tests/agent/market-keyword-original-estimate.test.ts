@@ -9,6 +9,8 @@ import {keywordRuleFixture} from './helpers/market-keyword-rule-fixture';
 import {canonicalJsonSha256 as digest} from '../../server/runtime/model-request-accounting';
 import {buildMarketKeywordRevision} from '../../server/domain/market-research/keyword-revision';
 
+// Approved cross-category corrections to the archive's unsupported household defaults.
+function withoutHouseholdAssumption(value:unknown){return JSON.parse(JSON.stringify(value).replaceAll('样本几乎无明确人群词，需求默认面向家庭通用用户，不宜强行细分年龄/性别。','样本未识别到明确人群词，目标用户待验证；不据此推断年龄、性别或家庭定位。').replaceAll('等零散词，默认家庭通用定位。','等零散词，暂不能确定主要目标人群。').replaceAll('等人群词，但规模有限，默认家庭通用。','等人群词，但规模有限，目标用户待验证。').replaceAll('样本内无明确场景词，Listing 需按通用家居场景表达。','样本内未识别到明确场景词，使用场景待验证；不能据此推断场景或人群。').replaceAll('W3：场景词不足，先用通用家居表达。','W3：场景词不足，使用场景待验证。'));}
 function fixture(){const facts=structuredClone(keywordRuleFixture().response.run.facts!);facts.members.forEach((m,i)=>{m.pageMetrics.monthlySearchVolume={value:i?null:100,reason:i?'missing':null};m.pageMetrics.recommendedCpcUsd={value:1.5,reason:null};});const {factsId:_,...basis}=facts;facts.factsId=`market-keyword-facts:${digest(basis)}`;return facts;}
 test('original sample uses page volume, not reference-month coverage; estimates never mutate facts',()=>{
  const facts=fixture(),before=JSON.stringify(facts),result=buildKeywordOriginalEstimate({facts,productSeed:'lamp'});
@@ -52,7 +54,7 @@ test('original engine matches supplied archive across missing inputs, merging an
  const row=(keyword:string,volume:number|null,bid:number|null,months=24)=>({keyword,weeklySearchRank:null,weeklySearchVolume:null,monthlySearchVolume:volume,cpcExactBid:bid,peakSeason:null,yearlySearchVolume:{},trend:Array.from({length:months},(_,i)=>({month:`${2024+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`,volume:100+i*8,abaRank:null,cpc:null}))});
  for(const keywords of [[],[row('floor lamp',100,null,0)],[row('floor lamp',0,0),row('floor lamp for bedroom',null,2)],[row('floor lamp',100000,1),row('standing lamp for bedroom',3000,2,6),row('floor lamp for kids',1,null,0),row('led floor lamp',200,3)]]){
   const input={productName:'floor lamp',marketplace:'US',queryMode:'keyword_extends' as const,totalCount:keywords.length,fetchedPages:1,trendEnrichedCount:keywords.filter(k=>k.trend.length).length,keywords};
-  assert.deepEqual(buildAmazonKeywordDemandReport(input),reference.buildAmazonKeywordDemandReport(input));
+  assert.deepEqual(JSON.parse(JSON.stringify(buildAmazonKeywordDemandReport(input))),withoutHouseholdAssumption(reference.buildAmazonKeywordDemandReport(input)));
  }
 });
 test('saved real source replay matches archive output exactly and keeps finite scores',async t=>{
@@ -60,6 +62,14 @@ test('saved real source replay matches archive output exactly and keeps finite s
  const facts=JSON.parse(readFileSync('test-results/keyword-recovered-real.json','utf8')).run.facts;
  const reference=await import(pathToFileURL('C:/Users/EDY/.codex/project-notes/amazon-insights/ui-parity-20260914/reference/app/lib/product-keyword-demand-analysis.ts').href);
  const input=originalEstimateInput(facts,'floor lamp');const estimate=buildKeywordOriginalEstimate({facts,productSeed:'floor lamp'});
- assert.deepEqual(estimate.report,JSON.parse(JSON.stringify(reference.buildAmazonKeywordDemandReport(input))));
+ assert.deepEqual(estimate.report,withoutHouseholdAssumption(reference.buildAmazonKeywordDemandReport(input)));
  assert.ok(estimate.report.synthesis.clusters.length>0);assert.ok(estimate.report.synthesis.clusters.every(c=>Number.isFinite(c.computed.pvs)));
+});
+
+test('unknown scenes never assume household use for unrelated categories',()=>{
+ for(const productSeed of ['scooter','swim vest','garden tool']){
+  const facts=fixture();facts.members.forEach(m=>{m.keyword=productSeed;m.pageMetrics.monthlySearchVolume={value:100,reason:null};});const {factsId:_,...basis}=facts;facts.factsId=`market-keyword-facts:${digest(basis)}`;
+  const report=buildKeywordOriginalEstimate({facts,productSeed}).report;
+  assert.doesNotMatch(report.dimensions.w2.conclusion,/默认家庭|默认面向家庭/);assert.doesNotMatch(report.dimensions.w3.conclusion,/通用家居/);assert.doesNotMatch(report.synthesis.bullets.join(' '),/通用家居/);
+ }
 });

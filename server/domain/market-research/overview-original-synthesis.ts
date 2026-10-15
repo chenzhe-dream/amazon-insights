@@ -1,3 +1,4 @@
+import {auditOverviewChapters,completeSalesShares} from './overview-chapter-evidence';
 import {overviewContentOpportunity} from './overview-content-opportunity';
 import {isLowReviewRange,isHighReviewRange} from '../../../shared/market-numeric-range';
 import {overviewSourceMonth} from '../../../shared/market-overview-period';
@@ -25,10 +26,10 @@ const moneyKey=(key:string)=>/price|revenue|fba$/i.test(key)&&!/^fbaProportion$/
 
 const finite=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value);
 const unique=(values:string[])=>[...new Set(values)];
-const rowShare=(row:Pick<SellerSpriteDistRow,'unitsShare'|'asinRatio'>)=>finite(row.unitsShare)?row.unitsShare:finite(row.asinRatio)?row.asinRatio:null;
+const rowShare=(row:Pick<SellerSpriteDistRow,'unitsShare'|'asinRatio'>)=>finite(row.unitsShare)&&row.unitsShare>=0&&row.unitsShare<=100?row.unitsShare:null;
 const sumShares=(rows:readonly Pick<SellerSpriteDistRow,'unitsShare'|'asinRatio'>[])=>{
  const values=rows.map(rowShare),known=values.filter((value):value is number=>value!==null);
- return known.length===values.length?known.reduce((sum,value)=>sum+value,0):null;
+ return values.length>0&&known.length===values.length?known.reduce((sum,value)=>sum+value,0):null;
 };
 type TrendAggregation='sum'|'last';
 export function normalizeTrendPoints(points:readonly SellerSpriteTrendPoint[],aggregation:TrendAggregation='last'){
@@ -114,11 +115,11 @@ const ratingConclusion=(rows:readonly SellerSpriteDistRow[])=>{
  return high!=null&&high>=55?`高评分区间贡献约 ${high.toFixed(1)}% 销量，现有产品体验较成熟，单纯优化评分的空间有限。`:'评分值分布不足以判断品质门槛，需结合评论文本确认具体痛点。';
 };
 
-function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:SellerSpriteMarketReport, refs:readonly string[], parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12}) {
+function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:SellerSpriteMarketReport, refs:readonly string[], parameters:{headTopN:5|10|20;newProductMonths:1|3|6|12},issues:OverviewInputIssues={}) {
  const value=(input:unknown)=>typeof input==='number'&&Number.isFinite(input)?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(input):'未知';
  const pct=(input:unknown)=>typeof input==='number'&&Number.isFinite(input)?`${value(input)}%`:'未知';
  const rows=(key:keyof SellerSpriteMarketReport)=>Array.isArray(report[key])?report[key] as readonly unknown[]:[];
- const withData=(id:string,hasData:boolean,performance:string,meaning:string,conclusion:string,missing:string[]=[])=>(
+ const withData=(id:string,hasData:boolean,performance:string,meaning:string,conclusion:string,missing:string[]=[]):Parameters<typeof auditOverviewChapters>[0][number]=>(
    {id,status:hasData?(missing.length?'partial':'ready'):'insufficient',performance,meaning,conclusion,missing,sourceRefs:[...refs]});
  const rawKeywordPoints=report.keywordTrends.flatMap(s=>s.points);
  const keywordPoints=normalizeTrendPoints(rawKeywordPoints,'sum');
@@ -137,11 +138,11 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
  const coreScaleReady=niche.totalUnits!==null&&niche.sampleProducts!==null;
  const overviewReady=coreScaleReady&&coreCrnReady&&niche.newRatio!==null&&niche.avgUnits!==null&&niche.newAvgUnits!==null&&report.keywordTrends.length>0&&report.salesTrend.length>0&&(report.productDemand?.pageViews.length??0)>0&&report.prices.length>0&&report.listingAge.length>0&&report.ratingCounts.length>0&&report.ratingValues.length>0&&report.ebc.length>0;
  const keywordDirection=trend(keywordPoints),salesDirection=trend(salesTrend),amountDirection=trend(amountTrend);
- const dynamicDemand=coreScaleReady&&demandPoints>=6
+ const dynamicDemand=coreScaleReady&&demandPoints>=6&&keywordDirection!=='unknown'
    ?`${trendPhrase(keywordDirection,'搜索需求')}；${buildSeasonalPhrase(keywordPoints,'搜索需求')}${keywordDirection==='up'?' 市场需求旺盛，且需求仍在扩张。':keywordDirection==='down'?' 市场需求正在收缩，应谨慎进入。':' 市场需求稳定，属于成熟型需求市场。'}`
    :null;
- const dynamicSales=coreScaleReady&&salesPoints>=6
-   ?`${trendPhrase(salesDirection,'行业销量')}；${commonMonths.size>=6&&alignedSales.length>=6&&alignedAmount.length>=6&&amountDirection!=='unknown'&&salesDirection!=='unknown'?(amountDirection==='up'&&salesDirection!=='up'?'销售额增长快于销量，可能存在客单价提升或产品升级。':salesDirection==='up'&&amountDirection!=='up'?'销量增长快于销售额，可能存在低价带增长或价格竞争。':salesDirection==='up'&&amountDirection==='up'?'销量与销售额同步增长，市场处于真实增长阶段。':'销量与销售额联动相对稳定。'):'销量与销售额共同月份不足，暂不判断客单价变化。'} ${buildSeasonalPhrase(salesTrend,'销售')}`
+ const dynamicSales=coreScaleReady&&salesPoints>=6&&salesDirection!=='unknown'
+   ?`${trendPhrase(salesDirection,'行业销量')}；${commonMonths.size>=6&&alignedSales.length>=6&&alignedAmount.length>=6&&amountDirection!=='unknown'?(amountDirection==='up'&&salesDirection!=='up'?'销售额增长快于销量，可能存在客单价提升或产品升级。':salesDirection==='up'&&amountDirection!=='up'?'销量增长快于销售额，可能存在低价带增长或价格竞争。':salesDirection==='up'&&amountDirection==='up'?'销量与销售额同步增长，市场处于真实增长阶段。':'销量与销售额联动相对稳定。'):'销量与销售额共同月份不足，暂不判断客单价变化。'} ${buildSeasonalPhrase(salesTrend,'销售')}`
    :null;
  const dynamicMaturity=report.listingAge.length>0&&niche.newRatio!==null?original.sections.maturity:null;
  const dynamicReview=report.ratingCounts.length>0?reviewConclusion(report.ratingCounts):null;
@@ -163,21 +164,22 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
      :'上架趋势已保存，但缺少与需求或销量同窗数据，暂不能判断成长或竞争方向。'
    :null;
  const productShare=productRows.slice(0,3).map(row=>row.unitsShare).filter((value):value is number=>typeof value==='number'&&Number.isFinite(value));
- const top3=productShare.length?productShare.reduce((a,b)=>a+b,0):null;
+ const top3=productRows.length>=3&&completeSalesShares(productRows)?productShare.reduce((a,b)=>a+b,0):null;
  const concentrationConclusion=(list:readonly SellerSpriteCrnRow[],label:string)=>{
   const known=list.filter(row=>typeof row.unitsShare==='number'&&Number.isFinite(row.unitsShare));
   const top=known[0],top3Share=known.slice(0,3).reduce((sum,row)=>sum+(row.unitsShare??0),0);
   if(!top)return `暂无${label}有效销量份额，不能形成集中度结论。`;
+  if(known.length!==list.length||known.length<3)return `已保存${known.length}条有效销量份额，但完整排序与Top3依据不足。`;
   return `${label}头部为“${top.label}”，销量占比 ${pct(top.unitsShare)}；Top3销量份额 ${pct(top3Share)}。该结果仅代表本次保存的 Top${parameters.headTopN} 样本，不外推全市场。`;
  };
  const salesMissing=unique([
-  ...(salesPoints<2?['行业销量趋势有效月份不足']:[]),
-  ...(amountPoints===0?['销售额趋势缺失']:[]),
+  ...(salesDirection==='unknown'?['行业销量趋势有效月份不足或不连续']:[]),
+  ...(amountDirection==='unknown'?['销售额趋势缺失或有效窗口不足']:[]),
   ...(amountPoints>0&&commonMonths.size<6?['销量与销售额共同月份不足6个月']:[]),
  ]);
  const keywordMissing=keywordPoints.length<6||keywordDirection==='unknown'?['关键词有效月份不足或月份不连续']:[];
  const dist=(key:keyof SellerSpriteMarketReport,label:string,id=String(key))=>{const count=rows(key).length;return withData(id,count>0,`${label}已保存 ${count} 个分组。`,`分组反映本次返回样本的构成，不能直接外推全市场。`,count?`${label}可用于比较各组占比；需结合来源范围和缺失项判断。`:`暂无可用分组，不能形成该章节结论。`,count?[]:[`${label}来源未返回有效分组`]);};
- return [
+ return auditOverviewChapters([
   withData('overview',niche.totalUnits!==null||niche.sampleProducts!==null,`样本商品 ${value(niche.sampleProducts)}，销量 ${value(niche.totalUnits)}，品牌 ${value(niche.brands)}，卖家 ${value(niche.sellers)}。`,'基础指标描述当前保存样本的规模与结构，不等于全类目总量。',overviewReady?original.finalVerdict:'规模、集中度和新品指标需在输入齐全时联合判断。',Object.entries({totalUnits:niche.totalUnits,sampleProducts:niche.sampleProducts,brands:niche.brands,sellers:niche.sellers}).filter(([,v])=>v===null).map(([k])=>`${k}缺失`)),
   withData('demand-keywords',demandPoints>0,`关键词趋势汇总覆盖 ${demandPoints} 个有效月份（原始观测点 ${rawKeywordPoints.length} 个）。`,'先按月份汇总关键词搜索量，再判断需求方向和季节性；重复、缺失或不连续月份不作为完整季节性依据。',dynamicDemand??(demandPoints>=6?'可结合窗口趋势判断需求方向；旺季月份和备货提前期仍需完整月序列。':'当前观测不足，先补齐关键词趋势再判断旺淡季。'),keywordMissing),
   withData('sales-trend',salesPoints>0,`行业销量趋势覆盖 ${salesPoints} 个有效月份；销售额趋势覆盖 ${amountPoints} 个有效月份，共同月份 ${commonMonths.size} 个。`,'销量与销售额必须按相同月份和相同类目范围对齐；销售额由已保存的同月数据推算时必须注明来源。',dynamicSales??(salesPoints>=2?'可比较最近与前段变化；缺月不补零。':'只有一个或没有月份，不能判断升降趋势。'),salesMissing),
@@ -193,7 +195,7 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
   withData('rating-count',rows('ratingCounts').length>0,`评分数分布保存 ${rows('ratingCounts').length} 个分组。`,'评论数量是新品建立信任和获取转化的门槛代理指标。',dynamicReview??(rows('ratingCounts').length?'需结合高评论与低评论区间份额判断评论壁垒。':'暂无评分数分布，无法判断评论壁垒。'),rows('ratingCounts').length?[]:['评分数分布缺失']),
   withData('rating-value',rows('ratingValues').length>0,`评分值分布保存 ${rows('ratingValues').length} 个分组。`,'评分值用于识别体验问题集中区间，不能代替评论文本中的具体痛点。',rows('ratingValues').length?ratingConclusion(report.ratingValues):dynamicProductOpportunity??'暂无评分值分布，无法判断体验机会。',rows('ratingValues').length?[]:['评分值分布缺失']),
   withData('price',rows('prices').length>0,`价格带保存 ${rows('prices').length} 个分组，均价 ${value(niche.avgPrice)}。`,'价格带明细用于比较链接数、销量份额、需求效率和已取得毛利率，缺失项不能补算。',dynamicPrice??(rows('prices').length?'可按价格带筛选切入区间；利润与需求效率缺失时结论只能部分成立。':'暂无价格带，无法形成价格结构结论。'),rows('prices').length?[]:['价格带分布缺失'])
- ];
+ ],report,niche,parameters.headTopN,issues);
 }
 
 /** Pure projection of receipts already verified by the frozen-catalog reader. No fetching or cross-module lookup. */
@@ -285,7 +287,7 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
  if(!Object.values(report.asinProfits??{}).some(p=>p.profit!==null)&&!report.prices.some(r=>r.items?.some(p=>p.profit!=null)))gaps.add('价格带商品毛利率样本缺失，未使用平均毛利率或跨模块数据补齐。');
  const checked=input.scoringVersion==='observed-items/2'?buildItemCheckedOverviewSynthesis(niche,report,inputIssues):buildCheckedOverviewSynthesis(niche,report,inputIssues);
  for(const dimension of Object.values(checked.evaluation!.dimensions))for(const gap of dimension.missing)gaps.add(gap);
- const sourceRefs=[...refs],chapters=buildChapterExplanations(niche,report,sourceRefs,parameters);
+ const sourceRefs=[...refs],chapters=buildChapterExplanations(niche,report,sourceRefs,parameters,inputIssues);
  const projected=MarketOverviewOriginalSynthesisSchema.parse({version:6,...checked,inputGaps:[...gaps].map(g=>g.replace(/保留原版空(分布|排名|趋势)判断/g,'相关判断须以有效输入为依据')),sourceRefs,chapters,originalAssumptions:[
   '沿用原版第6版评分权重、阈值和完整输入下的结论；缺失输入不补默认分，六维未齐全时不输出总分或准入等级。',
   `缺失校验版本 ${input.scoringVersion??'observed-inputs/1'}：真实0保留；null、空字符串和无效数字不当作0。当前结果根据保存来源重新计算，不覆盖历史快照。`,
@@ -295,5 +297,5 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
   '金额币种无回显时沿用冻结请求绑定的站点和币种；明确冲突的金额数据不参与分析。',
   '原版金额分析文案固定使用美元符号；其他币种仍保留该原版文案限制。',
  ]});
- return MarketOverviewOriginalSynthesisSchema.parse({...projected,derivation:{ruleVersion:'market-overview-derived/20261015.1',projectionHash:digest(projected)}});
+ return MarketOverviewOriginalSynthesisSchema.parse({...projected,derivation:{ruleVersion:'market-overview-derived/20261015.2',projectionHash:digest(projected)}});
 }

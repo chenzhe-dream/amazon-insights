@@ -30,6 +30,35 @@ function source(operation:string,values:Record<string,unknown>|Record<string,unk
  return createMarketSourceEvidence({scope,provider:'sellerSprite',operation,requestIdentity:{nodeIdPath:scope.nodeIdPath,marketplace:'US',month},responseIdentityPaths:{nodeIdPath:[[...path,'nodeIdPath']],month:[[...path,'month']],...(currency==='USD'?{currency:[[...path,'currency']]}:{})},payload:{code:'OK',data:operation==='market_research'?{items:[raw]}:raw},fetchedAt:'2026-09-12T00:00:00.000Z',observationPeriod:{kind:'calendar-months',fromMonth:month,toMonth:month},units:{},coverage:{receivedCount:1,expectedCount:1,truncation:{status:'not-truncated'}}});
 }
 const project=(sources:ReturnType<typeof source>[])=>projectMarketOverviewOriginalSynthesis({scope,parameters,sources});
+for(const [operation,id,item] of [
+ ['market_product_concentration','product-crn',{asin:'B000000001',title:'Synthetic product'}],
+ ['market_brand_concentration','brand-crn',{brand:'Synthetic brand'}],
+ ['market_seller_concentration','seller-crn',{sellerName:'Synthetic seller'}],
+ ['market_rating_distribution','rating-value',{label:'4.5',products:10}],
+ ['market_ratings_count_distribution','rating-count',{label:'1-50',products:10,asinRatio:1}],
+ ['market_seller_country_distribution','seller-country',{label:'US',products:10}],
+ ['market_seller_type_concentration','seller-type',{label:'FBA',products:10}],
+ ['market_listing_date_distribution','listing-age',{label:'3年以上',products:10}],
+ ['market_listing_trend_distribution','listing-trend',{label:'2026',products:10}],
+ ['market_price_distribution','price',{label:'20-30',products:10}],
+] as const)test(`${id}: rows without sales evidence are never sufficient`,()=>{
+ const chapter=project([source(operation,[item])]).chapters!.find(c=>c.id===id)!;
+ assert.notEqual(chapter.status,'ready');assert.ok(chapter.missing.length>0);
+ assert.doesNotMatch(chapter.conclusion,/100\.0% 销量|新品不需要很高 Review|经营效率明显更高/);
+});
+test('incomplete concentration never calls a partial known sum Top3',()=>{
+ const chapter=project([source('market_product_concentration',[{asin:'B000000001',unitsRatio:.2},{asin:'B000000002'}])]).chapters!.find(c=>c.id==='product-crn')!;
+ assert.notEqual(chapter.status,'ready');assert.match(chapter.performance,/Top1-3销量份额合计 未知/);
+ assert.doesNotMatch(chapter.conclusion,/Top3销量份额 20/);
+});
+test('complete concentration retains its measured Top3, and valid zero shares remain data',()=>{
+ const chapter=project([source('market_product_concentration',Array.from({length:10},(_,i)=>({asin:`B${String(i).padStart(9,'0')}`,unitsRatio:i<3?.2:0}))) ]).chapters!.find(c=>c.id==='product-crn')!;
+ assert.equal(chapter.status,'ready');assert.match(chapter.conclusion,/Top3销量份额 60/);
+});
+test('partial country denominators cannot imply supply-chain advantage',()=>{
+ const chapter=project([source('market_seller_country_distribution',[{label:'US',products:10,units:100,unitsRatio:.8},{label:'CN',products:null,units:null,unitsRatio:.2}])]).chapters!.find(c=>c.id==='seller-country')!;
+ assert.notEqual(chapter.status,'ready');assert.doesNotMatch(chapter.conclusion,/已形成明显经营效率与供应链优势/);
+});
 test('v4 synthesis excludes exactly the same conflicting and future demand months as the visible projection',()=>{
  const items=Array.from({length:12},(_,i)=>({date:`2025-${String(i+1).padStart(2,'0')}-01`,glanceViews:100}));items.push({date:'2025-12-01',glanceViews:999999},{date:'2026-09-01',glanceViews:999999});
  const emptySeries={status:'not-collected' as const,points:[],sourceRefs:[],errorCode:null},externalData={referenceMonth:scope.toMonth,salesTrend:emptySeries,salesAmountTrend:emptySeries,asinProfits:{status:'not-collected' as const,items:{},requestedAsins:[],missingAsins:[],sourceRefs:[],errorCode:null}};

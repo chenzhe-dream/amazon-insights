@@ -1,4 +1,5 @@
 "use client";
+import {MarketDevelopmentConclusion} from './market-development-conclusion';
 import {marketThemeLanguage} from '../shared/market-theme-translation-contracts';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
@@ -90,5 +91,6 @@ export function MarketThemeInsightPanel({entry,writesDisabled,onWriteState}:{ent
    {!result&&sampleError?<div className="pending-box" role="alert"><strong>样本读取失败</strong><span>{sampleError}</span></div>:!shownAsins?<div className="pending-box" role="status">正在读取样本…</div>:shownAsins.length?<MarketThemeSampleTable asins={shownAsins} samples={selection?.samples} translations={translations} marketplace={entry.report.scope.marketplace} busy={busy||writesDisabled} onRemove={selection&&!readOnly?asin=>void change([...(result?.excludedAsins??[]),asin]):undefined}/>:<div className="pending-box">暂无可展示的样本。</div>}
    {result&&result.excludedAsins.length>0&&<details><summary>已移出样本（{result.excludedAsins.length}）</summary><p>{result.excludedAsins.join('、')}</p></details>}
   </MarketThemeLaunchSection>
+  {selection&&<MarketDevelopmentConclusion basis={{kind:'reviews',runId,attemptId,revisionId:selection.revision?.revisionId??null}} writesDisabled={writesDisabled||busy}/>}
  </>;
 }

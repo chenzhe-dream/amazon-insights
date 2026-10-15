@@ -1,3 +1,4 @@
+import {ConclusionBasisSchema,ConclusionQuerySchema} from '../../shared/market-development-conclusion';
 import {ProjectFavoriteError} from '../db/postgres/market-project-favorites-store';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -30,6 +31,11 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
       throw error;
     }
   }
+  app.get('/v1/market-analysis/conclusions',async req=>execute(req,async(s,actor)=>{
+    const query=ConclusionQuerySchema.parse(req.query);let decoded:unknown;try{decoded=JSON.parse(query.basis);}catch{throw new ContractRouteError(400,'VALIDATION_ERROR','结论范围参数无效');}
+    const basis=ConclusionBasisSchema.parse(decoded);return s.developmentConclusion(actor,basis,query.snapshot);
+  }));
+  app.post('/v1/market-analysis/conclusions',async req=>execute(req,(s,actor)=>s.saveDevelopmentConclusion(actor,req.body)));
   app.post('/v1/market-analysis/studies', async (req, reply) => execute(req, async (s, actor) => {
     const { created, ...result } = await s.createStudy(actor, req.body, req.headers['idempotency-key']); reply.code(created ? 201 : 200); return result;
   }));

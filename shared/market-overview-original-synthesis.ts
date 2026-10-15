@@ -10,7 +10,7 @@ export const MarketOverviewChapterExplanationSchema=z.object({
  opportunity:z.string().max(1000).optional(),id:z.string().min(1).max(80),status:chapterStatus,performance:z.string().min(1).max(1000),meaning:z.string().min(1).max(1000),conclusion:z.string().min(1).max(1000),missing:z.array(z.string().max(240)).max(20),sourceRefs:z.array(z.string().regex(/^market-source:[a-f0-9]{64}$/)).max(200)
 }).strict();
 export const MarketOverviewOriginalSynthesisSchema=z.object({
- derivation:z.object({ruleVersion:z.literal("market-overview-derived/20261015.1"),projectionHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
+ derivation:z.object({ruleVersion:z.enum(["market-overview-derived/20261015.1","market-overview-derived/20261015.2"]),projectionHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
  version:z.literal(6),
  summary:z.object({version:z.literal(6),ruleVersion:z.literal(MARKET_OVERVIEW_ZIP_RULE_VERSION),score,grade:z.enum(['极高机会','高机会','良好机会','一般机会','谨慎机会','低机会']).nullable(),gradeLabel:z.enum(['重点准入','优先准入','建议准入','可评估准入','谨慎准入','不建议准入']).nullable(),gradeDefinition:z.string(),scores,sections:z.object({demand:z.string(),competition:z.string(),maturity:z.string(),newEntry:z.string(),productOpportunity:z.string(),priceOpportunity:z.string()}).strict(),topOpportunities:z.array(z.string()),topRisks:z.array(z.string()),finalVerdict:z.string(),crossSignals:z.array(z.string())}).strict(),
  evaluation:OverviewScoreEvaluationSchema.optional(),

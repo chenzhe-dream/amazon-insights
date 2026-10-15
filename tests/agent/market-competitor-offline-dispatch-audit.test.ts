@@ -1,3 +1,4 @@
+import {MarketDevelopmentConclusionService} from '../../server/services/market-development-conclusion-service';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -122,6 +123,14 @@ test('offline real market workers and competitor collection scripts expose dispa
  const request={scope:{marketplace:'US',nodeQuery:'34',month:'2026-09',headTopN:10,newProductMonths:6},fromMonth:'2026-07'};
  const runBatch=async(forceRefresh=false,failModules=false)=>{const id=randomUUID();await linked.create(actor,{...request,forceRefresh},id);await basicWorker.tick();await linked.tick();const batch=(await linked.find(actor,id)).batch;assert.equal(batch.status,'started',JSON.stringify(batch));quotaDuringModules=failModules;try{await drain();}finally{quotaDuringModules=false;}const views=[];for(const entry of Object.values(batch.modules)){const view=await steps.findModuleRun({actor,moduleRunId:entry.runId!});assert.ok(view);const summary={module:view.run.moduleKind,status:view.run.status,steps:view.steps.map(s=>({kind:s.kind,status:s.status,input:s.input})),errors:view.attempts.filter(a=>a.error).map(a=>a.error)};views.push(summary);console.log('AUDIT module '+JSON.stringify({...summary,steps:summary.steps.filter(s=>s.status==='failed')}));}return {batch,views};};
  phase='market-linked-100';const initial=await runBatch();await checkpoint(phase);
+ const conclusions=new MarketDevelopmentConclusionService(context,service),conclusionBasis={kind:'linked' as const,batchId:initial.batch.id};
+ const callsBeforeConclusion=physical.length,preview=await conclusions.read(actor,conclusionBasis);
+ assert.equal(preview.response.conclusion.evidence.length,4);assert.ok(preview.response.conclusion.evidence.every(e=>e.identity&&e.status!=='mismatch'&&e.status!=='missing'),JSON.stringify(preview.response.conclusion.evidence));
+ const frozenConclusion=await conclusions.save(actor,conclusionBasis,preview.response.contentHash);
+ assert.ok(frozenConclusion.savedAt);assert.equal(physical.length,callsBeforeConclusion,'conclusion generation and freeze use no provider calls');
+ if(process.env.MARKET_VIRTUAL_CONCLUSIONS_ONLY==='1'){assert.deepEqual((await conclusions.read(actor,conclusionBasis,frozenConclusion.contentHash)).response.conclusion,frozenConclusion.conclusion);console.log('CONCLUSION four modules generated, frozen and replayed; provider delta 0');return;}
+
+
  phase='market-expand-150';const study=await service.createStudy(actor,{marketplace:'US',currency:'USD',nodeIdPath:'12:34',fromMonth:'2026-07',toMonth:'2026-09'},randomUUID());
  const expanded=await service.startShapes(actor,study.study.id,{poolSize:150,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion:'manual-after-collection/v1',allowedLabels:[]}},randomUUID());await drain();const shape=(await service.findShapes(actor,expanded.run.id)).run;await checkpoint(phase);
  assert.equal(shape.source?.products.length,150,JSON.stringify({shape,initial:initial.views,physical}));assert.equal(shape.status,'succeeded');
@@ -200,6 +209,7 @@ test('offline real market workers and competitor collection scripts expose dispa
  assert.equal(physical.length,failedRestoreCalls,'ordinary query after quota failure is local only');
  for(const module of modules)assert.equal(recovered.batch.modules[module].runId,refreshed.batch.modules[module].runId,module+' selects latest good report rather than failed refresh');
  scenarios.push({name:'ordinary-after-failure',sameFourRunIds:true,newJobs:0,newRuns:0,newSteps:0,providerCalls:0});await checkpoint(phase);
+ const frozenReplay=await conclusions.read(actor,conclusionBasis,frozenConclusion.contentHash);assert.deepEqual(frozenReplay.response.conclusion,frozenConclusion.conclusion,'refresh failures cannot rewrite frozen conclusions');
  console.log('SCENARIOS '+JSON.stringify(scenarios));
  const report={synthetic:true,liveCalls:0,directory,scenarios,initial:initial.views,repeated:repeated.views,expanded:{products:shape.source?.products.length,status:shape.status},modelCalls,checkpoints,physical,logical,stageResults};
  const reportPath=path.join(root,'.runtime','market-competitor-offline-dispatch-audit.json');await writeFile(reportPath,JSON.stringify(report,null,2));console.log('AUDIT report '+reportPath);
