@@ -1,3 +1,7 @@
+## 2026-10-15 business flow audit supplement
+
+The original technical diagram below is not a complete business-output inventory. The current four-module business diagram and the seven-region shape drilldown are documented in [market-business-flow-20261015.md](../../../docs/market-research/market-business-flow-20261015.md), with ZIP/live-runtime evidence in [zip-business-parity-audit-20261015.md](../../../docs/market-research/zip-business-parity-audit-20261015.md). Shape synthesis is wired, but the inspected saved report is gated by missing six-month sales. Margin shape/band guides, TOP10 brand-layout output and embedded confidence have confirmed presentation gaps. These findings are open, not marked implemented by this documentation update. No 31900 publication is authorized by this audit.
+
 ## Context
 
 Approved source: `.superpowers/reviews/market-backend-flow-20260916/review-notes.md` and its diagram. See proposal.md for motivation. `MarketModuleService.startOverview` currently freezes v3 and expanded catalog; runtime already implements v5 with complete table catalog and a separate `overviewSynthesis*` identity. The public HTTP shape and frontend already understand persisted synthesis reports. The no-model fallback worker currently admits only overview v1-v3 and must be checked alongside the new entrypoint.
