@@ -181,7 +181,7 @@ test('observed zero keeps a visible preview mark while wholly missing data stays
 test('original business tables show metrics and keep coverage in tooltips or collapsed details',()=>{
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
  const tables=html.match(/<table[^>]*shape-price-table[\s\S]*?<\/table>/g)??[];
- assert.equal(tables.length,4);
+ assert.equal(tables.length,5); // Four original aggregates plus the restored TOP 10 brand layout.
  for(const table of tables)assert.doesNotMatch(table.replace(/<[^>]*>/g,''),/可计算/);
  assert.match(html,/<details class="shape-history-coverage"/);
 });
@@ -208,4 +208,19 @@ test('fixed-shape legacy labels remain visible but do not enter shape statistics
  assert.equal(analysis.shapes[0]?.label,'未分类');
  const conclusions=buildReferenceConclusions(value,assignments,['B000000001'],allowed);
  assert.doesNotMatch(JSON.stringify(conclusions),/旧分类/);
+});
+
+
+test('missing history still renders a factual summary without a full score and lists every affected product',()=>{
+ const value=structuredClone(report);
+ value.products[0].sales.last6Months=null;
+ value.products.push({...structuredClone(value.products[0]),asin:'B000000002',sales:{...value.products[0].sales,last3Months:null}});
+ const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);
+ const summary=html.slice(html.indexOf('id="market-structure-synthesis-conclusion"'));
+ assert.match(summary,/阶段总结 · 已保存证据/);
+ assert.match(summary,/当前所选 2 条商品均保留/);
+ assert.match(summary,/销量已知 0\/2 条，已知销量合计 未知/);
+ assert.match(summary,/B000000001/);assert.match(summary,/B000000002/);
+ assert.match(summary,/近3个月销量/);assert.match(summary,/近6个月销量/);
+ assert.doesNotMatch(summary,/\d+\/100/);
 });

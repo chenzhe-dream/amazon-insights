@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { buildReferenceConclusions } from "../../app/market-shape-reference/conclusions";
-import { ReferenceConclusionsView, ReferenceShapePriceConclusion, ReferenceBrandPriceConclusion } from "../../app/market-shape-reference/conclusions/view";
+import { ReferenceConclusionsView, ReferenceMarginConclusion, ReferenceSynthesisConclusion, ReferenceShapePriceConclusion, ReferenceBrandPriceConclusion } from "../../app/market-shape-reference/conclusions/view";
 import type { SorftimeCategoryDashboardReport } from "../../app/market-shape-reference/types";
 
 const product = (asin: string, shape: string, price: number, sales: number, year: string) => ({
@@ -203,4 +203,48 @@ test("complete input matches the preserved original reference analyzers", async 
 test('legacy annual date interpretation keeps a saved missing-year conclusion unavailable',()=>{
  const source=structuredClone(report);source.calculationVersion='shape-reference/1';source.products=source.products.slice(0,1);source.products[0].onlineDate='2026/01/01';source.products[0].sales.y2024=null;source.products[0].sales.y2025=null;
  const result=buildReferenceConclusions(source,{});assert.equal(result.synthesis.status,'insufficient');assert.equal(result.brandPrice.status,'insufficient');
+});
+
+// Missing one product must not hide the saved evidence summary or invent a complete score.
+test('partial summary keeps all selected products and lists every missing input', async () => {
+  const {buildReferenceEvidenceSummary} = await import('../../app/market-shape-reference/conclusions/evidence-summary');
+  const source = structuredClone(report);
+  source.products[0].sales.last6Months = null;
+  source.products[1].sales.last3Months = null;
+  const before = JSON.stringify(source);
+  const summary = buildReferenceEvidenceSummary(source, {});
+  assert.equal(summary.total, 2);
+  assert.equal(summary.sixMonthKnown, 1);
+  assert.equal(summary.sixMonthSales, 1200);
+  assert.ok(summary.gaps.some(g => g.asin === 'A' && g.fields.includes('近6个月销量')));
+  assert.ok(summary.gaps.some(g => g.asin === 'B' && g.fields.includes('近3个月销量')));
+  assert.equal(buildReferenceConclusions(source, {}).synthesis.status, 'insufficient');
+  assert.equal(JSON.stringify(source), before);
+  assert.equal(buildReferenceEvidenceSummary(source, {}, ['A']).sixMonthSales, null);
+  assert.equal(buildReferenceEvidenceSummary(source, {}, []).total, 0);
+});
+
+test('restored original detail panels and embedded confidence remain visible', () => {
+  const result = buildReferenceConclusions(report, {});
+  assert.equal(result.brandPrice.status, 'ready');
+  if(result.brandPrice.status !== 'ready') return;
+  const html = renderToStaticMarkup(createElement(ReferenceBrandPriceConclusion, {result:result.brandPrice.result, embedded:true}));
+  assert.match(html, /TOP 10 品牌布局/);
+  assert.match(html, /置信度/);
+  assert.match(html, /Brand A/);
+});
+
+
+test('margin guidance and embedded final confidence are restored without mutating rule results',()=>{
+ const result=buildReferenceConclusions(report,{});
+ if(result.margin.status!=='ready'||result.synthesis.status!=='ready') return assert.fail('fixture must produce complete conclusions');
+ const before=JSON.stringify(result);
+ const marginHtml=renderToStaticMarkup(createElement(ReferenceMarginConclusion,{result:result.margin.result}));
+ assert.match(marginHtml,/market-structure-margin-shape-card/);
+ assert.match(marginHtml,/Desk/);assert.match(marginHtml,/Floor/);assert.match(marginHtml,/形态内销量占比/);
+ const html=renderToStaticMarkup(createElement(ReferenceSynthesisConclusion,{result:result.synthesis.result,embedded:true}));
+ assert.match(html,/五维结构综合 · 置信度/);
+ assert.match(html,/优先\/建议进入销量占比/);
+ assert.match(html,/market-structure-margin-shape-tiers-merged/);
+ assert.equal(JSON.stringify(result),before);
 });
