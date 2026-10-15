@@ -20,5 +20,5 @@
 - [x] Update browser fixtures for the new contract; investigate the cancellation timing failure without masking it.
 - [x] Run targeted regressions, full synthetic 150+10 scenario, typecheck, build and diff checks.
 - [x] Save candidate changes and this fix in Git; back up and update 32900/32901, verify matching identities.
-- [ ] Verify historical UI on the deployed 32900 after user login (both Chrome tabs currently show login).
+- [x] Verify deployed 32900 historical UI after login: ordinary keyword/theme queries reuse old runs with no new jobs/source events; failed theme task retains its clearly identified historical report across reload.
 - [ ] User acceptance of 32900; 31900 remains pending.
