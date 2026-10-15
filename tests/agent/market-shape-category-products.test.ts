@@ -59,3 +59,16 @@ for(const poolSize of [150,200])test(`category_products head preserves verified 
  }}});assert.notEqual(expansion.status,'failed');if(expansion.status==='failed')return;
  assert.equal(new Set([...head.products,...expansion.products].map(p=>p.asin)).size,poolSize);assert.equal(expansion.products.at(-1)!.sourceRank,poolSize);
 });
+
+test('legacy zero-price snapshots replay exactly but present an unknown price',async()=>{
+ const legacyPayload={data:{category_stats_report:{category_name:'Kick Scooters'},top100_products:[{asin:row.asin,title:'Scooter',price:0,category_rank:'Kick Scooters (Rank: 1)'}]}};
+ const result=await collectSorftimeShapePoolPage({scope,jobId:'legacy',replayOperation:'category_report',now:()=>new Date(at),connector:{id:'sorftime',probe:async()=>{throw Error('unused')},execute:async r=>({data:legacyPayload,source:{connectorId:'sorftime',operation:r.operation,fetchedAt:at,attemptCount:1}})}});assert.notEqual(result.status,'failed');if(result.status==='failed')return;
+ const sourceRef='market-source:'+digest(result.evidence);
+ const makeSnapshot=(price:number)=>createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:at,expectedRecordIds:[row.asin],records:result.products.map(product=>({id:product.asin,scope,data:{collection:'sorftime-shape-pool',product:{...product,price},sourceRef}}))});
+ let snapshot=makeSnapshot(0);
+ const view={run:{id:'71000000-0000-4000-8000-000000000002',scope,params:{poolSize:100}},steps:[{id:'step',kind:'collect-shape-pool',input:{poolSize:100}}],attempts:[{id:'attempt',stepId:'step',status:'succeeded',output:{sourceRef,inputSnapshotId:snapshot.snapshotId,productCount:1,productAsins:[row.asin],receivedCount:1,categoryName:'Kick Scooters'}}]} as unknown as MarketModuleRunView;
+ const snapshots={findSource:async()=>({id:sourceRef,evidence:result.evidence}),findInput:async()=>({snapshot})} as unknown as PostgresMarketAnalysisSnapshotStore;
+ const input={view,actor:{organizationId:scope.organizationId,userId:'22222222-2222-4222-8222-222222222223'},snapshots,pageAttemptIds:['attempt']};
+ const replay=await replaySorftimeShapePoolPages(input);assert.deepEqual(replay.pages[0].snapshot,snapshot);assert.equal(replay.snapshot.snapshotId,snapshot.snapshotId);assert.equal(replay.publicPool.products[0].price,null);
+ snapshot=makeSnapshot(42);await assert.rejects(replaySorftimeShapePoolPages(input),/Pool input replay differs/);
+});

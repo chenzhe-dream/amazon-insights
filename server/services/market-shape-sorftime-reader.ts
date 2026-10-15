@@ -17,15 +17,28 @@ export async function replaySorftimeShapePoolPages({view,actor,snapshots,pageAtt
   if(!raw||!saved||digest(raw.evidence.scope)!==digest(view.run.scope)||raw.id!=='market-source:'+digest(raw.evidence))throw Error('Pool source scope differs');
   const result=await collectSorftimeShapePoolPage({scope:view.run.scope,jobId:'pool-replay',...(raw.evidence.operation==='category_report'?{replayOperation:'category_report' as const}:{}),poolSize:z.number().parse(input.poolSize),...(input.page===undefined?{}:{page:z.number().parse(input.page),categoryName:z.string().parse(input.categoryName)}),now:()=>new Date(raw.evidence.fetchedAt),connector:{id:'sorftime',probe:async()=>{throw Error('No replay probes')},execute:async()=>({data:structuredClone(raw.evidence.payload) as Record<string,unknown>,source:{connectorId:'sorftime',operation:raw.evidence.operation,fetchedAt:raw.evidence.fetchedAt,attemptCount:1}})}});
   if(result.status==='failed'||digest(result.evidence)!==digest(raw.evidence))throw Error('Pool source replay differs');
-  const expected=createMarketInputSnapshot({scope:view.run.scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:result.products.map(p=>p.asin),records:result.products.map(product=>({id:product.asin,scope:view.run.scope,data:{collection:'sorftime-shape-pool',product,sourceRef:raw.id}}))});
-  if(digest(expected)!==digest(saved.snapshot)||out.productCount!==result.products.length||digest(out.productAsins)!==digest(result.products.map(p=>p.asin))||out.receivedCount!==result.receivedCount||out.categoryName!==result.categoryName)throw Error('Pool input replay differs');
-  return {attempt,step,snapshot:saved.snapshot,sourceRef:raw.id,...result};
+  const makeSnapshot=(products:typeof result.products)=>createMarketInputSnapshot({scope:view.run.scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:products.map(p=>p.asin),records:products.map(product=>({id:product.asin,scope:view.run.scope,data:{collection:'sorftime-shape-pool',product,sourceRef:raw.id}}))});
+  let products=result.products;
+  if(digest(makeSnapshot(products))!==digest(saved.snapshot)){
+   // Older normalizers retained a provider's literal zero price. Reproduce only
+   // that known encoding, then require the entire frozen snapshot to match.
+   const payload=obj(raw.evidence.payload),data=payload.data??payload;
+   const rawRows=raw.evidence.operation==='category_report'?obj(data).top100_products:data;
+   const legacy=products.map(product=>{
+    const source=Array.isArray(rawRows)?obj(rawRows[product.sourceIndex]):{};
+    const value=source.price,zero=typeof value==='number'?value===0:typeof value==='string'&&/^0(?:\.0+)?$/.test(value.trim());
+    return product.price===null&&zero?{...product,price:0}:product;
+   });
+   if(digest(makeSnapshot(legacy))===digest(saved.snapshot))products=legacy;
+  }
+  if(digest(makeSnapshot(products))!==digest(saved.snapshot)||out.productCount!==result.products.length||digest(out.productAsins)!==digest(result.products.map(p=>p.asin))||out.receivedCount!==result.receivedCount||out.categoryName!==result.categoryName)throw Error('Pool input replay differs');
+  return {attempt,step,snapshot:saved.snapshot,sourceRef:raw.id,...result,products};
  }));
  const poolSize=z.number().int().min(1).max(300).parse(obj(view.run.params).poolSize),unique=new Map<string,typeof pages[number]['products'][number]>(),records=new Map<string,typeof pages[number]['snapshot']['records'][number]>();
  for(const page of pages)for(const product of page.products)if(!unique.has(product.asin)&&unique.size<poolSize){unique.set(product.asin,product);records.set(product.asin,page.snapshot.records.find(r=>r.id===product.asin)!);}
  const collectedAt=pages.map(p=>p.evidence.fetchedAt).sort().at(-1)!;
  const factory={scope:view.run.scope,kind:'products' as const,sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt,expectedRecordIds:[...unique.keys()],records:[...records.values()].map(r=>({id:r.id,scope:r.scope,data:r.data}))};
- return {pages,factory,snapshot:createMarketInputSnapshot(factory),publicPool:SorftimeShapePoolPublicSchema.parse({provider:'sorftime',period:'recent-30-days',fetchedAt:collectedAt,categoryName:pages[0].categoryName,products:[...unique.values()],sourceRefs:pages.map(p=>p.sourceRef),requestedSize:poolSize})};
+ return {pages,factory,snapshot:createMarketInputSnapshot(factory),publicPool:SorftimeShapePoolPublicSchema.parse({provider:'sorftime',period:'recent-30-days',fetchedAt:collectedAt,categoryName:pages[0].categoryName,products:[...unique.values()].map(p=>p.price===0?{...p,price:null}:p),sourceRefs:pages.map(p=>p.sourceRef),requestedSize:poolSize})};
 }
 export async function readMarketShapeSorftimePool(input:Input&{current:Set<string>}){
  const step=input.view.steps.find(s=>input.current.has(s.stepKey)&&obj(s.input).phase==='select-sorftime-shape-members');
