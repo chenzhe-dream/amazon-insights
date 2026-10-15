@@ -10,8 +10,8 @@
 - [x] O-03: Introduce reusable per-chapter evidence checks; retain usable facts, list missing fields, and prohibit unsupported conclusions.
 - [x] H-01: Inspect existing report generation/storage boundaries; preserve historical source data and distinguish frozen output from current derivation. Add persistence or version support where the current requirement needs it.
 - [x] Scheduler: Inspect actual worker advancement and existing virtual cost fixtures; run bounded offline comparison of cold, shared-cache and report-history paths. Change only demonstrated bottlenecks.
-- [ ] Regression: Run four-module/default/manual/history/cross-category suites, typecheck and build. Record actual outcomes and unresolved business boundaries.
-- [ ] Candidate: Update only 32900/32901 and verify saved reports and version identity; 31900 remains unchanged.
+- [x] Regression: Run four-module/default/manual/history/cross-category suites, typecheck and build. Record actual outcomes and unresolved business boundaries.
+- [x] Candidate: Update only 32900/32901 and verify saved reports and version identity; 31900 remains unchanged.
 
 - [x] N-01: Add category review development conclusions with positive requirements, negative risks, evidence and validation actions. Bind baseline/manual selection and saved attempt.
 - [x] N-02: Add four-module conclusions from matching saved report scope only, showing missing/failed modules separately. No new provider/model calls.
