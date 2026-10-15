@@ -1,3 +1,4 @@
+import {isLowReviewRange,isHighReviewRange} from '../../../../shared/market-numeric-range';
 import {
   analyzePriceBands,
   buildPriceOpportunityHeadline,
@@ -342,8 +343,8 @@ export function buildMarketOverviewSynthesis(
     listingAge,
     label => /1个月|3个月|半年|1年$|12个月|一年内|1年以内|0-6|6-12/.test(label),
   );
-  const highReviewShare = shareOf(ratingCounts, label => /500|1000|以上/.test(label) && !/1-50|50-100|100-200|200-300|300-500/.test(label));
-  const lowReviewShare = shareOf(ratingCounts, label => /1-50|50-100|100-300|<50|＜50/.test(label));
+  const highReviewShare = shareOf(ratingCounts, isHighReviewRange);
+  const lowReviewShare = shareOf(ratingCounts, isLowReviewRange);
   const midLowRatingShare = shareOf(ratingValues, label => /4\.0|4\.1|4\.2|4\.3|＜4/.test(label));
 
   const newRatio = niche.newRatio ?? 0;

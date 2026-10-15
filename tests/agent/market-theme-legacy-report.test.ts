@@ -1,3 +1,4 @@
+import {categoryProductsFixture} from './helpers/category-products-fixture';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -20,7 +21,7 @@ import type {RemoteMcpConnector} from '../../server/connectors/connector-contrac
 
 test('pre-status-field theme reports remain readable with their original hash and no source work',{timeout:120000},async t=>{
  const db=await startPostgresTestContainer();t.after(()=>db.close());await runPostgresMigrations(db.pool);const f=await createMarketSemanticFixture(db.pool);
- let calls=0;const source=(id:'sorftime'|'sellerSprite'):RemoteMcpConnector=>({id,probe:async()=>{throw Error('No probes')},execute:async r=>{calls++;return {data:id==='sorftime'?{data:{top100_products:[]}}:{code:'OK',data:[]},source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};}});
+ let calls=0;const source=(id:'sorftime'|'sellerSprite'):RemoteMcpConnector=>({id,probe:async()=>{throw Error('No probes')},execute:async r=>{calls++;return {data:id==='sorftime'?(r.operation==='category_products'?categoryProductsFixture({data:{top100_products:[]}},r.input.node_id):{data:{top100_products:[]}}):{code:'OK',data:[]},source:{connectorId:id,operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};}});
  const worker=new MarketModuleStepWorker({steps:f.stores.steps,handlers:{...createMarketSourceStepHandlers({context:f.context,connectors:{sellerSprite:source('sellerSprite'),sorftime:source('sorftime')}}),'prepare-members':createMarketSourceProjectionStep(f.context),report:createMarketThemeReportStep(f.context)}});t.after(()=>worker.stop());
  const service=new MarketModuleService({context:f.context,modelIdentity:()=>null});
  for(const flow of ['market-theme-flow/v1','market-theme-flow/v2','market-theme-flow/rules-v3'])await t.test(flow,async()=>{

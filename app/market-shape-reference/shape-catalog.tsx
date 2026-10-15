@@ -1,7 +1,7 @@
 "use client";
 import {useState} from 'react';
 export const SCOOTER_SHAPES=['三轮滑板车','小两轮滑板车','大两轮滑板车'];
-export function fixedShapeLabels(categoryName:string,nodeId:string){return /scooter|滑板车/i.test(categoryName)||nodeId.split(':').at(-1)==='13280971'?SCOOTER_SHAPES:[];}
+export function fixedShapeLabels(categoryName:string,nodeId:string,marketplace='US'){return marketplace==='US'&&nodeId.split(':').at(-1)==='13280971'&&!/mobility|electric|代步|电动/i.test(categoryName)?SCOOTER_SHAPES:[];}
 
 export function ShapeCatalog({labels,fixed,assignments,onAssignment,onLabels,disabled}:{labels:string[];fixed:string[];assignments:Record<string,string>;onAssignment:(asin:string,label:string)=>void;onLabels:(labels:string[])=>void;disabled:boolean}){
  const [name,setName]=useState(''),[target,setTarget]=useState(''),[deleting,setDeleting]=useState<string|null>(null),[error,setError]=useState('');

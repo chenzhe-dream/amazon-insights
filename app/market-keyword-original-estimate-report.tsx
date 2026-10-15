@@ -203,11 +203,11 @@ function ArchiveDemandSummary({ report }: { report: AmazonKeywordDemandReport })
   );
 }
 
-export function MarketKeywordOriginalEstimateReport({estimate,manual=false}:{estimate:MarketKeywordOriginalEstimate;manual?:boolean}){
+export function MarketKeywordOriginalEstimateReport({estimate,manual=false}:{estimate:Pick<MarketKeywordOriginalEstimate,'report'|'notes'|'totalKeywordCount'>;manual?:boolean}){
  const {report}=estimate,clusters=report.synthesis.clusters;
  const score=(value:number)=>value.toLocaleString('zh-CN',{maximumFractionDigits:2});
  return <section aria-label="原版关键词业务报告" className="market-keyword-report-stack">
-  {!manual&&<ArchiveDemandSummary report={report}/>}
+  {manual&&<p className="market-research-note">以下综合结论按当前人工修订的标签、归属及固定事实生成。</p>}<ArchiveDemandSummary report={report}/>
   <p className="market-research-note">按 {report.scope.sampleCount}/{estimate.totalKeywordCount} 个有效样本分析；规模统计月份未注明，采用来源页月搜索量。S3、S5 固定 50，S4 含中性估算；评分仅用于样本比较。</p>
   <details className="market-insights-evidence"><summary>评分与开发建议</summary>
    <div className="market-keyword-report-stack">

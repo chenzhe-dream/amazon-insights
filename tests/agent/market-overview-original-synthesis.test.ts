@@ -3,11 +3,11 @@ import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 const hashes={
- 'overview-synthesis':'63e600da48dd435db1f2cd6c6a39eb7748b10d8b4db806f3ec20c48c3a9d8727',
+ 'overview-synthesis':'2dd87d1142b4abad650a2d0ae4f7a64cc6227fccfe28670080a3528d3de313ec',
  'price-analysis':'ba6a3bd54b98c4af3b13306e408a0d2faf4d1ce5720878e045b7513af8177495',
  'niche':'d3f0adf7646614007113fde71dd16ed5c13b7ab6fe8b6b123f1add1028b5fbfc',
 };
-test('pure original synthesis, price rules and niche types retain exact reference bytes',()=>{
+test('review-boundary-patched synthesis and unchanged archive price rules retain recorded bytes',()=>{
  for(const [name,hash] of Object.entries(hashes)) assert.equal(createHash('sha256').update(readFileSync(new URL(`../../server/domain/market-research/original-overview/sellersprite-market-${name}.ts`,import.meta.url),'utf8').replace(/\r?\n/g,'\r\n').replace(/  \/\/ @ts-expect-error Original v6[^\r\n]*\r\n/,'')).digest('hex'),hash);
 });
 
@@ -186,3 +186,14 @@ test('concentration conclusions rank by validated unit share instead of provider
  ] as any;
  assert.deepEqual(rankConcentrationRows(rows).map(row=>row.label),['A','B','C']);
 });
+
+ test('partial product demand lists missing return and purchase ratios separately',()=>{
+ const result=project([source('market_product_demand_trend',{items:[{date:'2026-07-01',glanceViews:100},{date:'2026-08-01',glanceViews:110}],returnRatio:null,searchToPurchaseRatio:null})]);
+ const chapter=result.chapters!.find(c=>c.id==='product-demand')!;
+ assert.equal(chapter.status,'partial');assert.ok(chapter.missing.some(x=>x.includes('退货率')));assert.ok(chapter.missing.some(x=>x.includes('搜索购买比')));
+ });
+ test('A+ chapter owns its content opportunity and never reuses new-entry conclusion',()=>{
+ const result=project([source('market_ebc_distribution',[{label:'A+',products:70,units:90,unitsRatio:.9},{label:'无A+',products:30,units:10,unitsRatio:.1}])]);
+ const chapter=result.chapters!.find(c=>c.id==='ebc')!;
+ assert.ok(chapter.opportunity?.includes('内容'));assert.notEqual(chapter.conclusion,result.summary.sections.newEntry);
+ });

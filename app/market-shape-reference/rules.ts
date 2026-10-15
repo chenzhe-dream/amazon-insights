@@ -92,11 +92,11 @@ export function referenceMonthlyAverage(sales: number | null, coverage: Referenc
   return round ? Math.round(average) : average;
 }
 
-export function formatPriceBand(price: number | null | undefined): string {
+export function formatPriceBand(price: number | null | undefined,currency="USD"): string {
   const value = known(price);
   if (value === null || value <= 0) return "—";
   const low = Math.floor(value / 10) * 10;
-  return `$${low}-${low + 10}`;
+  return `${currency==="USD"?"$":currency+" "}${low}-${low + 10}`;
 }
 
 export function resolveProductPriceBand(product: Pick<SorftimeCategoryDashboardProduct, "priceBand" | "price">): string {

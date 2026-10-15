@@ -23,12 +23,14 @@ export function projectThemeSample(input:{asin:string;sourceIndex:number;product
 export function deriveThemeSelection(facts:ReturnType<typeof restoreMarketThemeDetails>,excluded:readonly string[],reconciliationRequired:boolean,baseSelectionShortfall=false,rulesOnly=false,originalRules=false){
  const original=facts.aggregation.scope.selectedAsins;
  if(new Set(excluded).size!==excluded.length||excluded.some(a=>!original.includes(a)))throw new TypeError('Excluded ASIN is outside the fixed base selection');
- const selectedAsins=original.filter(a=>!excluded.includes(a)),results:CustomerThemesAsinInput[]=[];
- for(const a of facts.aggregation.perAsin.filter(a=>selectedAsins.includes(a.asin))){
+ const selectedAsins=original.filter(a=>!excluded.includes(a)),allResults:CustomerThemesAsinInput[]=[];
+ for(const a of facts.aggregation.perAsin){
   if(a.reportedStatus===null)continue;
-  if(a.reportedStatus==='success'){if(!a.source)throw new TypeError('Missing source');results.push({asin:a.asin,status:'success',source:a.source,...(a.quarantine?{quarantine:a.quarantine}:{}),themes:a.themes.map(t=>({sourceThemeId:t.sourceThemeId,keyword:t.keyword,content:t.content,mention:t.mention,positive:t.positive,negative:t.negative,sourceUpdatedAt:t.sourceUpdatedAt}))});}
-  else results.push({asin:a.asin,status:a.reportedStatus,source:a.source,reason:a.reason!});
+  if(a.reportedStatus==='success'){if(!a.source)throw new TypeError('Missing source');allResults.push({asin:a.asin,status:'success',source:a.source,...(a.quarantine?{quarantine:a.quarantine}:{}),themes:a.themes.map(t=>({sourceThemeId:t.sourceThemeId,keyword:t.keyword,content:t.content,mention:t.mention,positive:t.positive,negative:t.negative,sourceUpdatedAt:t.sourceUpdatedAt}))});}
+  else allResults.push({asin:a.asin,status:a.reportedStatus,source:a.source,reason:a.reason!});
  }
+ const results=allResults.filter(r=>selectedAsins.includes(r.asin));
+ const baseGroups=facts.aggregation.display.omittedGroupCount===0?facts.aggregation.groups:aggregateCustomerThemes({selectedAsins:original,results:allResults,mappings:facts.aggregation.mappings}).groups;
  const members=new Set(results.flatMap(r=>r.status==='success'?r.themes.map(t=>t.sourceThemeId):[])),decisions=facts.decisions.filter(d=>members.has(d.sourceThemeId));
  const topN=facts.aggregation.display.topN;
  const a=aggregateCustomerThemes({selectedAsins,results,mappings:facts.aggregation.mappings.filter(m=>members.has(m.sourceThemeId))});
@@ -38,10 +40,15 @@ export function deriveThemeSelection(facts:ReturnType<typeof restoreMarketThemeD
  const sentimentGroupCounts={positive:a.groups.filter(g=>themeMatchesSentiment(g.totals,'positive',originalRules)).length,negative:a.groups.filter(g=>themeMatchesSentiment(g.totals,'negative',originalRules)).length};
  const labels=new Map(facts.labels.map(l=>[l.groupId,l])),decisionMap=new Map(decisions.map(d=>[d.sourceThemeId,d]));
  const preview=(s:string)=>({text:s.slice(0,2000),totalLength:s.length,truncated:s.length>2000});
- const groups=displayedGroups.map((g,index)=>{const label=g.groupId?labels.get(g.groupId):undefined;return {kind:'group' as const,index,groupId:g.groupId,mappingStatus:g.mappingStatus,labelZh:label?.labelZh??null,definition:label?.definition??null,labelOrigin:label?.origin??null,sourceLabel:g.mappingStatus==='unmapped'?preview(g.members[0].keyword):null,memberCount:g.members.length,totals:g.totals,topicShare:g.topicShare};});
+ const baseIndex=(g:typeof a.groups[number])=>{
+  const index=baseGroups.findIndex(base=>g.groupId!==null?base.groupId===g.groupId:base.groupId===null&&base.members.some(member=>g.members.some(retained=>retained.sourceThemeId===member.sourceThemeId)));
+  if(index<0)throw new TypeError('Theme group is outside the frozen base report');
+  return index;
+ };
+ const groups=displayedGroups.map(g=>{const label=g.groupId?labels.get(g.groupId):undefined;return {kind:'group' as const,index:baseIndex(g),groupId:g.groupId,mappingStatus:g.mappingStatus,labelZh:label?.labelZh??null,definition:label?.definition??null,labelOrigin:label?.origin??null,sourceLabel:g.mappingStatus==='unmapped'?preview(g.members[0].keyword):null,memberCount:g.members.length,totals:g.totals,topicShare:g.topicShare};});
  const shown=new Set([...groups.filter(g=>themeMatchesSentiment(g.totals,'positive',originalRules)).sort((x,y)=>y.totals.mention-x.totals.mention).slice(0,12),...groups.filter(g=>themeMatchesSentiment(g.totals,'negative',originalRules)).sort((x,y)=>y.totals.negative-x.totals.negative||y.totals.mention-x.totals.mention).slice(0,12)].map(g=>g.index));
  const unknownCount=decisions.filter(d=>d.status==='unknown').length,unavailableCount=decisions.filter(d=>d.status==='unavailable').length;
- const evidence=a.groups.flatMap((g,index)=>{if(!shown.has(index))return [];const counts=new Map<string,number>();for(const m of g.members)counts.set(m.asin,(counts.get(m.asin)??0)+m.mention);
+ const evidence=a.groups.flatMap(g=>{const index=baseIndex(g);if(!shown.has(index))return [];const counts=new Map<string,number>();for(const m of g.members)counts.set(m.asin,(counts.get(m.asin)??0)+m.mention);
   const uniqueMembers=[...new Map(g.members.filter(t=>t.content.trim()).map(t=>[t.content.trim(),t])).values()].slice(0,3);
   return [{index,topAsins:[...counts].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0])).slice(0,3).map(([asin,mention])=>({asin,mention})),members:uniqueMembers.map(t=>({kind:'member' as const,sourceThemeId:t.sourceThemeId,asin:t.asin,sourceRecordId:t.sourceRecordId,sourceUpdatedAt:t.sourceUpdatedAt,keyword:preview(t.keyword),content:preview(t.content),mention:t.mention,positive:t.positive,negative:t.negative,withinAsinShare:a.perAsin.find(p=>p.asin===t.asin)!.themes.find(m=>m.sourceThemeId===t.sourceThemeId)!.topicShare,decision:decisionMap.get(t.sourceThemeId)!}))}];});
  const result=MarketThemeSelectionResultSchema.parse({selectedAsins,excludedAsins:original.filter(a=>excluded.includes(a)),status:!a.dataReady?'no-data':a.coverage.status==='partial'||baseSelectionShortfall||!rulesOnly&&(unknownCount||unavailableCount||reconciliationRequired)?'partial':'complete',totals:a.totals,metricKind:a.metricKind,sentimentOverlap:a.sentimentOverlap,reviewDeduplication:'unavailable',mappingBasis:'inherited-from-base-report',baseSelectionShortfall,reconciliationRequired,unknownCount,unavailableCount,sentimentGroupCounts,previewOmittedGroupCount:groups.length-shown.size,groups:groups.filter(g=>shown.has(g.index)),evidence,display,

@@ -1,16 +1,9 @@
+import {SCENE_PATTERNS,W4_FAMILIES,detectW2Label} from '../../../shared/market-keyword-semantic-rules';
 // Preserved archive business algorithm. Estimation and pre-merge score behavior are intentional.
 import { classifyKeywordDetailed } from "../../../app/keyword-classifier";
 import type { KeywordCategory } from "../../../app/keyword-meaning-taxonomy";
 import type { ProductKeywordRow, ProductKeywordSearchReport, ProductKeywordTrendPoint } from "../../../shared/market-keyword-original-input";
 type ManualDimensions = NonNullable<ProductKeywordSearchReport['manualDimensions']>;
-
-const SCENE_PATTERNS = [
-  { label: "客厅", pattern: /living room|for sala|para sala/i },
-  { label: "卧室", pattern: /bedroom|bed room/i },
-  { label: "办公室", pattern: /office/i },
-  { label: "角落", pattern: /corner/i },
-  { label: "户外", pattern: /outdoor|patio|garden/i },
-] as const;
 
 const W4_LABELS: Partial<Record<KeywordCategory, string>> = {
   function: "功能",
@@ -19,55 +12,7 @@ const W4_LABELS: Partial<Record<KeywordCategory, string>> = {
   benefit: "利益",
 };
 
-const BRAND_W2_FALSE_POSITIVE = /\bhi[\s-]?boy\b/i;
 
-function detectW2Label(keyword: string, category: KeywordCategory): string | null {
-  if (category === "brand_competitor") return null;
-  const text = keyword.toLowerCase();
-  if (BRAND_W2_FALSE_POSITIVE.test(text)) return null;
-
-  const forMatch = text.match(
-    /\bfor\s+(kids?|children|child|adults?|adult|teens?|teenagers?|toddlers?|babies|baby|infants?|seniors?|senior|elderly|beginners?|beginner|boys?|girls?|men|women)\b/i,
-  );
-  if (forMatch) {
-    const token = forMatch[1].toLowerCase();
-    if (/^(kids?|children|child|toddlers?|babies|baby|infants?)$/.test(token)) return "儿童";
-    if (/^(teens?|teenagers?)$/.test(token)) return "青少年";
-    if (/^(adults?|adult)$/.test(token)) return "成人";
-    if (/^(seniors?|senior|elderly)$/.test(token)) return "老人";
-    if (/^(beginners?|beginner)$/.test(token)) return "初学者";
-    if (/^(boys?|men)$/.test(token)) return "男性";
-    if (/^(girls?|women)$/.test(token)) return "女性";
-  }
-
-  if (category === "age" || /\bages?\s*\d|\d+\s*[-–]\s*\d+/.test(text)) {
-    if (/\b(teens?|teenagers?|1[3-9])\b/.test(text)) return "青少年";
-    return "儿童";
-  }
-
-  if (/\b(teens?|teenagers?)\b/.test(text)) return "青少年";
-  if (/\b(kids?|children|child|toddlers?|baby|babies|infants?|niños?|niñas?|ninos?|ninas?)\b/.test(text)) return "儿童";
-  if (/\b(adults?|adult)\b/.test(text)) return "成人";
-  if (/\b(seniors?|senior|elderly)\b/.test(text)) return "老人";
-  if (/\b(beginners?|beginner)\b/.test(text)) return "初学者";
-  if (/\b(women|woman)\b/.test(text) || /\bfor girls?\b/.test(text)) return "女性";
-  if (/\bfor boys?\b/.test(text) || (/\b(men|man)\b/.test(text) && !/\b(women|woman)\b/.test(text))) return "男性";
-
-  // The age branch above already returns; this preserves runtime behavior.
-  if (category === "audience") return "其他人群";
-
-  return null;
-}
-
-const W4_FAMILIES = [
-  { label: "LED/光源", pattern: /\bled\b|light.?up|bulb/i },
-  { label: "调光", pattern: /dimmable|dimmer|brightness|touch control/i },
-  { label: "现代风格", pattern: /modern|contemporary|minimalist|mid century/i },
-  { label: "尺寸结构", pattern: /tall|small|large|skinny|arc|tripod|corner|slim|compact|mini/i },
-  { label: "材质", pattern: /wood|metal|brass|glass|fabric|rattan|bamboo|marble/i },
-  { label: "智能控制", pattern: /smart|wifi|bluetooth|app|remote control|alexa/i },
-  { label: "便携/折叠", pattern: /portable|foldable|collaps|travel/i },
-] as const;
 
 const W5_LABELS: Record<string, string> = {
   growing: "上升期",

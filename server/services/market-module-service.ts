@@ -201,7 +201,7 @@ export class MarketModuleService {
     const {facts,reconciliation}=result.run;
     const automaticClassification=facts&&result.run.semanticStatus==='skipped'?buildKeywordOriginalClassification(facts,result.run.params.plannedPages[0].seed):undefined;
     const ruleReport=facts?buildMarketKeywordRuleReport({facts,classification:automaticClassification?{kind:'local',report:automaticClassification}:reconciliation?{kind:'global',report:reconciliation}:null}):null;
-    return {...result,run:{...result.run,...(automaticClassification?{automaticClassification}:{}),...(ruleReport&&facts?{ruleReport,originalEstimate:automaticClassification?buildKeywordOriginalEstimate({facts,productSeed:automaticClassification.productSeed}):undefined,scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
+    return {...result,run:{...result.run,...(automaticClassification?{automaticClassification}:{}),...(ruleReport&&facts?{ruleReport,originalEstimate:buildKeywordOriginalEstimate({facts,productSeed:automaticClassification?.productSeed??result.run.params.plannedPages[0]?.seed??"产品"}),scoreInputAudit:buildMarketKeywordScoreInputAudit({facts,report:ruleReport})}:{})}};
   }
   async saveKeywordRevision(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     id=MarketModuleIdSchema.parse(id);

@@ -196,13 +196,13 @@ test('known aggregate coverage, original editing tools and missing year average 
 });
 
 test('fixed scooter names keep an old label visible without allowing new arbitrary labels',()=>{
- const value=structuredClone(report);value.categoryName='Kick Scooters';
+ const value=structuredClone(report);value.categoryName='Kick Scooters';value.nodeId='13280971';
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{B000000001:'旧分类'}} selectedAsins={['B000000001']} onAssignment={()=>{}} onSelected={()=>{}}/>);
  assert.match(html,/<select[^>]*aria-label="B000000001 人工形态"/);assert.match(html,/三轮滑板车/);assert.match(html,/旧标签待确认：旧分类/);
 });
 
 test('fixed-shape legacy labels remain visible but do not enter shape statistics',()=>{
- const value=structuredClone(report);value.categoryName='Kick Scooters';
+ const value=structuredClone(report);value.categoryName='Kick Scooters';value.nodeId='13280971';
  const assignments={B000000001:'旧分类'};
  const allowed=['三轮滑板车','小两轮滑板车','大两轮滑板车'];
  const analysis=buildReferenceShapeAnalysis(value,assignments,['B000000001'],allowed);

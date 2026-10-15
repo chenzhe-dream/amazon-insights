@@ -99,7 +99,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const [editingAsin,setEditingAsin]=useState<string|null>(null);
   const { widths, setWidth } = useReferenceColumnWidths();
   const selected = new Set(selectedAsins);
-  const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId);
+  const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId,report.marketplace);
   const analysis = useMemo(() => buildReferenceShapeAnalysis(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
   const finalConclusion = useMemo(() => buildReferenceSynthesisPresentation(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
   const conclusions = useMemo(() => buildReferenceConclusions(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
@@ -212,12 +212,12 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
       {shapeConclusion.status === "ready" ? <><ConclusionScope slot={shapeConclusion} /><ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /></> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
-    <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
+    <LaunchSection title="商品形态 · 价格带分析" description={`按商品形态与 10 ${marketSites.find(site=>site.code===report.marketplace)?.currency??report.marketplace} 价格带交叉汇总`} badge={<span className="source-badge">{shapeBands.length} 组</span>}>
       <SectionFilter name="形态价格带" options={shapes} optionCounts={shapeCounts} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage context="形态价格带" calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
       <ShapePriceBandTable sort={bandSort} onSort={setBandSort} shapes={sortSectionRows(bandAnalysis.shapes,bandSort)} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
       {bandConclusion.status === "ready" ? <><ConclusionScope slot={bandConclusion} /><ReferenceShapePriceConclusion result={bandConclusion.result} embedded /></> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
-    <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
+    <LaunchSection title="品牌 · 价格带分析" description={`按品牌与 10 ${marketSites.find(site=>site.code===report.marketplace)?.currency??report.marketplace} 价格带交叉汇总`} badge={<span className="source-badge">{brandBands.length} 组</span>}>
       <SectionFilter name="品牌价格带" options={brands} optionCounts={brandCounts} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage context="品牌价格带" calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
       <AggregateTable sort={brandSort} onSort={setBrandSort} calculationVersion={analysis.calculationVersion} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
       {brandConclusion.status === "ready" ? <><ConclusionScope slot={brandConclusion} /><ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /></> : <p className="market-research-note">{brandConclusion.reason}</p>}

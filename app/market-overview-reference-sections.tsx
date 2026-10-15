@@ -19,7 +19,7 @@ function ChapterExplanation({chapter}:{chapter:Chapter|undefined}) {
  const status=chapter?.status==='ready'?'依据充分':chapter?.status==='partial'?'部分依据':'依据不足';
  return <section className="market-overview-business-explanation" data-explanation-status={chapter?.status??'missing'}>
   <h5>业务解释 · {status}</h5>
-  {chapter?<><dl><div><dt>数据表现</dt><dd>{chapter.performance}</dd></div><div><dt>数据含义</dt><dd>{chapter.meaning}</dd></div><div><dt>业务结论</dt><dd>{chapter.conclusion}</dd></div></dl>
+  {chapter?<><dl><div><dt>数据表现</dt><dd>{chapter.performance}</dd></div><div><dt>数据含义</dt><dd>{chapter.meaning}</dd></div><div><dt>业务结论</dt><dd>{chapter.conclusion}</dd></div>{chapter.opportunity&&<div><dt>开发机会</dt><dd>{chapter.opportunity}</dd></div>}</dl>
    {chapter.missing.length>0&&<p className="market-research-note">待补证据：{chapter.missing.join('；')}</p>}
   </>:<p className="market-research-note">当前报告暂无可用业务总结。</p>}
  </section>;
@@ -106,7 +106,7 @@ function SavedPriceBandDetails({detail,entries}:{detail:Details;entries:readonly
 /** Original chapter layout, over immutable saved report facts. */
 export function MarketOverviewReferenceSections({entry,detail,overview,headTopN=10}:{entry:Entry;detail:Details;overview:React.ReactNode;headTopN?:number}){
  const chapters=detail.numbers.chapterSynthesis?.chapters??detail.numbers.originalSynthesis?.chapters??[];
- return <>{overviewPresentationSections.map(section=>{
+ return <>{detail.numbers.chapterSynthesis?.derivation&&<p className="market-research-note">历史来源保持不变；章节解释按规则 {detail.numbers.chapterSynthesis.derivation.ruleVersion} 派生，非原保存结论。结果版本 {detail.numbers.chapterSynthesis.derivation.projectionHash.slice(0,12)}。</p>}{overviewPresentationSections.map(section=>{
   const entries=section.operation?selectOverviewDistributionEntries(detail.numbers.distributions??[],section.operation):[];
   return <section key={section.id} className="ss-report-block" data-report-section={section.id}><header><div><h4>{section.title}</h4><small>{overviewPeriodLabel(entry.report.scope)} · 当前保存报告</small></div></header>
    {section.id==='overview'?<><SavedOverviewFacts detail={detail}/>{overview}</>:section.id==='demand-keywords'?<MarketOverviewDemandTrend demand={detail.numbers.industryDemand} hasDemandStage={['market-overview-flow/rules-v3','market-overview-flow/rules-v4'].includes(entry.report.versions.planner)}/>:section.id==='sales-trend'?<SavedSalesChart detail={detail}/>:section.id==='product-demand'&&detail.numbers.productDemand?<MarketOverviewProductDemand demand={detail.numbers.productDemand} hasStage={entry.report.versions.planner==='market-overview-flow/rules-v4'}/>:section.id==='product-crn'?<SavedProductConcentration detail={detail} headTopN={headTopN}/>:section.operation?entries.length?<MarketOverviewDistributions key={`${entry.attemptId}/${section.id}`} entries={entries} currency={entry.report.scope.currency} rolling={!!entry.report.scope.overviewPeriod} embedded headTopN={headTopN}/>:<p className="ss-report-empty">此版本尚无该维度的已保存数据，其他可用结果继续保留。</p>:<p className="ss-report-empty">{section.missing}</p>}

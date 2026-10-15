@@ -1,4 +1,5 @@
 "use client";
+import {recoverKeywordDisplay} from '../shared/market-keyword-display-projection';
 import type {MarketKeywordOriginalEstimate} from '../shared/market-keyword-original-estimate-contracts';
 import {MarketKeywordOriginalEstimateReport} from './market-keyword-original-estimate-report';
 import React, {useState} from 'react';
@@ -98,7 +99,7 @@ function GlobalSemantics({facts,result}:{facts:MarketKeywordFacts;result:MarketK
 }
 export type MarketKeywordFactsReportProps={emptyReason?:string;automaticClassification?:MarketKeywordOriginalClassification;queryName?:string;facts:MarketKeywordFacts;catalog?:SourceCatalog;reconciliation?:MarketKeywordReconciliationReport;ruleReport?:MarketKeywordRuleReport;scoreInputAudit?:MarketKeywordScoreInputAudit;originalEstimate?:MarketKeywordOriginalEstimate;semanticSkipped?:boolean};
 export function MarketKeywordFactsReport({emptyReason,facts,catalog,reconciliation,ruleReport,originalEstimate,queryName,semanticSkipped=false,automaticClassification}:MarketKeywordFactsReportProps){
- const estimate=originalEstimate?.factsId===facts.factsId&&originalEstimate.classificationId===null?originalEstimate:undefined;
+ const estimate=originalEstimate?.factsId===facts.factsId&&originalEstimate.classificationId===null?originalEstimate:originalEstimate?undefined:recoverKeywordDisplay(facts,queryName??facts.members[0]?.occurrences[0]?.seed??"产品");
  return <section className="market-research-result market-keyword-report-stack" aria-label="关键词来源事实报告"><h3 className="market-research-sr-only">关键词来源事实</h3>
   {emptyReason&&<p role="status" className="market-research-notice">{emptyReason}</p>}
   <MarketKeywordTable automaticClassification={automaticClassification} queryName={queryName} facts={facts} catalog={catalog} reconciliation={semanticSkipped?undefined:reconciliation} semanticSkipped={semanticSkipped}/>

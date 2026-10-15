@@ -1,3 +1,5 @@
+import {overviewContentOpportunity} from './overview-content-opportunity';
+import {isLowReviewRange,isHighReviewRange} from '../../../shared/market-numeric-range';
 import {overviewSourceMonth} from '../../../shared/market-overview-period';
 import {projectOverviewProductDemand} from './overview-product-demand';
 import type {MarketOverviewExternalData} from '../../../shared/market-overview-external';
@@ -99,7 +101,7 @@ const countryConclusion=(rows:readonly SellerSpriteDistRow[])=>{
  return gap>=15?`“${top.label}”商品占比 ${productShare.toFixed(1)}%，销量占比 ${unitShare.toFixed(1)}%，已形成明显经营效率与供应链优势。`:gap<=-15?`“${top.label}”商品占比 ${productShare.toFixed(1)}%，销量占比 ${unitShare.toFixed(1)}%，供给数量多但平均经营效率偏低。`:`“${top.label}”占据主要分组，但商品与销量占比差距有限，地域集中度与经营效率仍需结合其他分组判断。`;
 };
 const reviewConclusion=(rows:readonly SellerSpriteDistRow[])=>{
- const low=rows.filter(row=>/^(?:<|＜)?\s*(?:50|100)|50-100|100-300/.test(row.label)),high=rows.filter(row=>/500|1000|以上|>/.test(row.label));
+ const low=rows.filter(row=>isLowReviewRange(row.label)),high=rows.filter(row=>isHighReviewRange(row.label));
  const lowShare=sumShares(low),highShare=sumShares(high);
  if(lowShare!=null&&lowShare>=15)return `低 Review 区间仍贡献约 ${lowShare.toFixed(1)}% 销量，新品不需要很高 Review 也有机会进入主流成交。`;
  if(highShare!=null&&highShare>=55)return `高 Review 区间贡献约 ${highShare.toFixed(1)}% 销量，Review 积累壁垒较高，新品需要预留评论增长周期。`;
@@ -150,7 +152,7 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
   const top=list[0],share=top?.unitsShare;
   return top?`${label}最高分组为“${String(top.label??'未知')}”，销量占比 ${pct(share)}；其余分组需结合完整样本和来源范围判断。`:`暂无${label}有效分组，不能形成该章节结论。`;
  };
- const ebcConclusion=report.ebc.length>0&&niche.ebcProportion!==null?original.sections.newEntry:null;
+ const content=overviewContentOpportunity(report.ebc);
  const sellerTypeConclusion=report.sellerTypes.length>0?mixConclusion(rankConcentrationRows(report.sellerTypes),'卖家类型'):null;
  const countryConclusionText=report.countries.length>0?countryConclusion(rankConcentrationRows(report.countries)):null;
  const listingTrendDirection=trend(salesTrend);
@@ -183,9 +185,9 @@ function buildChapterExplanations(niche:ReturnType<typeof mapNiche>, report:Sell
   withData('brand-crn',brandRows.length>0,`品牌集中度返回 ${brandRows.length} 条排名明细；头部品牌销量占比 ${pct(brandRows[0]?.unitsShare)}。`,'品牌份额反映本次保存样本内品牌结构和潜在品牌壁垒，不能替代商品集中度。',brandRows.length?concentrationConclusion(brandRows,'品牌集中度'):'缺少品牌排名，无法判断品牌壁垒。',brandRows.length?[]:['品牌集中度排名缺失']),
   withData('seller-crn',sellerRows.length>0,`卖家集中度返回 ${sellerRows.length} 条排名明细；头部卖家销量占比 ${pct(sellerRows[0]?.unitsShare)}。`,'卖家份额反映经营主体集中程度，不等同品牌集中度；结论仅限本次保存样本。',sellerRows.length?concentrationConclusion(sellerRows,'卖家集中度'):'缺少卖家排名，无法判断经营主体集中度。',sellerRows.length?[]:['卖家集中度排名缺失']),
   withData('seller-type',rows('sellerTypes').length>0,`卖家类型分布保存 ${rows('sellerTypes').length} 个分组。`,'卖家类型反映经营主体结构，不能直接等同品牌或商品集中度。',sellerTypeConclusion??dynamicDistribution('sellerTypes','卖家类型'),rows('sellerTypes').length?[]:['卖家类型分布缺失']),
-  withData('ebc',rows('ebc').length>0,`A+视频分布保存 ${rows('ebc').length} 个分组。`,'A+与视频覆盖反映内容门槛；覆盖率缺失时不能推断新品友好程度。',ebcConclusion??dynamicDistribution('ebc','A+视频'),rows('ebc').length?[]:['A+视频分布缺失']),
+  {...withData('ebc',rows('ebc').length>0,`A+视频分布保存 ${rows('ebc').length} 个分组。`,'A+与视频覆盖反映内容门槛；覆盖率缺失时不能推断新品友好程度。',content.conclusion,content.missing),opportunity:content.opportunity},
   withData('seller-country',rows('countries').length>0,`卖家所属地分布保存 ${rows('countries').length} 个分组。`,'卖家所属地反映供给来源结构，不能直接推断本地履约或竞争强度。',countryConclusionText??dynamicDistribution('countries','卖家所属地'),rows('countries').length?[]:['卖家所属地分布缺失']),
-  withData('product-demand',!!report.productDemand&&report.productDemand.pageViews.length>0,`商品浏览趋势保存 ${report.productDemand?.pageViews.length??0} 个观测点，退货率 ${pct(report.productDemand?.returnRatio)}。`,'浏览、退货和搜索购买比共同描述需求质量；缺一项时不能替代完整判断。',dynamicProductOpportunity??(report.productDemand?.pageViews.length?'可结合趋势和退货/转化指标判断需求质量，缺失指标保留待验证。':'暂无浏览量趋势，无法判断商品需求质量。'),report.productDemand?.pageViews.length?[]:['商品浏览量趋势缺失']),
+  withData('product-demand',!!report.productDemand&&report.productDemand.pageViews.length>0,`商品浏览趋势保存 ${report.productDemand?.pageViews.length??0} 个观测点，退货率 ${pct(report.productDemand?.returnRatio)}。`,'浏览、退货和搜索购买比共同描述需求质量；缺一项时不能替代完整判断。',dynamicProductOpportunity??(report.productDemand?.pageViews.length?'可结合趋势和退货/转化指标判断需求质量，缺失指标保留待验证。':'暂无浏览量趋势，无法判断商品需求质量。'),[...(!report.productDemand?.pageViews.length?['商品浏览量趋势缺失']:[]),...(!finite(report.productDemand?.returnRatio)?['退货率缺失']:[]),...(!finite(report.productDemand?.searchToPurchaseRatio)?['搜索购买比缺失']:[])]),
   withData('listing-age',rows('listingAge').length>0,`上架时间分布保存 ${rows('listingAge').length} 个分组。`,'上架年龄用于判断老品沉淀与新品进入窗口。',dynamicMaturity??(rows('listingAge').length?'需结合老品、新品占比判断市场成熟度。':'暂无上架时间分布，无法判断市场成熟度。'),rows('listingAge').length?[]:['上架时间分布缺失']),
   withData('listing-trend',rows('listingTrend').length>0,`上架趋势分布保存 ${rows('listingTrend').length} 个分组。`,'上架趋势用于判断新品供给是否持续进入。',listingTrendConclusion??dynamicDistribution('listingTrend','上架趋势'),rows('listingTrend').length?[]:['上架趋势分布缺失']),
   withData('rating-count',rows('ratingCounts').length>0,`评分数分布保存 ${rows('ratingCounts').length} 个分组。`,'评论数量是新品建立信任和获取转化的门槛代理指标。',dynamicReview??(rows('ratingCounts').length?'需结合高评论与低评论区间份额判断评论壁垒。':'暂无评分数分布，无法判断评论壁垒。'),rows('ratingCounts').length?[]:['评分数分布缺失']),
@@ -284,7 +286,7 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
  const checked=input.scoringVersion==='observed-items/2'?buildItemCheckedOverviewSynthesis(niche,report,inputIssues):buildCheckedOverviewSynthesis(niche,report,inputIssues);
  for(const dimension of Object.values(checked.evaluation!.dimensions))for(const gap of dimension.missing)gaps.add(gap);
  const sourceRefs=[...refs],chapters=buildChapterExplanations(niche,report,sourceRefs,parameters);
- return MarketOverviewOriginalSynthesisSchema.parse({version:6,...checked,inputGaps:[...gaps].map(g=>g.replace(/保留原版空(分布|排名|趋势)判断/g,'相关判断须以有效输入为依据')),sourceRefs,chapters,originalAssumptions:[
+ const projected=MarketOverviewOriginalSynthesisSchema.parse({version:6,...checked,inputGaps:[...gaps].map(g=>g.replace(/保留原版空(分布|排名|趋势)判断/g,'相关判断须以有效输入为依据')),sourceRefs,chapters,originalAssumptions:[
   '沿用原版第6版评分权重、阈值和完整输入下的结论；缺失输入不补默认分，六维未齐全时不输出总分或准入等级。',
   `缺失校验版本 ${input.scoringVersion??'observed-inputs/1'}：真实0保留；null、空字符串和无效数字不当作0。当前结果根据保存来源重新计算，不覆盖历史快照。`,
   `集中度使用保存的 Top ${parameters.headTopN}，新品数据使用保存的 ${parameters.newProductMonths} 个月窗口；原版部分分析文案固定写作近6个月。`,
@@ -293,4 +295,5 @@ export function projectMarketOverviewOriginalSynthesis(input:{scope:MarketAnalys
   '金额币种无回显时沿用冻结请求绑定的站点和币种；明确冲突的金额数据不参与分析。',
   '原版金额分析文案固定使用美元符号；其他币种仍保留该原版文案限制。',
  ]});
+ return MarketOverviewOriginalSynthesisSchema.parse({...projected,derivation:{ruleVersion:'market-overview-derived/20261015.1',projectionHash:digest(projected)}});
 }
