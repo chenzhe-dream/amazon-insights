@@ -8,5 +8,5 @@ Tech stack: TypeScript, React, Zod, existing PostgreSQL snapshots and candidate 
 - [x] P1: Scope fixed taxonomy explicitly; propagate native currency; expose immutable shape history separate from live draft.
 - [x] P2: Restore legacy keyword summaries; add A+ opportunity and per-field data gaps; version derived summaries without rewriting source history.
 - [x] P2: Correct legacy fixture, expand cross-category/boundary regressions and update flow docs.
-- [ ] Run focused server/UI tests and typecheck/build. Verify candidate identity and deployment isolation; update 32900 only.
-- [ ] Verify saved report reads and runtime health. Record evidence and limitations for user acceptance.
+- [x] Run focused server/UI tests and typecheck/build. Verify candidate identity and deployment isolation; update 32900 only.
+- [x] Verify saved report reads and runtime health. Record evidence and limitations for user acceptance.
