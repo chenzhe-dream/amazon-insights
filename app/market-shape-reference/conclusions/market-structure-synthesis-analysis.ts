@@ -312,7 +312,7 @@ function buildShapeDirectionRecommendation(entry: ProductShapeDirectionEntry) {
     case "量大低毛利基本盘":
       return `${entry.productShape}：TOP 销量占比 ${shareText}，但均毛利仅 ${marginText}（${fmtPct(entry.below50LinkSharePct)} 链接低于 50%），需求大却难常规铺货，建议避开同质化低价带或找带内高毛利细分。`;
     case "高客单方向":
-      return `${entry.productShape}：TOP 销量占比 ${shareText}，均毛利 ${marginText}，均价 ${priceText} 为形态最高，偏大童/青少年与中高端客单，适合差异化高端款或配置升级验证。`;
+      return `${entry.productShape}：TOP 销量占比 ${shareText}，均毛利 ${marginText}，均价 ${priceText} 为形态最高，偏中高端客单，适合差异化高端款或配置升级验证。`;
     case "可验证细分":
       return `${entry.productShape}：TOP 销量占比 ${shareText}，均毛利 ${marginText}（${favorableText} 链接可进入），主攻 ${bandText}，体量适中且毛利尚可，适合小批量差异化切入。`;
     case "小众高毛利":
@@ -404,7 +404,7 @@ function formatProductShapeDirectionText(entries: ProductShapeDirectionEntry[]) 
     .slice(0, 4)
     .map(item => `${item.productShape} ${fmtPct(item.topSharePct)}`)
     .join(" · ");
-  const summary = `多种形态对应不同市场逻辑，不宜用同一标准判断；近6个月 TOP 样本：${shareOverview}。`;
+  const summary = `${entries.length > 1 ? "多种形态对应不同市场逻辑，不宜用同一标准判断" : "当前有效样本仅识别到一种已标注形态，暂不作多形态比较"}；近6个月 TOP 样本：${shareOverview}。`;
   const lines = entries.slice(0, 3).map(item => item.recommendation);
   return [summary, ...lines].join("");
 }

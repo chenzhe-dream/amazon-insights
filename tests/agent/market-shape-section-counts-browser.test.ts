@@ -26,6 +26,13 @@ test('local section filters count included products through edits, exclusion and
   await page.getByRole('button',{name:name+'局部筛选',exact:true}).click();
  };
  await page.getByLabel('B000000001 人工形态',{exact:true}).waitFor();
+ const final=page.locator('#market-structure-synthesis-conclusion');
+ assert.equal(await final.locator('.market-structure-dimension-head h5').count(),5);
+ assert.match(await final.innerText(),/新品准入机会/);assert.match(await final.innerText(),/机会方向/);
+ assert.match(await final.innerText(),/本维缺失项/);assert.doesNotMatch(await final.innerText(),/阶段总结/);
+ await final.getByText('本维缺失项（1 条商品）',{exact:true}).first().click();
+ assert.match(await final.locator('details[open]').innerText(),/B000000001：商品形态待标注/);
+
  for(const name of ['形态销量','形态价格带'])await inspect(name,{'未分类':1,'其他':1});
  await inspect('品牌价格带',{'Brand A':1,'Brand B':1});
  // Selecting a local group must not erase the count of another available group.

@@ -211,3 +211,8 @@ R3 结果见 reliability-fixes-20260917-r3.md：13 次真实总览业务调用�
 S-04（上升/下滑独立分组）是呈现差异，不等于趋势规则丢失。本次只有审计与文档更新，不能用既有七区33项测试通过关闭上述子输出缺项。证据：docs/market-research/zip-business-parity-audit-20261015.md；流程图：docs/market-research/market-business-flow-20261015.md。31900保持未发布。
 
 2026-10-15 后续实施：14.3–14.6 代码和离线回归已完成；历史报告缺失数据时显示阶段总结。完整五维评分仍须原条件满足，不把阶段总结等同于完整结论。见 `docs/market-research/shape-summary-restoration-20261015.md`。
+
+- [x] 14.7 按用户纠正撤去阶段总结替代布局，恢复原版最终结论逐维有效证据分析，明确样本分母、独立缺口与未知评分。
+- [x] 14.8 恢复形态上升/下滑独立清单及其他独立总结的可用证据；复核其他三模块已接线，源码/虚拟展示回归与真实数据验收分开记录。
+
+14.6的阶段事实总结已由14.7替换，见 docs/market-research/original-final-conclusion-plan-20261015.md。仅32900候选，31900不发布。

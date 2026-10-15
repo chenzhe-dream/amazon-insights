@@ -205,25 +205,6 @@ test('legacy annual date interpretation keeps a saved missing-year conclusion un
  const result=buildReferenceConclusions(source,{});assert.equal(result.synthesis.status,'insufficient');assert.equal(result.brandPrice.status,'insufficient');
 });
 
-// Missing one product must not hide the saved evidence summary or invent a complete score.
-test('partial summary keeps all selected products and lists every missing input', async () => {
-  const {buildReferenceEvidenceSummary} = await import('../../app/market-shape-reference/conclusions/evidence-summary');
-  const source = structuredClone(report);
-  source.products[0].sales.last6Months = null;
-  source.products[1].sales.last3Months = null;
-  const before = JSON.stringify(source);
-  const summary = buildReferenceEvidenceSummary(source, {});
-  assert.equal(summary.total, 2);
-  assert.equal(summary.sixMonthKnown, 1);
-  assert.equal(summary.sixMonthSales, 1200);
-  assert.ok(summary.gaps.some(g => g.asin === 'A' && g.fields.includes('近6个月销量')));
-  assert.ok(summary.gaps.some(g => g.asin === 'B' && g.fields.includes('近3个月销量')));
-  assert.equal(buildReferenceConclusions(source, {}).synthesis.status, 'insufficient');
-  assert.equal(JSON.stringify(source), before);
-  assert.equal(buildReferenceEvidenceSummary(source, {}, ['A']).sixMonthSales, null);
-  assert.equal(buildReferenceEvidenceSummary(source, {}, []).total, 0);
-});
-
 test('restored original detail panels and embedded confidence remain visible', () => {
   const result = buildReferenceConclusions(report, {});
   assert.equal(result.brandPrice.status, 'ready');
@@ -247,4 +228,78 @@ test('margin guidance and embedded final confidence are restored without mutatin
  assert.match(html,/优先\/建议进入销量占比/);
  assert.match(html,/market-structure-margin-shape-tiers-merged/);
  assert.equal(JSON.stringify(result),before);
+});
+
+
+test('original final layout analyzes dimensions independently and keeps partial scores unknown',async()=>{
+ const {buildReferenceSynthesisPresentation}=await import('../../app/market-shape-reference/conclusions/synthesis-presentation');
+ const source=structuredClone(report);source.products[0].onlineDate='';
+ const result=buildReferenceSynthesisPresentation(source,{},undefined);
+ const age=result.moduleSections.find(s=>s.key==='newProductEntry')!;
+ const margin=result.moduleSections.find(s=>s.key==='marginMarketAccess')!;
+ assert.equal(age.coverage!.known,1);assert.equal(age.score,null);
+ assert.equal(margin.coverage!.known,2);assert.notEqual(margin.score,null);
+ assert.ok(margin.marginAccessDetail);assert.equal(result.score,null);
+ source.products[0].onlineDate='2024-01-01';source.products[0].grossProfitMargin=null;
+ const next=buildReferenceSynthesisPresentation(source,{});
+ assert.notEqual(next.moduleSections.find(s=>s.key==='newProductEntry')!.score,null);
+ assert.equal(next.moduleSections.find(s=>s.key==='marginMarketAccess')!.score,null);
+ const html=renderToStaticMarkup(createElement(ReferenceSynthesisConclusion,{result:next,embedded:true}));
+ for(const title of ['新品准入机会','价格带分布 · 形态分化','市场准入 · 形态×价格带','商品形态方向切入','品牌 · 商品形态 · 价格带布局方向','机会方向','主要风险'])assert.ok(html.includes(title));
+ assert.doesNotMatch(html,/阶段总结|NaN|undefined/);assert.match(html,/总分暂不可计算/);
+});
+
+test('complete final presentation agrees with original scores and empty samples never score',async()=>{
+ const {buildReferenceSynthesisPresentation}=await import('../../app/market-shape-reference/conclusions/synthesis-presentation');
+ const expected=buildReferenceConclusions(report,{}).synthesis;
+ assert.equal(expected.status,'ready');if(expected.status!=='ready')return;
+ const complete=buildReferenceSynthesisPresentation(report,{});
+ assert.equal(complete.score,expected.result.score);
+ assert.deepEqual(complete.moduleSections.map(s=>[s.key,s.score,s.text]),expected.result.moduleSections.map(s=>[s.key,s.score,s.text]));
+ const none=buildReferenceSynthesisPresentation(report,{},[]);
+ assert.equal(none.score,null);assert.ok(none.moduleSections.every(s=>s.score===null&&s.coverage!.known===0));
+ const source=structuredClone(report);source.products.forEach(p=>{p.sales.last6Months=null;});
+ const before=JSON.stringify(source);const missing=buildReferenceSynthesisPresentation(source,{});
+ assert.ok(missing.moduleSections.every(s=>s.score===null));assert.equal(JSON.stringify(source),before);
+ source.products.forEach(p=>p.sales.last6Months=0);
+ assert.equal(buildReferenceSynthesisPresentation(source,{}).score,null);
+});
+
+test('missing shapes are not a fake assigned group and do not block independent margin analysis',async()=>{
+ const {buildReferenceSynthesisPresentation}=await import('../../app/market-shape-reference/conclusions/synthesis-presentation');
+ const source=structuredClone(report);source.products.forEach(p=>p.productShape='未分类');
+ const result=buildReferenceSynthesisPresentation(source,{});
+ assert.equal(result.moduleSections.find(s=>s.key==='productShapeDirection')!.coverage!.known,0);
+ assert.equal(result.moduleSections.find(s=>s.key==='shapePriceDistribution')!.score,null);
+ assert.equal(result.moduleSections.find(s=>s.key==='marginMarketAccess')!.coverage!.known,2);
+ assert.equal(result.score,null);
+});
+
+
+test('other original summaries reuse valid evidence with an explicit scope instead of all-or-nothing blocking',async()=>{
+ const {buildAvailableReferenceConclusions}=await import('../../app/market-shape-reference/conclusions/available-conclusions');
+ const source=structuredClone(report);source.products[0].sales.last6Months=null;
+ const next=buildAvailableReferenceConclusions(source,{});
+ for(const key of ['margin','listingYear','brandPrice','shapePrice'] as const){
+  const slot=next[key];assert.equal(slot.status,'ready',key);if(slot.status!=='ready')continue;
+  assert.equal(slot.scope?.included,1);assert.equal(slot.scope?.total,2);assert.deepEqual(slot.scope?.excludedAsins,['A']);
+ }
+ assert.equal(buildReferenceConclusions(source,{}).margin.status,'insufficient');
+});
+
+
+test('missing three-month trend does not hide six-month dimension text or fabricate a total',async()=>{
+ const {buildReferenceSynthesisPresentation}=await import('../../app/market-shape-reference/conclusions/synthesis-presentation');
+ const source=structuredClone(report);source.products[0].sales.last3Months=null;
+ const result=buildReferenceSynthesisPresentation(source,{});
+ assert.equal(result.score,null);assert.ok(result.moduleSections.every(s=>s.coverage!.known===2));
+ assert.ok(result.risks.some(r=>r.includes('近3个月销量')&&r.includes('A')));
+ const subset=buildReferenceSynthesisPresentation(report,{},['B']);assert.equal(subset.highlights.top3ListingSharePct,null);
+});
+
+test('shape summary restores rising and declining groups',()=>{
+ const result=buildReferenceConclusions(report,{}).shapeSales;
+ if(result.status!=='ready')return assert.fail('fixture must be ready');
+ const html=renderToStaticMarkup(createElement(ReferenceConclusionsView,{result:buildReferenceConclusions(report,{})}));
+ assert.match(html,/近6个月销量占比/);assert.match(html,/上升趋势/);assert.match(html,/下滑趋势/);
 });

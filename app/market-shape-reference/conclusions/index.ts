@@ -15,7 +15,7 @@ import { buildTopSalesMarginEntryConclusion, formatOnlineDateYear, formatPriceBa
 import type { SorftimeCategoryDashboardReport as OriginalReport } from "./sorftime-category-dashboard";
 
 export type ReferenceConclusionSlot<T> =
-  | { status: "ready"; result: T; warnings?: readonly string[] }
+  | { status: "ready"; result: T; warnings?: readonly string[]; scope?: {included:number;total:number;excludedAsins:string[]} }
   | { status: "insufficient"; reason: string };
 export type ReferenceConclusions = {
   listingYear: ReferenceConclusionSlot<ReturnType<typeof analyzeListingAgeSalesShare>>;
@@ -68,7 +68,7 @@ export function buildReferenceConclusions(
   const shape = (asin: string) => {
     const product = products.find(item => item.asin === asin);
     const value = report.calculationVersion==='shape-reference/1'?assignments[asin]?.trim()||product?.productShape?.trim()||'—':product ? resolveReferenceProductShape(product, assignments) : '—';
-    return allowedShapes?.length && value !== '—' && value !== '未分类' && !allowedShapes.includes(value) ? '未分类' : value;
+    return value === '未分类' || (allowedShapes?.length && value !== '—' && !allowedShapes.includes(value)) ? '—' : value;
   };
   const sixMonthGap = missingSales(products, ["last6Months"]);
   const recentGap = missingSales(products, ["last3Months", "last6Months"]);

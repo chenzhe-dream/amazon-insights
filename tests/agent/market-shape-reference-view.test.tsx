@@ -52,13 +52,14 @@ test('product table exposes only batch checkboxes and retains excluded sample re
 
 test("summary status distinguishes computed conclusions from missing evidence", () => {
   const render = (value: SorftimeCategoryDashboardReport) => renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
-  const complete = render(report);
-  assert.match(complete, /规则结论已生成/);
+  const knownShape = structuredClone(report); knownShape.products[0].productShape="Desk";
+  const complete = render(knownShape);
+  assert.match(complete, /原版五维结论/);
   assert.doesNotMatch(complete, /规则草稿/);
-  const missing = structuredClone(report);
+  const missing = structuredClone(knownShape);
   missing.products[0].sales.y2024 = null;
   const partial = render(missing);
-  assert.match(partial, /规则结论已生成/);
+  assert.match(partial, /原版五维结论/);
   assert.match(partial, /B000000001 缺少 2024 销量/);
 
 });
@@ -68,9 +69,9 @@ test("summary keeps a usable conclusion when one product lacks price evidence an
   missingPrice.products[0].price = null;
   missingPrice.products[0].priceBand = "—";
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={missingPrice} assignments={{}} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
-  assert.match(html, /规则结论已生成/);
-  assert.match(html, /数据缺口提示/);
-  assert.match(html, /缺少价格及价格带/);
+  assert.match(html, /总分暂不可计算/);
+  assert.match(html, /本维缺失项/);
+  assert.match(html, /价格及价格带/);
   assert.match(html, /价格\/价格带：可用0\/1件，待补1件/);
   assert.doesNotMatch(html, /综合判断尚缺数据/);
 });
@@ -114,7 +115,7 @@ test("margin cards keep missing margins unknown and explain both denominators", 
 
 test("reference view renders the seven original regions from supplied evidence", () => {
   const html = renderToStaticMarkup(<MarketShapeReferenceView report={report} assignments={{ B000000001: "折叠款" }} selectedAsins={["B000000001"]} onAssignment={() => {}} onSelected={() => {}} />);
-  for (const heading of ["类目销量看板", "TOP 销售商品", "上架年份", "商品形态 · 销量占比", "商品形态 · 价格带", "品牌 · 价格带", "市场结构综合结论"]) assert.ok(html.includes(heading), heading);
+  for (const heading of ["类目销量看板", "TOP 销售商品", "上架年份", "商品形态 · 销量占比", "商品形态 · 价格带", "品牌 · 价格带", "类目商品链接调研 · 最终结论"]) assert.ok(html.includes(heading), heading);
   assert.ok(html.includes("折叠款"));
   assert.ok(html.includes("建议进入"));
   assert.ok(html.includes("最近30天"));
@@ -217,10 +218,11 @@ test('missing history still renders a factual summary without a full score and l
  value.products.push({...structuredClone(value.products[0]),asin:'B000000002',sales:{...value.products[0].sales,last3Months:null}});
  const html=renderToStaticMarkup(<MarketShapeReferenceView report={value} assignments={{}} selectedAsins={value.products.map(p=>p.asin)} onAssignment={()=>{}} onSelected={()=>{}}/>);
  const summary=html.slice(html.indexOf('id="market-structure-synthesis-conclusion"'));
- assert.match(summary,/阶段总结 · 已保存证据/);
- assert.match(summary,/当前所选 2 条商品均保留/);
- assert.match(summary,/销量已知 0\/2 条，已知销量合计 未知/);
+ assert.doesNotMatch(summary,/阶段总结/);
+ assert.match(summary,/新品准入机会/);assert.match(summary,/机会方向/);assert.match(summary,/主要风险/);
+ assert.match(summary,/所选 2 条商品保留在报告中/);
+ assert.match(summary,/有效样本 0\/2 条/);assert.match(summary,/本维近6个月已知销量 未知/);
  assert.match(summary,/B000000001/);assert.match(summary,/B000000002/);
- assert.match(summary,/近3个月销量/);assert.match(summary,/近6个月销量/);
+ assert.match(summary,/近6个月销量/);
  assert.doesNotMatch(summary,/\d+\/100/);
 });

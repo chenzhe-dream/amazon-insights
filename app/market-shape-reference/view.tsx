@@ -7,9 +7,10 @@ import { referenceMonthlyAverage, buildReferenceShapeAnalysis, resolveListingYea
 import { TopSalesMultiSelectFilter } from "./top-sales-multi-select-filter";
 import type { TopSalesMultiSelectFilterState } from "./multi-filter";
 import { CategoryComboChart, MonopolyTrendChart } from "./charts";
-import { buildReferenceEvidenceSummary } from "./conclusions/evidence-summary";
-import { buildReferenceConclusions } from "./conclusions";
-import { ReferencePartialSummary, ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceMarginConclusion, ReferenceSummaryMetrics, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
+import { buildReferenceSynthesisPresentation } from "./conclusions/synthesis-presentation";
+import { buildAvailableReferenceConclusions as buildReferenceConclusions } from "./conclusions/available-conclusions";
+import type { ReferenceConclusionSlot } from "./conclusions";
+import { ReferenceBrandPriceConclusion, ReferenceListingYearConclusion, ReferenceMarginConclusion, ReferenceShapePriceConclusion, ReferenceShapeSalesConclusion, ReferenceSynthesisConclusion } from "./conclusions/view";
 import { ResizeHeader, TOP_SALES_COLUMNS, useReferenceColumnWidths, type TopSalesColumnId } from "./column-resize";
 import {MarketAdminContent} from '../market-admin-tools';
 import {ReferenceHistoryCoverage} from './history-coverage';
@@ -100,6 +101,7 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const selected = new Set(selectedAsins);
   const fixedLabels=fixedShapeLabels(report.categoryName,report.nodeId);
   const analysis = useMemo(() => buildReferenceShapeAnalysis(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
+  const finalConclusion = useMemo(() => buildReferenceSynthesisPresentation(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
   const conclusions = useMemo(() => buildReferenceConclusions(report, assignments, selectedAsins, fixedLabels), [report, assignments, selectedAsins, fixedLabels]);
   const active = analysis.products;
   const brands = [...new Set(report.products.map(p => p.brand || "未知"))].sort();
@@ -138,8 +140,6 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
   const yearly=analysis.listingYears,byShape=sortSectionRows(shapeAnalysis.shapes,shapeSort),shapeBands=sortGroupedPriceBands(bandAnalysis.shapePriceBands,bandAnalysis.shapes,bandSort,'shape'),brandBands=sortGroupedPriceBands(brandAnalysis.brandPriceBands,brandAnalysis.brands,brandSort,'brand');
   const labelOptions=[...new Set([...fixedLabels,...catalogLabels,...localLabels,...Object.values(assignments).map(v=>v.trim())])].filter(v=>v&&v!=='未分类');
   const setLabels=(labels:string[])=>{setLocalLabels(labels);onCatalogLabels?.(labels)};
-  const currentUnits = analysis.synthesis.currentMonthlyVolume, currentAmount = analysis.synthesis.currentMonthlyAmount;
-  const periodTotal = (key: Period) => analysis.synthesis.totalSales[key];
   const marginGroups = Object.entries(analysis.synthesis.marginCounts).filter(([, count]) => count > 0);
   const marginConclusion = conclusions.margin.status === "ready" ? conclusions.margin.result : null;
   const completedVolume = [...report.history.volume].sort((a, b) => a.month.localeCompare(b.month));
@@ -198,35 +198,33 @@ export function MarketShapeReferenceView({ report, assignments, selectedAsins, o
       </tbody></LaunchTable>
       <p className="market-research-note">毛利准入：≥70% 优先进入；≥60% 建议进入；≥50% 谨慎进入；低于50% 不建议进入。未知保持未知。</p>
       <MetricBars rows={marginGroups.map(([label, count]) => ({ label, value: count }))} />
-      {marginConclusion ? <ReferenceMarginConclusion result={marginConclusion} /> : <div className="listing-age-conclusion listing-age-entry-gray shape-summary-panel"><h4 className="listing-age-conclusion-title">毛利准入结论待补数据</h4><p className="shape-summary-note">{conclusions.margin.status === "insufficient" ? conclusions.margin.reason : "缺失历史销量保留未知，补齐后可生成分层结论。"}</p></div>}
+      {marginConclusion ? <><ConclusionScope slot={conclusions.margin} /><ReferenceMarginConclusion result={marginConclusion} /></> : <div className="listing-age-conclusion listing-age-entry-gray shape-summary-panel"><h4 className="listing-age-conclusion-title">毛利准入结论待补数据</h4><p className="shape-summary-note">{conclusions.margin.status === "insufficient" ? conclusions.margin.reason : "缺失历史销量保留未知，补齐后可生成分层结论。"}</p></div>}
     </LaunchSection>
 
     <LaunchSection title="上架年份 · 销量结构分析" description="按已选商品的真实历史销量汇总；缺失历史不补零" badge={<span className="source-badge">{yearly.length} 年份组</span>}>
       <ReferenceHistoryCoverage context="上架年份" calculationVersion={report.calculationVersion} products={active} />
       <AggregateTable calculationVersion={analysis.calculationVersion} rows={yearly} total={analysis.synthesis.totalSales} yearBasis />
-      {conclusions.listingYear.status === "ready" ? <ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
+      {conclusions.listingYear.status === "ready" ? <><ConclusionScope slot={conclusions.listingYear} /><ReferenceListingYearConclusion result={conclusions.listingYear.result} embedded /></> : <p className="market-research-note">{conclusions.listingYear.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 销量占比分析" description="按人工确认形态汇总 TOP 链接历史销量" badge={<span className="source-badge">{byShape.length} 形态</span>}>
       <SectionFilter name="形态销量" options={shapes} optionCounts={shapeCounts} filter={localShape} onFilter={setLocalShape} sort={shapeSort} onSort={setShapeSort}/><ReferenceHistoryCoverage context="形态销量" calculationVersion={report.calculationVersion} products={shapeAnalysis.products}/>
       <AggregateTable sort={shapeSort} onSort={setShapeSort} calculationVersion={analysis.calculationVersion} rows={byShape} total={shapeAnalysis.synthesis.totalSales} />
       <MetricBars rows={byShape.map(row => ({ label: row.label, value: row.sales.last6Months }))} />
-      {shapeConclusion.status === "ready" ? <ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /> : <p className="market-research-note">{shapeConclusion.reason}</p>}
+      {shapeConclusion.status === "ready" ? <><ConclusionScope slot={shapeConclusion} /><ReferenceShapeSalesConclusion result={shapeConclusion.result} embedded /></> : <p className="market-research-note">{shapeConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="商品形态 · 价格带分析" description="按商品形态与 10 美元价格带交叉汇总" badge={<span className="source-badge">{shapeBands.length} 组</span>}>
       <SectionFilter name="形态价格带" options={shapes} optionCounts={shapeCounts} filter={localBandShape} onFilter={setLocalBandShape} sort={bandSort} onSort={setBandSort}/><ReferenceHistoryCoverage context="形态价格带" calculationVersion={report.calculationVersion} products={bandAnalysis.products}/>
       <ShapePriceBandTable sort={bandSort} onSort={setBandSort} shapes={sortSectionRows(bandAnalysis.shapes,bandSort)} bands={shapeBands} total={bandAnalysis.synthesis.totalSales} />
-      {bandConclusion.status === "ready" ? <ReferenceShapePriceConclusion result={bandConclusion.result} embedded /> : <p className="market-research-note">{bandConclusion.reason}</p>}
+      {bandConclusion.status === "ready" ? <><ConclusionScope slot={bandConclusion} /><ReferenceShapePriceConclusion result={bandConclusion.result} embedded /></> : <p className="market-research-note">{bandConclusion.reason}</p>}
     </LaunchSection>
     <LaunchSection title="品牌 · 价格带分析" description="按品牌与 10 美元价格带交叉汇总" badge={<span className="source-badge">{brandBands.length} 组</span>}>
       <SectionFilter name="品牌价格带" options={brands} optionCounts={brandCounts} filter={localBrand} onFilter={setLocalBrand} sort={brandSort} onSort={setBrandSort}/><ReferenceHistoryCoverage context="品牌价格带" calculationVersion={report.calculationVersion} products={brandAnalysis.products}/>
       <AggregateTable sort={brandSort} onSort={setBrandSort} calculationVersion={analysis.calculationVersion} rows={brandBands} total={brandAnalysis.synthesis.totalSales} />
-      {brandConclusion.status === "ready" ? <ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /> : <p className="market-research-note">{brandConclusion.reason}</p>}
+      {brandConclusion.status === "ready" ? <><ConclusionScope slot={brandConclusion} /><ReferenceBrandPriceConclusion result={brandConclusion.result} embedded /></> : <p className="market-research-note">{brandConclusion.reason}</p>}
     </LaunchSection>
-    <LaunchSection title="市场结构综合结论" description="汇总形态、价格带、品牌与毛利准入证据" badge={<span className="source-badge">{conclusions.synthesis.status === "ready" ? "规则结论已生成" : "阶段总结已生成 · 完整评分待补"}</span>}>
+    <LaunchSection title="类目商品链接调研 · 最终结论" description="综合 TOP 销售、上架年份、形态、价格带与品牌布局；各维缺口单独标注" badge={<span className="source-badge">{finalConclusion.score === null ? "分维分析 · 总分待补" : "原版五维结论"}</span>}>
       <div className="shape-summary-panel shape-summary-overview">
-        <ReferenceSummaryMetrics items={[["所选商品链接", n(active.length)], ["近30天销量", n(currentUnits)], ["近30天销售额（来源值）", n(currentAmount, 2)], ["近6个月已知历史销量", n(periodTotal("last6Months"))], ["形态分组（含未分类）", n(analysis.shapes.length)], ["品牌 × 价格带组合", n(analysis.brandPriceBands.length)]]} />
-        <div className="shape-summary-selection"><strong>毛利准入分布</strong>{marginGroups.length ? marginGroups.map(([label, count]) => <span key={label}>{label.replace("—", "未知")} <b>{count} 条</b></span>) : <span>暂无所选样本</span>}</div>
-        {conclusions.synthesis.status === "ready" ? <ReferenceSynthesisConclusion result={conclusions.synthesis.result} warnings={conclusions.synthesis.warnings} embedded /> : <ReferencePartialSummary summary={buildReferenceEvidenceSummary(report, assignments, selectedAsins, fixedLabels)} reason={conclusions.synthesis.reason} />}
+        <ReferenceSynthesisConclusion result={finalConclusion} embedded />
         <MarketAdminContent><details className="shape-summary-source"><summary>数据范围与口径</summary><p className="shape-summary-note">{report.note || "所有统计限于当前所选商品与已保存来源；数据缺口显示未知。"}</p></details></MarketAdminContent>
       </div>
     </LaunchSection>
@@ -266,4 +264,9 @@ function combinedCoverage(rows: ReferenceGroupRow[], period: Period) {
 }
 function totalSalesText(value:number|null, rows:ReferenceGroupRow[], period:Period) {
   return `${value !== null && combinedCoverage(rows, period).missing > 0 ? '已知 ' : ''}${n(value)}`;
+}
+
+function ConclusionScope({slot}:{slot:ReferenceConclusionSlot<unknown>}) {
+ if(slot.status!=='ready'||!slot.scope)return null;
+ return <div className="shape-summary-warning"><strong>本项有效样本 {slot.scope.included}/{slot.scope.total} 条</strong><p>下方沿用原版分析，销量占比、推荐和置信度仅针对这 {slot.scope.included} 条有效样本；上方原始统计表仍保留全部所选商品，两者分母可能不同。</p><details><summary>未参与本项计算的商品（{slot.scope.excludedAsins.length} 条）</summary><p>{slot.scope.excludedAsins.join('、')}</p></details></div>;
 }

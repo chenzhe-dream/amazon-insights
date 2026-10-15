@@ -1,5 +1,5 @@
 import { MarginShapeGuideCardList, MARGIN_SHAPE_GUIDE_FOOTNOTE } from "./margin-shape-guide-cards";
-import type { ReferenceEvidenceSummary } from "./evidence-summary";
+import type { SynthesisPresentation } from "./synthesis-presentation";
 import type { MarginMarketAccessSectionDetail } from "./market-structure-synthesis-analysis";
 import { LaunchSection, LaunchTable } from "../../launch-section";
 import { marketStructureVerdictLabel } from "./market-structure-synthesis-analysis";
@@ -44,6 +44,7 @@ export function ReferenceListingYearConclusion({ result, embedded = false }: { r
 
 export function ReferenceShapeSalesConclusion({ result, embedded = false }: { result: Ready["shapeSales"]; embedded?: boolean }) {
   const body = <div className="listing-age-conclusion market-shape-saved-conclusion"><p>{result.summary}</p>
+      <div className="shape-summary-columns"><div><h5>近6个月销量占比</h5><ul>{result.insights.map(item=><li key={item.productShape}>{item.productShape}：{number(item.last6MonthsSharePct,'%')}</li>)}</ul></div><div><h5>上升趋势</h5>{result.risingShapes.length?<ul>{result.risingShapes.map(item=><li key={item.productShape}>{item.productShape}：{item.trendLabel}</li>)}</ul>:<p>当前样本未识别到上升趋势形态</p>}</div><div><h5>下滑趋势</h5>{result.decliningShapes.length?<ul>{result.decliningShapes.map(item=><li key={item.productShape}>{item.productShape}：{item.trendLabel}</li>)}</ul>:<p>当前样本未识别到下滑趋势形态</p>}</div></div>
       <div className="market-structure-dimension-grid">{result.insights.map(item => <article className="market-structure-dimension-card" key={item.productShape}>
         <h5>{item.productShape} · {item.entryPriority}</h5><p>{item.trendLabel}</p><p>{item.recommendation}</p>
       </article>)}</div>
@@ -76,17 +77,18 @@ export function ReferenceBrandPriceConclusion({ result, embedded = false }: { re
   return embedded ? body : <LaunchSection title="品牌 × 价格带 · 机会结论" description="按需求、竞争和品牌布局筛选价格带" badge={<span className="source-badge">{result.analysisScope.validLinkCount} 条有效链接 · 置信度 {confidence[result.analysisScope.confidence]}</span>}>{body}</LaunchSection>;
 }
 
-export function ReferenceSynthesisConclusion({ result, warnings = [], embedded = false }: { result: Ready["synthesis"]; warnings?: readonly string[]; embedded?: boolean }) {
+export function ReferenceSynthesisConclusion({ result, warnings = [], embedded = false }: { result: SynthesisPresentation; warnings?: readonly string[]; embedded?: boolean }) {
   const body = <div className={`listing-age-conclusion market-structure-synthesis ${tone[result.verdictColor]}`} id="market-structure-synthesis-conclusion">
-      <div className="market-structure-synthesis-top"><div className="market-structure-synthesis-verdict-card"><p className="listing-age-conclusion-eyebrow">五维结构综合 · 置信度：{confidence[result.confidence]}</p><h4 className="listing-age-conclusion-title">{marketStructureVerdictLabel(result.verdict)}<span className="listing-age-conclusion-badge">{result.score}/100</span></h4><p className="market-structure-synthesis-def">{result.verdictDefinition}</p></div>
-        <div className="market-structure-synthesis-meta-grid"><div><span>样本链接</span><b>{result.topLinkCount}</b></div><div><span>主销价格带</span><b>{result.highlights.primaryPriceBand ?? "待验证"}</b></div><div><span>可进入毛利链接</span><b>{result.highlights.marginGreenSharePct.toFixed(1)}%</b></div><div><span>Top3 Listing</span><b>{result.highlights.top3ListingSharePct == null ? "—" : `${result.highlights.top3ListingSharePct.toFixed(1)}%`}</b></div></div>
+      <div className="market-structure-synthesis-top"><div className="market-structure-synthesis-verdict-card"><p className="listing-age-conclusion-eyebrow">五维结构综合 · 置信度：{confidence[result.confidence]}</p><h4 className="listing-age-conclusion-title">{marketStructureVerdictLabel(result.verdict)}<span className="listing-age-conclusion-badge">{result.score === null ? "总分暂不可计算" : `${result.score}/100`}</span></h4><p className="market-structure-synthesis-def">{result.verdictDefinition}</p></div>
+        <div className="market-structure-synthesis-meta-grid"><div><span>样本链接</span><b>{result.topLinkCount}</b></div><div><span>主销价格带</span><b>{result.highlights.primaryPriceBand ?? "待验证"}</b></div><div><span>可进入毛利链接</span><b>{number(result.highlights.marginGreenSharePct,"%")}</b></div><div><span>Top3 Listing</span><b>{result.highlights.top3ListingSharePct == null ? "—" : `${result.highlights.top3ListingSharePct.toFixed(1)}%`}</b></div></div>
       </div>
+      {result.highlightNotes && <p className="shape-summary-note">{result.highlightNotes}</p>}
       {warnings.length > 0 && <div className="shape-summary-warning"><strong>数据缺口提示</strong><ul>{warnings.map((warning, index) => <li key={index}>{warning}；该项不参与完整证据判断。</li>)}</ul></div>}
       <p>{result.summary}</p><p>{result.finalVerdict}</p>
-      <div className="market-structure-dimension-grid">{result.moduleSections.map(section => <article className="market-structure-dimension-card" key={section.key}><header className="market-structure-dimension-head"><h5>{section.title}</h5><span className="market-structure-dimension-score">{section.score}/{section.maxScore}</span></header><div className="market-structure-dimension-bar" aria-hidden="true"><i style={{ width: `${Math.round(section.score / section.maxScore * 100)}%` }} /></div>{section.marginAccessDetail ? <ReferenceMarginAccessDetail detail={section.marginAccessDetail} /> : <ul>{sentences(section.text).map((item, i) => <li key={i}>{item}。</li>)}</ul>}</article>)}</div>
+      <div className="market-structure-dimension-grid">{result.moduleSections.map(section => <article className="market-structure-dimension-card" key={section.key}><header className="market-structure-dimension-head"><h5>{section.title}</h5><span className="market-structure-dimension-score">{section.score === null ? "待补数据 · 暂不评分" : `${section.score}/${section.maxScore}`}</span></header><div className="market-structure-dimension-bar" aria-hidden="true">{section.score !== null && <i style={{ width: `${Math.round(section.score / section.maxScore * 100)}%` }} />}</div><SynthesisSectionEvidence section={section} />{section.marginAccessDetail ? <ReferenceMarginAccessDetail detail={section.marginAccessDetail} /> : <ul>{sentences(section.text).map((item, i) => <li key={i}>{item}。</li>)}</ul>}</article>)}</div>
       <div className="market-structure-synthesis-extra"><p className="market-structure-synthesis-extra-title">机会与风险</p><div className="market-structure-synthesis-extra-body market-structure-synthesis-extra-split"><div className="market-structure-synthesis-extra-column"><p className="listing-age-conclusion-block-title">机会方向</p><ul>{result.opportunities.map((item, i) => <li key={i}>{item}</li>)}</ul></div><div className="market-structure-synthesis-extra-column"><p className="listing-age-conclusion-block-title">主要风险</p><ul>{result.risks.map((item, i) => <li key={i}>{item}</li>)}</ul></div></div></div>
     </div>;
-  return embedded ? body : <LaunchSection title="类目商品链接调研 · 最终结论" description="综合 TOP 销售、上架年份、形态价格带与品牌价格带的五维结论" badge={<span className="source-badge">{result.sampleScope} · {result.score}/100 · 置信度 {confidence[result.confidence]}</span>}>{body}</LaunchSection>;
+  return embedded ? body : <LaunchSection title="类目商品链接调研 · 最终结论" description="综合 TOP 销售、上架年份、形态价格带与品牌价格带的五维结论" badge={<span className="source-badge">{result.sampleScope} · {result.score === null ? "总分暂不可计算" : `${result.score}/100`} · 置信度 {confidence[result.confidence]}</span>}>{body}</LaunchSection>;
 }
 
 export function ReferenceConclusionsView({ result }: { result: ReferenceConclusions }) {
@@ -104,13 +106,6 @@ function ReferenceMarginAccessDetail({detail}:{detail:MarginMarketAccessSectionD
   return <div><p>{detail.headline}</p><ReferenceSummaryMetrics items={detail.salesShareByLabel.map(item=>[`${item.label}销量占比`,number(item.pct,'%')] as const)} /><p>优先/建议进入销量占比 {number(detail.favorableSalesPct,'%')}；可进入销量占比 {number(detail.accessibleSalesPct,'%')}；可进入毛利链接占比 {number(detail.linkGreenSharePct,'%')}，有效毛利 {detail.withMarginCount}/{detail.totalLinks} 条。</p><MarginShapeGuideCardList shapeGuides={detail.shapeGuides} tierMode="merged" />{detail.emptyMessage&&<p>{detail.emptyMessage}</p>}{detail.shapeNote&&<p>{detail.shapeNote}</p>}<p className="shape-summary-note">{MARGIN_SHAPE_GUIDE_FOOTNOTE}</p></div>;
 }
 
-export function ReferencePartialSummary({summary,reason}:{summary:ReferenceEvidenceSummary;reason:string}) {
- return <div className="listing-age-conclusion shape-summary-panel" id="market-structure-synthesis-conclusion">
-  <header className="shape-summary-header"><h4>阶段总结 · 已保存证据</h4><span className="source-badge">完整评分暂缓 · 证据不完整</span></header>
-  <p className="shape-summary-lead">当前所选 {summary.total} 条商品均保留；近6个月销量已知 {summary.sixMonthKnown}/{summary.total} 条，已知销量合计 {number(summary.sixMonthSales)}。现阶段可梳理形态、价格带和品牌的链接布局；待历史销量与关键字段补齐后，再给出完整进入判断。</p>
-  <p className="shape-summary-note">{reason}。以下为样本事实总结，不生成完整分数，不以缺失值补零，也不把已知部分当作全类目。</p>
-  <div className="market-structure-dimension-grid">{summary.sections.map(section=><article className="market-structure-dimension-card" key={section.title}><h5>{section.title}</h5><p>{section.text}</p></article>)}</div>
-  <div className="shape-summary-warning"><strong>下一步</strong><p>先核对下方缺口及人工形态标注，再对缺失来源定向补齐；补齐前暂不据此作完整立项判断。</p></div>
-  <details className="shape-summary-source"><summary>全部数据缺口与待核实项（{summary.gaps.length} 条商品）</summary><p>此处列出当前范围全部缺口；年度历史和形态标注并非每项评分的共同前置条件。</p><ul>{summary.gaps.map(gap=><li key={gap.asin}><strong>{gap.asin}</strong>：{gap.fields.join('、')}</li>)}</ul></details>
- </div>;
+function SynthesisSectionEvidence({section}:{section:SynthesisPresentation['moduleSections'][number]}) {
+ return <>{section.coverage&&<p className="shape-summary-note">有效样本 {section.coverage.known}/{section.coverage.total} 条 · 本维近6个月已知销量 {number(section.coverage.sales)}。以下占比、分析和建议仅适用于本维有效样本；缺失商品仍保留在原报告。</p>}{section.notes?.map(note=><p className="shape-summary-warning" key={note}>{note}</p>)}{Boolean(section.gaps?.length)&&<details className="shape-summary-source"><summary>本维缺失项（{section.gaps!.length} 条商品）</summary><ul>{section.gaps!.map(gap=><li key={gap.asin}>{gap.asin}：{gap.fields.join('、')}</li>)}</ul></details>}</>;
 }

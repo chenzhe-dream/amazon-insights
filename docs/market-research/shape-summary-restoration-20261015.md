@@ -21,3 +21,6 @@
 - 截图：.runtime/shape-summary-live-20261015.png。
 - 验收前后sorftime_source_events=12、market_research_jobs=102；没有新增采集任务。
 - 正式31900 sourceCommit仍253366e876728a6c9bc35bb9dda2c1b00575b87c，没有发布31900。
+
+## 后续纠正
+用户确认本版“阶段总结”不符合原版结构。其替代分支已撤回，由原版最终结论统一逐维呈现；以 original-final-conclusion-plan-20261015.md 的后续验收为准。此前38项通过只证明当时实现，不代表符合本次纠正要求。
