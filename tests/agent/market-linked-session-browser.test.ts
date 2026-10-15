@@ -21,6 +21,7 @@ test('linked mutations reject late session replies and denied reads clear output
   return route.fulfill({status:404,json:{error:{message:'not yet accepted'}}});
  });
  await page.goto(origin);await page.getByRole('button',{name:'start',exact:true}).click();await page.waitForFunction(()=>!!sessionStorage.getItem('market-linked-pending:account-a'));
+ await page.waitForTimeout(350);assert.equal(readCount,0,'do not poll an uncommitted create command');assert.equal(await page.getByRole('alert').textContent(),'','no false missing-batch error during submission');
  await page.getByRole('button',{name:'switch account'}).click();release();await page.waitForTimeout(200);
  assert.equal(await page.locator('output').textContent(),'none');assert.equal(new URL(page.url()).searchParams.get('linkedBatch'),null);
  assert.equal(await page.evaluate(()=>(window as unknown as {accepted?:number}).accepted??0),0,'late response must not call parent scope callback');

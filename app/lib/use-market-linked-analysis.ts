@@ -21,7 +21,7 @@ export function useMarketLinkedAnalysis(sessionIdentity:string,onBatch:(batch:Ma
  },[]);
  useEffect(()=>{
   if(!id)return;const abort=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
-  const poll=async()=>{const version=generation.current;try{const value=await readLinkedBatch(id,abort.signal);if(abort.signal.aborted||owner.current?.signal.aborted)return;if(version===generation.current){accept(value);if(value.status!=='pending')return;}}catch(cause){if(abort.signal.aborted)return;if(version===generation.current){if(rejectAuthorization(cause))return;setError(submissionError.current??(cause instanceof Error?cause.message:'联动状态读取失败'));}}timer=setTimeout(()=>void poll(),3000);};
+  const poll=async()=>{if(submitting.current){timer=setTimeout(()=>void poll(),3000);return;}const version=generation.current;try{const value=await readLinkedBatch(id,abort.signal);if(abort.signal.aborted||owner.current?.signal.aborted)return;if(version===generation.current){accept(value);if(value.status!=='pending')return;}}catch(cause){if(abort.signal.aborted)return;if(version===generation.current){if(rejectAuthorization(cause))return;setError(submissionError.current??(cause instanceof Error?cause.message:'联动状态读取失败'));}}timer=setTimeout(()=>void poll(),3000);};
   void poll();return()=>{abort.abort();if(timer)clearTimeout(timer);};
  },[id,readVersion,accept]);
  const start=async(input:MarketLinkedRequest)=>{
