@@ -13,7 +13,8 @@ export function MarketDevelopmentEvidence({decision:d}:{decision:DevelopmentDeci
   {d.candidates.map(c=><article key={c.id} className="listing-age-conclusion" style={{borderLeft:`3px solid ${c.status==='hold'?'#dc8542':c.status==='supported'?'#39a18c':'#a4b2c7'}`,padding:16,marginBottom:12}}>
    <h5 style={{fontSize:14,marginTop:0}}>{c.label} · {statusLabels[c.status]}</h5>
    <p>{c.reason}</p>
-   <p><strong>对应商品：</strong>{c.asins.join('、')||'暂无已确认关联的商品属性'}</p>
+   <p><strong>对应商品：</strong>{c.asins.length?`${c.asins.length} 个 · ${c.asins.slice(0,6).join('、')}${c.asins.length>6?'…':''}`:'暂无已确认关联的商品属性'}</p>
+   {c.asins.length>6&&<details><summary>查看全部对应 ASIN</summary><p style={{overflowWrap:'anywhere'}}>{c.asins.join('、')}</p></details>}
    <p><strong>样本参考价格：</strong>{c.price}。不作为建议售价或利润。</p>
    <details><summary>关联依据（{c.evidence.length}）</summary><ul>{c.evidence.map((e,i)=><li key={i}><strong>{moduleLabels[e.module]??e.module}：</strong>{e.description}<div style={{color:'#62758e',overflowWrap:'anywhere'}}>来源：{e.ref}</div></li>)}</ul></details>
    {!!c.counterevidence.length&&<div><strong>相反信号与风险线索</strong><ul>{c.counterevidence.map((v,i)=><li key={i}>{v}</li>)}</ul></div>}

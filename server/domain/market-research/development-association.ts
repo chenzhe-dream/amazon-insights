@@ -35,7 +35,8 @@ export function associateDevelopmentEvidence(input:ConclusionEvidence[]):Develop
  const demands=usable.filter(e=>e.module==='keywords').flatMap(e=>e.observations?.demands??[]);
  const products=usable.filter(e=>e.module==='shapes').flatMap(e=>e.observations?.products??[]);
  const reviews=usable.filter(e=>e.module==='themes').flatMap(e=>e.observations?.reviews??[]);
- const marketContext=usable.filter(e=>e.module==='overview').flatMap(e=>(e.observations?.metrics??[]).map(m=>({module:'overview',ref:m.ref,description:`${m.label}：${m.value} ${m.unit}；${m.period}；${m.denominator}。仅用于该来源样本的市场背景，不代表候选销量或全市场。`})));
+ const displayUnit=(m:{key:string;unit:string})=>m.unit==='count'?({avgRating:'分',totalUnits:'件','sample-products':'个'} as Record<string,string>)[m.key]??'个':m.unit;
+ const marketContext=usable.filter(e=>e.module==='overview').flatMap(e=>(e.observations?.metrics??[]).map(m=>({module:'overview',ref:m.ref,description:`${m.label}：${m.value} ${displayUnit(m)}；${m.period}；${m.denominator}。仅用于该来源样本的市场背景，不代表候选销量或全市场。`})));
  const metrics=usable.flatMap(e=>e.observations?.metrics??[]);
  const risks=reviews.filter(r=>r.negative>0&&risky(`${r.topic} ${r.text}`)).map(r=>({asin:r.asin,ref:r.ref,text:r.text,reason:'出现严重风险词且该主题有负向提及；优先核对原摘要和样品，尚未认定产品缺陷。'}));
  const conflicts:DevelopmentDecision['conflicts']=[];
