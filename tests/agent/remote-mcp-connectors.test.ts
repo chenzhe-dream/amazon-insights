@@ -26,6 +26,17 @@ const immediatePolicy = {
   maxQueue: 1,
 } as const;
 
+test('shared quota and wait errors preserve their meaning and quota never retries',async()=>{
+ for(const [kind,expected] of [['quota','quota-exhausted'],['wait','upstream-temporary']] as const){
+  let calls=0;
+  const connector=createRemoteMcpConnector({id:'sorftime',resolveCredential:async()=> 'fixture',clock:()=>new Date(checkedAt),sleep:async()=>{},policy:immediatePolicy,
+   transport:async()=>{calls++;throw Object.assign(new Error('private supplier payload'),{kind,name:kind==='wait'?'SorftimeSourceWaitError':'SorftimeQuotaError',doNotRetry:true});},probeTransport:async()=>({})});
+  const error=await captureConnectorError(connector.execute({operation:'category_products',input:{}}));
+  assert.equal(error.code,expected);assert.equal(calls,1);assert.equal(error.message.includes('private'),false);
+  if(kind==='quota')assert.equal(error.retryable,false);
+ }
+});
+
 function jsonRpcResponse(
   data: Readonly<Record<string, unknown>> = { accepted: true },
   status = 200,

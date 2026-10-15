@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from './market-shared-read-sql';
 import { z } from 'zod';
 import { MarketModuleIdSchema } from '../../../shared/market-module-contracts';
 import { MarketThemeSelectionRequestSchema, MarketThemeSelectionRevisionSchema, MarketThemeSelectionRevisionIdSchema, MarketThemeSelectionResponseSchema } from '../../../shared/market-theme-selection-contracts';
@@ -21,8 +22,8 @@ export class MarketThemeSelectionStore{
  constructor(private readonly context:PostgresQueryContext){}
  private async authorize(input:Identity,write=false){
   MarketModuleIdSchema.parse(input.moduleRunId);MarketModuleIdSchema.parse(input.attemptId);z.string().uuid().parse(input.actor.organizationId);z.string().uuid().parse(input.actor.userId);
-  const active=await this.context.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND status='active' FOR SHARE",[input.actor.userId,input.actor.organizationId]);if(!active.rowCount)return null;
-  const rows=await this.context.query<{study_id:string;status:string}>(`SELECT r.study_id,r.status FROM market_analysis_module_runs r WHERE r.id=$1 AND r.organization_id=$2 AND r.request_json->>'moduleKind'='customer-themes' AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$2 AND u.status='active') FOR ${write?'UPDATE':'SHARE'}`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);return rows.rows[0]??null;
+  const active=write?await this.context.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND status='active' FOR SHARE",[input.actor.userId,input.actor.organizationId]):null;if(write&&!active?.rowCount)return null;
+  const rows=await this.context.query<{study_id:string;status:string}>(`SELECT r.study_id,r.status FROM market_analysis_module_runs r WHERE r.id=$1 AND r.organization_id=$2 AND r.request_json->>'moduleKind'='customer-themes' AND ${write?"EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$2 AND u.status='active')":marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR ${write?'UPDATE':'SHARE'}`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);return rows.rows[0]??null;
  }
  private restore(input:Identity,row:Row){
   try{

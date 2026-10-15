@@ -1,3 +1,4 @@
+import {MarketThemeQueryRequestSchema,assertStandaloneQueryBinding} from '../../shared/market-standalone-query-contracts';
 import { z } from 'zod';
 import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema, MarketThemeStartRequestSchema, MarketThemeRunResponseSchema, MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from '../../shared/market-module-contracts';
 import { MarketThemeDetailQuerySchema, MarketThemeDetailResponseSchema } from '../../shared/market-theme-detail-contracts';
@@ -55,4 +56,9 @@ export async function startThemeTranslations(id:string,attemptId:string,reportHa
  const runId=MarketModuleIdSchema.parse(id),attempt=MarketModuleIdSchema.parse(attemptId),body=MarketThemeTranslationStartSchema.parse({reportHash,...(itemIds?{itemIds}: {})});
  const result=await request(`runs/${runId}/reports/${attempt}/translations`,MarketThemeTranslationResponseSchema,post(body,runId,signal));
  if(result.report.attemptId!==attempt||result.report.report.moduleRunId!==runId||result.report.report.reportHash!==reportHash)throw new Error('报告版本或翻译身份不一致，未启动翻译。');return result;
+}
+
+export async function queryThemeRun(body:unknown,key:string,signal?:AbortSignal){
+ const input=MarketThemeQueryRequestSchema.parse(body),{run}=await request('customer-themes/query',MarketThemeRunResponseSchema,post(input,key,signal));
+ assertStandaloneQueryBinding(input,run);return run;
 }

@@ -40,6 +40,7 @@ const argumentsSchema=z.object({
 // Provider topN controls upstream analysis, not necessarily its response row count.
 const MAX_PROVIDER_PRODUCT_ROWS=1000;
 const messages:Record<IssueCode,string>={
+  'quota-exhausted':'数据源额度已耗尽，商品池采集已暂停',
   configuration:'商品池数据源未配置',authentication:'商品池数据源认证失败','rate-limit':'商品池数据源限流',
   timeout:'商品池采集超时','upstream-temporary':'商品池数据源暂时不可用','upstream-permanent':'商品池数据源拒绝请求',
   'malformed-response':'商品池返回格式或成员身份无效','scope-mismatch':'商品池返回的站点、类目或月份不匹配',

@@ -1,0 +1,14 @@
+import {z} from 'zod';
+import {ProjectContextSchema,ProjectFavoriteQuerySchema,ProjectGroupSchema,ProjectStatusSchema,projectModules} from './market-project-favorites-contracts';
+import {MarketSiteSchema} from './market-sites';
+const count=z.number().int().nonnegative();
+export const ProjectCatalogQuerySchema=ProjectFavoriteQuerySchema;
+export const ProjectHistoryQuerySchema=ProjectFavoriteQuerySchema.extend({categoryId:z.string().regex(/^\d+$/).max(60),module:z.enum(projectModules)});
+export const ProjectCatalogModuleSchema=z.strictObject({reports:count,conditions:count,ready:count,running:count});
+export const ProjectCategorySchema=z.strictObject({categoryId:z.string(),sites:z.array(MarketSiteSchema),reports:count,conditions:count,complete:z.boolean(),updatedAt:z.string().datetime(),modules:z.record(z.enum(projectModules),ProjectCatalogModuleSchema)});
+export const ProjectCatalogSchema=z.strictObject({items:z.array(ProjectCategorySchema).max(10),total:count,page:z.number().int().positive(),pageSize:z.literal(10),groups:z.array(ProjectGroupSchema),stats:z.strictObject({categories:count,reports:count,conditions:count,complete:count,sites:count})});
+export const ProjectHistoryRowSchema=z.strictObject({favoriteId:z.string().uuid(),title:z.string(),creatorName:z.string(),updatedAt:z.string().datetime(),status:ProjectStatusSchema,context:ProjectContextSchema});
+export const ProjectHistorySchema=z.strictObject({items:z.array(ProjectHistoryRowSchema).max(10),total:count,page:z.number().int().positive(),pageSize:z.literal(10)});
+export type ProjectCatalog=z.infer<typeof ProjectCatalogSchema>;
+export type ProjectHistory=z.infer<typeof ProjectHistorySchema>;
+export type ProjectCategory=z.infer<typeof ProjectCategorySchema>;

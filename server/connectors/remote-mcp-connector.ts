@@ -8,6 +8,7 @@ import {
   type ConnectorResult,
   type RemoteMcpConnector,
 } from "./connector-contract";
+import {sourceMetadata} from "../../scripts/lib/sorftime-source-policy.mjs";
 import {
   ResourceGovernorAdmissionError,
   LOCAL_ADMISSION_REASONS,
@@ -148,6 +149,10 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
     error && typeof error === "object"
       ? (error as StructuralTransportError)
       : null;
+  if (structural?.kind === "quota" || (error instanceof Error && error.cause && typeof error.cause === "object" && "kind" in error.cause && error.cause.kind === "quota")) {
+    return new ConnectorError(connectorId, "quota-exhausted", false);
+  }
+  if (error instanceof Error && error.name === "SorftimeSourceWaitError") return new ConnectorError(connectorId, "upstream-temporary", true);
   if (structural?.kind === "timeout") {
     return new ConnectorError(connectorId, "timeout", true);
   }
@@ -363,7 +368,7 @@ export function createRemoteMcpConnector(
           source: Object.freeze({
             connectorId: options.id,
             operation: request.operation,
-            fetchedAt: options.clock().toISOString(),
+            fetchedAt: sourceMetadata(executed.data)?.fetchedAt ?? options.clock().toISOString(),
             attemptCount: executed.attemptCount,
           }),
         });

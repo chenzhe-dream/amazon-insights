@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool as defaultCallSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import { parseSorftimeTrend, parseSorftimeProductTrend } from "./lib/sorftime-trend-parse.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
@@ -267,15 +268,16 @@ export async function runSorftimePriceStrategyCli(options = {}) {
         }),
       ];
       const strategy = parsePriceStrategyResponse({ asin, detailRaw, priceRaw });
+      const sourceDate = sourceFetchedDate([detailRaw,priceRaw],fetchedAt);
       if (!strategy) {
         const result = fallback();
         if (result) records[asin] = result;
         else delete records[asin];
         console.log("empty");
       } else {
-        records[asin] = { ...strategy, asin, marketplace, fetchedAt, status: "ready", source: "Sorftime",
+        records[asin] = { ...strategy, asin, marketplace, fetchedAt:sourceDate, status: "ready", source: "Sorftime",
           provenance: {
-            ...(jobId ? { jobId } : {}), asin, marketplace, fetchedAt,
+            ...(jobId ? { jobId } : {}), asin, marketplace, fetchedAt:sourceDate,
             connector: 'sorftime', stageId: 'price_strategy',
             operation: 'product_detail+product_trend', tool: 'product_detail+product_trend',
             trendType: 'Price', observationPeriod: strategy.observationPeriod ?? 'no-history',

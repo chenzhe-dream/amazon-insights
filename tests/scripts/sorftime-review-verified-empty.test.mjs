@@ -47,6 +47,7 @@ test("verified zero reviews bypasses review provider tools without schema degrad
     reviewCount: 0,
   });
 
+  assert.equal(result.exitCode,0,result.stderr);
   assert.deepEqual({
     exitCode: result.exitCode,
     toolCalls: provider.toolCalls(),
@@ -330,6 +331,8 @@ const mapped = new Map([
   ["generated-app-data-path.mjs", "scripts/lib/generated-app-data-path.mjs"],
   ["sorftime-review-transform.mjs", "scripts/lib/sorftime-review-transform.mjs"],
   ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
+  ["sorftime-source-policy.mjs", "scripts/lib/sorftime-source-policy.mjs"],
+  ["sorftime-catalog-fallback.mjs", "scripts/lib/sorftime-catalog-fallback.mjs"],
   ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],
   ["commerce-data-validity.mjs", "scripts/lib/commerce-data-validity.mjs"],
   ["sellersprite-mcp-client.mjs", "scripts/lib/sellersprite-mcp-client.mjs"],

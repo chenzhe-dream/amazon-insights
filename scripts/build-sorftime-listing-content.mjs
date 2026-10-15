@@ -96,6 +96,7 @@ async function main() {
     process.stdout.write(`[listing] ${asin} ... `);
     try {
       const product = await collectListingProductData({ asin, marketplace, key: sorftimeKey, callTool: callSorftimeTool, detailEvidence: evidence, refreshImages });
+      const sourceDate = product.sourceFetchedAt?.slice(0,10) ?? fetchedAt;
       const { galleryImages, operation } = product;
       if (refreshImages && !galleryImages.length) throw new Error("本次未返回图片，保留原图册");
       const mainImage = galleryImages[0] ?? null;
@@ -140,7 +141,7 @@ async function main() {
           lqs,
           source: "Sorftime",
           ...(product.specifications ? { specifications: product.specifications } : {}),
-          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt:sourceDate, operation }),
         };
         console.log("empty");
       } else {
@@ -160,10 +161,11 @@ async function main() {
           lqs,
           source: "Sorftime",
           ...(product.specifications ? { specifications: product.specifications } : {}),
-          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt, operation }),
+          provenance: createDirectListingProvenance({ jobId, marketplace, asin, fetchedAt:sourceDate, operation }),
         };
         console.log(`${galleryImages.length} imgs · A+ ${hasAplus ? "Y" : hasAplus === false ? "N" : "?"}`);
       }
+      records[asin].fetchedAt = sourceDate;
       records[asin] = retainScopedListingSpecifications(records[asin], existing[asin]);
     } catch (error) {
       if (refreshImages) {

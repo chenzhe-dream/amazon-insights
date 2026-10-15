@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from './market-shared-read-sql';
 import {MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION} from '../../domain/market-research/shape-price-flow';
 import {LOCAL_ADMISSION_REASONS} from '../concurrency-control-repository';
 import {readMarketOverviewSynthesisReport} from '../../runtime/market-overview-synthesis-report-reader';
@@ -49,7 +50,7 @@ const retrySchema = z.object({actor:actorSchema,moduleRunId:uuid4,steps:z.array(
 const cancelSchema = z.object({actor:actorSchema,moduleRunId:uuid4,idempotencyKey:uuid4}).strict();
 const receiptSchema = z.object({status:z.literal("committed"),attemptId:uuid4,sourceIds:z.array(label),inputIds:z.array(label),childStepIds:z.array(uuid4)}).strict();
 class LeaseLostError extends Error {}
-const automaticCodes = new Set(["upstream-temporary","timeout","interrupted"]);
+const automaticCodes = new Set(["rate-limit","upstream-temporary","timeout","interrupted"]);
 type RunRow={id:string;organization_id:string;study_id:string;created_by:string;request_json:unknown;request_fingerprint:string;status:MarketModuleRun["status"];created_at:Date|string;cancelled_at:Date|string|null;plan_revision:number;latest_report_attempt_id:string|null};
 type StepRow={id:string;organization_id:string;study_id:string;run_id:string;definition_json:unknown;input_hash:string;kind:MarketStepDefinition["kind"];status:MarketExecutionStep["status"];attempt_count:number;retry_round:number;round_attempt_count:number;next_attempt_at:Date|string|null;latest_attempt_id:string|null;lease_owner_id:string|null;lease_generation:number;lease_until:Date|string|null};
 type AttemptRow={id:string;step_id:string;attempt_number:number;retry_round:number;lease_generation:number;lease_owner_id:string;input_hash:string;status:MarketExecutionAttempt["status"];output_json:MarketExecutionAttempt["output"];error_json:MarketExecutionAttempt["error"];output_hash:string|null;completion_hash:string|null;receipt_json:unknown};
@@ -150,7 +151,7 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
   }
   async findModuleRun(value:unknown):Promise<MarketModuleRunView|null>{
     const {actor,moduleRunId}=z.object({actor:actorSchema,moduleRunId:uuid4}).strict().parse(value);
-    const result=await this.queries.query<RunRow>(`SELECT r.* FROM market_analysis_module_runs r JOIN market_analysis_studies s ON s.id=r.study_id AND s.organization_id=r.organization_id WHERE r.id=$1 AND r.organization_id=$2 AND r.request_json->'scope'=s.scope_json AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$2 AND u.status='active')`,[moduleRunId,actor.organizationId,actor.userId]);
+    const result=await this.queries.query<RunRow>(`SELECT r.* FROM market_analysis_module_runs r JOIN market_analysis_studies s ON s.id=r.study_id AND s.organization_id=r.organization_id WHERE r.id=$1 AND r.organization_id=$2 AND r.request_json->'scope'=s.scope_json AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})}`,[moduleRunId,actor.organizationId,actor.userId]);
     if(!result.rows[0])return null;
     const steps=await this.queries.query<StepRow>("SELECT * FROM market_analysis_steps WHERE run_id=$1 AND organization_id=$2 ORDER BY step_key,id",[moduleRunId,actor.organizationId]);
     const attempts=await this.queries.query<AttemptRow>("SELECT * FROM market_analysis_step_attempts WHERE run_id=$1 AND organization_id=$2 ORDER BY started_at,id",[moduleRunId,actor.organizationId]);
@@ -299,11 +300,16 @@ export class PostgresMarketModuleExecutionStore implements MarketModuleExecution
           publishReport=true;
         }
         const sourceIds:string[]=[],inputIds:string[]=[];
+        // Collectors timestamp observations on the application clock. A slightly
+        // slower database clock must not reject data already observed here.
+        // Keep database time for leases/planning; never derive validation time
+        // from an untrusted observation timestamp.
+        const snapshotNow=new Date(Math.max(Date.parse(now),Date.now())).toISOString();
         for(const source of accepted.sources){
-          const saved=await snapshots.saveSource({actor,studyId:claim.studyId,input:source,now});sourceIds.push(saved.id);
+          const saved=await snapshots.saveSource({actor,studyId:claim.studyId,input:source,now:snapshotNow});sourceIds.push(saved.id);
         }
         for(const snapshot of accepted.inputs){
-          const saved=await snapshots.saveInput({actor,studyId:claim.studyId,input:snapshot,now});inputIds.push(saved.snapshot.snapshotId);
+          const saved=await snapshots.saveInput({actor,studyId:claim.studyId,input:snapshot,now:snapshotNow});inputIds.push(saved.snapshot.snapshotId);
         }
         const childStepIds=await this.insertSteps(run,accepted.children,step.id,claim.attemptId);
         const admission = outcome.status==='failed' && outcome.error.code==='local-admission' ? outcome.error.admission : undefined;

@@ -4,6 +4,7 @@ import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
 import { createSorftimeBudget } from "./lib/sorftime-request-budget.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {sourceMetadata,attachSourceMetadata,sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import {
   isForceRefresh,
   isRepairIncomplete,
@@ -106,7 +107,7 @@ async function fetchAllVariations(key, asin, marketplace, call = callSorftimeToo
   }
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
-  return [...map.values()];
+  return attachSourceMetadata([...map.values()],sourceMetadata(first)??{});
 }
 
 async function fetchListingDetail(key, asin, marketplace, call = callSorftimeTool) {
@@ -174,10 +175,10 @@ export async function syncParentVariants(key, catalogAsin, marketplace, fetchedA
   const optionalCall = budget(true);
   const progress = options.onProgress ?? (() => {});
   let partial = false;
-  const salesMonth = fetchedAt.slice(0, 7);
   const listing = await fetchListingDetail(key, catalogAsin, marketplace, call);
   const parentAsin = listing.parentAsin || catalogAsin;
   const variations = await fetchAllVariations(key, parentAsin, marketplace, call, () => { partial = true; });
+  const salesMonth = sourceFetchedDate([variations],fetchedAt).slice(0,7);
 
   let reviewSamples = [];
   try {

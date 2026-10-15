@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
+import {sourceFetchedDate} from './lib/sorftime-source-policy.mjs';
 import { buildSifKeywordAnalysis } from "./lib/sif-keyword-transform.mjs";
 import { collectUniqueKeywords, enrichKeywords } from "./lib/sif-keyword-enrichment.mjs";
 import { matchesKeywordQueryWindow, SIF_KEYWORD_QUERY_WINDOW } from "./lib/sif-keyword-sync-config.mjs";
@@ -166,7 +167,7 @@ async function main() {
         ...SIF_KEYWORD_QUERY_WINDOW,
         topN,
       });
-      records[asin] = buildSifKeywordAnalysis(asin, marketplace, payload, fetchedAt, SIF_KEYWORD_QUERY_WINDOW);
+      records[asin] = buildSifKeywordAnalysis(asin, marketplace, payload, sourceFetchedDate([payload],fetchedAt), SIF_KEYWORD_QUERY_WINDOW);
       console.log(`${records[asin].keywords.length} keywords`);
     } catch (error) {
       if (existing[asin]?.status === "ready") {

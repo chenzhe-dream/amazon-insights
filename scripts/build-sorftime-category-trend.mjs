@@ -1,5 +1,6 @@
 import { createRepairSafeRecordMap, isRepairIncomplete } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
@@ -333,7 +334,7 @@ export async function collectSorftimeCategoryRecords({
         sourceAsin: plan.sourceAsin,
         ...associations(plan),
         marketplace,
-        fetchedAt,
+        fetchedAt:sourceFetchedDate([volumeRaw,avgPriceRaw,listingRaw,brandRaw,sellerRaw],fetchedAt),
         status: volume.length ? "ready" : "empty",
         ...(volume.length ? {} : { statusMessage: "UPSTREAM_EMPTY" }),
         volume,

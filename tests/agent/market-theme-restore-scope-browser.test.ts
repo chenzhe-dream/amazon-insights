@@ -117,7 +117,7 @@ async function fixture(t: any) {
             e.report.moduleRunId = second.id;
             e.report.scope = second.scope;
         }
-    const state = { writes: 0, reads: 0, status: 0, hold: false, release: () => { }, entered: () => { }, response: base };
+    const state = { writes: 0, reads: 0, status: 0, hold: false, holdId: '', release: () => { }, entered: () => { }, response: base };
     await page.route('**/*', async (route) => {
         const r = route.request(), u = new URL(r.url());
         if (u.origin !== origin)
@@ -132,7 +132,7 @@ async function fixture(t: any) {
             state.reads++;
             const run = u.pathname.endsWith(second.id) ? second : state.response, status = state.status;
             state.status = 0;
-            if (state.hold) {
+            if (state.hold && (!state.holdId || run.id===state.holdId)) {
                 state.hold = false;
                 if (!await gates.wait(route, release => { state.release = release; state.entered(); })) return;
             }
@@ -170,15 +170,12 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
             await route.fulfill({ json: { run: base } }).catch(() => {});
         });
     } else {
-        await page.route('**/studies', route => {
+        await page.route('**/customer-themes/query', async route => {
             actionWrites++;
-            const id = route.request().headers()['idempotency-key'];
-            return route.fulfill({ json: { study: { id, scope: { ...base.scope, ...route.request().postDataJSON(), researchId: id }, createdAt: base.createdAt } } });
-        });
-        await page.route('**/customer-themes', async route => {
-            actionWrites++;
+            const input=route.request().postDataJSON();
+            assert.equal(input.forceRefresh,kind==='recollect');
             const next = structuredClone(second);
-            next.scope.researchId = new URL(route.request().url()).pathname.split('/').at(-2)!;
+            next.scope={...next.scope,...input.scope};next.params=input.params;
             for (const entry of [next.currentReport, next.latestSavedReport, ...next.history]) if (entry) entry.report.scope = next.scope;
             MarketThemeRunResponseSchema.parse({ run: next });
             if (!await gate(route)) return;
@@ -197,7 +194,7 @@ for (const kind of ['retry', 'cancel', 'submit', 'recollect'] as const) test(`cu
     assert.equal(await page.getByRole('alert').filter({ hasText: '状态读取失败' }).count(), 1);
     assert.equal(new URL(page.url()).searchParams.get('themeRun'), base.id);
     assert.equal(await page.getByLabel('类目路径').inputValue(), '999');
-    assert.equal(actionWrites, kind === 'retry' || kind === 'cancel' ? 1 : 2);
+    assert.equal(actionWrites, 1);
     await page.unroute(`**/runs/${base.id}`);
     await restore(second.id);
     await page.waitForURL(u => u.searchParams.get('themeRun') === second.id);
@@ -378,7 +375,7 @@ test('nested translation write locks restore until settled and target read locks
     let writes = 0;
     await page.route('**/translations?*', route => route.fulfill({ json: { report: base.currentReport, items: [] } }));
     await page.route('**/translations', async (route) => { writes++; if (!await gates.wait(route, owned => { release = owned; started(); })) return; await route.fulfill({ status: 503, json: { error: { message: 'synthetic write complete' } } }).catch(() => { }); });
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).first().click();
     await entered;
     assert.equal(await page.getByRole('button', { name: '读取任务', exact: true }).isDisabled(), true);
     release();
@@ -388,7 +385,7 @@ test('nested translation write locks restore until settled and target read locks
     const targetEntered = new Promise<void>(r => state.entered = r);
     await restore(second.id);
     await targetEntered;
-    assert.equal(await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: '统一为英语', exact: true }).first().isDisabled(), true);
     await page.getByRole('button', { name: '取消读取', exact: true }).click();
     state.release();
     assert.equal(writes, 1);
@@ -403,13 +400,13 @@ test('overlapping translation owners keep restore locked until both settle', { t
     await page.route('**/translations', async (route) => { count++; if (!await gates.wait(route, release => { releases.push(release); entered(); })) return; await route.fulfill({ status: 503, json: { error: { message: 'synthetic settled ' + count } } }).catch(() => { }); });
     await page.getByText('报告统计口径与完整证据', { exact: true }).click();
     await page.getByRole('button', { name: '重读明细', exact: true }).click();
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).nth(1).waitFor();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).nth(1).waitFor();
     const first = new Promise<void>(r => entered = r);
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).first().click();
     await first;
-    assert.equal(await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).isDisabled(), false);
+    assert.equal(await page.getByRole('button', { name: '统一为英语', exact: true }).isDisabled(), false);
     const second = new Promise<void>(r => entered = r);
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).click();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).click();
     await second;
     releases[0]();
     await page.getByText(/synthetic settled/).first().waitFor();
@@ -441,7 +438,7 @@ for (const automatic of [false, true]) test(`${automatic ? 'automatic poll' : 'm
     const reading = new Promise<void>(resolve => state.entered = resolve);
     if (!automatic) await page.getByRole('button', { name: '刷新状态', exact: true }).click();
     await reading;
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).first().click();
     await writing;
     const response = page.waitForResponse(r => r.url().endsWith('/runs/' + base.id));
     state.release();
@@ -467,7 +464,7 @@ for (const status of [401, 403]) test(`current ${status} revokes report during a
         await route.fulfill({ status: 503, json: {} }).catch(() => {});
     });
     t.after(() => release());
-    await page.getByRole('button', { name: '开始/继续中文翻译', exact: true }).first().click();
+    await page.getByRole('button', { name: '统一为英语', exact: true }).first().click();
     await writing;
     state.status = status;
     await page.getByRole('button', { name: '刷新状态', exact: true }).click();
@@ -475,6 +472,20 @@ for (const status of [401, 403]) test(`current ${status} revokes report during a
     assert.equal(settled, false);
     assert.equal(await page.getByLabel('报告版本').count(), 0);
     release();
+});
+
+test('failed new theme run keeps the matching old report after navigation and reload', {timeout:30000}, async t => {
+    const {page,base,second,state,open,restore}=await fixture(t);
+    second.scope={...base.scope,researchId:second.scope.researchId};second.params={...base.params};
+    second.currentReport=null;second.latestSavedReport=null;second.history=[];second.status='failed';
+    second.steps=themeRun().run.steps.map(step=>({...step,status:'failed',errorCode:'quota-exhausted',canRetry:false}));
+    await open();await restore(second.id);
+    const retained=page.getByRole('region',{name:'保留的上次报告'});await retained.waitFor();
+    assert.match(await retained.innerText(),/数据源额度已耗尽/);
+    assert.ok((await retained.innerText()).includes(base.id));assert.ok((await retained.innerText()).includes(second.id));
+    assert.equal(new URL(page.url()).searchParams.get('themeRun'),second.id);
+    await page.reload();await retained.waitFor();assert.ok((await retained.innerText()).includes(base.id));
+    assert.equal(state.writes,0);
 });
 
 test('nested selection save locks restore and target reads prevent selection writes', { timeout: 120000 }, async (t) => {
@@ -499,6 +510,7 @@ test('nested selection save locks restore and target reads prevent selection wri
     release();
     await page.waitForFunction(() => !(Array.from(document.querySelectorAll('button')).find(b => b.textContent === '读取任务') as HTMLButtonElement)?.disabled);
     state.hold = true;
+    state.holdId = second.id; // Gate the target read, not a post-save current-report poll.
     const reading = new Promise<void>(r => state.entered = r);
     await restore(second.id);
     await reading;
@@ -506,4 +518,30 @@ test('nested selection save locks restore and target reads prevent selection wri
     await page.getByRole('button', { name: '取消读取', exact: true }).click();
     state.release();
     assert.equal(writes, 1);
+});
+
+test('standalone theme query uses server history and forced failure keeps prior report across reload', {timeout:45000},async t=>{
+    const {page,base,second,state,open}=await fixture(t);
+    const flags:boolean[]=[];
+    await page.route('**/customer-themes/query',async route=>{
+        const input=route.request().postDataJSON();flags.push(input.forceRefresh);
+        if(!input.forceRefresh){
+            base.scope={...base.scope,...input.scope};base.params=input.params;
+            for(const entry of [base.currentReport,base.latestSavedReport,...base.history])if(entry)entry.report.scope=base.scope;
+            return route.fulfill({json:{run:base}});
+        }
+        second.scope={...base.scope};second.params={...base.params};second.status='failed';second.currentReport=null;second.latestSavedReport=null;second.history=[];
+        second.steps=[{id:second.id,kind:'collect-customer-themes',status:'failed',latestAttemptId:second.id,attemptCount:1,current:true,canRetry:true,asin:null,errorCode:'quota-exhausted'}];
+        return route.fulfill({json:{run:second}});
+    });
+    await open(base.scope.nodeIdPath);
+    await page.getByRole('button',{name:'拉取见解',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector<HTMLFieldSetElement>('fieldset')?.disabled);
+    assert.deepEqual(flags,[false]);assert.equal(new URL(page.url()).searchParams.get('themeRun'),base.id);
+    await page.getByRole('button',{name:'重新拉取',exact:true}).click();
+    const retained=page.getByRole('region',{name:'保留的上次报告'});await retained.waitFor();
+    assert.deepEqual(flags,[false,true]);assert.match(await retained.innerText(),/数据源额度已耗尽/);
+    assert.equal(new URL(page.url()).searchParams.get('themeRun'),second.id);
+    await page.reload();await retained.waitFor();assert.ok((await retained.innerText()).includes(base.id));
+    assert.deepEqual(flags,[false,true],'reload only reads persisted reports');assert.equal(state.writes,0);
 });

@@ -4,12 +4,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 import { readServerConnectorSecret } from "../../server/config/connector-secrets.mjs";
 import {
-  normalizeMcpResult,
   safeSellerSpriteTransportError,
 } from "../../server/connectors/mcp-transport.mjs";
 import { governExternalRequest } from "./postgres-resource-governor.mjs";
 import { runWithProviderDiagnostics } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
+import {withSharedProviderSource,normalizeSharedProviderResult} from './shared-provider-source-client.mjs';
 
 /** @param {Readonly<Record<string, string | undefined>>} [env] */
 export function readSellerSpriteSecretKey(env = process.env) {
@@ -29,6 +29,9 @@ export function readSellerSpriteSecretKey(env = process.env) {
  * @property {'market'} [sessionScope]
  * @property {ReturnType<import('./sellersprite-session-pool.mjs').createSellerSpriteSessionPool>} [sessionPool]
  * @property {number} [timeoutMs]
+ * @property {ReturnType<import('./sorftime-source-cache.mjs').createSorftimeSourceCache>} [sourceCache]
+ * @property {boolean} [forceRefresh]
+ * @property {()=>Promise<void>} [onPhysicalDispatch]
  */
 
 /** @param {SellerSpriteMcpOptions} [options] */
@@ -83,6 +86,7 @@ export async function requestSellerSpriteMcp(
           organizationId,
           jobId,
           attemptKind,
+          onPhysicalDispatch: options.onPhysicalDispatch,
         }),
         requestInit: {
           headers: { "secret-key": secretKey },
@@ -135,6 +139,7 @@ function createSellerSpriteGovernedFetch({
   organizationId,
   jobId,
   attemptKind,
+  onPhysicalDispatch,
 }) {
   return async (input, init = {}) => governExternalRequest({
     resourceGovernor,
@@ -145,28 +150,31 @@ function createSellerSpriteGovernedFetch({
     resource: "sellerSprite",
     attemptKind,
     signal: lifecycleSignal,
-    operation: () => fetchImpl(input, {
+    operation: async () => {
+      if(typeof init.body==='string' && JSON.parse(init.body).method==='tools/call')await onPhysicalDispatch?.();
+      return fetchImpl(input, {
       ...init,
       signal: init.signal
         ? AbortSignal.any([lifecycleSignal, init.signal])
         : lifecycleSignal,
       redirect: "error",
-    }),
+    });},
   });
 }
 
 /** @param {SellerSpriteMcpOptions} [options] */
 export async function callSellerSpriteMcpTool(secretKey, toolName, args, options = {}) {
   const env = options.env ?? process.env;
-  return await runWithProviderDiagnostics({
+  return withSharedProviderSource('sellerSprite',secretKey,toolName,args,options,recordAttempt=>runWithProviderDiagnostics({
     connector: "sellerSprite",
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(args),
     operation: toolName,
     env,
-  }, async () => normalizeMcpResult(
-    await requestSellerSpriteMcp(secretKey, "tools/call", { name: toolName, arguments: args }, options),
-  ));
+  }, async () => {
+    const result=await requestSellerSpriteMcp(secretKey, "tools/call", { name: toolName, arguments: args }, {...options,onPhysicalDispatch:recordAttempt});
+    return normalizeSharedProviderResult(result,'SellerSprite');
+  }));
 }
 
 function providerAsin(value) {

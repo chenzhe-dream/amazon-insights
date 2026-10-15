@@ -7,6 +7,7 @@ export type ConnectorErrorCode =
   | "configuration"
   | "authentication"
   | "local-admission"
+  | "quota-exhausted"
   | "rate-limit"
   | "timeout"
   | "upstream-temporary"
@@ -19,6 +20,7 @@ const SAFE_ERROR_MESSAGES: Readonly<Record<ConnectorErrorCode, string>> =
     configuration: "Connector configuration is unavailable",
     authentication: "Connector authentication failed",
     "rate-limit": "Connector rate limit was exceeded",
+    "quota-exhausted": "Connector quota is exhausted; new collection is paused",
     timeout: "Connector request timed out",
     "upstream-temporary": "Connector upstream is temporarily unavailable",
     "upstream-permanent": "Connector upstream request failed",

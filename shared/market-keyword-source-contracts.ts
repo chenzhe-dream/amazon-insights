@@ -26,7 +26,7 @@ export interface MarketKeywordSourceFailure {
   readonly status: "failed";
   readonly operation: "keyword_extends" | "keyword_trend";
   readonly failure: Readonly<{
-    code: "invalid-request" | "cancelled" | "identity-conflict" | "configuration" | "authentication" | "rate-limit" | "timeout" | "upstream-temporary" | "upstream-permanent" | "malformed-response";
+    code: "quota-exhausted" | "local-admission" | "invalid-request" | "cancelled" | "identity-conflict" | "configuration" | "authentication" | "rate-limit" | "timeout" | "upstream-temporary" | "upstream-permanent" | "malformed-response";
     retryable: boolean;
   }>;
   /** Diagnostics only; rejected responses are never valid evidence. */

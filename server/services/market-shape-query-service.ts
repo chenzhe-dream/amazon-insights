@@ -46,6 +46,9 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
    const {study}=await service.createStudy(actor,input.scope,command);
    return service.startShapes(actor,study.id,input.params,command);
   })();
+  if(input.forceRefresh && result.created) {
+    await context.query('INSERT INTO sorftime_source_refresh_scopes(job_id,not_before) VALUES($1,$2) ON CONFLICT(job_id) DO NOTHING',[result.run.id,now]);
+  }
   await context.query('INSERT INTO market_shape_query_receipts(organization_id,user_id,command_id,request_hash,run_id,created_at) VALUES($1,$2,$3,$4,$5,$6)',[actor.organizationId,actor.userId,command,requestHash,result.run.id,now]);
   return result;
  });

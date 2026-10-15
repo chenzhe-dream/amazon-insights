@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import { isForceRefresh, logCacheHit, readCachedDataExport } from "./lib/sync-cache.mjs";
 import {
   buildSorftimeFbaRecord,
@@ -75,7 +76,7 @@ async function main() {
     process.stdout.write(`[fba] ${asin} ... `);
     try {
       const detailRaw = await callSorftimeTool(sorftimeKey, "product_detail", { asin, amz_site: marketplace });
-      const normal = buildSorftimeFbaRecord({ asin, marketplace, fetchedAt, response: detailRaw });
+      const normal = buildSorftimeFbaRecord({ asin, marketplace, fetchedAt:sourceFetchedDate([detailRaw],fetchedAt), response: detailRaw });
       records[asin] = normal.status === "ready" ? normal : (fallback() ?? normal);
       console.log(records[asin].status === "ready" ? "Sorftime ready" : "empty");
     } catch (error) {

@@ -1,3 +1,6 @@
+import {MarketKeywordQueryRequestSchema,MarketThemeQueryRequestSchema} from './market-standalone-query-contracts';
+import {ProjectCatalogSchema,ProjectCatalogQuerySchema,ProjectHistoryQuerySchema,ProjectHistorySchema} from './market-project-catalog-contracts';
+import {ProjectFavoriteCreateSchema,ProjectFavoriteUpdateSchema,ProjectFavoriteQuerySchema,ProjectFavoriteListSchema,ProjectFavoriteResponseSchema,ProjectFavoriteExportSchema,ProjectGroupSchema,ProjectGroupCreateSchema} from './market-project-favorites-contracts';
 import {MarketShapeQueryRequestSchema} from './market-shape-query-contracts';
 import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from './market-shape-category-name-contracts';
 import {MarketShapeDraftResponseSchema,MarketShapeDraftSaveRequestSchema} from './market-shape-draft-contracts';
@@ -1747,6 +1750,8 @@ export const v1Contracts = [
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords',params:z.object({id:MarketModuleIdSchema}).strict(),response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/runs/:id/keywords/revisions',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketKeywordRevisionRequestSchema,response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
   {method:'GET',path:'/v1/market-analysis/runs/:id/keywords/revisions/:revisionId',params:z.object({id:MarketModuleIdSchema,revisionId:MarketKeywordRevisionIdSchema}).strict(),response:z.object({revision:MarketKeywordRevisionEntrySchema}).strict(),error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/keywords/query',request:MarketKeywordQueryRequestSchema,response:MarketKeywordRunResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-analysis/customer-themes/query',request:MarketThemeQueryRequestSchema,response:MarketThemeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/shape-price/query',request:MarketShapeQueryRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/shape-price/resolve-category',request:ShapeCategoryNameRequestSchema,response:ShapeCategoryNameResponseSchema,error:ApiErrorResponseSchema},
   {method:'POST',path:'/v1/market-analysis/studies/:id/shape-price',params:z.object({id:MarketModuleIdSchema}).strict(),request:MarketShapeStartRequestSchema,response:MarketShapeRunResponseSchema,error:ApiErrorResponseSchema},
@@ -2214,6 +2219,14 @@ export const v1Contracts = [
     error: ApiErrorResponseSchema,
   },
   {method:'GET',path:'/v1/admin/module-visibility',request:VisibilityPeopleQuerySchema,response:VisibilityPeopleResponseSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-research/project-favorites/catalog',request:ProjectCatalogQuerySchema,response:ProjectCatalogSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-research/project-favorites/history',request:ProjectHistoryQuerySchema,response:ProjectHistorySchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-research/project-favorites',request:ProjectFavoriteQuerySchema,response:ProjectFavoriteListSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-research/project-favorites/export',request:ProjectFavoriteQuerySchema,response:ProjectFavoriteExportSchema,error:ApiErrorResponseSchema},
+  {method:'GET',path:'/v1/market-research/project-favorites/:id',params:z.strictObject({id:z.string().uuid()}),response:ProjectFavoriteResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-research/project-favorites',request:ProjectFavoriteCreateSchema,response:ProjectFavoriteResponseSchema,error:ApiErrorResponseSchema},
+  {method:'PATCH',path:'/v1/market-research/project-favorites/:id',params:z.strictObject({id:z.string().uuid()}),request:ProjectFavoriteUpdateSchema,response:ProjectFavoriteResponseSchema,error:ApiErrorResponseSchema},
+  {method:'POST',path:'/v1/market-research/project-favorites/groups',request:ProjectGroupCreateSchema,response:z.strictObject({group:ProjectGroupSchema}),error:ApiErrorResponseSchema},
   {method:"GET",path:"/v1/market-research/favorites",request:MarketFavoriteListQuerySchema,response:MarketFavoriteListResponseSchema,error:ApiErrorResponseSchema},
   {method:"POST",path:"/v1/market-research/favorites",request:MarketFavoriteCreateSchema,response:MarketFavoriteCreateResponseSchema,error:ApiErrorResponseSchema},
   {method:"DELETE",path:"/v1/market-research/favorites/:favoriteId",params:z.strictObject({favoriteId:z.string().uuid()}),response:z.unknown(),error:ApiErrorResponseSchema},

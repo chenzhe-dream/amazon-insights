@@ -531,9 +531,9 @@ export function buildAgentApp(options: BuildAgentAppOptions = {}) {
   registerAnalysisRunRoutes(app, analysisRunServiceResolver);
   registerSellingTranslationRoutes(app, createSellingTranslationService(options.repository ?? null, env));
   registerMarketResearchRoutes(app, options.marketResearchService ?? null);
-  registerMarketModuleRoutes(app, options.marketModuleService ?? null);
+  registerMarketModuleRoutes(app, options.marketModuleService ?? null, options.repository?.marketFavorites?.projects?.resolveReadActor.bind(options.repository.marketFavorites.projects));
   registerMarketLinkedRoutes(app,options.marketLinkedService??null);
-  registerMarketThemeSelectionRoutes(app, options.repository?.marketExecutionContext ?? null);
+  registerMarketThemeSelectionRoutes(app, options.repository?.marketExecutionContext ?? null, options.repository?.marketFavorites?.projects?.resolveReadActor.bind(options.repository.marketFavorites.projects));
   registerLegacyProjectOwnershipRoutes(
     app,
     options.repository ?? null,

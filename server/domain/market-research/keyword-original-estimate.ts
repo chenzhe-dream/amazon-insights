@@ -9,8 +9,9 @@ import {buildMarketKeywordRevision} from './keyword-revision';
 
 /** Source-page volume is intentionally NOT assigned a reference month. */
 export function originalEstimateInput(facts:MarketKeywordFacts,productSeed:string):ProductKeywordSearchReport{
+ // "empty" describes the requested months, not the complete saved history.
  const keywords=facts.members.map(m=>({keyword:m.keyword,weeklySearchRank:m.pageMetrics.weeklySearchRank.value,weeklySearchVolume:m.pageMetrics.weeklySearchVolume.value,monthlySearchVolume:m.pageMetrics.monthlySearchVolume.value,cpcExactBid:m.pageMetrics.recommendedCpcUsd.value,peakSeason:m.pageMetrics.seasonality?.replace(/^Peak season of search volume:\s*/i,'').trim()||null,
- trend:['ready','partial'].includes(m.trend.status)?(m.trend.historyMonths??m.trend.months).filter(p=>p.month<=facts.referenceMonth&&p.searchVolume.value!==null&&p.searchVolume.reason===null).map(p=>({month:p.month,volume:p.searchVolume.value!,abaRank:p.searchRank.value,cpc:p.recommendedBid.value})):[],yearlySearchVolume:{}}));
+ trend:['ready','partial','empty'].includes(m.trend.status)?(m.trend.historyMonths??m.trend.months).filter(p=>p.month<=facts.referenceMonth&&p.searchVolume.value!==null&&p.searchVolume.reason===null).map(p=>({month:p.month,volume:p.searchVolume.value!,abaRank:p.searchRank.value,cpc:p.recommendedBid.value})):[],yearlySearchVolume:{}}));
  return {productName:productSeed,marketplace:facts.scope.marketplace,queryMode:'keyword_extends',keywords,totalCount:keywords.length,fetchedPages:facts.pool.receivedPageCount,trendEnrichedCount:keywords.filter(k=>k.trend.length).length};
 }
 export function buildKeywordOriginalEstimate({facts:raw,productSeed,revision}:{facts:MarketKeywordFacts;productSeed:string;revision?:MarketKeywordRevisionCatalog}){

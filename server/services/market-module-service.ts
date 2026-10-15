@@ -1,3 +1,4 @@
+import {queryStandaloneRun} from './market-standalone-query-service';
 import {MARKET_OVERVIEW_CACHE_TTL_MS} from '../../shared/market-overview-cache-policy';
 import {buildKeywordOriginalEstimate} from '../domain/market-research/keyword-original-estimate';
 import {PostgresMarketShapeReferenceRevisionStore} from '../db/postgres/market-shape-reference-revision-store';
@@ -160,6 +161,8 @@ export class MarketModuleService {
   async overviewDetails(actor:MarketExecutionActor,id:string,attemptId:string){
     const details=await new MarketOverviewReportService(this.deps.context).details({actor,moduleRunId:id,attemptId});if(!details)throw unavailable();return details;
   }
+  async queryKeywords(actor:MarketExecutionActor,body:unknown,key:unknown){return queryStandaloneRun(this,this.deps.context,actor,'keywords',body,key,this.now());}
+  async queryThemes(actor:MarketExecutionActor,body:unknown,key:unknown){return queryStandaloneRun(this,this.deps.context,actor,'themes',body,key,this.now());}
   async queryShapes(actor:MarketExecutionActor,body:unknown,key:unknown){return queryShapeRun(this,this.deps.context,actor,body,key,this.now());}
   async startShapes(actor:MarketExecutionActor,id:string,body:unknown,key:unknown){
     const params=MarketShapeStartRequestSchema.parse(body),idempotencyKey=MarketModuleIdSchema.parse(key),studyId=MarketModuleIdSchema.parse(id);

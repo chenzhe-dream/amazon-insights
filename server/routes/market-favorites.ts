@@ -1,3 +1,4 @@
+import {registerMarketProjectFavoriteRoutes} from './market-project-favorites';
 import type {FastifyInstance,FastifyRequest} from 'fastify';
 import {z} from 'zod';
 import {MarketFavoriteCreateSchema,MarketFavoriteCreateResponseSchema,MarketFavoriteListQuerySchema,MarketFavoriteListResponseSchema} from '../../shared/market-favorites-contracts';
@@ -18,6 +19,7 @@ export function registerMarketFavoritesRoutes(app:FastifyInstance,store:MarketFa
   }
   return p;
  }
+ registerMarketProjectFavoriteRoutes(app,store?.projects,authorized);
  function rethrow(error:unknown):never{
   if(error instanceof MarketFavoriteConflictError)throw new ContractRouteError(409,'CONFLICT','收藏标识已被使用，请刷新后重试');
   if(error instanceof MarketFavoriteNotFoundError)throw new ContractRouteError(404,'NOT_FOUND','未找到该收藏');

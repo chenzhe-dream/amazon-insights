@@ -26,7 +26,7 @@ export class MarketModuleStepWorker {
   readonly #workTimeoutMs: number; readonly #stopTimeoutMs: number; readonly #handlers: Readonly<Dependencies['handlers']>;
   readonly #commitLeaseMs: number;
   readonly #kinds: GeneralStepKind[];
-  #timer: ReturnType<typeof setInterval> | undefined; #running: Promise<boolean> | undefined;
+  #started = false; #timer: ReturnType<typeof setTimeout> | undefined; #running: Promise<boolean> | undefined;
   #controller: AbortController | undefined; #stopped = false; #stopping: Promise<void> | undefined;
   constructor(private readonly deps: Dependencies) {
     this.#owner = z.string().uuid().parse(deps.ownerId ?? randomUUID());
@@ -42,9 +42,18 @@ export class MarketModuleStepWorker {
   }
   start() {
     if (this.#stopped) throw new Error('A stopped market step worker cannot be restarted');
-    if (this.#timer) return;
-    const poll = () => { void this.tick().catch(() => this.#emit({ event: 'poll-failed' })); };
-    this.#timer = setInterval(poll, this.#pollMs); this.#timer.unref(); poll();
+    if (this.#started) return;
+    this.#started = true;
+    const poll = async () => {
+      let claimed = false;
+      try { claimed = await this.tick(); } catch { this.#emit({ event: 'poll-failed' }); }
+      if (this.#stopped) return;
+      // Drain ready work sequentially; only idle/error polls wait. Provider admission
+      // and database leases still govern every claim, including cached steps.
+      this.#timer = setTimeout(() => { void poll(); }, claimed ? 0 : this.#pollMs);
+      this.#timer.unref();
+    };
+    void poll();
   }
   tick(): Promise<boolean> {
     if (this.#running) return this.#running;
@@ -53,7 +62,7 @@ export class MarketModuleStepWorker {
   }
   stop(): Promise<void> {
     if (this.#stopping) return this.#stopping;
-    this.#stopped = true; if (this.#timer) clearInterval(this.#timer); this.#timer = undefined;
+    this.#stopped = true; if (this.#timer) clearTimeout(this.#timer); this.#timer = undefined;
     this.#controller?.abort(createTrustedExecutionAbortReason('worker-stopping'));
     this.#stopping = (async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;

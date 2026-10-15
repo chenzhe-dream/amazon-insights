@@ -97,7 +97,7 @@ export async function executeOnce(connector: RemoteMcpConnector, request: Connec
 }
 function transportFailure(operation: Operation, error: unknown): MarketKeywordSourceFailure {
   if (error instanceof DeadlineError) return failed(operation, error.code, null, [], error.code === "timeout");
-  if (error instanceof ConnectorError) return failed(operation, error.code === 'local-admission' ? 'rate-limit' : error.code, null, [], error.retryable);
+  if (error instanceof ConnectorError) return failed(operation, error.code, null, [], error.retryable);
   return failed(operation, "upstream-temporary", null, [], true);
 }
 function validNow(now: Date): boolean { return now instanceof Date && Number.isFinite(now.getTime()); }

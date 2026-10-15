@@ -1,12 +1,16 @@
 "use client";
+import {rememberPreviousMarketRun} from './lib/market-retained-result';
+import {MarketProjectFavorites,MarketProjectSaveButton} from "./market-project-favorites";
 import {MarketAdminTools,MarketAdminContent} from './market-admin-tools';
 import {overviewMonthLabel} from '../shared/market-overview-period';
 import { browserRequestId } from "./lib/browser-request-id";
 import {publishUsagePage} from "./lib/usage-analytics-browser";
-import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView } from "./lib/market-navigation";
+import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView, type MarketScreen } from "./lib/market-navigation";
 import {emptyMarketModuleSelection, marketModuleNodeQueryKey, readMarketModuleSelection, writeMarketModuleSelection, type IndependentMarketView, type MarketModuleSelection} from './lib/market-module-selection';
 import {MarketSiteSchema} from "../shared/market-sites";
 import {MarketSharedFavorites,type KeywordFavoriteInput} from "./market-shared-favorites";
+import {ProjectFavoriteResponseSchema} from "../shared/market-project-favorites-contracts";
+import {localAgentFetch} from "./lib/local-agent-browser";
 import type {MarketFavorite} from "../shared/market-favorites-contracts";
 
 
@@ -191,6 +195,7 @@ type MarketNavigationProps = { view?: MarketView; onViewChange?: (view: MarketVi
 function MarketResearchModules({ view: controlledView, onViewChange, showAuditDetails=false,sessionIdentity }: MarketNavigationProps & {showAuditDetails?:boolean;sessionIdentity:string}) {
   const [restoreVersion,setRestoreVersion]=useState(0),[favoriteRequest,setFavoriteRequest]=useState(0);
   const [keywordInput,setKeywordInput]=useState<KeywordFavoriteInput|undefined>(),[restoredKeywordInput,setRestoredKeywordInput]=useState<KeywordFavoriteInput|undefined>();
+  useEffect(()=>{const id=new URLSearchParams(window.location.search).get('marketFavorite');if(!id||!/^[-a-f0-9]{36}$/i.test(id))return;const c=new AbortController();void localAgentFetch('/v1/market-research/project-favorites/'+id,{signal:c.signal}).then(async r=>{if(!r.ok)return;const parsed=ProjectFavoriteResponseSchema.safeParse(await r.json());if(parsed.success&&!c.signal.aborted){setRestoredKeywordInput(parsed.data.project.context.keywordInput);setKeywordInput(parsed.data.project.context.keywordInput)}}).catch(()=>{});return()=>c.abort()},[]);
   const [localView,setView]=useState<MarketView>('overview');
   const view = controlledView ?? localView;
   const [viewRestored,setViewRestored]=useState(false);
@@ -209,13 +214,13 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     const storageKey=`market-linked-view:${sessionIdentity}:${batch.id}`;
     type Applied={initial:Record<string,string|null>;applied:string[]};let saved:Applied|null=linkedApplied.current.get(batch.id)??null;
     if(!saved)try{saved=JSON.parse(sessionStorage.getItem(storageKey)??'null');}catch{}
-    if(apply&&!saved){const alreadyApplied=params.get('linkedScopeApplied')===batch.id;saved={initial:Object.fromEntries(linkedModules.map(module=>[module,params.get(keys[module])])),applied:alreadyApplied?linkedModules.filter(module=>params.has(keys[module])):[]};if(!alreadyApplied){for(const module of ['shapes','keywords','themes'] as const)writeMarketModuleSelection(params,module,selection);setModuleSelections({shapes:selection,keywords:selection,themes:selection});params.set('linkedScopeApplied',batch.id);}}
+    if(apply&&!saved){const alreadyApplied=params.get('linkedScopeApplied')===batch.id;saved={initial:Object.fromEntries(linkedModules.map(module=>[module,params.get(keys[module])])),applied:alreadyApplied?linkedModules.filter(module=>batch.modules[module].runId!==null&&params.get(keys[module])===batch.modules[module].runId):[]};if(!alreadyApplied){for(const module of ['shapes','keywords','themes'] as const)writeMarketModuleSelection(params,module,selection);setModuleSelections({shapes:selection,keywords:selection,themes:selection});params.set('linkedScopeApplied',batch.id);}}
     for(const module of linkedModules){
       const runId=batch.modules[module].runId,key=keys[module];if(!runId||saved?.applied.includes(module))continue;
       const current=module==='overview'?{marketplace:params.get('marketSite'),nodeIdPath:params.get('marketNode'),fromMonth:params.get('marketFrom')??batch.request.fromMonth,toMonth:params.get('marketMonth')}:readMarketModuleSelection(params,module,previousCompleteMonth(),false);
       const matches=current.marketplace===selection.marketplace&&(current.nodeIdPath===selection.nodeIdPath||current.nodeIdPath===batch.request.scope.nodeQuery)&&current.fromMonth===selection.fromMonth&&current.toMonth===selection.toMonth;
       const unchanged=saved?params.get(key)===saved.initial[module]:!params.has(key);
-      if(matches&&unchanged&&(module==='overview'||module!==view)&&params.get(key)!==runId){params.set(key,runId);changed=changed||module===view;if(module==='overview'){params.set('marketNode',selection.nodeIdPath);setScope(current=>({...current,nodeQuery:selection.nodeIdPath}));}else{writeMarketModuleSelection(params,module,selection);setModuleSelections(current=>({...current,[module]:selection}));}}
+      if(matches&&unchanged&&(module==='overview'||module!==view)&&params.get(key)!==runId){rememberPreviousMarketRun(key,runId,params.get(key));params.set(key,runId);changed=changed||module===view;if(module==='overview'){params.set('marketNode',selection.nodeIdPath);setScope(current=>({...current,nodeQuery:selection.nodeIdPath}));}else{writeMarketModuleSelection(params,module,selection);setModuleSelections(current=>({...current,[module]:selection}));}}
       if(saved&&!(matches&&unchanged&&module===view&&module!=='overview'))saved.applied.push(module);
     }
     if(saved){linkedApplied.current.set(batch.id,saved);try{sessionStorage.setItem(storageKey,JSON.stringify(saved));}catch{}}
@@ -278,11 +283,13 @@ function MarketResearchModules({ view: controlledView, onViewChange, showAuditDe
     onViewChange?.(favorite.module);
     // The URL carries the saved run identity; do not invoke a collection action here.
   }
-  return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
+  return <div className="market-ui-reference">{controlledView===undefined&&<nav className="market-theme-actions market-theme-module-nav" aria-label="市场调研模块">{marketNavigation.filter(item=>item.view!=="favorites").map(({view:id,label})=><button type="button" className="ghost-btn" key={id} aria-pressed={view===id} onClick={()=>{if(onViewChange){onViewChange(id);return;}setView(id);window.history.replaceState(window.history.state,'',marketViewHref(id,new URLSearchParams(window.location.search)));}}>{label}</button>)}</nav>}
+    <div className="market-project-save-toolbar"><MarketProjectSaveButton keywordInput={keywordInput} /><a className="ghost-btn" href={typeof window!=="undefined"?marketViewHref("favorites",window.location.search):"/?tab=market-overview&themeView=favorites"}>查看调研收藏夹</a></div>
     <MarketSharedFavorites view={view} query={favoriteQuery} keywordInput={keywordInput} onRestore={restoreFavorite} saveRequest={favoriteRequest}/>
     <MarketLinkedStatus batch={linked.batch} error={linked.error} busy={linked.busy} onRetry={module=>void linked.retry(module)}/>
     <div key={restoreVersion}><MarketAdminTools key={view} enabled={showAuditDetails&&(view==='overview'||view==='shapes')}>{view==='overview'?<MarketResearchWorkspace scope={scope} setScope={updateScope} fromMonth={fromMonth} setFromMonth={updateFrom} showAuditDetails={showAuditDetails} onLinkedSubmit={linked.start} linkedBusy={linked.busy||linked.batch?.status==='pending'}/>:view==='shapes'?<MarketShapeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.shapes} onSelectionChange={next=>changeSelection('shapes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:view==='keywords'?<MarketKeywordSection showAuditDetails={showAuditDetails} cacheIdentity={sessionIdentity} maxMonth={previousCompleteMonth()} selection={moduleSelections.keywords} onSelectionChange={next=>changeSelection('keywords',next)} initialInput={restoredKeywordInput} onInputChange={setKeywordInput} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>:<MarketThemeSection maxMonth={previousCompleteMonth()} selection={moduleSelections.themes} onSelectionChange={next=>changeSelection('themes',next)} onFavorite={()=>setFavoriteRequest(value=>value+1)}/>}</MarketAdminTools></div></div>;
 }
-export function MarketResearchSection({ sessionIdentity, showAuditDetails=false, ...navigation }: { sessionIdentity: string; showAuditDetails?:boolean } & MarketNavigationProps) {
-  return <MarketResearchModules key={sessionIdentity} sessionIdentity={sessionIdentity} showAuditDetails={showAuditDetails} {...navigation} />;
+export function MarketResearchSection({ sessionIdentity, showAuditDetails=false, view, onViewChange }: { sessionIdentity: string; showAuditDetails?:boolean;view?:MarketScreen;onViewChange?:(view:MarketScreen)=>void }) {
+  if(view==='favorites')return <MarketProjectFavorites key={sessionIdentity} />;
+  return <MarketResearchModules key={sessionIdentity} sessionIdentity={sessionIdentity} showAuditDetails={showAuditDetails} view={view} onViewChange={onViewChange} />;
 }

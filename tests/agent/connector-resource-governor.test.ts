@@ -261,7 +261,7 @@ test("SellerSprite server execute and probe never use environment governor ident
   }));
   const health = await connector.probe();
 
-  assert.equal(executeError.code, "rate-limit");
+  assert.equal(executeError.code, "local-admission");
   assert.equal(health.available, false);
   assert.equal(governorCalls, 0);
   assert.equal(fetchDispatches, 0);
@@ -489,7 +489,7 @@ test("canonical governor fails closed when exact compensation cannot be proven",
   }
 });
 
-test("SIF and Sorftime retain one outer governance record per attempt", async () => {
+test("SIF and Sorftime retain one governance record per physical dispatch", async () => {
   const governor = new CapturingGovernor();
   let fetchDispatches = 0;
   const fetchImpl: typeof fetch = async () => {
@@ -617,8 +617,9 @@ test("governor admission failure is fail-closed and safe before transport is cal
       governorScope: { organizationId, jobId: safeJobId },
     }),
   );
-  assert.equal(error.code, "rate-limit");
-  assert.equal(error.retryable, true);
+  assert.equal(error.code, "local-admission");
+  assert.equal(error.retryable, false);
+  assert.equal(error.admission?.reason, "unavailable");
   assert.doesNotMatch(JSON.stringify(error), /provider\.example|credential|owner|db-url|secret/i);
 });
 

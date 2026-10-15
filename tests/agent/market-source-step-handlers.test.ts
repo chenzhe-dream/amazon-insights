@@ -22,9 +22,13 @@ test('source steps persist governed collections without requiring a model', { ti
   let productPayload: Record<string, unknown> = { code: 'OK', data: [{ asin, title: 'Synthetic lamp', brand: 'Fixture', totalUnits: 0,
     price: null, totalRevenue: null, ranking: 1, sellerName: 'Fixture', sellerType: 'FBA', shelfDate: '2025-01-01', rating: 4, ratings: 5 }] };
   let failOverviewStatistics=false;
+  let exhausted=false;
+  let rateLimited=false;
   let localAdmission: {reason:"rolling-window";retryAt:string}|undefined;
   const connector = (id: 'sellerSprite' | 'sorftime'): RemoteMcpConnector => ({ id, probe: async () => { throw new Error('not used'); }, execute: async request => {
     calls.push(request);
+    if(exhausted)throw new ConnectorError(id,'quota-exhausted',false);
+    if(rateLimited)throw new ConnectorError(id,'rate-limit',true);
     if(localAdmission)throw new ConnectorError(id,"local-admission",true,localAdmission);
     if(failOverviewStatistics&&request.operation==='market_research_statistics')throw new ConnectorError('sellerSprite','upstream-permanent',false);
     const overview={nodeIdPath:f.scope.nodeIdPath,nodeId:'34',month:'202608',marketplace:'US',currency:'USD',topProducts:100,totalUnits:0,totalRevenue:0};
@@ -43,6 +47,25 @@ test('source steps persist governed collections without requiring a model', { ti
   }
   const view = (id: string) => f.stores.steps.findModuleRun({ actor: f.actor, moduleRunId: id });
   let productInputId = '', keywordInputId = '', keywordId = '';
+  await t.test('rate limit retains its label and bounded automatic retry',async()=>{
+    const run=await create('collect-product-month',{month:'2026-08',poolSize:100,newProductMonths:6});
+    rateLimited=true;
+    try{await worker.tick();const saved=(await view(run.id))!;assert.equal(saved.steps[0].status,'queued');assert.equal((saved.attempts[0].error as any).code,'rate-limit');}
+    finally{rateLimited=false;}
+    await pg.pool.query('UPDATE market_analysis_steps SET next_attempt_at=clock_timestamp() WHERE run_id=$1',[run.id]);
+    await worker.tick();assert.equal((await view(run.id))!.steps[0].status,'succeeded');
+  });
+  await t.test('quota stays explicit through collector, persisted step and public schema without retrying',async()=>{
+    exhausted=true;
+    try{
+      for(const [kind,input] of [['collect-product-month',{month:'2026-08',poolSize:100,newProductMonths:6}],['collect-keyword-page',{seed:'fixture lamp',page:1}]] as const){
+        const run=await create(kind,input);const before=calls.length;await worker.tick();
+        const saved=(await view(run.id))!;
+        assert.equal(saved.steps[0].status,'failed');assert.deepEqual(saved.attempts[0].error,{code:'quota-exhausted',retryable:false});
+        assert.equal(calls.length,before+1);assert.equal(await worker.tick(),false);
+      }
+    }finally{exhausted=false;}
+  });
   await t.test('source handler preserves exact local cooldown across flattened collector failure',async()=>{
     const run=await create('collect-product-month',{month:'2026-08',poolSize:100,newProductMonths:6});
     localAdmission={reason:'rolling-window',retryAt:new Date(Date.now()+60000).toISOString()};

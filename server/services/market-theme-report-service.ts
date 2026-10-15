@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from '../db/postgres/market-shared-read-sql';
 import type { MarketExecutionActor } from '../db/market-module-execution-repository';
 import { MarketExecutionConflictError } from '../db/market-module-execution-repository';
 import { PostgresQueryContext } from '../db/postgres/query-context';
@@ -31,7 +32,7 @@ export class MarketThemeReportService {
     const moduleRunId = MarketModuleIdSchema.parse(input.moduleRunId), attemptId = MarketModuleIdSchema.parse(input.attemptId);
     return this.context.transaction(async () => {
       const locked = await this.context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2
-        AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$2 AND u.status='active') FOR SHARE`, [moduleRunId, input.actor.organizationId, input.actor.userId]);
+        AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR SHARE`, [moduleRunId, input.actor.organizationId, input.actor.userId]);
       if (!locked.rowCount) return null;
       const view = await new PostgresMarketModuleExecutionStore(this.context).findModuleRun({ actor: input.actor, moduleRunId });
       if (!view || !isMarketThemeFlow(view.run)) return null;
@@ -50,7 +51,7 @@ export class MarketThemeReportService {
   async read(input: { actor: MarketExecutionActor; moduleRunId: string }) {
     return this.context.transaction(async () => {
       const locked = await this.context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2
-        AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$2 AND u.status='active') FOR SHARE`,
+        AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR SHARE`,
       [input.moduleRunId, input.actor.organizationId, input.actor.userId]);
       if (!locked.rowCount) return null;
       const view = await new PostgresMarketModuleExecutionStore(this.context).findModuleRun(input);

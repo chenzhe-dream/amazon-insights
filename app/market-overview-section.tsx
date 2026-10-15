@@ -1,4 +1,6 @@
 "use client";
+import {MarketRetainedResult} from './market-retained-result';
+import {rememberPreviousMarketRun} from './lib/market-retained-result';
 import {MarketAdminContent,useMarketAdminTools} from './market-admin-tools';
 import {canReuseOverviewRun} from '../shared/market-overview-cache-policy';
 import {latestCompleteOverviewMonth,overviewPeriodLabel} from '../shared/market-overview-period';
@@ -18,13 +20,13 @@ type Run=MarketOverviewRunResponse['run'];
 const active=(run:Run)=>run.status!=='cancelled'&&run.steps.some(s=>s.current&&['queued','running'].includes(s.status));
 const labels:Partial<Record<Run['steps'][number]['kind'],string>>={'collect-overview-month':'采集月度来源',rules:'整理数字','prepare-members':'规划分析分段','prepare-model-batches':'准备分析输入','model-batch':'解释证据',report:'保存报告'};
 const statuses={queued:'排队中',running:'执行中',succeeded:'已完成',empty:'结果为空',failed:'失败',cancelled:'已取消'};
-const errors:Record<string,string>={timeout:'处理超时',governance:'模型配置或额度不可用','invalid-data':'结果未通过校验',authentication:'来源认证失败','upstream-temporary':'来源暂不可用',interrupted:'执行中断','scope-mismatch':'来源范围不符',internal:'内部处理失败',cancelled:'已取消'};
+const errors:Record<string,string>={timeout:'处理超时',governance:'模型配置或额度不可用','quota-exhausted':'数据源额度已耗尽，新采集已暂停；已保存报告仍可查看','rate-limit':'数据源限流，请稍后重试','local-admission':'本地调用队列暂满或策略限制', 'invalid-data':'结果未通过校验',authentication:'来源认证失败','upstream-temporary':'来源暂不可用',interrupted:'执行中断','scope-mismatch':'来源范围不符',internal:'内部处理失败',cancelled:'已取消'};
 export function marketOverviewErrorText(step:Run['steps'][number]|undefined){
   if(step?.kind==='rules'&&step.errorCode==='invalid-data')return '来源回执或任务绑定校验未通过';
   return errors[step?.errorCode??'internal']??'请查看任务进度';
 }
 function sameNode(path:string,query:string){return path===query||!query.includes(':')&&path.split(':').at(-1)===query;}
-function remember(id:string){const url=new URL(window.location.href);url.searchParams.set('overviewRun',id);url.searchParams.set('themeView','overview');window.history.replaceState(window.history.state,'',url);}
+function remember(id:string){const url=new URL(window.location.href);rememberPreviousMarketRun('overviewRun',id,url.searchParams.get('overviewRun'));url.searchParams.set('overviewRun',id);url.searchParams.set('themeView','overview');window.history.replaceState(window.history.state,'',url);}
 function forget(){const url=new URL(window.location.href);url.searchParams.delete('overviewRun');window.history.replaceState(window.history.state,'',url);}
 export type MarketOverviewController = { openReport: (scope: MarketResearchScope) => void };
 export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScope,controller,onExpandedChange,onContextChange,categoryName,showAuditDetails=false}:{scope:MarketResearchScope;fromMonth:string;onFromMonth:(value:string)=>void;onRestoreScope:(run:Run)=>void;controller?:React.Ref<MarketOverviewController>;onExpandedChange?:(open:boolean)=>void;onContextChange?:(context:OverviewBasicContext)=>void;categoryName?:string|null;showAuditDetails?:boolean}){
@@ -105,6 +107,7 @@ export function MarketOverviewSection({scope,fromMonth,onFromMonth,onRestoreScop
         <div><strong>{progressCopy.title}</strong><p>{progressCopy.detail}</p></div>
       </div>}
       {run&&!run.currentReport&&selected&&<p className="market-research-notice">本轮尚无新报告，以下为之前保存的版本。</p>}
+      <MarketRetainedResult current={run} runKey="overviewRun" read={readOverviewRun} usable={value=>!!(value.currentReport??value.latestSavedReport)}>{saved=><MarketOverviewReport entry={(saved.currentReport??saved.latestSavedReport)!} headTopN={saved.params.headTopN} newProductMonths={saved.params.newProductMonths} supplementBusy/>}</MarketRetainedResult>
       {selected?<MarketOverviewReport supplementBusy={busy||isActive||!!readError} onSupplement={run?()=>{const savedScope={marketplace:run.scope.marketplace,nodeQuery:run.scope.nodeIdPath,month:run.scope.overviewPeriod??run.scope.toMonth,...run.params};onRestoreScope(run);onFromMonth(run.scope.fromMonth);void start(savedScope,run.scope.fromMonth,run.params);}:undefined} onBasicSnapshot={setBasicSnapshot} key={selected.attemptId} entry={selected} headTopN={run?.params.headTopN} newProductMonths={run?.params.newProductMonths} categoryName={run&&sameNode(run.scope.nodeIdPath,scope.nodeQuery)?categoryName:null} showAuditDetails={showAuditDetails}/>:<div className="market-reference-pending" role="status"><div className="market-reference-pending-copy">{(lookingUp||busy||isActive||runId&&!run&&!readError)&&<span className="market-theme-spinner" aria-hidden="true"/>}<div><strong>{pendingTitle}</strong><span>{noSaved?'当前条件没有7天内可复用的报告。旧报告仍可通过历史链接或任务编号读取；需要更新时，请开始总览分析。':failedStep&&!isActive?'已采集的数据保留，可直接重试失败步骤。':runId?admin?'已保存输入保留，详情与重试见下方管理员工具。':'已保存输入保留；任务异常可联系管理员处理。':'打开历史报告不会自动采集。'}</span></div></div>{noSaved&&!lookingUp&&<button className="primary-btn" type="button" disabled={busy||!scope.nodeQuery} onClick={()=>void start(scope,scope.month==='last30'?period(scope).toMonth:overviewReportStartMonth(scope.month,fromMonth))}>开始总览分析</button>}{admin&&failedStep?.canRetry&&!readError&&!isActive&&<button className="ghost-btn" type="button" disabled={busy} onClick={()=>void action('retry',failedStep)}>重试{labels[failedStep.kind]??'失败步骤'}</button>}</div>}
     </div>}
     <MarketAdminContent><details className="market-reference-tools"><summary>分析设置与任务管理</summary>

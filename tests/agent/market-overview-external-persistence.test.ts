@@ -38,7 +38,8 @@ for(const rolling of [false,true])test(`external pages preserve reports, retries
  }};
  const sorftime:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('unused');},execute:async r=>{
   calls.push({op:r.operation,input:r.input});
-  if(r.operation==='category_trend'&&r.input.trend_index==='AvgPrice'&&failPrice)throw new ConnectorError('sorftime','timeout',false);
+  if(r.operation==='category_keywords'&&!rolling)throw new ConnectorError('sorftime','quota-exhausted',false);
+  if(r.operation==='category_trend'&&r.input.trend_index==='AvgPrice'&&failPrice)throw new ConnectorError('sorftime',rolling?'timeout':'quota-exhausted',false);
   return {data:{data:r.operation==='category_keywords'?[]:r.input.trend_index==='SalesCount'?['2026-06=10','2026-07=11','2026-08=12','2026-09=999']:['2026-07=2.25','2026-08=2.75','2026-09=999']},source:{connectorId:'sorftime',operation:r.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
  }};
  const request={actor:f.actor,scope:f.scope,moduleKind:'overview' as const,params:{...(rolling?{scoringVersion:'observed-items/2'}:{}),flow,headTopN:10,newProductMonths:6},versions:{source,rule,mapping:rule,planner:flow,model:null,prompt:null,configuration:null},collectionRevision:'external/v1',idempotencyKey:randomUUID()};
@@ -60,7 +61,8 @@ for(const rolling of [false,true])test(`external pages preserve reports, retries
  assert.ok(detail.numbers.basicOverview.tableMetrics);
  if(rolling){assert.equal(detail.entry.report.scope.overviewPeriod,'last30');assert.ok(detail.numbers.months.some(m=>Object.values(m.metrics).some(v=>v.state==='known')));assert.ok(detail.numbers.originalSummary);assert.ok(detail.numbers.originalSynthesis);}
  assert.deepEqual(detail.numbers.externalData!.salesTrend.points,[{month:'2026-06',value:10},{month:'2026-07',value:11},{month:'2026-08',value:12}]);
- assert.equal(detail.numbers.externalData!.salesAmountTrend.status,'failed');assert.equal(detail.numbers.externalData!.salesAmountTrend.errorCode,'timeout');
+ assert.equal(detail.numbers.externalData!.salesAmountTrend.status,'failed');assert.equal(detail.numbers.externalData!.salesAmountTrend.errorCode,rolling?'timeout':'quota-exhausted');
+ if(!rolling){const demand=view.steps.find(s=>(s.input as any).phase==='overview-industry-demand')!;assert.equal(demand.status,'failed');assert.equal((view.attempts.find(a=>a.id===demand.latestAttemptId)!.error as any).code,'quota-exhausted');}
  assert.equal(detail.numbers.externalData!.asinProfits.status,'partial');assert.deepEqual(Object.keys(detail.numbers.externalData!.asinProfits.items),['B000000001']);assert.deepEqual(detail.numbers.externalData!.asinProfits.missingAsins,['B000000002']);
  assert.equal(detail.numbers.productDemand!.status,'ready');assert.equal(detail.numbers.productDemand!.returnRatio,null);assert.equal(detail.numbers.productDemand!.points.length,2);
  const frozen=(d:typeof detail)=>({report:d.entry.report,numbers:d.numbers,semantic:d.semantic}),hash=digest(frozen(detail)),before=calls.length;

@@ -1,0 +1,122 @@
+{
+  "synthetic": true,
+  "scope": "US virtual category 12:34; July-September2026; 100->150 products; 10 overlapping competitors; 2 keywords; 1 variant per ASIN; business tool calls only",
+  "before": {
+    "coldRequests": 614,
+    "coldByProvider": {
+      "sellerSprite": 46,
+      "sorftime": 525,
+      "sif": 43
+    },
+    "phases": {
+      "market-linked-100": 379,
+      "market-expand-150": 153,
+      "report-reload": 0,
+      "competitor-first": 82,
+      "competitor-repeat": 0,
+      "market-second-batch": 47
+    },
+    "modules": [
+      {
+        "module": "overview",
+        "status": "succeeded"
+      },
+      {
+        "module": "shape-price",
+        "status": "succeeded"
+      },
+      {
+        "module": "keywords",
+        "status": "succeeded"
+      },
+      {
+        "module": "customer-themes",
+        "status": "succeeded"
+      }
+    ],
+    "repeatModules": [
+      {
+        "module": "overview",
+        "status": "succeeded"
+      },
+      {
+        "module": "shape-price",
+        "status": "succeeded"
+      },
+      {
+        "module": "keywords",
+        "status": "succeeded"
+      },
+      {
+        "module": "customer-themes",
+        "status": "succeeded"
+      }
+    ],
+    "expanded": {
+      "products": 150,
+      "status": "succeeded"
+    },
+    "scriptExecutions": 24,
+    "scriptFailures": 0,
+    "liveCalls": 0
+  },
+  "after": {
+    "coldRequests": 612,
+    "coldByProvider": {
+      "sellerSprite": 45,
+      "sorftime": 525,
+      "sif": 42
+    },
+    "phases": {
+      "market-linked-100": 378,
+      "market-expand-150": 153,
+      "report-reload": 0,
+      "competitor-first": 81,
+      "competitor-repeat": 0,
+      "market-second-batch": 0
+    },
+    "modules": [
+      {
+        "module": "overview",
+        "status": "succeeded"
+      },
+      {
+        "module": "shape-price",
+        "status": "succeeded"
+      },
+      {
+        "module": "keywords",
+        "status": "succeeded"
+      },
+      {
+        "module": "customer-themes",
+        "status": "succeeded"
+      }
+    ],
+    "repeatModules": [
+      {
+        "module": "overview",
+        "status": "succeeded"
+      },
+      {
+        "module": "shape-price",
+        "status": "succeeded"
+      },
+      {
+        "module": "keywords",
+        "status": "succeeded"
+      },
+      {
+        "module": "customer-themes",
+        "status": "succeeded"
+      }
+    ],
+    "expanded": {
+      "products": 150,
+      "status": "succeeded"
+    },
+    "scriptExecutions": 24,
+    "scriptFailures": 0,
+    "liveCalls": 0
+  }
+}

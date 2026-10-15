@@ -8,5 +8,5 @@ export function keywordCollectionProgress(run:MarketKeywordRunResponse['run']):s
  }
  const completed=trends.filter(step=>step.status==='succeeded'||step.status==='empty').length;
  const empty=trends.filter(step=>step.status==='empty').length;
- return `趋势已完成 ${completed}/${trends.length}（其中 ${empty} 词来源为空）`;
+ return `趋势已完成 ${completed}/${trends.length}（其中 ${empty} 词研究月份无搜索量，其他月份历史仍保留）`;
 }

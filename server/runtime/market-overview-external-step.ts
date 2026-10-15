@@ -26,7 +26,7 @@ export function createOverviewExternalStep(context:PostgresQueryContext,connecto
  if(stage.kind==='profits')same(stage.asins,overviewExternalAsins(sources,view.run.scope).slice(stage.batch!*40,stage.batch!*40+40));
  const result=await collectOverviewExternal({scope:view.run.scope,stage,connectors,jobId:claim.moduleRunId,signal});signal.throwIfAborted();
  if(result.status==='failed'){
-  const code:MarketStepError['code']=result.code==='timeout'?'timeout':result.code==='local-admission'?'local-admission':result.code==='authentication'?'authentication':['rate-limit','upstream-temporary'].includes(result.code)?'upstream-temporary':'invalid-data';
+  const code:MarketStepError['code']=result.code==='quota-exhausted'?'quota-exhausted':result.code==='rate-limit'?'rate-limit':result.code==='timeout'?'timeout':result.code==='local-admission'?'local-admission':result.code==='authentication'?'authentication':['rate-limit','upstream-temporary'].includes(result.code)?'upstream-temporary':'invalid-data';
   return {kind:'settlement',value:{outcome:{status:'failed',error:{code,retryable:result.retryable}}}};
  }
  const data={collection:'overview-external',stage,...result.result,sourceRef:`market-source:${digest(result.evidence)}`},factory={scope:view.run.scope,kind:'overview' as const,sourceVersion:MARKET_SOURCE_HANDLER_VERSION,ruleVersion:'overview-external/v1',collectedAt:result.evidence.fetchedAt,expectedRecordIds:['external'],records:[{id:'external',scope:view.run.scope,data:json(data)}]},snapshot=createMarketInputSnapshot(factory);

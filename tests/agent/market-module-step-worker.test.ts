@@ -21,6 +21,21 @@ test('general market step worker fences preparation and atomic commit', { timeou
     const view = () => f.stores.steps.findModuleRun({ actor: f.actor, moduleRunId: created.run.id });
     return { ...f, runId: created.run.id, view };
   }
+  await t.test('started worker drains ready steps without a poll interval between them', async () => {
+    const first = await fixture(), second = await fixture(); let completed = 0;
+    const done = deferred();
+    const worker = new MarketModuleStepWorker({ steps: first.stores.steps, pollMs: 60000,
+      handlers: { rules: async () => ({ kind: 'settlement', value: success }) },
+      onEvent: event => { if (event.event === 'succeeded' && ++completed === 2) done.resolve(); } });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      worker.start(); worker.start();
+      await Promise.race([done.promise, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('ready queue stalled behind poll interval')), 2500); })]);
+      assert.equal((await first.view())!.steps[0].status, 'succeeded');
+      assert.equal((await second.view())!.steps[0].status, 'succeeded');
+    } finally { if (deadline) clearTimeout(deadline); await worker.stop(); }
+    assert.equal(completed, 2);
+  });
   await t.test('two workers and reentrant ticks compute once; committed results are not repeated', async () => {
     const f = await fixture(), entered = deferred(), release = deferred(); let calls = 0;
     const handlers = { rules: async () => { calls++; entered.resolve(); await release.promise; return { kind: 'settlement' as const, value: success }; } };

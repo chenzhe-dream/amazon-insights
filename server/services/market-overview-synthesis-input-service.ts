@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from '../db/postgres/market-shared-read-sql';
 import {MarketModuleIdSchema} from '../../shared/market-module-contracts';
 import {MarketExecutionConflictError,type MarketExecutionActor} from '../db/market-module-execution-repository';
 import {PostgresQueryContext} from '../db/postgres/query-context';
@@ -20,8 +21,8 @@ async function restoreMarketOverviewSynthesisBasis(
   if(input.mode!=='current'&&input.mode!=='historical')throw new TypeError('Invalid overview synthesis read mode');
   return context.transaction(async()=>{
     signal.throwIfAborted();
-    const lock=await context.query(`SELECT id FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2
-      AND EXISTS(SELECT 1 FROM users WHERE id=$3 AND organization_id=$2 AND status='active') FOR SHARE`,
+    const lock=await context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2
+      AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR SHARE`,
       [input.moduleRunId,input.actor.organizationId,input.actor.userId]);
     if(!lock.rowCount)return null;
     const view=await new PostgresMarketModuleExecutionStore(context).findModuleRun({actor:input.actor,moduleRunId:input.moduleRunId});
@@ -81,7 +82,7 @@ async function restoreMarketOverviewSynthesisChildren(context: PostgresQueryCont
     const requestedIds=z.array(z.string().min(1).max(240)).min(1).max(2_000).parse(childIds);
     exact(requestedIds,requestedIds);
     const steps = new PostgresMarketModuleExecutionStore(context), snapshots = new PostgresMarketAnalysisSnapshotStore(context), audits = new PostgresMarketAgentRunStore(context);
-    const locked = await context.query('SELECT id FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2 FOR SHARE', [moduleRunId, actor.organizationId]);
+    const locked = await context.query('SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2 FOR SHARE', [moduleRunId, actor.organizationId]);
     if (locked.rowCount !== 1) fail();
     const foundView = await steps.findModuleRun({actor,moduleRunId});
     if (!foundView) return fail();
@@ -198,7 +199,7 @@ export async function loadMarketOverviewSynthesisEvidenceWithSourceReport(contex
  return context.transaction(async()=>{
   signal.throwIfAborted();
   inputId.parse(inputSnapshotId);
-  const locked=await context.query('SELECT id FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2 FOR SHARE',[moduleRunId,actor.organizationId]);if(locked.rowCount!==1)fail();
+  const locked=await context.query('SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2 FOR SHARE',[moduleRunId,actor.organizationId]);if(locked.rowCount!==1)fail();
   const snapshots=new PostgresMarketAnalysisSnapshotStore(context),steps=new PostgresMarketModuleExecutionStore(context);
   const maybeView=await steps.findModuleRun({actor,moduleRunId});if(!maybeView)return fail();const view=maybeView;
   const maybeFound=await snapshots.findInput({actor,studyId:view.run.scope.researchId,id:inputSnapshotId});if(!maybeFound)return fail();const found=maybeFound;

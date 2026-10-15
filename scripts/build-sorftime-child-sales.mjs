@@ -6,6 +6,7 @@ import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { pathToFileURL } from "node:url";
 import { readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {sourceMetadata,attachSourceMetadata,sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import {
   isForceRefresh,
   logCacheHit,
@@ -96,7 +97,7 @@ export async function fetchAllVariations(key, asin, marketplace, options = {}) {
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
   const rows = [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
-  return { containerRecognized, rawRowCount, validSalesRowCount, rows };
+  return attachSourceMetadata({ containerRecognized, rawRowCount, validSalesRowCount, rows },sourceMetadata(first)??{});
 }
 
 export async function syncSorftimeChildSales({ outputPath = outPath, asins: selectedAsins, key: suppliedKey, callTool } = {}) {
@@ -186,13 +187,13 @@ export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 
         asin: item.asin,
         variant: item.variant,
         sales: item.sales,
-        observedAt: fetchedAt,
+        observedAt: sourceFetchedDate([parsed],fetchedAt),
         source: "Sorftime",
       }));
       const result = normalRows.length ? null : selectChildSalesFallback(parsed, fallback);
       records[parentAsin] = result?.rows ?? normalRows;
       outcomes[parentAsin] = result ?? {
-        asin: parentAsin, marketplace, fetchedAt, source: "Sorftime",
+        asin: parentAsin, marketplace, fetchedAt:sourceFetchedDate([parsed],fetchedAt), source: "Sorftime",
         status: normalRows.length ? "ready" : parsed.containerRecognized && parsed.rawRowCount === 0 ? "empty" : "schema-error",
         verifiedEmpty: parsed.containerRecognized && parsed.rawRowCount === 0,
         containerRecognized: parsed.containerRecognized,

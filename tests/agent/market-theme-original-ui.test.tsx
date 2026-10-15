@@ -27,18 +27,18 @@ test('sample table renders saved https images with safe fallback for unsupported
  assert.doesNotMatch(render('javascript:alert(1)'),/<img/);
 });
 
-test('new saved planner localizes labels without changing legacy source labels or inventing unknown text',()=>{
+test('saved planners retain source labels until site-language translation is ready',()=>{
  const entry=themeRuleEntry();entry.report.versions.planner='market-theme-flow/rules-v3';
  const group=themeDetails(new URL('https://test.invalid/details?section=groups')).page.items[0] as Group;
  group.sourceLabel={text:'Brightness',totalLength:10,truncated:false};
  const current=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={{}}/>);
- assert.match(current,/亮度/);
+ assert.match(current,/Brightness/);assert.doesNotMatch(current,/亮度/);
  const old=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={themeRuleEntry()} evidence={{}}/>);
  assert.doesNotMatch(old,/亮度/);assert.match(old,/Brightness/);
  group.sourceLabel={text:'Unlisted original theme',totalLength:23,truncated:false};
  const unknownLabel=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={{}}/>);
  assert.match(unknownLabel,/Unlisted original theme/);
- assert.match(unknownLabel,/原文保留，中文翻译未完成/);
+ assert.match(unknownLabel,/原文保留，可统一为英语/);
 });
 
 test('original theme summary marks unknown source wording as retained original text',()=>{
@@ -51,7 +51,7 @@ test('original theme summary marks unknown source wording as retained original t
  const evidence:Record<number,Evidence>={[group.index]:{members:[member]}};
  const html=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={evidence}/>);
  assert.match(html,/Unknown source wording/);
- assert.match(html,/部分摘要保留原文，中文翻译未完成/);
+ assert.match(html,/部分摘要保留原文，可统一为英语/);
 });
 
 test('saved category name identifies the report while the node path remains available',()=>{
@@ -80,4 +80,17 @@ test('quarantined themes stay partial in business UI and show actual usable cove
  const asin=themeDetails(new URL('https://test.invalid/details?section=asins')).page.items.find(i=>i.kind==='asin')!;
  const html=renderToStaticMarkup(<MarketThemeSampleTable asins={[{...asin,status:'success',quarantine,memberCount:1}]} marketplace="US"/>);
  assert.match(html,/有效 1\/2/);assert.match(html,/隔离 1 条异常主题/);
+});
+
+
+test('German topic preview uses ready translation and keeps original while failed text stays visible',()=>{
+ const entry=themeRuleEntry();entry.report.scope.marketplace='DE';entry.report.scope.currency='EUR';
+ const group=themeDetails(new URL('https://test.invalid/details?section=groups')).page.items[0] as Group;
+ group.sourceLabel={text:'Brightness',totalLength:10,truncated:false};
+ const member=themeDetails(new URL('https://test.invalid/details?section=members')).page.items.find(i=>i.kind==='member') as Member;
+ member.content={text:'Not bright for 2 hours',totalLength:22,truncated:false};
+ const translations={[`group:${group.index}:label`]:{state:'ready',translated:'Helligkeit'},[`member:${member.sourceThemeId}:content`]:{state:'failed',translated:null}};
+ const html=renderToStaticMarkup(<MarketThemeTopicTable groups={[group]} entry={entry} evidence={{[group.index]:{members:[member]}}} translations={translations}/>);
+ assert.match(html,/Helligkeit/);assert.match(html,/Brightness/);assert.match(html,/Not bright for 2 hours/);assert.match(html,/可统一为德语/);
+ assert.match(renderToStaticMarkup(<MarketThemeReport entry={entry}/>),/统一为德语/);
 });

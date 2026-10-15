@@ -1,4 +1,5 @@
 "use client";
+import {marketThemeLanguage} from '../shared/market-theme-translation-contracts';
 import React, { useEffect, useId, useState } from 'react';
 import { z } from 'zod';
 import { MarketThemeReportEntrySchema } from '../shared/market-module-contracts';
@@ -39,7 +40,7 @@ function ThemePages({entry,writesDisabled,onWriteState}:{entry:Entry}&ThemeWrite
     <nav className="market-theme-actions" aria-label="明细视图">{([['groups','主题分组'],['asins','商品覆盖'],['members','原主题证据']] as const).map(([value,label])=><button className="ghost-btn" type="button" key={value} aria-pressed={section===value} onClick={()=>move({section:value,offset:0})}>{label}</button>)}</nav>
     {groupIndex!==undefined&&<p>正在查看第 {groupIndex+1} 组的证据 <button className="ghost-btn" type="button" onClick={()=>move({section:'groups',offset:0})}>返回分组</button></p>}
       {error?<p className="market-research-error" role="alert">{error} <button type="button" className="ghost-btn" onClick={()=>setReload(n=>n+1)}>重读明细</button></p>:!page?<p role="status"><span className="market-theme-spinner" aria-hidden="true"/>正在读取此版本明细…</p>:<>
-      <div className="market-theme-translation-actions"><span>{translationError??'原文、译文和失败状态按当前报告版本分别保存。'}</span><button type="button" className="ghost-btn" disabled={writesDisabled||translationBusy||!!translationError&&translationError.includes('服务尚未')} onClick={()=>void translate()}>{translationBusy?'正在提交…':'开始/继续中文翻译'}</button>{failedIds.length>0&&<button type="button" className="ghost-btn" disabled={writesDisabled||translationBusy} onClick={()=>void translate(failedIds)}>仅重试失败项（{failedIds.length}）</button>}</div>
+      <div className="market-theme-translation-actions"><span>{translationError??'原文、译文和失败状态按当前报告版本分别保存。'}</span><button type="button" className="ghost-btn" disabled={writesDisabled||translationBusy||!!translationError&&translationError.includes('服务尚未')} onClick={()=>void translate()}>{translationBusy?'正在提交…':`统一为${marketThemeLanguage(entry.report.scope.marketplace).name}`}</button>{failedIds.length>0&&<button type="button" className="ghost-btn" disabled={writesDisabled||translationBusy} onClick={()=>void translate(failedIds)}>仅重试失败项（{failedIds.length}）</button>}</div>
       <p className="market-research-note">此版本主题提及总数：{num(page.totals?.mention??null)}；当前视图共 {page.totalItems} 项。统计分母不随翻页变化。</p>
       {section==='groups'&&<p className="market-research-note">共 {page.display.totalGroupCount} 组，展示 {page.display.displayedGroupCount} 组，省略 {page.display.omittedGroupCount} 组。</p>}
       {page.items.length===0?<p>该版本在此视图暂无可展示的明细。</p>:<ul className="market-theme-rows">{page.items.map((item,index)=><li key={`${page.offset+index}`}>

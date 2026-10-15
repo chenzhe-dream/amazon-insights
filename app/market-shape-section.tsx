@@ -1,4 +1,7 @@
 'use client';
+import {MarketShapeSavedResult} from './market-shape-saved-result';
+import {MarketRetainedResult} from './market-retained-result';
+import {rememberPreviousMarketRun} from './lib/market-retained-result';
 import {MarketAdminContent} from './market-admin-tools';
 import {shapePollingDelay} from './lib/market-shape-polling';
 import {MarketShapeReferencePanel,type ShapeReferenceSwitchState} from './market-shape-reference-panel';
@@ -29,7 +32,7 @@ type Selection = {
 const active = (run: MarketShapeRun) => run.steps.some(s => s.current && ['running', 'queued'].includes(s.status));
 const categoryNames:Record<string,string>={report:'类目近30天统计',SalesCount:'类目月销量',AvgPrice:'类目历史均价',Top3ProductSalesAmountShare:'Top3商品销售额占比',Top3BrandSalesAmountShare:'Top3品牌销售额占比',Top3SellerSalesAmountShare:'Top3卖家销售额占比'};
 const stepNames: Record<string, string> = { 'collect-product-month': '商品采集', 'collect-shape-category':'类目历史与指标', 'collect-product-history':'商品月度历史', 'prepare-members': '固定商品池 / 准备形态输入', 'prepare-model-batches': '准备模型分析', 'model-batch': '形态建议' };
-const stepErrors: Record<string, string> = { timeout: '等待上游超时', 'upstream-temporary': '上游暂不可用', 'invalid-data': '数据校验未通过', 'scope-mismatch': '来源范围不匹配', authentication: '来源认证失败', governance: '额度或调用策略限制', interrupted: '任务中断', internal: '处理失败', cancelled: '已取消' };
+const stepErrors: Record<string, string> = { timeout: '等待上游超时', 'upstream-temporary': '上游暂不可用', 'quota-exhausted':'数据源额度已耗尽，新采集已暂停；已保存报告仍可查看','rate-limit':'数据源限流，请稍后重试','local-admission':'本地调用队列暂满或策略限制', 'invalid-data': '数据校验未通过', 'scope-mismatch': '来源范围不匹配', authentication: '来源认证失败', governance: '额度或调用策略限制', interrupted: '任务中断', internal: '处理失败', cancelled: '已取消' };
 const statusNames: Record<string, string> = { queued: '排队中', running: '处理中', succeeded: '已完成', empty: '未返回数据', failed: '失败', cancelled: '已取消' };
 const messages: Record<string, string> = { 'not-ready': '等待商品来源', unavailable: '模型暂不可用，可先人工确认并保存统计结果', running: '正在生成形态建议', partial: '部分形态建议不可用，可查看失败步骤或人工确认', complete: '形态建议已返回，需人工确认后才参与分组' };
 export function shapeRunSummary(run: MarketShapeRun): string {
@@ -140,7 +143,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
         return; const abort = new AbortController();historyOwner.current=abort; void readShapeRevision(runId, choice, abort.signal).then(r => { if (!abort.signal.aborted)
         setHistoric(r); }, e => { if (!abort.signal.aborted)
         setHistoryError(e instanceof Error ? e.message : '读取报告失败'); }); return () => abort.abort(); }, [runId, choice]);
-    const remember = (id: string) => { const url = new URL(window.location.href); url.searchParams.set('shapeRun', id); url.searchParams.set('themeView', 'shapes'); window.history.replaceState(window.history.state, '', url); setRestoreId(id); };
+    const remember = (id: string) => { const url = new URL(window.location.href); rememberPreviousMarketRun('shapeRun',id,url.searchParams.get('shapeRun'));url.searchParams.set('shapeRun', id); url.searchParams.set('themeView', 'shapes'); window.history.replaceState(window.history.state, '', url); setRestoreId(id); };
     async function start(e?: FormEvent, requestedPoolSize = poolSize, requestedSelection = selection, forceRefresh = false) {
         e?.preventDefault();
         const signal = owner.current?.signal;
@@ -301,6 +304,7 @@ export function MarketShapeSection({ selection, onSelectionChange, maxMonth, onF
   {error && <p role="alert" className="market-research-error">{error}</p>}{readError && <p role="alert" className="market-research-error">{readError}；已保留当前显示内容，来源修改操作暂停。{lastReadAt&&` 最后成功读取：${lastReadAt}`}</p>}
  </section>
  {!run && <LaunchSection title="类目销量看板" description={`${marketSites.find(site=>site.code===(selection.marketplace??'US'))?.label??selection.marketplace} · 输入类目节点和研究月份后筛选市场`} badge={<span className="source-badge">商品来源</span>}><div className="pending-box"><strong>{runId?'正在读取形态任务…':'等待指定类目节点'}</strong><span>采集完成后直接查看看板，在 TOP 销售表修改形态即可更新统计；保存可保留当前版本。</span></div></LaunchSection>}
+ <MarketRetainedResult current={run} runKey="shapeRun" read={readShapeRun} usable={value=>!!value.source?.products.length||!!value.latestRevision}>{saved=><MarketShapeSavedResult key={saved.id} run={saved}/>}</MarketRetainedResult>
  {run && run.referenceHistory!==undefined?<MarketShapeReferencePanel key={run.id} run={run} readError={readError} starting={writeLocked} switching={targetLoading||!!pendingTarget} onSwitchStateChange={onReferenceState} requestedPoolSize={pendingPoolSize ?? run.params.poolSize} onRefresh={()=>setReload(n=>n+1)} onPoolSizeChange={requestPoolSizeChange}/>:run && <>{run.categoryDashboard&&choice==='latest'?<MarketShapeCategoryDashboard data={run.categoryDashboard} node={run.scope.nodeIdPath} marketplace={run.scope.marketplace} poolSize={run.source?.products.length??0}/>:report?<MarketShapeDashboard report={report}/>:choice==='latest'&&run.source?.summary?<MarketShapeDashboard report={run.source.summary}/>:null}
    {!report && !run.source?.summary && <LaunchSection title="类目销量看板" description="共同可比商品销量与历史趋势" badge={<span className="source-badge">待保存统计版本</span>}><div className="pending-box"><strong>{run.source?'等待人工确认并保存':'等待有效商品来源'}</strong><span>报告位置保留，当前尚无已保存可比统计。</span></div></LaunchSection>}
  {run.source && <MarketShapeProductTable run={run} selected={selected} assignments={assignments} disabled={busy || !!readError || run.status==='cancelled'} onSelected={setSelected} onAssignment={(asin,label)=>setAssignments(old=>({...old,[asin]:label}))} bands={bands}/>}

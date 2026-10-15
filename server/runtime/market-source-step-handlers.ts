@@ -56,6 +56,7 @@ function evidenceProposal(evidence: MarketSourceEvidence) {
 }
 function failure(sourceCode: string, retryable: boolean, themeIssue?:MarketThemeSourceIssue): MarketStepWork {
   const code: MarketStepError['code'] = ['scope-mismatch', 'identity-conflict', 'identity-mismatch', 'source-mismatch'].includes(sourceCode) ? 'scope-mismatch'
+    : ['quota-exhausted','rate-limit'].includes(sourceCode) ? sourceCode as MarketStepError['code']
     : sourceCode === 'authentication' ? 'authentication'
     : ['configuration', 'local-admission', 'governor-rejected'].includes(sourceCode) ? 'governance'
     : sourceCode === 'timeout' ? 'timeout' : ['interrupted', 'cancelled'].includes(sourceCode) ? 'interrupted'

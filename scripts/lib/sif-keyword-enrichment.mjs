@@ -1,5 +1,6 @@
 import { createRepairSafeRecordMap } from "./sync-cache.mjs";
 import { callSifTool } from "./sif-mcp-client.mjs";
+import {sourceFetchedDate} from './sorftime-source-policy.mjs';
 import { buildKeywordEnrichment, normalizeKeywordKey } from "./sif-keyword-transform.mjs";
 
 function chunk(items, size) {
@@ -40,7 +41,7 @@ export async function enrichKeywords(keywords, marketplace, fetchedAt, existing 
         const historyEntry = historyMap.get(key);
         enrichment[key] = {
           keyword,
-          fetchedAt,
+          fetchedAt: sourceFetchedDate([payload],fetchedAt),
           status: historyEntry ? "ready" : "partial",
           ...buildKeywordEnrichment(keyword, historyEntry, null),
         };
@@ -86,7 +87,7 @@ export async function enrichKeywords(keywords, marketplace, fetchedAt, existing 
         enrichment[key] = {
           ...current,
           keyword,
-          fetchedAt,
+          fetchedAt: [current.fetchedAt,sourceFetchedDate([payload],fetchedAt)].filter(Boolean).sort()[0],
           status: current.status === "error" && !promotionEntry ? "error" : "ready",
           bidLow: merged.bidLow ?? current.bidLow ?? null,
           bidMedian: merged.bidMedian ?? current.bidMedian ?? null,

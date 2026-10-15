@@ -1,5 +1,6 @@
 import { createRepairSafeRecordMap, hasCompleteReviewRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { buildSorftimeReviewAnalysis } from "./lib/sorftime-review-transform.mjs";
@@ -124,7 +125,7 @@ async function main() {
         marketplace,
         customersSayCandidate,
         reviewsCandidate,
-        fetchedAt,
+        sourceFetchedDate([customersSay,reviews],fetchedAt),
         {
           title: product.title ?? "",
           category: `${product.subRankCategory ?? ""} ${product.rankCategory ?? ""}`,

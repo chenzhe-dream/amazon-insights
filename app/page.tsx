@@ -65,7 +65,7 @@ import { amazonMediaSrc } from "./lib/amazon-image";
 import { localAgentErrorMessage, localAgentFetch } from "./lib/local-agent-browser";
 import { buildAppTabHref as buildTabHref, tabFromParam, type TabId } from "./lib/app-tabs";
 import {MarketSiteSchema} from "../shared/market-sites";
-import { marketNavigation, marketViewFromParam, marketViewHref, type MarketView } from "./lib/market-navigation";
+import { marketNavigation, marketScreenFromParam, marketViewHref, type MarketScreen } from "./lib/market-navigation";
 import { MarketResearchSection } from "./market-research-section";
 import "./market-research.css";
 import {
@@ -130,7 +130,7 @@ const savedReportStageLabels = {
   "product-definition": "产品定义",
 } as const;
 
-type NavLeaf = { id: TabId; label: string; sub: string; marketView?: MarketView };
+type NavLeaf = { id: TabId; label: string; sub: string; marketView?: MarketScreen };
 type NavGroup = { id: NavGroupId; label: string; sub: string; children: NavLeaf[] };
 type NavEntry = NavLeaf | NavGroup;
 
@@ -504,7 +504,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   const initialAsins = resolveActiveAsins(slugParam ? null : asinsParam);
   const activeTab = tabFromParam(tabParam);
   const activeMarketSite=MarketSiteSchema.safeParse(searchParams.get("marketSite")).data??"US";
-  const activeMarketView = marketViewFromParam(searchParams.get("themeView"));
+  const activeMarketView = marketScreenFromParam(searchParams.get("themeView"));
   const isLeafActive = (leaf: NavLeaf) => leaf.id === activeTab && (!leaf.marketView || leaf.marketView === activeMarketView);
   const leafHref = (leaf: NavLeaf) => leaf.marketView ? marketViewHref(leaf.marketView, searchParams) : tabHref(leaf.id);
   useEffect(()=>{if(activeTab!=="market-overview")publishUsagePage(activeTab)},[activeTab]);

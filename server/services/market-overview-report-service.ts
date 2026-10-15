@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from '../db/postgres/market-shared-read-sql';
 import {PostgresQueryContext} from '../db/postgres/query-context';
 import {PostgresMarketModuleExecutionStore} from '../db/postgres/market-module-execution-store';
 import {MarketExecutionConflictError,type MarketExecutionActor} from '../db/market-module-execution-repository';
@@ -22,8 +23,8 @@ export class MarketOverviewReportService{
     return this.context.transaction(async()=>(await this.readValidated(input))?.reports??null);
   }
   private async readValidatedDetail(input:{actor:MarketExecutionActor;moduleRunId:string},attemptId:string){
-    const lock=await this.context.query(`SELECT id FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2
-      AND EXISTS(SELECT 1 FROM users WHERE id=$3 AND organization_id=$2 AND status='active') FOR SHARE`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);
+    const lock=await this.context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2
+      AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR SHARE`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);
     if(!lock.rowCount)return null;
     const view=await new PostgresMarketModuleExecutionStore(this.context).findModuleRun(input);if(!view||!isMarketOverviewFlow(view.run))return null;
     const attempt=view.attempts.find(value=>value.id===attemptId),step=view.steps.find(value=>value.id===attempt?.stepId);
@@ -36,8 +37,8 @@ export class MarketOverviewReportService{
   }
   private async readValidated(input:{actor:MarketExecutionActor;moduleRunId:string},detailAttemptId?:string){
       let detail:Awaited<ReturnType<typeof readMarketOverviewReport>>|Awaited<ReturnType<typeof readMarketOverviewSynthesisReport>>|undefined;
-      const lock=await this.context.query(`SELECT id FROM market_analysis_module_runs WHERE id=$1 AND organization_id=$2
-        AND EXISTS(SELECT 1 FROM users WHERE id=$3 AND organization_id=$2 AND status='active') FOR SHARE`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);
+      const lock=await this.context.query(`SELECT id FROM market_analysis_module_runs r WHERE id=$1 AND organization_id=$2
+        AND ${marketSharedReadSql('$3','r.organization_id',{run:'r.id'})} FOR SHARE`,[input.moduleRunId,input.actor.organizationId,input.actor.userId]);
       if(!lock.rowCount)return null;
       const view=await new PostgresMarketModuleExecutionStore(this.context).findModuleRun(input);if(!view||!isMarketOverviewFlow(view.run))return null;
       const current=new Set(inspectMarketOverviewContinuation(view,new Date().toISOString()).currentStepKeys),history=[];

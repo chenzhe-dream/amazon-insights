@@ -1,0 +1,28 @@
+import {z} from 'zod';
+import {MarketSiteSchema} from './market-sites';
+import {MarketFavoriteKeywordInputSchema} from './market-favorites-contracts';
+export const projectModules=['overview','shapes','keywords','themes'] as const;
+export type ProjectModule=typeof projectModules[number];
+const month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
+export const ProjectModuleBindingSchema=z.strictObject({marketplace:MarketSiteSchema,nodeIdPath:z.string().regex(/^\d+(?::\d+)*$/).max(240),fromMonth:month,toMonth:month,runId:z.string().uuid().optional(),overviewPeriod:z.literal('last30').optional()}).refine(v=>v.fromMonth<=v.toMonth,'月份范围无效');
+export const ProjectContextSchema=z.strictObject({overview:ProjectModuleBindingSchema.optional(),shapes:ProjectModuleBindingSchema.optional(),keywords:ProjectModuleBindingSchema.optional(),themes:ProjectModuleBindingSchema.optional(),headTopN:z.enum(['5','10','20']).optional(),newProductMonths:z.enum(['1','3','6','12']).optional(),keywordInput:MarketFavoriteKeywordInputSchema.optional()}).refine(v=>projectModules.some(m=>v[m]),'请先选择类目或打开报告');
+export type ProjectContext=z.infer<typeof ProjectContextSchema>;
+export const ProjectMetadataSchema=z.strictObject({title:z.string().trim().min(1).max(120),groupId:z.string().uuid().nullable().default(null),note:z.string().max(4000).default(''),tag:z.string().trim().max(40).default('')});
+export const ProjectFavoriteCreateSchema=ProjectMetadataSchema.extend({id:z.string().uuid(),context:ProjectContextSchema});
+export const ProjectFavoriteUpdateSchema=ProjectMetadataSchema.extend({revision:z.number().int().positive()});
+export const ProjectStatusSchema=z.enum(['ready','partial','running','conditions','unavailable']);
+export const ProjectFavoriteSchema=ProjectFavoriteCreateSchema.extend({createdBy:z.string().uuid(),creatorName:z.string(),createdAt:z.string().datetime(),updatedAt:z.string().datetime(),revision:z.number().int().positive(),canEdit:z.boolean(),status:ProjectStatusSchema,moduleStatus:z.record(z.enum(projectModules),ProjectStatusSchema)});
+export const ProjectGroupSchema=z.strictObject({id:z.string().uuid(),name:z.string().trim().min(1).max(60),count:z.number().int().nonnegative()});
+export const ProjectGroupCreateSchema=z.strictObject({id:z.string().uuid(),name:z.string().trim().min(1).max(60)});
+export const ProjectFavoriteQuerySchema=z.strictObject({q:z.string().trim().max(120).default(''),page:z.coerce.number().int().positive().max(100000).default(1),site:MarketSiteSchema.optional(),status:ProjectStatusSchema.optional(),groupId:z.union([z.string().uuid(),z.literal('ungrouped')]).optional(),mine:z.enum(['true','false']).default('false')});
+export const ProjectFavoriteListSchema=z.strictObject({items:z.array(ProjectFavoriteSchema).max(10),total:z.number().int().nonnegative(),page:z.number().int().positive(),pageSize:z.literal(10),groups:z.array(ProjectGroupSchema),stats:z.strictObject({total:z.number().int().nonnegative(),ready:z.number().int().nonnegative(),followUp:z.number().int().nonnegative(),sites:z.number().int().nonnegative()})});
+export const ProjectFavoriteResponseSchema=z.strictObject({project:ProjectFavoriteSchema});
+export type ProjectFavorite=z.infer<typeof ProjectFavoriteSchema>;
+export type ProjectFavoriteCreate=z.infer<typeof ProjectFavoriteCreateSchema>;
+export type ProjectFavoriteQuery=z.infer<typeof ProjectFavoriteQuerySchema>;
+export type ProjectFavoriteUpdate=z.infer<typeof ProjectFavoriteUpdateSchema>;
+export type ProjectFavoriteList=z.infer<typeof ProjectFavoriteListSchema>;
+export type ProjectStatus=z.infer<typeof ProjectStatusSchema>;
+export const projectStatusLabels:Record<ProjectStatus,string>={ready:'报告齐全',partial:'存在缺口',running:'分析中',conditions:'仅保存条件',unavailable:'报告不可用'};
+
+export const ProjectFavoriteExportSchema=z.strictObject({items:z.array(ProjectFavoriteSchema).max(10000)});

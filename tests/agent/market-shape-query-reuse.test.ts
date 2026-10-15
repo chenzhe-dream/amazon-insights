@@ -17,6 +17,8 @@ test('equivalent concurrent shape queries reuse a run and explicit refresh is id
  assert.equal(a.run.id,b.run.id);
  const key=randomUUID(),fresh=await service.queryShapes(f.actor,{...body,forceRefresh:true},key);
  assert.notEqual(fresh.run.id,a.run.id);
+ assert.equal((await pg.pool.query('SELECT count(*)::int AS count FROM sorftime_source_refresh_scopes WHERE job_id=$1',[fresh.run.id])).rows[0].count,1);
+ assert.equal((await pg.pool.query('SELECT count(*)::int AS count FROM sorftime_source_refresh_scopes WHERE job_id=$1',[a.run.id])).rows[0].count,0);
  assert.equal((await service.queryShapes(f.actor,{...body,forceRefresh:true},key)).run.id,fresh.run.id);
  const future=new MarketModuleService({context:f.context,modelIdentity:()=>null,now:()=>new Date('2030-01-01T00:00:00Z')});
  assert.equal((await future.queryShapes(f.actor,{...body,forceRefresh:true},key)).run.id,fresh.run.id,'accepted command replays after its original collection window expires');

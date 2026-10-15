@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import {sourceMetadata} from "./sorftime-source-policy.mjs";
 
 import { getProjectRoot } from "./project-root.mjs";
 import { resolveRuntimeRoots } from "./runtime-roots.mjs";
@@ -140,7 +141,7 @@ export function createProductDetailEvidence({
   detail,
 }) {
   const identity = normalizedIdentity({ jobId, marketplace, asin, operation: "product_detail" });
-  const normalizedFetchedAt = new Date(fetchedAt).toISOString();
+  const normalizedFetchedAt = new Date(sourceMetadata(detail)?.fetchedAt ?? fetchedAt).toISOString();
   return {
     schemaVersion: SCHEMA_VERSION,
     ...identity,
@@ -160,7 +161,7 @@ function createOperationEvidence({ jobId, marketplace, asin, fetchedAt = new Dat
   return {
     schemaVersion: SCHEMA_VERSION,
     ...identity,
-    fetchedAt: new Date(fetchedAt).toISOString(),
+    fetchedAt: new Date(sourceMetadata(data)?.fetchedAt ?? sourceMetadata(data?.response)?.fetchedAt ?? fetchedAt).toISOString(),
     source: SOURCE,
     provenance: { connector: "sorftime", tool: operation, stageId: "catalog" },
     data: normalizeEvidenceData(operation, data, identity),

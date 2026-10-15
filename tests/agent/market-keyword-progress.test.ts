@@ -9,5 +9,5 @@ test('keyword queue and pool phases have no zero denominator; established trends
  run.status='running';assert.equal(module!.keywordCollectionProgress(run),'正在采集关键词并汇总词池');
  run.status='failed';assert.equal(module!.keywordCollectionProgress(run),'趋势任务尚未生成');
  run.steps=[{current:true,kind:'collect-keyword-trend',status:'succeeded'},{current:true,kind:'collect-keyword-trend',status:'empty'},{current:false,kind:'collect-keyword-trend',status:'failed'},{current:true,kind:'collect-keyword-trend',status:'queued'}] as typeof run.steps;
- assert.equal(module!.keywordCollectionProgress(run),'趋势已完成 2/3（其中 1 词来源为空）');
+ assert.equal(module!.keywordCollectionProgress(run),'趋势已完成 2/3（其中 1 词研究月份无搜索量，其他月份历史仍保留）');
 });

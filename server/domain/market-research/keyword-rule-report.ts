@@ -69,7 +69,8 @@ export function buildMarketKeywordRuleReport(input:Input):MarketKeywordRuleRepor
   const trend=member.trend;
   if(trend.inputSnapshotId!==null&&trend.sourceRef!==null){const previous=snapshotSources.get(trend.inputSnapshotId);if(previous&&previous!==trend.sourceRef)throw new TypeError('Conflicting trend snapshot source references');snapshotSources.set(trend.inputSnapshotId,trend.sourceRef);}
   const source=trend.inputSnapshotId&&trend.sourceRef&&trend.fetchedAt?{inputSnapshotId:trend.inputSnapshotId,sourceRef:trend.sourceRef,fetchedAt:trend.fetchedAt,referenceMonth:facts.referenceMonth,unit:'count' as const,method:'calendar-month-total' as const,sourceVersion:facts.version}:null;
-  const usable=source!==null&&(trend.status==='ready'||trend.status==='partial');
+  // A verified empty research month can still have valid older observations.
+  const usable=source!==null&&(trend.status==='ready'||trend.status==='partial'||trend.status==='empty');
   const comparisons=trend.comparisonMonths;
   if(comparisons&&comparisons.referenceMonth!==facts.referenceMonth)throw new TypeError('Comparison reference month mismatch');
   const read=(month:string)=>{

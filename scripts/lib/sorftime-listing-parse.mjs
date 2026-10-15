@@ -1,4 +1,5 @@
 import { normalizeProductDetailResponse } from './sorftime-product-contract.mjs';
+import {sourceMetadata} from './sorftime-source-policy.mjs';
 import { parseSorftimeProductSpecifications, retainScopedListingSpecifications } from './sorftime-content-specifications.mjs';
 
 function normalizeListingProductResponse(raw, { asin, marketplace, operation = 'product_detail' }) {
@@ -118,14 +119,21 @@ export function discardUnscopedListingRecord(records, asin) {
 
 export async function collectListingProductData({ asin, marketplace, key, callTool, detailEvidence, refreshImages = false }) {
   let detail = detailEvidence?.data;
-  if (!detail) detail = normalizeListingProductResponse(await callTool(key, 'product_detail', { asin, amz_site: marketplace }), { asin, marketplace });
+  let sourceFetchedAt = detailEvidence?.fetchedAt;
+  if (!detail) {
+    const raw = await callTool(key, 'product_detail', { asin, amz_site: marketplace }, {forceRefresh:refreshImages});
+    sourceFetchedAt = sourceMetadata(raw)?.fetchedAt;
+    detail = normalizeListingProductResponse(raw, { asin, marketplace });
+  }
   let galleryImages = refreshImages && detailEvidence ? [] : parseImageList(detail.galleryImages ?? detail.main_image);
   const hasAplus = detail.hasAplus === true || detail.a_plus === true ? true : detail.hasAplus === false || detail.a_plus === false ? false : null;
   let operation = 'product_detail';
   let specifications;
   if (!galleryImages.length) {
     try {
-      const content = normalizeListingProductResponse(await callTool(key, 'product_content', { asin, amz_site: marketplace }), { asin, marketplace, operation: 'product_content' });
+      const raw = await callTool(key, 'product_content', { asin, amz_site: marketplace }, {forceRefresh:refreshImages});
+      sourceFetchedAt = sourceMetadata(raw)?.fetchedAt ?? sourceFetchedAt;
+      const content = normalizeListingProductResponse(raw, { asin, marketplace, operation: 'product_content' });
       if (content.asin !== asin) throw Object.assign(new TypeError('Product content ASIN missing'), { kind: 'schema' });
       galleryImages = parseImageList(content.main_image);
       if (Object.hasOwn(content, 'property') || Object.hasOwn(content, 'product_info')) {
@@ -138,7 +146,7 @@ export async function collectListingProductData({ asin, marketplace, key, callTo
       throw error;
     }
   }
-  return { galleryImages, hasAplus, operation, ...(specifications ? { specifications } : {}) };
+  return { galleryImages, hasAplus, operation, ...(sourceFetchedAt?{sourceFetchedAt}:{}), ...(specifications ? { specifications } : {}) };
 }
 
 export function buildListingFailureRecord({ asin, marketplace, jobId, fetchedAt, error }) {

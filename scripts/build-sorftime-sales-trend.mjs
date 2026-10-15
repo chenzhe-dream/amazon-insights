@@ -1,5 +1,6 @@
 import { isRepairIncomplete, hasUsableTrendRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -34,13 +35,14 @@ export async function collectSalesTrendResponses({key, asin, marketplace, callTo
   return {responses, requestErrors};
 }
 export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, previous = {}}) {
-  const next = {...previous, asin, marketplace, fetchedAt,
+  const next = {...previous, asin, marketplace, fetchedAt:sourceFetchedDate(Object.values(responses),fetchedAt),
     missingDailyObservations:{...previous.missingDailyObservations}, missingMonthlyObservations:{...previous.missingMonthlyObservations},
     dailyObservationFetchedAt:{...previous.dailyObservationFetchedAt}, monthlyObservationFetchedAt:{...previous.monthlyObservationFetchedAt},
     dailyObservations:{...previous.dailyObservations}, observationPeriods:{...previous.observationPeriods}, observationErrors:{...requestErrors},
     fieldFetchedAt:{...previous.fieldFetchedAt}, dailyFieldFetchedAt:{...previous.dailyFieldFetchedAt}, observationOutcomes:{...previous.observationOutcomes}};
   for (const field of Object.keys(requestErrors)) next.observationOutcomes[field] = {category:"request-failed", fetchedAt};
   for (const [field, type] of Object.entries(trendTypes)) {
+    const fetchedAt = sourceFetchedDate([responses[field]],next.fetchedAt);
     next[field] ??= [];
     if (next.dailyObservations[field]?.length) next.dailyFieldFetchedAt[field] ??= previous.fieldFetchedAt?.[field] ?? previous.fetchedAt;
     if (next[field].length || next.dailyObservations[field]?.length) next.fieldFetchedAt[field] ??= previous.fetchedAt;

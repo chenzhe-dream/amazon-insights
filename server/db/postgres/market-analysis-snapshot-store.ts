@@ -1,3 +1,4 @@
+import {marketSharedReadSql} from './market-shared-read-sql';
 import { z } from 'zod';
 import type { Pool } from 'pg';
 import { MarketAnalysisScopeSchema, type MarketAnalysisScope, type MarketInputSnapshot } from '../../../shared/market-analysis-contracts';
@@ -56,7 +57,7 @@ export class PostgresMarketAnalysisSnapshotStore {
   async findStudy(input:{actor:Actor;id:string}):Promise<StoredStudy|null>{
     const identity=actor(input.actor);uuid.parse(input.id);
     const result=await this.queries.query<StudyRow>(`SELECT s.* FROM market_analysis_studies s WHERE s.organization_id=$1 AND s.id=$2
-      AND EXISTS(SELECT 1 FROM users u WHERE u.id=$3 AND u.organization_id=$1 AND u.status='active')`,[identity.organizationId,input.id,identity.userId]);
+      AND ${marketSharedReadSql('$3','s.organization_id',{study:'s.id'})}`,[identity.organizationId,input.id,identity.userId]);
     return result.rows[0]?study(result.rows[0]):null;
   }
   private async save(input:SaveInput,kind:DocumentKind){
@@ -92,7 +93,7 @@ export class PostgresMarketAnalysisSnapshotStore {
     const result=await this.queries.query<DocumentRow>(`SELECT d.* FROM ${table} d JOIN market_analysis_studies s ON s.id=d.study_id AND s.organization_id=d.organization_id
       WHERE d.organization_id=$1 AND d.study_id=$2 AND d.id=$3
       AND s.scope_json = d.document_json->'scope'
-      AND EXISTS(SELECT 1 FROM users u WHERE u.id=$4 AND u.organization_id=$1 AND u.status='active')`,[identity.organizationId,input.studyId,input.id,identity.userId]);
+      AND ${marketSharedReadSql('$4','s.organization_id',{study:'s.id'})}`,[identity.organizationId,input.studyId,input.id,identity.userId]);
     return result.rows[0]??null;
   }
   async findInput(input:FindInput){const row=await this.find(input,'input');if(!row)return null;const result=document<MarketInputSnapshot>(row);return {snapshot:result.document,storedBy:result.storedBy,storedAt:result.storedAt};}

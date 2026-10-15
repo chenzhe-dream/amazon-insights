@@ -6,6 +6,7 @@ import { ConnectorError, type ConnectorResult, type RemoteMcpConnector } from ".
 
 type Dataset = MarketResearchIssue["dataset"];
 const messages: Record<MarketResearchIssue["code"], string> = {
+  "quota-exhausted":"数据源额度已耗尽，新采集已暂停；已保存报告仍可查看", "local-admission":"本地调用队列暂满或策略限制",
   configuration:"数据源尚未配置", authentication:"数据源认证失败", "rate-limit":"数据源限流，请稍后重试",
   timeout:"类目数据采集超时", "upstream-temporary":"数据源暂时不可用", "upstream-permanent":"数据源拒绝了本次请求",
   "malformed-response":"数据源返回格式无法识别", empty:"该类目和月份没有可用数据", "scope-mismatch":"返回的类目与请求不匹配",
@@ -19,7 +20,7 @@ function issue(dataset: Dataset, code: MarketResearchIssue["code"], retryable=fa
 }
 export function marketResearchFailure(error: unknown, dataset: Dataset="research"): MarketResearchIssue {
   if(error instanceof MarketResearchCollectionError) return error.issue;
-  if(error instanceof ConnectorError) return issue(dataset,error.code === 'local-admission' ? 'rate-limit' : error.code,error.retryable);
+  if(error instanceof ConnectorError) return issue(dataset,error.code,error.retryable);
   if(error instanceof Error && ["TimeoutError","AbortError"].includes(error.name)) return issue(dataset,"timeout",true);
   return issue(dataset,"malformed-response");
 }

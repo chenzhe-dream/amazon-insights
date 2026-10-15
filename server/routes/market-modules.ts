@@ -1,3 +1,4 @@
+import {ProjectFavoriteError} from '../db/postgres/market-project-favorites-store';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { MarketModuleIdSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from '../../shared/market-module-contracts';
@@ -11,13 +12,17 @@ import {MarketThemeTranslationQuerySchema,MarketThemeTranslationStartSchema} fro
 import {MarketOverviewEvidenceError} from '../domain/market-research/overview-catalog-compatibility';
 
 const id = (r: FastifyRequest) => z.object({ id: MarketModuleIdSchema }).strict().parse(r.params).id;
-export function registerMarketModuleRoutes(app: FastifyInstance, service: MarketModuleService | null) {
+export function registerMarketModuleRoutes(app: FastifyInstance, service: MarketModuleService | null, resolveSharedRead?: (actor:MarketExecutionActor,kind:'run'|'study',id:string)=>Promise<MarketExecutionActor>) {
   async function execute<T>(request: FastifyRequest, operation: (s: MarketModuleService, actor: MarketExecutionActor) => Promise<T>) {
     const principal = request.authPrincipal;
     if (principal?.kind !== 'user') throw new ContractRouteError(401, 'AUTHENTICATION_REQUIRED', '请先登录');
     if (!service) throw new ContractRouteError(503, 'CONFIGURATION_ERROR', '市场模块需要 PostgreSQL 持久化服务');
-    try { return await operation(service, { organizationId: principal.organizationId, userId: principal.userId }); }
+    try { let actor:MarketExecutionActor={organizationId:principal.organizationId,userId:principal.userId};
+      const match=request.method==='GET'?request.routeOptions.url?.match(/^\/v1\/market-analysis\/(runs|studies)\/:id(?:\/|$)/):null;
+      if(match&&resolveSharedRead){const value=(request.params as {id?:string}).id;if(value&&MarketModuleIdSchema.safeParse(value).success)actor=await resolveSharedRead(actor,match[1]==='runs'?'run':'study',value)}
+      return await operation(service, actor); }
     catch (error) {
+      if(error instanceof ProjectFavoriteError)throw new ContractRouteError(error.statusCode,error.statusCode===403?'FORBIDDEN':'VALIDATION_ERROR',error.message);
       if (error instanceof MarketOverviewEvidenceError) throw new ContractRouteError(409, 'CONFLICT', '已保存报告的数据版本校验未通过，请联系管理员检查历史报告兼容性；无需修改类目编号');
       if (error instanceof z.ZodError) throw new ContractRouteError(400, 'VALIDATION_ERROR', '市场研究参数或任务编号无效');
       if (error instanceof MarketExecutionConflictError || error instanceof MarketAnalysisStorageError) throw new ContractRouteError(409, 'CONFLICT', '研究范围或任务状态已变化，请刷新后重试');
@@ -29,6 +34,8 @@ export function registerMarketModuleRoutes(app: FastifyInstance, service: Market
     const { created, ...result } = await s.createStudy(actor, req.body, req.headers['idempotency-key']); reply.code(created ? 201 : 200); return result;
   }));
   app.get('/v1/market-analysis/studies/:id', async req => execute(req, (s, actor) => s.findStudy(actor, id(req))));
+  app.post('/v1/market-analysis/keywords/query',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.queryKeywords(actor,req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
+  app.post('/v1/market-analysis/customer-themes/query',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.queryThemes(actor,req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
   app.post('/v1/market-analysis/shape-price/query',async(req,reply)=>execute(req,async(s,actor)=>{const {created,...result}=await s.queryShapes(actor,req.body,req.headers['idempotency-key']);reply.code(created?201:200);return result;}));
   app.post('/v1/market-analysis/shape-price/resolve-category',async req=>execute(req,(s,actor)=>s.resolveShapeCategory(actor,req.body)));
   app.get('/v1/market-analysis/overview/saved',async req=>execute(req,(s,actor)=>s.findSavedOverview(actor,req.query)));

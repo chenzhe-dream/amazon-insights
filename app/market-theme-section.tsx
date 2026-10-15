@@ -1,10 +1,12 @@
 "use client";
+import {MarketRetainedResult} from './market-retained-result';
+import {rememberPreviousMarketRun} from './lib/market-retained-result';
 import { browserRequestId } from "./lib/browser-request-id";
 import {MarketSiteSelector} from "./market-site-selector";
 import {marketSiteCurrency,type MarketSite} from "../shared/market-sites";
 import React, { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { MarketModuleIdSchema, type MarketThemeRunResponse } from '../shared/market-module-contracts';
-import { cancelThemeRun, createThemeStudy, readThemeRun, retryThemeSteps, startThemeRun } from './lib/market-theme-browser';
+import { cancelThemeRun, queryThemeRun, readThemeRun, retryThemeSteps } from './lib/market-theme-browser';
 import {themeSourceErrorText} from './lib/market-theme-source-error';
 import {marketThemeSourceIssueText} from '../shared/market-theme-source-issue';
 import { MarketThemeReport } from './market-theme-report';
@@ -35,7 +37,7 @@ export function MarketThemePendingReport({run,runId,node,readError}:{run:Run|nul
  return <div className="pending-box market-theme-pending" role="status"><strong>{title}</strong><span>{detail}</span>{visibleSteps.length>0&&<ul className="market-theme-steps">{visibleSteps.map(s=><li key={s.id}><MarketThemeStepStatus step={s}/></li>)}</ul>}</div>;
 }
 export function themeRunFromUrl() {if(typeof window==='undefined')return null;const result=MarketModuleIdSchema.safeParse(new URL(window.location.href).searchParams.get('themeRun'));return result.success?result.data:null;}
-function rememberRun(id:string) {const url=new URL(window.location.href);url.searchParams.set('themeRun',id);url.searchParams.set('themeView','themes');window.history.replaceState(window.history.state,'',url);}
+function rememberRun(id:string) {const url=new URL(window.location.href);rememberPreviousMarketRun('themeRun',id,url.searchParams.get('themeRun'));url.searchParams.set('themeRun',id);url.searchParams.set('themeView','themes');window.history.replaceState(window.history.state,'',url);}
 
 type ResearchSelection={marketplace?:MarketSite;nodeIdPath:string;fromMonth:string;toMonth:string};
 export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavorite}:{maxMonth:string;onFavorite?:()=>void;selection?:ResearchSelection;onSelectionChange?:(patch:Partial<ResearchSelection>)=>void}) {
@@ -48,7 +50,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[readError,setReadError]=useState<string|null>(null),[reload,setReload]=useState(0);
   const [reportChoice,setReportChoice]=useState('latest');
   const [workflowOpen,setWorkflowOpen]=useState(false);
-  const [retainedReport,setRetainedReport]=useState<Run['currentReport']>(null),[priorRuns,setPriorRuns]=useState<string[]>([]);
+  const [priorRuns,setPriorRuns]=useState<string[]>([]);
   const owner=useRef<AbortController|null>(null),writing=useRef(false),revision=useRef(0);
   const mutationOwner=useRef<AbortController|null>(null);
   const startCommand=useRef<{signature:string;studyKey:string;runKey:string}|null>(null);
@@ -79,7 +81,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   }
   function cancelTarget(){targetOwner.current?.abort();targetOwner.current=null;targetGeneration.current++;setTargetLoading(false);}
   function invalidatePoll(){pollOwner.current?.abort();pollGeneration.current++;}
-  function clearReport(){invalidatePoll();mutationOwner.current?.abort();mutationOwner.current=null;writing.current=false;revision.current++;setBusy(false);setRun(null);setRetainedReport(null);setRunId(null);scopeRestore.current=null;}
+  function clearReport(){invalidatePoll();mutationOwner.current?.abort();mutationOwner.current=null;writing.current=false;revision.current++;setBusy(false);setRun(null);setRunId(null);scopeRestore.current=null;}
   useEffect(()=>{const abort=new AbortController();owner.current=abort;const restored=themeRunFromUrl();if(restored){scopeRestore.current={id:restored,revision:null};setRunId(restored);setRestoreId(restored);}return()=>{abort.abort();owner.current=null;mutationOwner.current?.abort();mutationOwner.current=null;targetOwner.current?.abort();targetGeneration.current++;invalidatePoll();};},[]);
   useEffect(()=>{
     if(!runId)return;const intent=scopeRestore.current;
@@ -101,7 +103,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
   async function submit(event:FormEvent){event.preventDefault();if(run&&themeRunActive(run))return;if(month>maxMonth||members>pool){setError('请选择完整月份，且商品池数量不得小于主题样本数量。');return;}
     const scope={marketplace:selection?.marketplace??localSite,nodeIdPath:node,fromMonth:selection?.fromMonth??month,toMonth:month,currency:marketSiteCurrency(selection?.marketplace??localSite)},params={memberCount:members,poolSize:pool,newProductMonths:6 as const};
     const signature=JSON.stringify({scope,params});if(startCommand.current?.signature!==signature)startCommand.current={signature,studyKey:browserRequestId(),runKey:browserRequestId()};
-    const keys=startCommand.current,inputRevision=queryState.current.revision;await mutate(async signal=>{const nodeIdPath=await resolveShapeNodeInput(scope.marketplace,scope.nodeIdPath,signal);const study=await createThemeStudy({...scope,nodeIdPath},keys.studyKey,signal);const result=await startThemeRun(study.id,params,keys.runKey,signal);if(!signal.aborted){setRetainedReport(null);adopt(result,inputRevision);}});
+    const keys=startCommand.current,inputRevision=queryState.current.revision;await mutate(async signal=>{const nodeIdPath=await resolveShapeNodeInput(scope.marketplace,scope.nodeIdPath,signal);const result=await queryThemeRun({scope:{...scope,nodeIdPath},params,forceRefresh:false},keys.runKey,signal);if(!signal.aborted){startCommand.current=null;adopt(result,inputRevision);}});
   }
   async function recollect(){
     if(!run||busy||readError||themeRunActive(run))return;
@@ -109,9 +111,8 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     if(refreshCommand.current?.runId!==previous.id)refreshCommand.current={runId:previous.id,studyKey:browserRequestId(),runKey:browserRequestId()};
     const keys=refreshCommand.current,{marketplace,nodeIdPath,fromMonth,toMonth,currency}=previous.scope;
     await mutate(async signal=>{
-      const study=await createThemeStudy({marketplace,nodeIdPath,fromMonth,toMonth,currency},keys.studyKey,signal);
-      const next=await startThemeRun(study.id,previous.params,keys.runKey,signal);
-      if(!signal.aborted){setRetainedReport(selected?{...selected,current:false}:null);setPriorRuns(ids=>[previous.id,...ids.filter(id=>id!==previous.id)]);refreshCommand.current=null;adopt(next,inputRevision);}
+      const next=await queryThemeRun({scope:{marketplace,nodeIdPath,fromMonth,toMonth,currency},params:previous.params,forceRefresh:true},keys.runKey,signal);
+      if(!signal.aborted){setPriorRuns(ids=>[previous.id,...ids.filter(id=>id!==previous.id)]);refreshCommand.current=null;adopt(next,inputRevision);}
     });
   }
   async function restore(event:FormEvent){event.preventDefault();if(writing.current||reportWrites.current.size)return;
@@ -121,7 +122,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     try{const next=await readThemeRun(parsed.data,abort.signal);if(abort.signal.aborted||generation!==targetGeneration.current||!owner.current||writing.current||reportWrites.current.size)return;
       invalidatePoll();revision.current++;scopeRestore.current=null;
       if(next.id===runId){setRun(next);setReadError(null);setReload(n=>n+1);}
-      else{setRetainedReport(null);adopt(next,inputRevision);}
+      else{adopt(next,inputRevision);}
     }catch(e){if(!abort.signal.aborted&&generation===targetGeneration.current){const status=(e as {status?:number}).status;
       const revoked=status===401||(status===403&&parsed.data===runId);
       if(revoked)clearReport();
@@ -134,7 +135,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     await mutate(async signal=>{if(kind==='retry')await retryThemeSteps(id,steps,key,signal);else await cancelThemeRun(id,key,signal);
       const next=await readThemeRun(id,signal);if(!signal.aborted){setRun(next);setReadError(null);}});
   }
-  const selected=run?(reportChoice==='latest'?(run.currentReport??run.latestSavedReport??retainedReport):run.history.find(e=>e.attemptId===reportChoice)??null):null;
+  const selected=run?(reportChoice==='latest'?(run.currentReport??run.latestSavedReport):run.history.find(e=>e.attemptId===reportChoice)??null):null;
   useEffect(()=>{if(run&&!selected)setWorkflowOpen(true);},[run?.id,!!selected]);
   return <div className="market-research-page market-theme-page">
     <section className="card ss-market-query ss-market-query--lilac">
@@ -151,6 +152,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     {readError&&<p className="market-research-error" role="alert">状态读取失败：{readError}。{run?'下方为上次取得的结果，未确认最新状态。':'未读取到任务。'}</p>}
     {run&&(run.scope.marketplace!==(selection?.marketplace??localSite)||run.scope.nodeIdPath!==node||run.scope.fromMonth!==(selection?.fromMonth??month)||run.scope.toMonth!==month||run.params.memberCount!==members||run.params.poolSize!==pool)&&<p className="market-research-notice">查询条件与下方任务不同；下方仍是类目 {run.scope.nodeIdPath}、{run.scope.fromMonth} 至 {run.scope.toMonth} 的已保存结果。</p>}
     {!run?.currentReport&&selected&&<p className="market-research-notice">当前分析尚无新报告，以下保留的历史报告不代表本轮结果。</p>}
+    <MarketRetainedResult current={run} runKey="themeRun" read={readThemeRun} usable={value=>!!(value.currentReport??value.latestSavedReport)?.report.counts.successfulCount}>{saved=><MarketThemeReport entry={{...(saved.currentReport??saved.latestSavedReport)!,current:false}} writesDisabled/>}</MarketRetainedResult>
     {selected?<MarketThemeReport entry={selected} writesDisabled={targetLoading||busy} onWriteState={onReportWrite}/>:<MarketThemeLaunchSection title="类目买家评论见解" description={(selection?.marketplace??localSite)+" · 基于样本链接的 Amazon Customers Say 聚合"}><MarketThemePendingReport run={run} runId={runId} node={node} readError={readError}/></MarketThemeLaunchSection>}
     <section className="card market-insights-workflow" aria-label="主题任务与报告"><details className="market-research-boundaries" open={workflowOpen} onToggle={e=>setWorkflowOpen(e.currentTarget.open)}><summary>任务进度、重试与历史报告</summary>
       <div className="market-theme-actions"><button type="button" className="ghost-btn" disabled={!runId||busy||targetLoading} onClick={()=>setReload(n=>n+1)}>刷新状态</button>{run&&themeRunActive(run)&&<button type="button" className="ghost-btn" disabled={busy||reportSaving||targetLoading||!!readError} onClick={()=>void action('cancel')}>取消本次分析</button>}</div>

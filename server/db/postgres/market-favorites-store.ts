@@ -1,3 +1,4 @@
+import {PostgresMarketProjectFavoritesStore} from './market-project-favorites-store';
 import {isDeepStrictEqual} from 'node:util';
 import {MarketFavoriteCreateSchema,MarketFavoriteListQuerySchema,MarketFavoriteListResponseSchema,MarketFavoriteSchema,type MarketFavoriteCreate,type MarketFavoriteListQuery} from '../../../shared/market-favorites-contracts';
 import {MarketFavoriteConflictError,MarketFavoriteForbiddenError,MarketFavoriteNotFoundError,type MarketFavoriteActor,type MarketFavoritesRepository} from '../market-favorites-repository';
@@ -8,7 +9,8 @@ function favorite(row:Record<string,unknown>,actor:MarketFavoriteActor,isOwner:b
 }
 
 export class PostgresMarketFavoritesStore implements MarketFavoritesRepository {
- constructor(private readonly queries:PostgresQueryContext){}
+ readonly projects:PostgresMarketProjectFavoritesStore;
+ constructor(private readonly queries:PostgresQueryContext){this.projects=new PostgresMarketProjectFavoritesStore(queries)}
 
  private async isOwner(actor:MarketFavoriteActor){
   const result=await this.queries.query('SELECT 1 FROM system_owners WHERE organization_id=$1 AND user_id=$2',[actor.organizationId,actor.userId]);

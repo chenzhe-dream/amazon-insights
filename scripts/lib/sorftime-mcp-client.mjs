@@ -13,6 +13,8 @@ import {
   runWithProviderDiagnostics,
 } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
+import { sourceCacheFromEnv } from "./sorftime-source-cache.mjs";
+import { isQuotaResponse, SorftimeQuotaError, assertSourceResponse } from "./sorftime-source-policy.mjs";
 
 export function readSorftimeKey(env = process.env) {
   return readServerConnectorSecret("sorftime", env);
@@ -62,7 +64,8 @@ export async function requestSorftimeMcp(
       logicalOperationKey,
       dispatchKey: `${logicalOperationKey}:${physicalAttemptKey}`,
       signal,
-      operation: () => {
+      operation: async () => {
+        await options.onPhysicalDispatch?.();
         const endpoint = new URL(providerEndpoint("sorftime", env));
         endpoint.searchParams.set("key", key);
         return fetchImpl(endpoint, {
@@ -105,7 +108,8 @@ export async function requestSorftimeMcp(
 
 export async function callSorftimeTool(key, toolName, args, options = {}) {
   const env = options.env ?? process.env;
-  return await runWithProviderDiagnostics({
+  const cache = options.sourceCache ?? sourceCacheFromEnv(env);
+  const execute = async ({recordAttempt = async () => {}} = {}) => runWithProviderDiagnostics({
     connector: "sorftime",
     stage: env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
     asin: providerAsin(args),
@@ -114,12 +118,26 @@ export async function callSorftimeTool(key, toolName, args, options = {}) {
     emitDiagnostics: options.emitDiagnostics,
     optionalEnrichment: options.optionalEnrichment,
     allowCategorySiblingDispatch: options.allowCategorySiblingDispatch,
-  }, async () => normalizeSorftimeToolResult(toolName,
-    await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args }, options),
-  ));
+  }, async () => {
+    const value = normalizeSorftimeToolResult(toolName,
+      await requestSorftimeMcp(key, "tools/call", { name: toolName, arguments: args },
+        {...options, onPhysicalDispatch: recordAttempt}));
+    if(cache) {
+      assertSourceResponse(value);
+      if(JSON.stringify(value).includes(key))throw new McpTransportError("malformed",null,{boundary:"tool-content"});
+    }
+    return value;
+  });
+  if(!cache) return execute();
+  return cache.run({
+    key, endpoint: providerEndpoint("sorftime", env), tool: toolName, args,
+    jobId: options.jobId ?? env.AGENT_SYNC_JOB_ID, signal: options.signal,
+    forceRefresh: options.forceRefresh === true || env.FORCE_REFRESH === '1' || process.argv.includes('--force'),
+  }, execute);
 }
 
 export function normalizeSorftimeToolResult(toolName, result) {
+  if(isQuotaResponse(result)) throw new SorftimeQuotaError();
   if (result?.isError === true) {
     throw new McpTransportError("rpc", null, { boundary: "tool-content" });
   }

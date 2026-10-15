@@ -6,7 +6,7 @@ import {MarketKeywordStartRequestSchema} from './market-keyword-flow-contracts';
 export const linkedModules=['overview','shapes','keywords','themes'] as const;
 export type LinkedModule=typeof linkedModules[number];
 export const linkedModuleLabels:Record<LinkedModule,string>={overview:'市场总览',shapes:'商品形态及价格带',keywords:'类目关键词洞察',themes:'买家评论见解'};
-export const MarketLinkedRequestSchema=z.object({scope:MarketResearchScopeSchema,fromMonth:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/)}).strict()
+export const MarketLinkedRequestSchema=z.object({scope:MarketResearchScopeSchema,fromMonth:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),forceRefresh:z.boolean().optional()}).strict()
  .refine(v=>v.scope.month!=='last30'&&v.fromMonth<=v.scope.month,'四模块联动请选择完整自然月，最近30天只适用于单独总览');
 export type MarketLinkedRequest=z.infer<typeof MarketLinkedRequestSchema>;
 const moduleState=z.object({status:z.enum(['pending','started','failed']),runId:MarketModuleIdSchema.nullable(),message:z.string().nullable()}).strict();

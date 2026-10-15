@@ -20,7 +20,6 @@ import type {
   ConnectorExecutionPolicy,
   ConnectorId,
   ConnectorMap,
-  ConnectorRequest,
   RemoteMcpConnector,
 } from "./connector-contract";
 import { createRemoteMcpConnector } from "./remote-mcp-connector";
@@ -36,6 +35,7 @@ const DEFAULT_POLICY: Readonly<ConnectorExecutionPolicy> = Object.freeze({
 });
 
 export interface McpConnectorDependencies {
+  sourceCache?: ReturnType<typeof import("../../scripts/lib/sorftime-source-cache.mjs").createSorftimeSourceCache>;
   env?: AgentEnvironment;
   resolveCredential?: (
     connectorId: ConnectorId,
@@ -67,81 +67,65 @@ function dependencies(input: McpConnectorDependencies) {
   };
 }
 
-function connector(
-  id: ConnectorId,
-  input: McpConnectorDependencies,
-  transport: (
-    request: ConnectorRequest,
-    signal: AbortSignal,
-    credential: string,
-    env: AgentEnvironment,
-    fetchImpl: typeof fetch,
-  ) => Promise<unknown>,
-  probeTransport: (
-    signal: AbortSignal,
-    credential: string,
-    env: AgentEnvironment,
-    fetchImpl: typeof fetch,
-  ) => Promise<unknown>,
-): RemoteMcpConnector {
-  const resolved = dependencies(input);
-  return createRemoteMcpConnector({
-    id,
-    physicalGovernance: "outer-attempt",
-    resolveCredential: (scope) => resolved.resolveCredential(id, scope),
-    transport: (request, signal, credential) =>
-      transport(request, signal, credential, resolved.env, resolved.fetchImpl),
-    probeTransport: (signal, credential) =>
-      probeTransport(signal, credential, resolved.env, resolved.fetchImpl),
-    clock: resolved.clock,
-    sleep: resolved.sleep,
-    policy: resolved.policy,
-    resourceGovernor: resolved.resourceGovernor,
-  });
-}
-
 export function createSifConnector(
   input: McpConnectorDependencies = {},
 ): RemoteMcpConnector {
-  return connector(
-    "sif",
-    input,
-    (request, signal, credential, env, fetchImpl) =>
+  const resolved = dependencies(input);
+  return createRemoteMcpConnector({
+    id: 'sif', physicalGovernance: 'transport-dispatch',
+    resolveCredential: scope => resolved.resolveCredential('sif',scope),
+    transport: (request, signal, credential, context) =>
       callSifTool(request.operation, request.input, {
-        env: { ...env, SIF_MCP_SECRET: credential },
-        fetchImpl,
-        signal,
+        env: { ...resolved.env, SIF_MCP_SECRET: credential, AGENT_EXECUTION_ORGANIZATION_ID: undefined, AGENT_SYNC_JOB_ID: undefined },
+        fetchImpl: resolved.fetchImpl, signal, sourceCache: input.sourceCache,
+        resourceGovernor: context.resourceGovernor ?? undefined,
+        organizationId: context.governorScope?.organizationId ?? null,
+        jobId: context.governorScope?.jobId ?? null, attemptKind: context.attemptKind,
       }),
-    (signal, credential, env, fetchImpl) =>
+    probeTransport: (signal, credential, context) =>
       requestSifMcp("tools/list", {}, {
-        env: { ...env, SIF_MCP_SECRET: credential },
-        fetchImpl,
-        signal,
+        env: { ...resolved.env, SIF_MCP_SECRET: credential, AGENT_EXECUTION_ORGANIZATION_ID: undefined, AGENT_SYNC_JOB_ID: undefined },
+        fetchImpl: resolved.fetchImpl, signal,
+        resourceGovernor: context.resourceGovernor ?? undefined,
+        organizationId: context.governorScope?.organizationId ?? null,
+        jobId: context.governorScope?.jobId ?? null, attemptKind: context.attemptKind,
       }),
-  );
+    clock: resolved.clock, sleep: resolved.sleep, policy: resolved.policy,
+    resourceGovernor: resolved.resourceGovernor,
+  });
 }
 
 export function createSorftimeConnector(
   input: McpConnectorDependencies = {},
 ): RemoteMcpConnector {
-  return connector(
-    "sorftime",
-    input,
-    (request, signal, credential, _env, fetchImpl) =>
-      callSorftimeTool(
-        credential,
-        request.operation,
-        request.input,
-        { fetchImpl, signal },
-      ),
-    (signal, credential, _env, fetchImpl) =>
-      requestSorftimeMcp(
-        credential,
-        "tools/list",
-        {},
-        { fetchImpl, signal },
-      ),
-  );
+  const resolved = dependencies(input);
+  return createRemoteMcpConnector({
+    id: "sorftime",
+    physicalGovernance: "transport-dispatch",
+    resolveCredential: scope => resolved.resolveCredential("sorftime", scope),
+    transport: (request, signal, credential, context) => callSorftimeTool(
+      credential, request.operation, request.input, {
+        sourceCache: input.sourceCache,
+        fetchImpl: resolved.fetchImpl, signal,
+        resourceGovernor: context.resourceGovernor ?? undefined,
+        organizationId: context.governorScope?.organizationId ?? null,
+        jobId: context.governorScope?.jobId ?? null,
+        attemptKind: context.attemptKind,
+        env: {...resolved.env, AGENT_EXECUTION_ORGANIZATION_ID: undefined, AGENT_SYNC_JOB_ID: undefined},
+      }),
+    probeTransport: (signal, credential, context) => requestSorftimeMcp(credential, "tools/list", {}, {
+      fetchImpl: resolved.fetchImpl, signal,
+      resourceGovernor: context.resourceGovernor ?? undefined,
+      organizationId: context.governorScope?.organizationId ?? null,
+      jobId: context.governorScope?.jobId ?? null,
+      attemptKind: context.attemptKind,
+      env: {...resolved.env, AGENT_EXECUTION_ORGANIZATION_ID: undefined, AGENT_SYNC_JOB_ID: undefined},
+    }),
+    clock: resolved.clock, sleep: resolved.sleep,
+    // With shared caching, the physical client owns its bounded connect retry.
+    policy: {...resolved.policy, maxAttempts: input.sourceCache || resolved.env.SORFTIME_SOURCE_CACHE_ENABLED === '1' ? 1 : resolved.policy.maxAttempts},
+    resourceGovernor: resolved.resourceGovernor,
+  });
 }
 
 export function createSellerSpriteConnector(
@@ -161,6 +145,7 @@ export function createSellerSpriteConnector(
         request.input,
         {
           sessionPool,
+          sourceCache: input.sourceCache,
           sessionScope: request.sessionScope,
           fetchImpl: resolved.fetchImpl,
           signal,

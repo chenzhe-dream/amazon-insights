@@ -52,3 +52,27 @@ test('one overview submission synchronizes modules; late results preserve edited
  await page.waitForFunction(id=>new URL(location.href).searchParams.get('keywordRun')===id,second.modules.keywords.runId);assert.equal(new URL(page.url()).searchParams.get('shapeRun'),oldRun,'same-scope active report must not be replaced');assert.equal(await activeEditor!.evaluate(node=>node.isConnected),true);assert.equal(writes,2);
  await nav.getByRole('button',{name:'市场总览'}).click();await nav.getByRole('button',{name:'商品形态及价格带'}).click();assert.equal(new URL(page.url()).searchParams.get('shapeRun'),second.modules.shapes.runId,'existing menu reveals the deferred report after leaving the active editor');assert.equal(writes,2);
 });
+
+test('reloading a pending linked query with old run IDs applies completed results after scope marker recovery',{timeout:60000},async t=>{
+ const server=await createServer({configFile:false,define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close();});
+ const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();page.setDefaultTimeout(10000);
+ const id=randomUUID(),oldRun=randomUUID();let writes=0;
+ const batch:MarketLinkedBatch={id,request:{scope:{marketplace:'US',nodeQuery:'12:34',month:'2026-09',headTopN:10,newProductMonths:6},fromMonth:'2026-09'},basicJobId:randomUUID(),basicRetryable:false,status:'pending',categoryName:null,resolvedNodeIdPath:null,message:null,modules:{overview:{status:'pending',runId:null,message:null},shapes:{status:'pending',runId:null,message:null},keywords:{status:'pending',runId:null,message:null},themes:{status:'pending',runId:null,message:null}}};
+ await page.route('**/*',async route=>{
+  const req=route.request(),url=new URL(req.url());if(url.origin!==origin)return route.abort();
+  if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/','<div id="root"></div><script type="module">import React from "react";import {createRoot} from "react-dom/client";import {MarketResearchSection} from "/app/market-research-section.tsx";createRoot(document.getElementById("root")).render(React.createElement(MarketResearchSection,{sessionIdentity:"restored-linked"}));</script>')});
+  if(!url.pathname.startsWith('/api/'))return route.continue();
+  if(req.method()==='POST'){writes++;return route.fulfill({status:500,json:{error:{message:'read only fixture'}}});}
+  if(url.pathname.includes('/linked/'))return route.fulfill({json:{batch}});
+  if(url.pathname.endsWith('/market-research/jobs'))return route.fulfill({json:{jobs:[]}});
+  return route.fulfill({status:404,json:{error:{message:'no fixture'}}});
+ });
+ const url=new URL(origin);url.searchParams.set('themeView','overview');url.searchParams.set('linkedBatch',id);url.searchParams.set('linkedApply','1');url.searchParams.set('linkedScopeApplied',id);
+ for(const [key,value] of Object.entries({marketNode:'12:34',marketMonth:'2026-09',marketFrom:'2026-09',marketSite:'US',marketShapeNode:'12:34',marketShapeMonth:'2026-09',marketShapeFrom:'2026-09',marketShapeSite:'US',shapeRun:oldRun}))url.searchParams.set(key,value);
+ await page.goto(url.href);await page.waitForFunction(id=>!!sessionStorage.getItem(`market-linked-view:restored-linked:${id}`),id);
+ batch.status='started';batch.categoryName='Fixture Lamps';batch.resolvedNodeIdPath='12:34';
+ for(const module of ['overview','shapes','keywords','themes'] as const)batch.modules[module]={status:'started',runId:randomUUID(),message:null};
+ await page.waitForFunction(runId=>new URL(location.href).searchParams.get('shapeRun')===runId,batch.modules.shapes.runId);
+ await page.reload();await page.getByRole('navigation',{name:'市场调研模块'}).waitFor();assert.equal(new URL(page.url()).searchParams.get('shapeRun'),batch.modules.shapes.runId);assert.equal(writes,0);
+});

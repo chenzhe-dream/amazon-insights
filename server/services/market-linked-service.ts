@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {z} from 'zod';
 import {MarketLinkedRequestSchema,MarketLinkedRetrySchema,MarketLinkedResponseSchema,linkedModules,linkedModuleParams,type MarketLinkedBatch} from '../../shared/market-linked-contracts';
 import {MarketModuleIdSchema} from '../../shared/market-module-contracts';
 import {marketSiteCurrency} from '../../shared/market-sites';
@@ -8,6 +9,7 @@ import type {PostgresQueryContext} from '../db/postgres/query-context';
 import type {MarketExecutionActor} from '../db/market-module-execution-repository';
 import {MarketModuleServiceError,type MarketModuleService} from './market-module-service';
 import type {MarketResearchService} from './market-research-service';
+import {findLinkedBasicHistory,findLinkedModuleHistory,marketModuleQueryLock} from './market-linked-history';
 
 type Row={id:string;organization_id:string;created_by:string;request_hash:string;state_json:unknown};
 // Versioned, deterministic UUID command identities survive restarts and ACK loss.
@@ -28,10 +30,20 @@ export class MarketLinkedService{
    const previous=await this.deps.context.query<Row>('SELECT * FROM market_linked_batches WHERE id=$1',[id]);
    if(previous.rows[0]){const row=previous.rows[0];if(row.organization_id!==actor.organizationId||row.created_by!==actor.userId||row.request_hash!==hash)throw new MarketModuleServiceError(400,'联动请求标识与范围不一致，请重新提交');return this.parse(row);}
    try{assertMarketProductQueryWindow({fromMonth:request.fromMonth,toMonth:request.scope.month},this.deps.now?.()??new Date());}catch(error){if(error instanceof RangeError)throw new MarketModuleServiceError(400,error.message);throw error;}
-   const {job}=await this.deps.research.create(actor,request.scope,command(id,'basic'));
+   const identity=canonicalJsonSha256({organizationId:actor.organizationId,...request,scope:{...request.scope,nodeQuery:request.scope.nodeQuery.split(':').at(-1)}});
+   await this.deps.context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`linked-scope:${identity}`]);
+   const candidates=request.forceRefresh?[]:await findLinkedBasicHistory(this.deps.context,actor,request);
+   let saved:Awaited<ReturnType<MarketResearchService['find']>>|null=null;
+   for(const candidate of candidates){
+    try{const found=await this.deps.research.find(actor,candidate.id);if(found.report){saved=found;break;}}
+    catch(error){if(!(error instanceof z.ZodError)&&!(error instanceof Error&&error.message==='Stored market research data failed integrity validation'))throw error;}
+   }
+   const job=saved??(await this.deps.research.create(actor,request.scope,command(id,'basic'))).job;
+   if(request.forceRefresh)await this.deps.context.query('INSERT INTO sorftime_source_refresh_scopes(job_id,not_before) VALUES($1,$2) ON CONFLICT(job_id) DO NOTHING',[job.id,(this.deps.now?.()??new Date()).toISOString()]);
    const batch:MarketLinkedBatch={id,request,basicJobId:job.id,basicRetryable:false,status:'pending',message:'正在获取类目基础数据和名称，完成后自动启动四个模块。',categoryName:null,resolvedNodeIdPath:null,modules:{overview:{status:'pending',runId:null,message:null},shapes:{status:'pending',runId:null,message:null},keywords:{status:'pending',runId:null,message:null},themes:{status:'pending',runId:null,message:null}}};
    await this.deps.context.query('INSERT INTO market_linked_batches(id,organization_id,created_by,request_json,request_hash,basic_job_id,state_json) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb)',[id,actor.organizationId,actor.userId,JSON.stringify(request),hash,job.id,JSON.stringify(batch)]);
-   return {batch};
+   if(saved)await this.advanceBatch({id,organization_id:actor.organizationId,created_by:actor.userId,request_hash:hash,state_json:batch});
+   return this.find(actor,id);
   });
  }
  async retry(actor:MarketExecutionActor,id:string,body:unknown){
@@ -52,13 +64,17 @@ export class MarketLinkedService{
   await this.deps.context.transaction(async()=>{
    // A transaction lock fences multiple processes; crash rolls back module commands and receipt together.
    const rows=await this.deps.context.query<Row>('SELECT b.* FROM market_linked_batches b JOIN market_research_jobs j ON j.id=b.basic_job_id WHERE b.pending AND j.status NOT IN (\'queued\',\'running\') ORDER BY b.created_at,b.id FOR UPDATE OF b SKIP LOCKED LIMIT 1');
-   if(!rows.rows[0])return;const row=rows.rows[0],{batch}=this.parse(row),actor={organizationId:row.organization_id,userId:row.created_by};
+   if(rows.rows[0])await this.advanceBatch(rows.rows[0]);
+  });
+ }
+ private async advanceBatch(row:Row){
+   const {batch}=this.parse(row),actor={organizationId:row.organization_id,userId:row.created_by};
    try{await this.authorize(actor);}catch{batch.status='failed';batch.message='原任务用户当前没有分析权限，请联系管理员。';await this.save(batch,false);return;}
    const job=await this.deps.research.find(actor,batch.basicJobId);
    if(!job.report){batch.status='failed';batch.basicRetryable=!!job.error?.retryable&&job.attempts<3;batch.message=(job.error?.message??'类目基础数据未取得，四个模块尚未启动。')+(batch.basicRetryable?' 可以重试基础采集并继续联动。':' 请先处理错误原因，再重新筛选市场创建新批次。');await this.save(batch,false);return;}
    const report=job.report,scope=batch.request.scope;
    const sameNode=report.nodeIdPath===scope.nodeQuery||!scope.nodeQuery.includes(':')&&report.nodeId===scope.nodeQuery;
-   if(!sameNode||report.scope.marketplace!==scope.marketplace||report.scope.month!==scope.month||canonicalJsonSha256(report.scope)!==canonicalJsonSha256(scope)){
+   if(!sameNode||canonicalJsonSha256({...report.scope,nodeQuery:report.nodeId})!==canonicalJsonSha256({...scope,nodeQuery:scope.nodeQuery.split(':').at(-1)})){
     batch.status='failed';batch.message='基础数据的类目或站点与联动范围不一致，已停止启动。';await this.save(batch,false);return;
    }
    batch.categoryName=report.categoryName||null;
@@ -70,9 +86,17 @@ export class MarketLinkedService{
     await this.deps.context.query('SAVEPOINT linked_module_start');
     try{
      const params=linkedModuleParams(module,batch.categoryName,scope.newProductMonths,scope.headTopN);
+     const lock=marketModuleQueryLock(actor.organizationId,module,studyScope,params);
+     await this.deps.context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[lock]);
+     const previous=batch.request.forceRefresh?null:await findLinkedModuleHistory(this.deps.context,this.deps.modules,actor,batch.request,module,report.nodeIdPath,batch.categoryName);
+     if(previous){
+      batch.modules[module]={status:'started',runId:previous.id,message:previous.status==='partial'?'已恢复已保存的部分报告，缺口保留。':['queued','running'].includes(previous.status)?'已复用正在执行的同条件任务。':'已恢复已保存报告。'};
+      await this.deps.context.query('RELEASE SAVEPOINT linked_module_start');continue;
+     }
      const {study}=await this.deps.modules.createStudy(actor,studyScope,command(batch.id,`study-${module}`),{verifiedNodePath:true});
      const start=module==='overview'?'startOverview':module==='shapes'?'startShapes':module==='keywords'?'startKeywords':'startThemes';
      const result=await this.deps.modules[start](actor,study.id,params,command(batch.id,module));
+     if(batch.request.forceRefresh)await this.deps.context.query('INSERT INTO sorftime_source_refresh_scopes(job_id,not_before) VALUES($1,$2) ON CONFLICT(job_id) DO NOTHING',[result.run.id,(this.deps.now?.()??new Date()).toISOString()]);
      batch.modules[module]={status:'started',runId:result.run.id,message:null};
      await this.deps.context.query('RELEASE SAVEPOINT linked_module_start');
     }catch(error){
@@ -81,8 +105,7 @@ export class MarketLinkedService{
     }
    }
    batch.status=linkedModules.every(module=>batch.modules[module].status==='started')?'started':'failed';
-   batch.message=batch.status==='started'?'四个分析任务已启动，可切换模块查看各自进度和结果。':'部分模块未启动，已启动任务继续执行；可以单独恢复失败模块。';
+   batch.message=batch.status==='started'?'四个模块已就绪，可切换查看已保存报告或任务进度。':'部分模块未启动，已启动任务继续执行；可以单独恢复失败模块。';
    await this.save(batch,false);
-  });
  }
 }

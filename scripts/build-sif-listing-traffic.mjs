@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
+import {sourceFetchedDate} from './lib/sorftime-source-policy.mjs';
 import {
   isForceRefresh,
   logCacheHit,
@@ -164,8 +165,9 @@ async function main() {
           const value = part === "overview" ? normalizeOverview(payload) : part === "structure" ? normalizeStructure(payload) : normalizeMonthlyTrend(payload);
           const valid = part === "overview" ? value.total > 0 : part === "structure" ? value.chars.dims.length > 0 : value.dates.length && value.nf.length;
           if (!valid) throw new Error(`${part}: empty provider response`);
-          if (part === "monthly") monthlyRecords[asin] = {fetchedAt, ...value};
-          else listingRecords[asin] = {...listingRecords[asin], fetchedAt: cachedListing?.fetchedAt ?? fetchedAt, [part]: value};
+          const sourceDate=sourceFetchedDate([payload],fetchedAt);
+          if (part === "monthly") monthlyRecords[asin] = {fetchedAt:sourceDate, ...value};
+          else listingRecords[asin] = {...listingRecords[asin], fetchedAt: [listingRecords[asin]?.fetchedAt,sourceDate].filter(Boolean).sort()[0], [part]: value};
           latestNotice = payload.data_notice ?? latestNotice;
         } catch (error) {
           console.error(`[repair-incomplete] ${asin} ${part}: ${error instanceof Error ? error.message : String(error)}`);
@@ -198,12 +200,12 @@ async function main() {
       });
 
       listingRecords[asin] = {
-        fetchedAt,
+        fetchedAt:sourceFetchedDate([overviewPayload,structurePayload],fetchedAt),
         overview: normalizeOverview(overviewPayload),
         structure: normalizeStructure(structurePayload),
       };
       monthlyRecords[asin] = {
-        fetchedAt,
+        fetchedAt:sourceFetchedDate([trendPayload],fetchedAt),
         ...normalizeMonthlyTrend(trendPayload),
       };
       latestNotice =

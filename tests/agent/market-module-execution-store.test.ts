@@ -181,6 +181,25 @@ test("market module execution persists independent runs and database-clock fence
     assert.equal(saved.inputIds.length,2);
     assert.equal((await store.findModuleRun({actor,moduleRunId:run.id}))?.steps[0].status,'succeeded');
   });
+  await t.test('source settlement tolerates a slower database clock without accepting future observations', async () => {
+    const context=new PostgresQueryContext(pg.pool),original=context.query.bind(context);
+    context.query=async function(text,values){
+      const result=await original(text,values);
+      if(text==='SELECT clock_timestamp() AS now')for(const row of result.rows)row.now=new Date(Date.now()-5000);
+      return result as any;
+    };
+    const skewed=new PostgresMarketModuleExecutionStore(context);
+    const run=(await store.createModuleRun(request())).run,active=await claim(run.id);assert.ok(active);
+    const saved=await skewed.settleAndEnqueue({claim:active,outcome:success,sources:[sourceInput()],inputs:[inputSnapshot()]});
+    assert.equal(saved.status,'committed');
+    assert.equal((await store.findModuleRun({actor,moduleRunId:run.id}))?.steps[0].status,'succeeded');
+    const futureRun=(await store.createModuleRun(request())).run,futureClaim=await claim(futureRun.id);assert.ok(futureClaim);
+    const future=new Date(Date.now()+60000).toISOString();
+    await assert.rejects(()=>skewed.settleAndEnqueue({claim:futureClaim,outcome:success,sources:[{...sourceInput(),fetchedAt:future}]}),/future/);
+    await assert.rejects(()=>skewed.settleAndEnqueue({claim:futureClaim,outcome:success,inputs:[{...inputSnapshot(),collectedAt:future}]}),/future/);
+    assert.equal((await store.findModuleRun({actor,moduleRunId:futureRun.id}))?.steps[0].status,'running');
+    await store.cancelModuleRun({actor,moduleRunId:futureRun.id,idempotencyKey:randomUUID()});
+  });
   await t.test("child enqueue failure rolls back previously saved source, input and attempt completion", async () => {
     const run=(await store.createModuleRun(request())).run;const active=await claim(run.id);assert.ok(active);
     const input=sourceInput();

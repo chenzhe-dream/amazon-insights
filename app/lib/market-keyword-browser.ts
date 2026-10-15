@@ -1,3 +1,4 @@
+import {MarketKeywordQueryRequestSchema,assertStandaloneQueryBinding} from '../../shared/market-standalone-query-contracts';
 import {z} from 'zod';
 import {MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSchema} from '../../shared/market-module-contracts';
 import {MarketKeywordStartRequestSchema} from '../../shared/market-keyword-flow-contracts';
@@ -85,4 +86,9 @@ export async function readKeywordRevision(id:string,revisionId:string,signal?:Ab
  if(revision.ruleReport)checkRules(revision.ruleReport,revision.catalog.facts,'manual',selected);
  if(revision.scoreInputAudit){if(!revision.ruleReport)throw new Error('输入核对缺少规则报告，未加载该结果。');assertKeywordScoreInputAuditBinding(revision.scoreInputAudit,revision.catalog.facts,revision.ruleReport);}
  return revision;
+}
+
+export async function queryKeywordRun(body:unknown,key:string,signal?:AbortSignal){
+ const input=MarketKeywordQueryRequestSchema.parse(body),{run}=await request('keywords/query',MarketKeywordRunResponseSchema,post(input,key,signal));
+ assertStandaloneQueryBinding(input,run);return checkRun(run);
 }

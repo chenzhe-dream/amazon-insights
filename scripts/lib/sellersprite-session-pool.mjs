@@ -45,10 +45,13 @@ export function createSellerSpriteSessionPool({ maxEntries = 32, idleTimeoutMs =
               if (init.method !== 'GET' && active) signals.push(active.signal);
               const fetchSignal = AbortSignal.any(signals.filter(Boolean));
               return governExternalRequest({resourceGovernor:context.resourceGovernor,requireResourceGovernor:context.requireResourceGovernor,env:context.env,organizationId:context.organizationId,jobId:context.jobId,resource:'sellerSprite',attemptKind:context.attemptKind ?? 'initial',signal:fetchSignal,
-                operation:()=>{
+                operation:async()=>{
                   if (active && typeof init.body === 'string') {
                     const body = JSON.parse(init.body);
-                    if (body.method === 'tools/call') active.dispatched = true;
+                    if (body.method === 'tools/call') {
+                      await context.onPhysicalDispatch?.();
+                      active.dispatched = true;
+                    }
                   }
                   return (context.fetchImpl ?? fetch)(input,{...init,signal:fetchSignal,redirect:'error'});
                 }});

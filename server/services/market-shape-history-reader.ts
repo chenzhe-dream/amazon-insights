@@ -7,10 +7,17 @@ import {createMarketInputSnapshot} from '../domain/market-research/snapshot';
 import {collectMarketProductHistory,productHistoryPeriods,referenceProductHistoryPeriods} from './market-product-history-collector';
 
 const obj=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
+// Each product reads two snapshots. Bound the fan-out without dropping products
+// or changing their order, so historical reads do not saturate the DB pool.
+async function readInBatches<T>(asins:string[],read:(asin:string)=>Promise<T>):Promise<T[]>{
+ const results:T[]=[];
+ for(let offset=0;offset<asins.length;offset+=8)results.push(...await Promise.all(asins.slice(offset,offset+8).map(read)));
+ return results;
+}
 /** Current attempts only, with replay against immutable JSON; never a remote collector. */
 export async function readMarketShapeHistory(input:{view:MarketModuleRunView;actor:MarketExecutionActor;current:Set<string>;snapshots:PostgresMarketAnalysisSnapshotStore;asins:string[];selectionInputSnapshotId:string}){
  const {view,actor,current,snapshots}=input,scope=view.run.scope;
- const products=await Promise.all(input.asins.map(async asin=>{
+ const products=await readInBatches(input.asins,async asin=>{
   const step=view.steps.find(s=>current.has(s.stepKey)&&s.kind==='collect-product-history'&&obj(s.input).asin===asin);
   const attempt=view.attempts.find(a=>a.id===step?.latestAttemptId);
   const base={asin,status:step?.status??(view.run.status==='cancelled'?'cancelled':'queued'),points:[],periods:productHistoryPeriods([],scope.toMonth),sourceRef:null,inputSnapshotId:null,fetchedAt:null,errorCode:step?.status==='failed'?String(obj(attempt?.error).code??'internal'):null};
@@ -24,7 +31,7 @@ export async function readMarketShapeHistory(input:{view:MarketModuleRunView;act
   const expected=createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:[asin],records:[{id:asin,scope,data:{collection:'product-history',asin,metric:'SalesVolume',points:result.points,sourceRef:raw.id}}]});
   if(digest(saved.snapshot)!==digest(expected))throw new TypeError('Historical input replay differs');
   return {...base,status:result.status,points:result.points,periods:productHistoryPeriods(result.points,scope.toMonth),sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt};
- }));
+ });
  return ProductHistoryPublicSchema.parse({provider:'sorftime',metric:'SalesVolume',referenceMonth:scope.toMonth,products});
 }
 
@@ -32,7 +39,7 @@ export async function readMarketShapeHistory(input:{view:MarketModuleRunView;act
 export async function readMarketShapeAmountHistory(input:{view:MarketModuleRunView;actor:MarketExecutionActor;current:Set<string>;snapshots:PostgresMarketAnalysisSnapshotStore;asins:string[];selectionInputSnapshotId:string}){
  const {view,actor,current,snapshots}=input,scope=view.run.scope;
  const periodsFor=(points:Parameters<typeof referenceProductHistoryPeriods>[0])=>referenceProductHistoryPeriods(points,scope.toMonth).map(p=>({id:p.id,fromMonth:p.fromMonth,toMonth:p.toMonth,months:p.months,amount:p.value,missingMonths:p.missingMonths}));
- const products=await Promise.all(input.asins.map(async asin=>{
+ const products=await readInBatches(input.asins,async asin=>{
   const step=view.steps.find(s=>current.has(s.stepKey)&&(s.kind as string)==='collect-product-amount-history'&&obj(s.input).asin===asin);
   const attempt=view.attempts.find(a=>a.id===step?.latestAttemptId);
   const base={asin,status:step?.status??(view.run.status==='cancelled'?'cancelled':'queued'),points:[],periods:periodsFor([]),sourceRef:null,inputSnapshotId:null,fetchedAt:null,errorCode:step?.status==='failed'?String(obj(attempt?.error).code??'internal'):null};
@@ -46,6 +53,6 @@ export async function readMarketShapeAmountHistory(input:{view:MarketModuleRunVi
   const expected=createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:[asin],records:[{id:asin,scope,data:{collection:'product-amount-history',asin,metric:'SalesAmount',points:result.points,sourceRef:raw.id}}]});
   if(digest(saved.snapshot)!==digest(expected))throw new TypeError('Historical amount input replay differs');
   return {...base,status:result.status,points:result.points,periods:periodsFor(result.points),sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt};
- }));
+ });
  return ProductAmountHistoryPublicSchema.parse({provider:'sorftime',metric:'SalesAmount',currency:scope.currency,referenceMonth:scope.toMonth,products});
 }

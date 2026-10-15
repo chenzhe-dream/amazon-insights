@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
+import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
 import {
   isForceRefresh,
   logCacheHit,
@@ -98,15 +99,16 @@ async function main() {
     process.stdout.write(`[rating] ${asin} ... `);
     try {
       const detailRaw = await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace });
+      const sourceDate = sourceFetchedDate([detailRaw],fetchedAt);
       const detail = normalizeSorftimeDetailIdentity(detailRaw, { asin, marketplace });
       const rating = toNumber(detail?.star_rating);
       const reviewCount = toNumber(detail?.review_count);
 
       records[asin] = {
-        ...buildSorftimeRatingRecord({ asin, marketplace, fetchedAt, rating, reviewCount, catalog: catalogByAsin.get(asin) }),
+        ...buildSorftimeRatingRecord({ asin, marketplace, fetchedAt:sourceDate, rating, reviewCount, catalog: catalogByAsin.get(asin) }),
         source: "Sorftime",
         provenance: {
-          ...(jobId ? { jobId } : {}), asin, marketplace, fetchedAt,
+          ...(jobId ? { jobId } : {}), asin, marketplace, fetchedAt:sourceDate,
           connector: "sorftime", stageId: "rating", operation: "product_detail", tool: "product_detail",
         },
       };
