@@ -1,0 +1,1 @@
+export function createPendingHandler(options:{root:string;authenticate:(request:Request)=>Promise<{id:string}|null>;JSZip:{loadAsync:(data:Uint8Array,options:{checkCRC32:boolean})=>Promise<{file:(name:string)=>unknown}>}}):(request:Request)=>Promise<Response>;
