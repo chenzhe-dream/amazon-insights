@@ -1,0 +1,161 @@
+{
+  "synthetic": true,
+  "liveCalls": 0,
+  "initial": [
+    {
+      "module": "overview",
+      "status": "succeeded"
+    },
+    {
+      "module": "shape-price",
+      "status": "succeeded"
+    },
+    {
+      "module": "keywords",
+      "status": "succeeded"
+    },
+    {
+      "module": "customer-themes",
+      "status": "succeeded"
+    }
+  ],
+  "expanded": [
+    {
+      "module": null,
+      "status": "succeeded"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "market-linked-100",
+      "physical": 378,
+      "logical": 382
+    },
+    {
+      "name": "market-expand-150",
+      "physical": 531,
+      "logical": 842
+    },
+    {
+      "name": "report-reload",
+      "physical": 531,
+      "logical": 842
+    },
+    {
+      "name": "competitor-first",
+      "physical": 612,
+      "logical": 842
+    },
+    {
+      "name": "competitor-repeat",
+      "physical": 612,
+      "logical": 842
+    },
+    {
+      "name": "market-second-batch",
+      "physical": 612,
+      "logical": 842
+    },
+    {
+      "name": "explicit-refresh",
+      "physical": 991,
+      "logical": 1224
+    },
+    {
+      "name": "quota-failed-refresh",
+      "physical": 996,
+      "logical": 1273
+    },
+    {
+      "name": "ordinary-after-failure",
+      "physical": 996,
+      "logical": 1273
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "ordinary-query",
+      "sameFourRunIds": true,
+      "newJobs": 0,
+      "newRuns": 0,
+      "newSteps": 0,
+      "providerCalls": 0
+    },
+    {
+      "name": "standalone-saved-query",
+      "sameRunIds": true,
+      "providerCalls": 0,
+      "newRuns": 0
+    },
+    {
+      "name": "explicit-refresh",
+      "newJobs": 1,
+      "newRuns": 4,
+      "providerCalls": 379,
+      "modules": [
+        {
+          "module": "overview",
+          "status": "succeeded"
+        },
+        {
+          "module": "shape-price",
+          "status": "succeeded"
+        },
+        {
+          "module": "keywords",
+          "status": "succeeded"
+        },
+        {
+          "module": "customer-themes",
+          "status": "succeeded"
+        }
+      ]
+    },
+    {
+      "name": "quota-failed-refresh",
+      "providerCalls": 5,
+      "modules": [
+        {
+          "module": "overview",
+          "failedRun": "75a59a78-6c94-416c-9bfc-5fe46d3b0476",
+          "retainedRun": "a14d8e32-663a-486b-9a8e-2cde1b4c840e",
+          "status": "partial",
+          "hasPartialNewResult": true,
+          "quotaReported": true
+        },
+        {
+          "module": "shapes",
+          "failedRun": "71408e15-b0be-4f87-9f39-387e238135d6",
+          "retainedRun": "c36fdfda-feef-4ef5-b4dd-d15a125b2abe",
+          "status": "failed",
+          "hasPartialNewResult": false,
+          "quotaReported": true
+        },
+        {
+          "module": "keywords",
+          "failedRun": "e064c725-dda2-477f-8e33-99da8d659f9e",
+          "retainedRun": "5103508c-8fcb-450f-93a1-b6c86ea22c39",
+          "status": "partial",
+          "hasPartialNewResult": false,
+          "quotaReported": true
+        },
+        {
+          "module": "themes",
+          "failedRun": "1ada83fa-285c-4762-ac15-892c0afa2cd0",
+          "retainedRun": "6ff7da4e-9295-45cd-acc2-8dab3fee8f1b",
+          "status": "failed",
+          "hasPartialNewResult": false,
+          "quotaReported": true
+        }
+      ]
+    },
+    {
+      "name": "ordinary-after-failure",
+      "sameFourRunIds": true,
+      "newJobs": 0,
+      "newRuns": 0,
+      "newSteps": 0,
+      "providerCalls": 0
+    }
+  ]
+}

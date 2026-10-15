@@ -14,10 +14,11 @@
 - New commits must exclude generated compiler state, runtime data, credentials and test artifacts.
 
 ## Tasks
-- [ ] Add failing regressions for standalone ordinary query, parameter/site/version isolation, concurrent commands, idempotent refresh, refresh source boundary, and usable older results.
-- [ ] Share history matching; add query schemas, migration 0068, service methods, API routes and BFF contracts.
-- [ ] Connect both UI entry points to the server query and verify returned identity; retain historical reports on refresh failure.
-- [ ] Update browser fixtures for the new contract; investigate the cancellation timing failure without masking it.
-- [ ] Run targeted regressions, full synthetic 150+10 scenario, typecheck, build and diff checks.
-- [ ] Save reviewed candidate changes and this fix in Git; back up and update 32900/32901, verify matching identities and historical UI.
+- [x] Add failing regressions for standalone ordinary query, parameter/site isolation, concurrent commands, idempotent refresh, refresh source boundary, and usable older results. Version matching reviewed against exact SQL comparisons.
+- [x] Share history matching; add query schemas, migration 0068, service methods, API routes and BFF contracts.
+- [x] Connect both UI entry points to the server query and verify returned identity; retain historical reports on refresh failure.
+- [x] Update browser fixtures for the new contract; investigate the cancellation timing failure without masking it.
+- [x] Run targeted regressions, full synthetic 150+10 scenario, typecheck, build and diff checks.
+- [x] Save candidate changes and this fix in Git; back up and update 32900/32901, verify matching identities.
+- [ ] Verify historical UI on the deployed 32900 after user login (both Chrome tabs currently show login).
 - [ ] User acceptance of 32900; 31900 remains pending.
