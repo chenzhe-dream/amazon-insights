@@ -312,6 +312,8 @@ test('unclassified products retain their known sales in shape denominators',asyn
  const direction=presentation.moduleSections.find(s=>s.key==='productShapeDirection')!;
  assert.equal(direction.coverage!.known,1);
  assert.equal(direction.coverage!.sales,1800);
+ const guide=presentation.moduleSections.find(s=>s.key==='marginMarketAccess')!.marginAccessDetail!.shapeGuides[0];
+ assert.ok(Math.abs(guide.last6MonthsSalesSharePct!-100/3)<0.1);
  assert.match(direction.text,/33\.3%/);assert.doesNotMatch(direction.text,/100\.0%/);
  const shape=buildAvailableReferenceConclusions(source,{}).shapeSales;
  assert.equal(shape.status,'ready');if(shape.status==='ready')assert.ok(Math.abs(shape.result.insights[0].last6MonthsSharePct!-100/3)<0.1);

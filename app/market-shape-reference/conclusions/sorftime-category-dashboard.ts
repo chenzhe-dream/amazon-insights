@@ -428,7 +428,8 @@ export function buildShapeMarginEntryPriceBandGuide(
     byShape.set(productShape, shapeBucket);
   }
 
-  const totalLast6MonthsSales = [...byShape.values()].reduce((sum, shape) => sum + shape.last6MonthsSales, 0);
+  // TOP share includes known sales of unclassified products; only shape cards omit unknown labels.
+  const totalLast6MonthsSales = products.reduce((sum, product) => sum + (product.sales.last6Months ?? 0), 0);
 
   return [...byShape.entries()]
     .map(([productShape, shape]) => {
