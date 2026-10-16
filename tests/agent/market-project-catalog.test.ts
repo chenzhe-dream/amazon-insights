@@ -45,6 +45,13 @@ test('category catalog groups leaf IDs and modules, preserves versions, pages li
  assert.equal((await store.catalog(actor,{mine:'true'})).total,2);
  assert.equal((await store.catalog(actor,{q:'987'})).total,1);
  const shared=await store.history({organizationId:otherOrg,userId:otherUser,role:'member'},{categoryId:'1063294',module:'overview'});assert.equal(shared.items.length,2);
+ const preview=shared.items.find(row=>row.context.overview?.runId===first.run)!.previewContext!;
+ assert.equal(preview.overview?.runId,first.run);
+ for(const m of ['shapes','keywords','themes'] as const){assert.ok(preview[m]?.runId);assert.equal(preview[m]?.marketplace,'US');assert.equal(preview[m]?.nodeIdPath.split(':').at(-1),'1063294');}
+ const detail=await store.get(actor,first.fav);assert.equal(detail.previewContexts?.overview?.overview?.runId,first.run);assert.ok(detail.previewContexts?.overview?.shapes?.runId,'drawer report links receive the same peer bindings');
+ const mismatched=(await store.history(actor,{categoryId:'987',module:'overview'})).items[0].previewContext!;
+ assert.equal(mismatched.shapes?.runId,undefined,'do not bind another site');assert.equal(mismatched.themes?.runId,undefined,'do not bind another end month');
+ assert.equal(mismatched.shapes?.nodeIdPath,'987');assert.equal(mismatched.themes?.nodeIdPath,'987');
  assert.ok(reads.some(sql=>/LIMIT/i.test(sql)&&/OFFSET/i.test(sql)),'history must be paginated by SQL');
  assert.equal((await pg.pool.query('SELECT count(*) FROM market_project_favorites')).rows[0].count,'22','no records removed by grouping');
  assert.equal((await store.catalog(actor,{q:'not-a-category'})).total,0);

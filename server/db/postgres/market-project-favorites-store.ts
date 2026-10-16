@@ -1,3 +1,4 @@
+import {buildProjectPreviewContext} from '../../../shared/market-project-preview';
 import {PostgresMarketProjectCatalog} from './market-project-catalog-store';
 import {PostgresModuleVisibilityStore} from './module-visibility-store';
 import type {MarketExecutionActor} from '../market-module-execution-repository';
@@ -43,7 +44,13 @@ export class PostgresMarketProjectFavoritesStore {
   const page=Math.min(q.page,Math.max(1,Math.ceil(rows.length/10)));const groups=(await this.queries.query('SELECT id,name FROM market_project_favorite_groups ORDER BY created_at,id',[])).rows.map(g=>({...g,count:all.filter(p=>p.groupId===g.id).length}));
   return {items:rows.slice((page-1)*10,page*10),total:rows.length,page,pageSize:10 as const,groups,stats:{total:all.length,ready:all.filter(p=>p.status==='ready').length,followUp:all.filter(p=>p.status!=='ready').length,sites:new Set(all.flatMap(p=>projectModules.flatMap(m=>p.context[m]?[p.context[m]!.marketplace]:[]))).size}};
  }
- async get(actor:MarketFavoriteActor,id:string){const item=(await this.readAll(actor,id)).find(p=>p.id===id);if(!item)throw new ProjectFavoriteError(404,'未找到该调研收藏');return item}
+ async get(actor:MarketFavoriteActor,id:string){
+  const item=(await this.readAll(actor,id)).find(p=>p.id===id);if(!item)throw new ProjectFavoriteError(404,'未找到该调研收藏');
+  const catalog=new PostgresMarketProjectCatalog(this.queries),categories=[...new Set(projectModules.flatMap(m=>item.context[m]?[item.context[m]!.nodeIdPath.split(':').at(-1)!]:[]))];
+  const candidates=(await Promise.all(categories.map(category=>catalog.previewCandidates(actor,category)))).flat();
+  item.previewContexts={};for(const m of projectModules)if(item.context[m])item.previewContexts[m]=buildProjectPreviewContext(item.context,m,candidates);
+  return item;
+ }
  async export(actor:MarketFavoriteActor,value:ProjectFavoriteQuery){const rows=this.filter(await this.readAll(actor),actor,ProjectFavoriteQuerySchema.parse(value));if(rows.length>10000)throw new ProjectFavoriteError(400,'导出超过一万条，请缩小筛选范围');return rows}
 
  async create(actor:MarketFavoriteActor,value:ProjectFavoriteCreate){const input=ProjectFavoriteCreateSchema.parse(value);await this.group(actor,input.groupId);const context=await this.normalize(actor,input.context),fingerprint=createHash('sha256').update(JSON.stringify(context)).digest('hex');

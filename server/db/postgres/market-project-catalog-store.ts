@@ -1,12 +1,15 @@
 import {ProjectCatalogSchema,ProjectCatalogQuerySchema,ProjectHistoryQuerySchema,ProjectHistorySchema} from '../../../shared/market-project-catalog-contracts';
 import type {MarketFavoriteActor} from '../market-favorites-repository';
 import type {PostgresQueryContext} from './query-context';
+import {buildProjectPreviewContext,type ProjectPreviewCandidate} from '../../../shared/market-project-preview';
 
 // Listing projects only reads scalar report status in PostgreSQL, never report bodies over the wire.
 // A saved binding is the shared-read grant. No unrelated task enters this relation.
 const referencesSql=`WITH expanded AS (
  SELECT f.id favorite_id,f.title,f.tag,f.group_id,f.created_by,f.updated_at,u.display_name creator_name,
- b.key module, b.value->>'runId' run_id,
+ b.key module, b.value->>'runId' run_id,COALESCE(r.created_at,f.updated_at) report_created_at,
+ (a.output_json IS NOT NULL AND COALESCE(a.output_json->'report',a.output_json) <> 'null'::jsonb
+  AND COALESCE(a.output_json#>>'{report,status}',a.output_json->>'status','') NOT IN ('no-data','unavailable')) report_exists,
  COALESCE(b.value->>'runId',f.id::text||':'||b.key) identity,
  CASE WHEN r.request_json->>'moduleKind'=CASE b.key WHEN 'shapes' THEN 'shape-price' WHEN 'themes' THEN 'customer-themes' ELSE b.key END
  THEN jsonb_strip_nulls(jsonb_build_object('marketplace',r.request_json#>>'{scope,marketplace}','nodeIdPath',r.request_json#>>'{scope,nodeIdPath}','fromMonth',r.request_json#>>'{scope,fromMonth}','toMonth',r.request_json#>>'{scope,toMonth}','runId',r.id::text,'overviewPeriod',r.request_json#>>'{scope,overviewPeriod}')) ELSE b.value END binding,
@@ -70,8 +73,25 @@ SELECT jsonb_build_object('items',COALESCE((SELECT jsonb_agg(item) FROM paged),'
 
 function isoDates(result:{items:{updatedAt:string}[]}){for(const row of result.items)row.updatedAt=new Date(row.updatedAt).toISOString();return result}
 
+const previewSql=referencesSql+` SELECT jsonb_build_object(module,binding)||parameters context,status,report_created_at,report_exists
+ FROM refs WHERE category_id=$7 AND run_id IS NOT NULL AND status IN ('ready','partial')`;
+
 export class PostgresMarketProjectCatalog {
  constructor(private readonly queries:PostgresQueryContext){}
+ async previewCandidates(actor:MarketFavoriteActor,categoryId:string):Promise<ProjectPreviewCandidate[]>{
+  const peers=await this.queries.query(previewSql,[...values(actor,ProjectCatalogQuerySchema.parse({})),categoryId]);
+  return peers.rows.map(r=>({context:r.context,status:r.status,createdAt:new Date(r.report_created_at).toISOString(),hasReport:r.report_exists}));
+ }
  async catalog(actor:MarketFavoriteActor,input:unknown){const q=ProjectCatalogQuerySchema.parse(input);const result=await this.queries.query(catalogSql,[...values(actor,q),q.page]);return ProjectCatalogSchema.parse(isoDates(result.rows[0].result))}
- async history(actor:MarketFavoriteActor,input:unknown){const q=ProjectHistoryQuerySchema.parse(input);const result=await this.queries.query(historySql,[...values(actor,q),q.categoryId,q.module,q.page]);return ProjectHistorySchema.parse(isoDates(result.rows[0].result))}
+ async history(actor:MarketFavoriteActor,input:unknown){
+  const q=ProjectHistoryQuerySchema.parse(input);
+  const [result,peers]=await Promise.all([
+   this.queries.query(historySql,[...values(actor,q),q.categoryId,q.module,q.page]),
+   // Peers come from all published favorites, independent of list filters. Only metadata is read.
+   this.previewCandidates(actor,q.categoryId),
+  ]);
+  const history=ProjectHistorySchema.parse(isoDates(result.rows[0].result));
+  for(const row of history.items)row.previewContext=buildProjectPreviewContext(row.context,q.module,peers);
+  return ProjectHistorySchema.parse(history);
+ }
 }
