@@ -34,14 +34,22 @@ const referencesSql=`WITH expanded AS (
  ORDER BY category_id,module,identity,updated_at DESC,favorite_id DESC
 )`;
 function values(actor:MarketFavoriteActor,q:ReturnType<typeof ProjectCatalogQuerySchema.parse>){return [actor.userId,q.mine==='true',q.groupId??null,q.site??null,q.q,q.status??null]}
-const catalogSql=referencesSql+`, aligned AS (
+const catalogSql=referencesSql+`, names AS (
+ -- Read names before report deduplication, so auto-named duplicate bindings do
+ -- not hide an older custom title. Exclude only the generated title formats.
+ SELECT DISTINCT ON (category_id) category_id,btrim(title) display_name FROM filtered
+ WHERE btrim(title)<>''
+ AND btrim(title)<>('类目 '||category_id||' · '||(binding->>'marketplace')||' 调研')
+ AND btrim(title) !~ '^[A-Z]{2} · .+ · [0-9]{4}-[0-9]{2}～[0-9]{4}-[0-9]{2}( · (市场总览|形态价格|关键词|买家评论) · [a-f0-9]{8})?$'
+ ORDER BY category_id,updated_at DESC,favorite_id DESC
+), aligned AS (
  SELECT category_id,binding->>'marketplace',binding->>'fromMonth',binding->>'toMonth',COALESCE(binding->>'overviewPeriod','calendar')
  FROM refs WHERE status='ready' GROUP BY 1,2,3,4,5 HAVING count(DISTINCT module)=4
 ), modules AS (
  SELECT category_id,module,jsonb_build_object('reports',count(*) FILTER(WHERE run_id IS NOT NULL),'conditions',count(*) FILTER(WHERE run_id IS NULL),'ready',count(*) FILTER(WHERE status='ready'),'running',count(*) FILTER(WHERE status='running')) summary
  FROM refs GROUP BY category_id,module
 ), categories AS (
- SELECT category_id,jsonb_build_object('categoryId',category_id,'sites',jsonb_agg(DISTINCT binding->>'marketplace'),
+ SELECT category_id,jsonb_build_object('categoryId',category_id,'displayName',(SELECT display_name FROM names n WHERE n.category_id=refs.category_id),'sites',jsonb_agg(DISTINCT binding->>'marketplace'),
  'reports',count(*) FILTER(WHERE run_id IS NOT NULL),'conditions',count(*) FILTER(WHERE run_id IS NULL),
  'complete',EXISTS(SELECT 1 FROM aligned a WHERE a.category_id=refs.category_id),'updatedAt',max(updated_at),
  'modules','{"overview":{"reports":0,"conditions":0,"ready":0,"running":0},"shapes":{"reports":0,"conditions":0,"ready":0,"running":0},"keywords":{"reports":0,"conditions":0,"ready":0,"running":0},"themes":{"reports":0,"conditions":0,"ready":0,"running":0}}'::jsonb || (SELECT jsonb_object_agg(module,summary) FROM modules m WHERE m.category_id=refs.category_id)) item,

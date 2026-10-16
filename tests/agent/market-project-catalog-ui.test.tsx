@@ -3,7 +3,19 @@ import test from 'node:test';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {findHttpContract} from '../../shared/agent-contracts';
-import {CategoryModuleCards,CategoryHistoryRows} from '../../app/market-project-catalog';
+import {CategoryDirectoryEntry,CategoryModuleCards,CategoryHistoryRows} from '../../app/market-project-catalog';
+
+test('directory preserves numeric links and site context with or without custom names',()=>{
+ const empty={reports:0,conditions:0,ready:0,running:0};
+ const category={categoryId:'1063294',sites:['US','DE'] as ('US'|'DE')[],reports:2,conditions:0,complete:false,updatedAt:'2026-10-16T00:00:00Z',modules:{overview:empty,shapes:empty,keywords:empty,themes:empty}};
+ for(const displayName of [undefined,null,'可调光落地灯']){
+  const html=renderToStaticMarkup(<CategoryDirectoryEntry category={{...category,displayName}} selected={true} onSelect={()=>{}}/>);
+  assert.match(html,/https:\/\/www\.amazon\.com\/b\?node=1063294/);assert.match(html,/https:\/\/www\.amazon\.de\/b\?node=1063294/);
+  const links=html.match(/<a\b[^>]*>[\s\S]*?<\/a>/g)!;assert.equal(links.length,2);
+  for(const link of links){const text=link.replace(/<[^>]*>/g,'');assert.equal(text,'1063294 ↗');}
+  if(displayName)assert.ok(html.includes('class="mpf-category-name">可调光落地灯'));
+ }
+});
 
 test('catalog and history are registered as static authenticated proxy routes',()=>{
  for(const suffix of ['catalog','history'])assert.equal(findHttpContract('GET','/v1/market-research/project-favorites/'+suffix)?.path,'/v1/market-research/project-favorites/'+suffix);

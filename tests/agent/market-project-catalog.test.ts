@@ -56,4 +56,14 @@ test('category catalog groups leaf IDs and modules, preserves versions, pages li
  await pg.pool.query('UPDATE market_analysis_module_runs SET latest_report_attempt_id=$2 WHERE id=$1',[first.run,partialAttempt]);
  assert.equal((await store.catalog(actor,{})).stats.complete,0,'partial overview breaks completeness');
 
+ // Names are selected before report deduplication: a newer auto-named copy must
+ // not hide an older custom title for the same run. Keep a stable newest winner.
+ await pg.pool.query("UPDATE market_project_favorites SET title='类目 1063294 · US 调研' WHERE context_json::text LIKE '%1063294%'");
+ assert.equal((await store.catalog(actor,{q:'1063294'})).items[0].displayName,null);
+ await pg.pool.query("UPDATE market_project_favorites SET title='客厅落地灯',updated_at='2026-01-01' WHERE id=$1",[first.fav]);
+ await pg.pool.query("UPDATE market_project_favorites SET title='US · 类目 1063294 · 2026-09～2026-09 · 市场总览 · 12345678',updated_at='2026-03-01' WHERE id=$1",[duplicate]);
+ assert.equal((await store.catalog(actor,{q:'1063294'})).items[0].displayName,'客厅落地灯');
+ await pg.pool.query("UPDATE market_project_favorites SET title='可调光落地灯',updated_at='2026-02-01' WHERE id=$1",[condition]);
+ assert.equal((await store.catalog(actor,{q:'1063294'})).items[0].displayName,'可调光落地灯');
+
 });

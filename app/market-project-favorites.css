@@ -27,6 +27,8 @@
 .mpf-category-entry-content{position:relative;pointer-events:none}
 .mpf-category-entry-content strong{display:block;font-size:13px}
 .mpf-category-entry-content small{display:block;font-size:11px;margin-top:6px;color:#7c8da5}
-.mpf-category-entry-content a{pointer-events:auto;position:relative;color:#2f80ed;text-decoration:none}
+.mpf-category-entry-content a{display:inline-flex;width:fit-content;max-width:100%;pointer-events:auto;position:relative;color:#2f80ed;text-decoration:none}
+.mpf-category-entry-content a strong{display:inline}
+.mpf-category-name{margin-bottom:5px;overflow-wrap:anywhere}
 .mpf-category-entry-content a:hover{text-decoration:underline}
 .mpf-category-site-links{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;margin-top:6px}
