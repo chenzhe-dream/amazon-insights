@@ -26,5 +26,16 @@ export function marketViewHref(view: MarketScreen, current: { toString(): string
     if (value !== null) params.set(key, value);
   }
   if (view !== 'overview' && view !== 'favorites' && !params.has(marketModuleNodeQueryKey(view))) params.set(marketModuleNodeQueryKey(view), '');
+  for (const key of ['favoriteCategory','favoriteModule','favoritePage']) {
+    const value=source.get(key);if(value!==null)params.set(key,value);
+  }
+  if(view==='favorites'&&source.get('themeView')!=='favorites'){
+    const from=marketViewFromParam(source.get('themeView'));
+    const node=source.get(from==='overview'?'marketNode':marketModuleNodeQueryKey(from));
+    if(node&&/^\d+(?::\d+)*$/.test(node)){
+      params.set('favoriteCategory',node.split(':').at(-1)!);
+      params.set('favoriteModule',from);
+    }
+  }
   return `/?${params}`;
 }

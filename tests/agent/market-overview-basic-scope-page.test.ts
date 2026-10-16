@@ -52,5 +52,13 @@ test('history overview binds basic scope regardless of response order and preser
  await page.getByRole('button',{name:'收起报告',exact:true}).click();await basic.getByRole('heading',{name:'冻结报告的完整概览',exact:true}).waitFor();
  wrongBasic=true;await page.reload();await page.getByText('最近30条采集历史中没有与该总览匹配的基础记录',{exact:true}).waitFor();assert.equal(await basic.count(),0);
  wrongBasic=false;failDetails=true;await page.reload();await page.getByText('冻结来源读取失败',{exact:false}).first().waitFor();assert.equal(await basic.count(),0);
+ // A saved-conditions link has no overviewRun. It must not use the newest unrelated job.
+ failDetails=false;includeBasic=false;rows=[job(1,'999:888'),job(5)];
+ const conditionsUrl=origin+'/?marketNode=123:456&marketMonth=2026-08&marketFrom=2026-08&marketHead=10&marketNew=6';
+ await page.goto(conditionsUrl);await basic.getByRole('heading',{name:'基础记录5',exact:true}).waitFor();
+ assert.doesNotMatch(await basic.innerText(),/基础记录1/);
+ await page.getByRole('textbox',{name:'类目节点或路径',exact:true}).fill('777');
+ await page.getByText('当前条件没有匹配的基础概览',{exact:true}).waitFor();assert.equal(await basic.count(),0);
+ await page.goto(origin+'/');await page.getByText('等待指定类目节点',{exact:true}).waitFor();assert.equal(await basic.count(),0);
  assert.equal(writes,0);assert.deepEqual(errors,[]);
 });

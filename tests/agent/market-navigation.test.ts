@@ -24,3 +24,12 @@ test("opening a fresh module keeps its category empty instead of copying the ove
     assert.equal(url.searchParams.get(key), "");
   }
 });
+
+test('returning from a report keeps the directory on its category and module',()=>{
+ const source=new URLSearchParams('themeView=shapes&marketNode=1:3405881&marketShapeNode=2:166423011');
+ const back=new URL(marketViewHref('favorites',source),'http://localhost').searchParams;
+ assert.equal(back.get('favoriteCategory'),'166423011');assert.equal(back.get('favoriteModule'),'shapes');
+ const directory=new URLSearchParams('themeView=favorites&favoriteCategory=16184244011&favoriteModule=keywords&favoritePage=2');
+ const retained=new URL(marketViewHref('favorites',directory),'http://localhost').searchParams;
+ for(const key of ['favoriteCategory','favoriteModule','favoritePage'])assert.equal(retained.get(key),directory.get(key));
+});
