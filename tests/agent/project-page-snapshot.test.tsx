@@ -13,7 +13,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
-test('original matrix and downloaded snapshot retain the same business cells and computed styles', async t => {
+test('snapshot retains matrix business cells and styles with its readable table font size', async t => {
   const page = await browser.newPage({viewport:{width:1440,height:1000}}); t.after(() => page.close());
   const api: string[] = [];
   await page.route('**/api/**', route => { api.push(route.request().url()); return route.abort(); });
@@ -40,7 +40,9 @@ test('original matrix and downloaded snapshot retain the same business cells and
   assert.deepEqual(api,[]);
   await page.setContent(value.html);
   const downloaded=await page.locator('table.compare-matrix').first().locator('tbody tr').evaluateAll(rows=>rows.filter(row=>['当前售价','产品规格'].includes(row.querySelector('th')!.textContent!.split('Features')[0])).map(row=>[row.textContent,getComputedStyle(row.querySelector('td')!).fontSize,getComputedStyle(row.querySelector('td')!).borderBottomColor,getComputedStyle(row.querySelector('td')!).fontFamily]));
-  assert.equal(downloaded.length,2);assert.deepEqual(downloaded,value.original);
+  assert.equal(downloaded.length,2);
+  // The exported report intentionally raises dense online tables to 12px.
+  assert.deepEqual(downloaded,value.original.map(([text,,border,font])=>[text,'12px',border,font]));
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('.matrix-wrap').first().evaluate(e=>getComputedStyle(e).overflowX),'auto');
   assert.deepEqual(api,[]);

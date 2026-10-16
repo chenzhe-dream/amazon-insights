@@ -84,7 +84,8 @@ export async function readPageSnapshotTraffic(context: ExportModuleContext, fetc
       const source = scoped(listings[asin],asin,market);
       if (source.naturalAd !== undefined && !TrafficListingDistributionSchema.array().safeParse(source.naturalAd).success) throw Error('流量自然/广告明细格式无效');
       const merged = mergeTrafficRecord(source);
-      if (Object.values(merged.availability).includes('invalid')) throw Error('流量结构明细格式无效');
+      // Freeze field availability with the valid metrics, as the online report does.
+      // The shared view displays invalid details explicitly and excludes them from grading.
       overview[asin] = merged.overview; detailAvailability[asin] = merged.availability;
       if (merged.overview?.updatedThrough && (!updatedThrough || merged.overview.updatedThrough > updatedThrough)) updatedThrough = merged.overview.updatedThrough;
     }

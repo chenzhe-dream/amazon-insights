@@ -80,3 +80,36 @@ test('partial exports use only selected products and never request comparative f
   assert.deepEqual(result.products.map(p=>p.asin),ctx.asins);
   assert.ok(!JSON.stringify(result).includes(base.asins[1]));
 });
+
+for (const field of ['adChannels','recommendationSources','children'] as const) {
+  test(`invalid ${field} retains valid published traffic and its field warning`,async()=>{
+    const ctx=context(), asin=ctx.asins[0], stage=ctx.version.stageOutputs.traffic!;
+    assert.ok(stage.stage==='traffic'&&'data'in stage);
+    stage.data.listingByAsin[asin][field]=[{label:'invalid-detail',score:-1,ratio:150}];
+    const before=JSON.stringify(ctx.version);
+    const result=await prepare(ctx,noRequests);
+    const data=result.trafficData.overview[asin]!;
+    assert.equal(data.totalScore,1000);
+    assert.deepEqual(data.naturalAd,[{label:'自然流量',score:700,ratio:70},{label:'广告流量',score:300,ratio:30}]);
+    assert.deepEqual(data[field],[]);
+    assert.equal(result.trafficData.detailAvailability?.[asin]?.[field],'invalid');
+    for (const other of ['adChannels','recommendationSources','children'] as const) {
+      if (other!==field) {
+        assert.equal(result.trafficData.detailAvailability?.[asin]?.[other],'complete');
+        assert.deepEqual(data[other],stage.data.listingByAsin[asin][other]);
+      }
+    }
+    assert.equal(result.monthlyTrendByAsin[asin].points.length,20);
+    assert.equal(buildTrafficAnalysisConclusion(result.products,result.trafficData).overview.length,0);
+    assert.equal(JSON.stringify(ctx.version),before,'export must not rewrite saved evidence');
+  });
+}
+
+test('partial traffic still rejects a listing with a foreign ASIN or marketplace',async()=>{
+  for (const foreign of [{asin:'B099999999'},{marketplace:'DE'}]) {
+    const ctx=context(), stage=ctx.version.stageOutputs.traffic!;
+    assert.ok(stage.stage==='traffic'&&'data'in stage);
+    Object.assign(stage.data.listingByAsin[ctx.asins[0]],foreign,{recommendationSources:null});
+    await assert.rejects(prepare(ctx,noRequests),/来源范围不匹配/);
+  }
+});

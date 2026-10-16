@@ -15,11 +15,13 @@ before(async () => {
   origin=`http://127.0.0.1:${address.port}`; browser=await chromium.launch({headless:true});
 });
 after(async () => { await browser?.close();await server?.close(); });
-async function fixture(t: test.TestContext, modules = "overview", missing = false) {
+async function fixture(t: test.TestContext, modules = "overview", missing = false,
+  configureVersion?: (version: ReturnType<typeof exportVersionFixture>) => void) {
   const page=await browser.newPage(); t.after(()=>page.close()); page.setDefaultTimeout(30000);
   await page.route("https://m.media-amazon.com/**", route => route.abort());
   const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));t.after(()=>assert.deepEqual(errors,[]));
   const state={favorite:true,fail:false,denied:false,delay:0,version:exportVersionFixture(),calls:[] as string[],writes:[] as string[]};
+  configureVersion?.(state.version);
   const project=exportProjectFixture();
   await page.route("**/api/**",async route=>{
     const path=new URL(route.request().url()).pathname.replace("/api/agent","");
@@ -154,4 +156,56 @@ test("preview uses available viewport without outer scrolling and page selection
   await d.getByRole('button',{name:'收起页面选择'}).click();
   assert.ok((await iframe.boundingBox())!.height>400);
   assert.equal(await d.getByRole('button',{name:'确认并开始导出'}).isVisible(),true);
+});
+
+test("partial traffic details keep all ten pages downloadable with warnings and valid metrics",async t=>{
+  const {page,state}=await fixture(t,"overview,voc,keywords,definition,checklist,traffic",false,version=>{
+    Object.assign(version.stageOutputs,{traffic:{stage:"traffic",stageStatus:"done",
+      projectId:version.projectId,runId:version.runId,jobId:version.jobId,
+      jobVersion:1,outputVersion:1,contentHash:"c".repeat(64),updatedAt:version.publishedAt,
+      data:{listingByAsin:Object.fromEntries(version.asins.map((asin,i)=>[asin,{
+        asin,marketplace:"US",totalScore:1000+i,
+        naturalAd:[{label:"自然流量",score:700+i,ratio:70},{label:"广告流量",score:300,ratio:30}],
+        adChannels:[{label:"SP(常规)",score:300,ratio:100}],
+        recommendationSources:i<2?[{label:"invalid-detail",score:-1,ratio:150}]:[{label:"有效推荐位",score:25,ratio:100}],
+        children:[],updatedThrough:"2026-09-23",
+      }])),monthlyByAsin:Object.fromEntries(version.asins.map(asin=>[asin,{points:[{month:"2026-09",natural:700,ad:300,total:1000}]}]))}}});
+  });
+  const iframe=page.locator('iframe[title="HTML 快照预览"]');
+  await iframe.waitFor();
+  const html=await iframe.getAttribute("srcdoc");assert.ok(html);
+  assert.equal(await page.locator('input[data-export-page]:checked').count(),10);
+  assert.equal((html.match(/<section class="snapshot-page" data-snapshot-page=/g)??[]).length,10);
+  assert.equal((html.match(/数据格式异常，明细待补齐/g)??[]).length,2);
+  assert.doesNotMatch(html,/invalid-detail/);
+  const downloaded=page.waitForEvent("download");
+  await page.getByRole("button",{name:"确认并开始导出"}).click();
+  const file=await downloaded,path=resolve("test-results","partial-traffic-complete-report.html");
+  await file.saveAs(path);
+  assert.deepEqual(await readFile(path),Buffer.from(html,"utf8"));
+  assert.deepEqual(state.writes,[]);
+  assert.ok(!state.calls.some(path=>/collect|refresh|translate$/.test(path)));
+
+  const recipient=await browser.newContext({javaScriptEnabled:false});t.after(()=>recipient.close());
+  const opened=await recipient.newPage();
+  const apiRequests:string[]=[];
+  opened.on("request",request=>{if(request.url().includes("/api/"))apiRequests.push(request.url());});
+  await opened.route("https://m.media-amazon.com/**",route=>route.abort());
+  await opened.goto(pathToFileURL(path).href);
+  await opened.locator('label[for="snapshot-page-traffic"]').click();
+  const traffic=opened.locator('[data-snapshot-page="traffic"]');
+  assert.equal(await traffic.isVisible(),true);
+  const rows=traffic.locator(".traffic-distribution-row");
+  assert.equal(await rows.count(),3);
+  for (let i=0;i<3;i++) {
+    const text=await rows.nth(i).innerText();
+    assert.ok(text.includes(state.version.asins[i]));
+    assert.ok(text.includes((1000+i).toLocaleString("en-US")));
+    assert.match(text,/SP\(常规\)/);
+    if(i<2) assert.match(text,/数据格式异常，明细待补齐/);
+    else assert.match(text,/有效推荐位/);
+  }
+  assert.equal(await traffic.locator(".monthly-traffic-bar").count(),3);
+  assert.deepEqual(apiRequests,[]);
+  await opened.screenshot({path:"test-results/partial-traffic-export-opened.png",fullPage:true});
 });
