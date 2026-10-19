@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { projectSyncReadiness, sameAsinSet } from "../services/project-sync-readiness";
 import { queryProjectLibrary } from "../services/project-library-query";
 import { createAnalysisProjectFavoriteStore } from "../services/analysis-project-favorite-store";
 import { z } from "zod";
@@ -547,11 +548,35 @@ export function registerLocalDataRoutes(
   });
 
   app.get("/v1/local-data/sync-asins", async (request) => {
-    const { asins: raw } = parseContract(LocalDataSyncReadinessQuerySchema, request.query);
+    const { asins: raw, projectId, marketplace } = parseContract(LocalDataSyncReadinessQuerySchema, request.query);
     const asins = await deps.normalizeAsins(raw.split(","));
     if (!asins) return validation("Invalid ASINs");
     try {
-      const items = await deps.fetchAsinDataStatus(asins);
+      // Read the same published project evidence as the matrix. Global ASIN caches
+      // cannot establish readiness for another project or marketplace.
+      let publishedJob: SyncJob | null = null;
+      const principal = request.authPrincipal;
+      if (projectId && principal?.kind === "user") {
+        const project = await deps.fetchProject(projectId);
+        if (!project) return missing("Readiness project not found");
+        if (project.marketplace !== marketplace || !sameAsinSet(project.asins, asins)) {
+          return validation("Readiness scope does not match project");
+        }
+        if (!deps.readCurrentDisplayVersion) throw new ContractRouteError(503, "CONFIGURATION_ERROR", "Current display version reader is unavailable");
+        const version = await deps.readCurrentDisplayVersion({ organizationId: principal.organizationId, projectId });
+        if (version) {
+          if (version.organizationId !== principal.organizationId || version.projectId !== projectId ||
+              version.marketplace !== marketplace || !sameAsinSet(version.asins, asins)) {
+            return validation("Published readiness scope does not match project");
+          }
+          const job = await deps.readJob(version.jobId);
+          if (job && job.jobId === version.jobId && job.scope?.organizationId === principal.organizationId &&
+              job.scope.projectId === projectId && job.scope.runId === version.runId &&
+              job.marketplace === marketplace && job.scope.marketplace === marketplace &&
+              sameAsinSet(job.asins, asins) && sameAsinSet(job.scope.asins, asins)) publishedJob = job;
+        }
+      }
+      const items = projectSyncReadiness(asins, publishedJob);
       const needsSync = items.some((item) =>
         !item.inCatalog || item.keywords === "missing" || item.reviews === "missing" ||
         item.sales === "missing" || item.childSales === "missing" || item.priceStrategy === "missing" ||
@@ -567,6 +592,7 @@ export function registerLocalDataRoutes(
         catalogPending: items.filter((item) => !item.inCatalog).map((item) => item.asin),
       });
     } catch (error) {
+      if (error instanceof ContractRouteError) throw error;
       rethrowLegacyError(error);
     }
   });

@@ -63,6 +63,8 @@ const status: AsinModuleStatus = {
   voc: "ready",
 };
 
+const missingStatus: AsinModuleStatus = { ...Object.fromEntries(Object.keys(status).map(key => [key, key === "asin" ? asin : key === "inCatalog" ? false : "missing"])) } as AsinModuleStatus;
+
 const job: SyncJob = {
   jobId: "job-1",
   jobVersion: 1,
@@ -189,6 +191,51 @@ function fakeDeps(statusItems: AsinModuleStatus[] = [status]): LocalDataBridgeDe
     },
   };
 }
+
+test("UK readiness never falls back to the shared US ASIN cache", async (t) => {
+  const deps = fakeDeps();
+  deps.fetchProject = async () => ({ ...project, marketplace: "UK", asins: [asin] });
+  deps.readCurrentDisplayVersion = async () => null;
+  deps.fetchAsinDataStatus = async () => { throw new Error("shared US cache must not be read"); };
+  const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+    authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+  t.after(() => app.close());
+  const response = await app.inject({ method: "GET",
+    url: `/v1/local-data/sync-asins?asins=${asin}&projectId=10000000-0000-4000-8000-000000000004&marketplace=UK`, headers: authenticatedHeaders() });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().items[0].inCatalog, false);
+  assert.equal(response.json().items[0].sales, "missing");
+  assert.equal(response.json().needsSync, true);
+});
+
+test("published readiness validates project, site, organization and exact cohort", async (t) => {
+  const projectId = "10000000-0000-4000-8000-000000000004";
+  const organizationId = memberPrincipal().organizationId;
+  for (const mismatch of [null, "marketplace", "projectId", "organizationId", "asins"] as const) {
+    const deps = fakeDeps();
+    deps.normalizeAsins = async values => Array.isArray(values) ? values : null;
+    deps.fetchProject = async () => ({ ...project, id: projectId, marketplace: "UK", asins: [asin] });
+    deps.readCurrentDisplayVersion = async () => ({ versionId: "version", organizationId, projectId,
+      jobId: job.jobId, runId: "run", marketplace: "UK", asins: [asin], catalog: [], stageOutputs: {},
+      gaps: [], contentHash: "hash", sourceCompletedAt: job.createdAt, publishedAt: job.createdAt });
+    deps.readJob = async () => ({ ...job, marketplace: "UK", asins: [asin],
+      scope: { organizationId, projectId, marketplace: "UK", asins: [asin], runId: "run",
+        ...(mismatch ? { [mismatch]: mismatch === "asins" ? ["B000000001"] : "other" } : {}) },
+      asinProgress: { [asin]: { sales_trend: { status: "ready", reason: null, updatedAt: job.createdAt } } } });
+    const app = buildAgentApp({ env: authenticatedLocalEnv(), authConfig,
+      authService: authService(memberPrincipal()), localDataBridgeDeps: deps });
+    t.after(() => app.close());
+    const url = `/v1/local-data/sync-asins?asins=${asin}&projectId=${projectId}&marketplace=UK`;
+    const response = await app.inject({ method: "GET", url, headers: authenticatedHeaders() });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().items[0].sales, mismatch ? "missing" : "ready", String(mismatch));
+    assert.equal(response.json().items[0].reviews, "missing");
+    const wrongSite = await app.inject({ method: "GET", url: url.replace("marketplace=UK", "marketplace=US"), headers: authenticatedHeaders() });
+    assert.equal(wrongSite.statusCode, 400);
+    const wrongAsins = await app.inject({ method: "GET", url: url.replace(`asins=${asin}`, `asins=${asin},${asin}`), headers: authenticatedHeaders() });
+    assert.equal(wrongAsins.statusCode, 400);
+  }
+});
 
 test("renaming a local analysis project updates the matching database project name", async (t) => {
   const deps = fakeDeps();
@@ -509,9 +556,9 @@ test("local fake bridge adapts legacy project and sync operations over Agent HTT
   const deleted = await app.inject({ method: "DELETE", url: "/v1/local-data/projects/project-1", headers: authenticatedHeaders() });
   assert.equal(deleted.statusCode, 403);
 
-  const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}`, headers: authenticatedHeaders() });
+  const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}&marketplace=US`, headers: authenticatedHeaders() });
   assert.equal(readiness.statusCode, 200);
-  assert.deepEqual(readiness.json(), { asins: [asin], items: [status], needsSync: false, vocPending: [], catalogPending: [] });
+  assert.deepEqual(readiness.json(), { asins: [asin], items: [missingStatus], needsSync: true, vocPending: [asin], catalogPending: [asin] });
 
   const started = await app.inject({ method: "POST", url: "/v1/local-data/sync-asins", headers: { ...authenticatedHeaders(), "content-type": "application/json" }, payload: { asins: [asin], marketplace: "US" } });
   assert.equal(started.statusCode, 202);
@@ -924,7 +971,7 @@ test("local bridge treats each independent readiness field as needing sync", asy
     });
     t.after(() => app.close());
 
-    const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}`, headers: authenticatedHeaders() });
+    const readiness = await app.inject({ method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}&marketplace=US`, headers: authenticatedHeaders() });
     assert.equal(readiness.statusCode, 200);
     assert.equal(readiness.json().needsSync, true, field);
   }
@@ -1107,7 +1154,7 @@ test("provider readiness rejects when all required providers are unavailable wit
 
   const read = await app.inject({
     method: "GET",
-    url: `/v1/local-data/sync-asins?asins=${asin}`,
+    url: `/v1/local-data/sync-asins?asins=${asin}&marketplace=US`,
     headers: authenticatedHeaders(),
   });
   assert.equal(read.statusCode, 200);
@@ -1264,16 +1311,16 @@ test("local bridge registers sync GET and POST routes with the real provider", a
 
   const readiness = await app.inject({
     method: "GET",
-    url: `/v1/local-data/sync-asins?asins=${asin}`,
+    url: `/v1/local-data/sync-asins?asins=${asin}&marketplace=US`,
     headers: authenticatedHeaders(),
   });
   assert.equal(readiness.statusCode, 200);
   assert.deepEqual(readiness.json(), {
     asins: [asin],
-    items: [status],
-    needsSync: false,
-    vocPending: [],
-    catalogPending: [],
+    items: [missingStatus],
+    needsSync: true,
+    vocPending: [asin],
+    catalogPending: [asin],
   });
 
   const started = await app.inject({
@@ -1312,7 +1359,7 @@ test("anonymous loopback cannot access local-data projects or sync deps", async 
     { method: "POST", url: "/v1/local-data/projects", payload: { kind: "analysis", name: project.name, marketplace: "US", asins: projectAsins } },
     { method: "PATCH", url: "/v1/local-data/projects/project-1", payload: { name: "Renamed" } },
     { method: "DELETE", url: "/v1/local-data/projects/project-1" },
-    { method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}` },
+    { method: "GET", url: `/v1/local-data/sync-asins?asins=${asin}&marketplace=US` },
     { method: "POST", url: "/v1/local-data/sync-asins", payload: { asins: [asin], marketplace: "US" } },
     { method: "GET", url: "/v1/local-data/sync-asins/job-1" },
   ] as const) {

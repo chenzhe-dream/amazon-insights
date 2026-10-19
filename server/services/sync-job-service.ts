@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { projectSyncReadiness } from "./project-sync-readiness";
 import {
   estimateImageRemarkSeconds,
   IMAGE_REMARK_POLICY_DETAIL,
@@ -48,6 +49,7 @@ const CONNECTOR_DISPLAY_NAMES = Object.freeze({
   sorftime: "Sorftime",
 } as const);
 type StatusModule = {
+  getScopedAsinDataStatus?(asins: string[], scope: { organizationId: string; projectId: string; marketplace: string }): AsinModuleStatus[];
   getAsinDataStatus(asins: string[]): AsinModuleStatus[];
   asinsNeedingMcpSync(asins: string[]): AsinModuleStatus[];
   asinsNeedingListingSync(asins: string[]): AsinModuleStatus[];
@@ -143,12 +145,16 @@ export class SyncJobService {
       if (!["completed", "failed"].includes(parent.status)) throw new SyncRepairScopeError("Repair parent must be terminal");
     } else if (input.parentJobId) throw new SyncRepairScopeError("Repair parent requires repair mode");
     const statusMod = await this.#loadStatusModule();
-    const catalogPending = statusMod.asinsNeedingCatalogSync(asins, {retryFallback: true});
-    const needing = statusMod.asinsNeedingMcpSync(asins);
-    const trafficPending = statusMod.asinsNeedingTrafficSync(asins);
-    const listingPending = statusMod.asinsNeedingListingSync(asins);
-    const imageRemarksCount = statusMod.countPendingImageRemarks(asins);
-    const statuses = statusMod.getAsinDataStatus(asins);
+    const scoped = marketplace !== "US";
+    if (scoped && !input.projectId) throw new SyncRepairScopeError("Non-US collection requires a project");
+    const statuses = scoped ? statusMod.getScopedAsinDataStatus?.(asins, {
+      organizationId: input.organizationId, projectId: input.projectId!, marketplace,
+    }) ?? projectSyncReadiness(asins, null) : statusMod.getAsinDataStatus(asins);
+    const catalogPending = scoped ? statuses.filter(item => !item.inCatalog).map(item => item.asin) : statusMod.asinsNeedingCatalogSync(asins, {retryFallback: true});
+    const needing = scoped ? statuses.filter(item => [item.keywords, item.reviews, item.sales, item.childSales, item.priceStrategy, item.fba, item.category].includes("missing")) : statusMod.asinsNeedingMcpSync(asins);
+    const trafficPending = scoped ? statuses.filter(item => item.traffic === "missing") : statusMod.asinsNeedingTrafficSync(asins);
+    const listingPending = scoped ? statuses.filter(item => item.listing === "missing") : statusMod.asinsNeedingListingSync(asins);
+    const imageRemarksCount = scoped ? 0 : statusMod.countPendingImageRemarks(asins);
     const repairTargets: Record<string, string[]> | undefined = input.mode === "repair-incomplete"
       ? {...repairTargetsFor(statuses), catalog: catalogPending} : undefined;
     if (repairTargets && input.imageAction) {
@@ -431,10 +437,10 @@ async function loadStatusModule(): Promise<StatusModule> {
   return await import("../../scripts/lib/asin-data-status.mjs") as StatusModule;
 }
 
-function normalizeMarketplace(value: string): "US" {
+function normalizeMarketplace(value: string): "US" | "UK" {
   const marketplace = value.trim().toUpperCase();
-  if (marketplace !== "US") throw new TypeError("Unsupported sync job marketplace");
-  return "US";
+  if (marketplace !== "US" && marketplace !== "UK") throw new TypeError("Unsupported sync job marketplace");
+  return marketplace;
 }
 
 function normalizeAsins(values: readonly string[]): string[] {
@@ -444,7 +450,7 @@ function normalizeAsins(values: readonly string[]): string[] {
 function syncJobFingerprint(input: {
   organizationId: string;
   projectId: string | null;
-  marketplace: "US";
+  marketplace: "US" | "UK";
   asins: readonly string[];
 }): string {
   return createHash("sha256")

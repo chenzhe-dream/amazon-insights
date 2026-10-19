@@ -56,7 +56,7 @@ export interface SyncJobRecord {
   readonly actorId: string | null;
   readonly fingerprint: string;
   readonly asins: readonly string[];
-  readonly marketplace: "US";
+  readonly marketplace: "US" | "UK";
   readonly status: "queued" | "running" | "completed" | "failed";
   readonly message: string;
   readonly currentStageId: string;
@@ -83,7 +83,7 @@ export interface SyncJobRecord {
     readonly organizationId: string;
     readonly projectId: string | null;
     readonly runId: string | null;
-    readonly marketplace: "US";
+    readonly marketplace: "US" | "UK";
     readonly asins: readonly string[];
   };
 }
@@ -128,7 +128,7 @@ export interface BuildPublicationRecoveryEvidence {
   readonly projectId: string;
   readonly runId: string;
   readonly fingerprint: string;
-  readonly marketplace: "US";
+  readonly marketplace: "US" | "UK";
   readonly asins: readonly string[];
   readonly outputs: readonly StageOutputDraft[];
 }
@@ -141,7 +141,7 @@ export interface AdmitSyncJobInput {
   readonly actorId: string | null;
   readonly fingerprint: string;
   readonly asins: readonly string[];
-  readonly marketplace: "US";
+  readonly marketplace: "US" | "UK";
   readonly createdAt: string;
   readonly stages: readonly SyncJobStageRecord[];
   readonly currentStageId: string;

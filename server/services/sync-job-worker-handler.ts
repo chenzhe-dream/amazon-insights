@@ -312,11 +312,11 @@ export class SyncJobWorkerHandler {
       organizationId: job.organizationId,
       projectId,
       runId,
-      marketplace: job.marketplace,
+      marketplace: "US",
       asins: job.asins,
     });
     if (!ownsLifecycle) {
-      if (!abortSignal?.aborted) await createSnapshot().catch(() => undefined);
+      if (!abortSignal?.aborted && job.marketplace === "US") await createSnapshot().catch(() => undefined);
       return false;
     }
     if (!begin || !settle) throw new Error("Canonical sync run lifecycle is unavailable");
@@ -339,6 +339,9 @@ export class SyncJobWorkerHandler {
       if (abortSignal?.aborted) {
         outcome = "cancelled";
         error = { code: "SYNC_TRAFFIC_CANCELLED" };
+      } else if (job.marketplace !== "US") {
+        outcome = "partial";
+        error = { code: "SYNC_TRAFFIC_MARKETPLACE_UNSUPPORTED", marketplace: job.marketplace };
       } else {
         await createSnapshot();
       }
@@ -515,6 +518,8 @@ export function createDetachedRunner(
           AGENT_CHILD_RESOURCE_GOVERNOR_REQUIRED: "1",
           AGENT_EXECUTION_ORGANIZATION_ID: lease.job.organizationId,
           AGENT_SYNC_JOB_ID: lease.job.jobId,
+          AGENT_SYNC_PROJECT_ID: lease.job.projectId ?? "",
+          AGENT_SYNC_MARKETPLACE: lease.job.marketplace,
           AGENT_RESOURCE_GOVERNOR_OWNER_ID: context.workerId,
           AGENT_XYDC_PROJECT_ID: lease.job.projectId ?? "",
           AGENT_XYDC_RUN_ID: lease.job.runId ?? "",

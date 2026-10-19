@@ -20,12 +20,21 @@ export function readSorftimeKey(env = process.env) {
   return readServerConnectorSecret("sorftime", env);
 }
 
+function providerSiteArguments(args) {
+  if (!args || typeof args !== "object") return args;
+  return { ...args,
+    ...(args.amz_site === "UK" ? { amz_site: "GB" } : {}),
+    ...(args.keyword_support_site === "UK" ? { keyword_support_site: "GB" } : {}),
+  };
+}
+
 export async function requestSorftimeMcp(
   key,
   method,
   params,
   options = {},
 ) {
+  if (method === "tools/call" && params?.arguments) params = { ...params, arguments: providerSiteArguments(params.arguments) };
   const {
     fetchImpl = fetch,
     signal,
@@ -107,6 +116,7 @@ export async function requestSorftimeMcp(
 }
 
 export async function callSorftimeTool(key, toolName, args, options = {}) {
+  args = providerSiteArguments(args);
   const env = options.env ?? process.env;
   const cache = options.sourceCache ?? sourceCacheFromEnv(env);
   const execute = async ({recordAttempt = async () => {}} = {}) => runWithProviderDiagnostics({

@@ -1206,7 +1206,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       const pendingCatalog = values.filter(v => !catalogItems.some(p => p.asin === v)).length;
       let needsMcpSync = pendingCatalog > 0;
       try {
-        const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(key)}`);
+        const response = await localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(key)}&marketplace=${encodeURIComponent(market)}${currentProjectId ? `&projectId=${encodeURIComponent(currentProjectId)}` : ""}`);
         if (response.ok) {
           const payload = await response.json();
           needsMcpSync = Boolean(payload.needsSync);
@@ -1226,7 +1226,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     setSyncAsins(values);
     setMessage(`已加入 ${values.length} 个竞品，后台正在全自动拉取数据（含 VOC）…`);
     return true;
-  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalSyncJob?.status, workspaceReady]);
+  }, [syncAsins, catalogItems, setMessage, syncJobId, resumedSyncScope.canStart, terminalOwnerFor, terminalSyncJob?.status, workspaceReady, market, currentProjectId]);
 
   useEffect(() => {
     const parsed = parseAsinsParam(asinsParam);
@@ -1610,7 +1610,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         method: "POST",
         body: JSON.stringify({
           asins: values,
-          marketplace: "US",
+          marketplace: market,
           projectId: registeredProject.id,
         }),
       });

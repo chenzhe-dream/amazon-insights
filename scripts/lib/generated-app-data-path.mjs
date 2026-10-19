@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { resolveRuntimeRoots } from "./runtime-roots.mjs";
@@ -13,6 +14,20 @@ export function generatedAppDataPath(codeRoot, fileName, env = process.env) {
     throw new Error("Formal generated data root does not match code root");
   }
   const { dataRoot } = resolveRuntimeRoots({ codeRoot: root, formal: true, env });
+  // The legacy shared cache is US-only. Non-US jobs must never seed from it.
+  // Hash the full owner identity so different organizations/projects cannot mix.
+  if (env.AGENT_SYNC_MARKETPLACE && env.AGENT_SYNC_MARKETPLACE !== "US") {
+    const scope = [env.AGENT_EXECUTION_ORGANIZATION_ID, env.AGENT_SYNC_PROJECT_ID, env.AGENT_SYNC_MARKETPLACE];
+    if (scope.some(value => !value)) throw new Error("Non-US generated data requires an exact project scope");
+    const owner = createHash("sha256").update(JSON.stringify(scope)).digest("hex");
+    const target = path.join(dataRoot, "generated-project-data", owner, fileName);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (fileName === "competitor-data.ts" && !fs.existsSync(target)) {
+      try { fs.writeFileSync(target, "export const refreshedCatalog = [];\n", { flag: "wx" }); }
+      catch (error) { if (error?.code !== "EEXIST") throw error; }
+    }
+    return target;
+  }
   const target = path.join(dataRoot, "generated-app-data", fileName);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (!fs.existsSync(target) && fs.existsSync(source)) {

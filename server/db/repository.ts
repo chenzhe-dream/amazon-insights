@@ -269,7 +269,7 @@ export interface ProjectRecord {
   id: string;
   organizationId: string;
   name: string;
-  marketplace: "US";
+  marketplace: "US" | "UK";
   asins: string[];
   createdBy: string;
   currentRunId: string | null;
@@ -293,7 +293,7 @@ export interface UpdateProjectMetadataInput {
   readonly organizationId: string;
   readonly projectId: string;
   readonly name?: string;
-  readonly marketplace?: "US";
+  readonly marketplace?: "US" | "UK";
   readonly asins?: readonly string[];
   readonly updatedAt: string;
 }

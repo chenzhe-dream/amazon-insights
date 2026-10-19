@@ -8,21 +8,22 @@ import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-
 
 const root = getProjectRoot();
 
-const paths = {
-  keywords: generatedAppDataPath(root, "sif-keyword-analysis-data.ts"),
-  ratings: generatedAppDataPath(root, "sorftime-rating-data.ts"),
-  reviews: generatedAppDataPath(root, "sorftime-review-analysis-data.ts"),
-  sales: generatedAppDataPath(root, "sorftime-sales-trend-data.ts"),
-  childSales: generatedAppDataPath(root, "sorftime-child-sales-data.ts"),
-  priceStrategies: generatedAppDataPath(root, "sorftime-price-strategy-data.ts"),
-  fbaFees: generatedAppDataPath(root, "sorftime-fba-fee-data.ts"),
-  categoryTrends: generatedAppDataPath(root, "sorftime-category-trend-data.ts"),
+function sourcePaths(env = process.env) { return {
+  keywords: generatedAppDataPath(root, "sif-keyword-analysis-data.ts", env),
+  ratings: generatedAppDataPath(root, "sorftime-rating-data.ts", env),
+  reviews: generatedAppDataPath(root, "sorftime-review-analysis-data.ts", env),
+  sales: generatedAppDataPath(root, "sorftime-sales-trend-data.ts", env),
+  childSales: generatedAppDataPath(root, "sorftime-child-sales-data.ts", env),
+  priceStrategies: generatedAppDataPath(root, "sorftime-price-strategy-data.ts", env),
+  fbaFees: generatedAppDataPath(root, "sorftime-fba-fee-data.ts", env),
+  categoryTrends: generatedAppDataPath(root, "sorftime-category-trend-data.ts", env),
   voc: path.join(root, "app", "rufus-voc-data.ts"),
-  catalog: generatedAppDataPath(root, "competitor-data.ts"),
-  traffic: generatedAppDataPath(root, "sif-listing-traffic-raw-data.ts"),
-  listing: generatedAppDataPath(root, "sorftime-listing-content-data.ts"),
-  imageRemarks: generatedAppDataPath(root, "listing-image-remarks.ts"),
-};
+  catalog: generatedAppDataPath(root, "competitor-data.ts", env),
+  traffic: generatedAppDataPath(root, "sif-listing-traffic-raw-data.ts", env),
+  listing: generatedAppDataPath(root, "sorftime-listing-content-data.ts", env),
+  imageRemarks: generatedAppDataPath(root, "listing-image-remarks.ts", env),
+}; }
+const paths = sourcePaths();
 
 export const ASIN_SYNC_STAGE_IDS = [
   "catalog", "keywords", "reviews", "sales_trend", "child_sales", "price_strategy",
@@ -131,7 +132,8 @@ export function countPendingImageRemarks(asins, sources = readAsinStatusSources(
   }, 0);
 }
 
-export function readAsinStatusSources() {
+export function readAsinStatusSources(scopeEnv) {
+  const paths = sourcePaths(scopeEnv);
   const imageRemarksMeta = readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta");
   return {
     catalogAsins: readCatalogAsins(),
@@ -149,7 +151,7 @@ export function readAsinStatusSources() {
     imageRemarkUrls: imageRemarksMeta.imageUrlsByAsin ?? {},
     categoryTrends: readCachedDataExport(paths.categoryTrends, "sorftimeCategoryTrendData"),
     traffic: readCachedDataExport(paths.traffic, "sifListingTrafficRawByAsin"),
-    vocSource: fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
+    vocSource: (!scopeEnv?.AGENT_SYNC_MARKETPLACE || scopeEnv.AGENT_SYNC_MARKETPLACE === "US") && (!process.env.AGENT_SYNC_MARKETPLACE || process.env.AGENT_SYNC_MARKETPLACE === "US") && fs.existsSync(paths.voc) ? fs.readFileSync(paths.voc, "utf8") : "",
   };
 }
 
@@ -300,4 +302,13 @@ export function estimateAutoSyncSeconds(
 export function estimateAlexaVocSeconds(asinCount, { auto = true } = {}) {
   const perAsin = auto ? SYNC_STAGE_ESTIMATES.alexaVocAutoPerAsin : SYNC_STAGE_ESTIMATES.alexaVocPerAsin;
   return asinCount * perAsin;
+}
+
+export function getScopedAsinDataStatus(asins, scope) {
+  const sources = readAsinStatusSources({ ...process.env,
+    AGENT_SYNC_MARKETPLACE: scope.marketplace,
+    AGENT_EXECUTION_ORGANIZATION_ID: scope.organizationId,
+    AGENT_SYNC_PROJECT_ID: scope.projectId,
+  });
+  return asins.map(asin => deriveAsinModuleStatus(asin, sources));
 }

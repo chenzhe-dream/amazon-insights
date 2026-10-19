@@ -50,6 +50,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("UK sync settles its run without invoking the US-only canonical traffic model", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "uk-sync-lifecycle-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const events: string[] = [];
+  const repository = repositoryForLifecycle({ events });
+  let outcome: unknown;
+  let invoked = false;
+  repository.ownsCanonicalTrafficRun = async () => true;
+  repository.beginCanonicalTrafficRun = async () => "started";
+  repository.settleCanonicalTrafficRun = async input => { outcome = input; return true; };
+  const lease = runningLease();
+  const handler = new SyncJobWorkerHandler({ syncJobs: repository, mirrorDirectory: directory,
+    dynamicTrafficSnapshotAdapter: { async createForAuthorizedRun() { invoked = true; } },
+    runner: async () => ({ status: "completed" }),
+  });
+  await handler.handle({ ...lease, job: { ...lease.job, marketplace: "UK", projectId: "project", runId: "run", actorId: "actor" } });
+  assert.equal(invoked, false);
+  assert.equal((outcome as { outcome: string }).outcome, "partial");
+  assert.ok(events.includes("db:complete"));
+});
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

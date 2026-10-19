@@ -214,8 +214,11 @@ export function AsinSyncProgressSection({
   const [status, setStatus] = useState<AsinSyncStatusPayload | null>(null);
   const [capabilities, setCapabilities] = useState<UnavailableProviderCapabilities | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const readinessOwner = useRef(0);
 
   const refreshStatus = useCallback(async () => {
+    const owner = ++readinessOwner.current;
+    setStatus(null);
     if (asins.length < 1) {
       setStatus(null);
       setCapabilities(null);
@@ -223,7 +226,7 @@ export function AsinSyncProgressSection({
     }
     try {
       const [response, capabilitiesResponse] = await Promise.all([
-        localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}`),
+        localAgentFetch(`/v1/local-data/sync-asins?asins=${encodeURIComponent(asins.join(","))}&marketplace=${encodeURIComponent(marketplace)}${syncResume.projectId ? `&projectId=${encodeURIComponent(syncResume.projectId)}` : ""}`),
         localAgentFetch("/v1/capabilities").catch(() => null),
       ]);
       const payload = (await response.json()) as AsinSyncStatusPayload & { error?: unknown };
@@ -237,14 +240,16 @@ export function AsinSyncProgressSection({
           nextCapabilities = null;
         }
       }
+      if (owner !== readinessOwner.current) return;
       setStatus(payload);
       setCapabilities(nextCapabilities);
       setStatusError(null);
     } catch (err) {
+      if (owner !== readinessOwner.current) return;
       setCapabilities(null);
       setStatusError(err instanceof Error ? err.message : "无法读取 MCP 状态");
     }
-  }, [asins]);
+  }, [asins, marketplace, syncResume.projectId]);
 
   useEffect(() => {
     if (syncRequest || syncResume.syncJobId || syncResume.terminalJob) return;
@@ -254,6 +259,7 @@ export function AsinSyncProgressSection({
     });
     return () => {
       cancelled = true;
+      readinessOwner.current++;
     };
   }, [refreshStatus, syncRequest, syncResume.syncJobId, syncResume.terminalJob]);
 

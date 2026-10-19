@@ -113,7 +113,7 @@ interface SyncJobRow extends QueryResultRow {
   readonly run_id: string | null;
   readonly actor_id: string | null;
   readonly fingerprint: string;
-  readonly marketplace: "US";
+  readonly marketplace: "US" | "UK";
   readonly asins: unknown;
   readonly status: "queued" | "running" | "completed" | "failed";
   readonly message: string;
@@ -2421,12 +2421,12 @@ function assertPositiveInteger(value: number, name: string): void {
 
 function normalizeAdmissionInput(input: AdmitSyncJobInput): AdmitSyncJobInput {
   const marketplace = String(input.marketplace).trim().toUpperCase();
-  if (marketplace !== "US") {
+  if (marketplace !== "US" && marketplace !== "UK") {
     throw new TypeError("Unsupported sync job marketplace");
   }
   return {
     ...input,
-    marketplace: "US",
+    marketplace,
     asins: normalizeStoredAsins(input.asins),
   };
 }

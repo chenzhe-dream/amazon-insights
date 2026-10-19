@@ -122,7 +122,7 @@ export const ProjectSchema = strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
   name: z.string().trim().min(1).max(200),
-  marketplace: z.literal("US"),
+  marketplace: z.enum(["US", "UK"]),
   asins: AsinListSchema,
   createdBy: EntityIdSchema,
   currentRunId: EntityIdSchema.nullable(),
@@ -1081,7 +1081,7 @@ export const ChangeFeedbackStatusRequestSchema = strictObject({
 export const CreateProjectRequestSchema = strictObject({
   id: EntityIdSchema.optional(),
   name: z.string().trim().min(1).max(200),
-  marketplace: z.literal("US"),
+  marketplace: z.enum(["US", "UK"]),
   asins: AsinListSchema,
 });
 export type CreateProjectRequest = z.infer<
@@ -1410,7 +1410,11 @@ export const LocalDataSyncStatusSchema = strictObject({
   traffic: z.enum(["ready", "missing"]),
   voc: z.enum(["ready", "missing"]),
 });
-export const LocalDataSyncReadinessQuerySchema = strictObject({ asins: z.string().trim().min(1) });
+export const LocalDataSyncReadinessQuerySchema = strictObject({
+  asins: z.string().trim().min(1),
+  projectId: EntityIdSchema.optional(),
+  marketplace: MarketplaceSchema,
+});
 export const LocalDataSyncStartRequestSchema = strictObject({
   asins: LocalDataAsinListSchema,
   marketplace: MarketplaceSchema.optional(),

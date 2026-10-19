@@ -9,6 +9,25 @@ import { generatedAppDataPath } from "../../scripts/lib/generated-app-data-path.
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
+test("UK project cache starts empty and never seeds the shared US cache", () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "scoped-generated-"));
+  const codeRoot = path.join(fixture, "code");
+  const dataRoot = path.join(fixture, "data");
+  fs.mkdirSync(path.join(codeRoot, "app"), { recursive: true });
+  fs.writeFileSync(path.join(codeRoot, "app", "competitor-data.ts"), "US seed");
+  const env = { AGENT_FORMAL_WORKTREE_ROOT: codeRoot, AGENT_DATA_ROOT: dataRoot,
+    AGENT_RUNTIME_ROOT: path.join(fixture, "runtime"), AGENT_SYNC_MARKETPLACE: "UK",
+    AGENT_EXECUTION_ORGANIZATION_ID: "org-1", AGENT_SYNC_PROJECT_ID: "project-uk" };
+  try {
+    const target = generatedAppDataPath(codeRoot, "competitor-data.ts", env);
+    assert.equal(fs.readFileSync(target, "utf8"), "export const refreshedCatalog = [];\n", "US seed must not be copied into a UK collection");
+    fs.writeFileSync(target, "UK result");
+    assert.equal(generatedAppDataPath(codeRoot, "competitor-data.ts", env), target);
+    assert.notEqual(generatedAppDataPath(codeRoot, "competitor-data.ts", { ...env, AGENT_SYNC_PROJECT_ID: "other" }), target);
+    assert.notEqual(generatedAppDataPath(codeRoot, "competitor-data.ts", { ...env, AGENT_EXECUTION_ORGANIZATION_ID: "other" }), target);
+  } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
+});
+
 test("formal generated data is copied once outside the code root", () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "generated-app-data-"));
   const codeRoot = path.join(fixture, "code");
