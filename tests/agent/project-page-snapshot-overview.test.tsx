@@ -23,6 +23,9 @@ test("overview snapshot retains the native matrix and complete cached selling po
   assert.match(html, /<details[^>]*open=""[^>]*><summary>月销量<\/summary>/);
   for (const label of ["月销售额", "历史价格", "大类 BSR", "竞品参数总览", "竞品历史数据追踪"]) assert.ok(html.includes(label), label);
   assert.doesNotMatch(html, /<button|<script|正在准备中文卖点/);
+  const ukHtml = renderToStaticMarkup(<CompetitorOverviewSnapshotView {...props} market="UK" />);
+  assert.ok(ukHtml.includes("GBP 49.99"));
+  assert.ok(!ukHtml.includes("$49.99"));
 
   const unavailable = renderToStaticMarkup(<CompetitorOverviewSnapshotView {...props} sellingTranslationsByAsin={{[asin]: {asin, sourceHash: "hash", state: "unavailable", points: [], original: ["Retained source text"], sourceComplete: false, message: "Translation unavailable"}}}/>);
   assert.ok(unavailable.includes("Retained source text"));

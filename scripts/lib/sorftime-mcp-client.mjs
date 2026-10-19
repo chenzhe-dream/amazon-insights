@@ -23,6 +23,7 @@ export function readSorftimeKey(env = process.env) {
 function providerSiteArguments(args) {
   if (!args || typeof args !== "object") return args;
   return { ...args,
+    ...(args.site === "UK" ? { site: "GB" } : {}),
     ...(args.amz_site === "UK" ? { amz_site: "GB" } : {}),
     ...(args.keyword_support_site === "UK" ? { keyword_support_site: "GB" } : {}),
   };

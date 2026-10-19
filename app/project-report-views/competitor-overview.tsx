@@ -14,7 +14,7 @@ import {sorftimeSalesTrendMeta, type sorftimeSalesTrendData} from "../sorftime-s
 import type {sorftimeRatingData} from "../sorftime-rating-data";
 import type {sorftimeCategoryTrendData} from "../sorftime-category-trend-data";
 import type {SellingTranslationResult} from "../../shared/selling-point-translation-contracts";
-import {marketSites, type MarketSite} from "../../shared/market-sites";
+import {marketSites, marketSiteCurrency, type MarketSite} from "../../shared/market-sites";
 import {hasValidListingSpecificationsProvenance} from "../../scripts/lib/sorftime-content-specifications.mjs";
 import type {SorftimeListingContentRecord} from "../sorftime-listing-content-data";
 
@@ -659,7 +659,7 @@ function SellingPointsRow(props: MatrixProps) {
   </td>)}</tr>;
 }
 
-export function PriceStrategyRow({ products, priceStrategyByAsin, presentation }: Pick<CompetitorOverviewData, "products" | "priceStrategyByAsin"> & { presentation: "page" | "snapshot" }) {
+export function PriceStrategyRow({ products, priceStrategyByAsin, presentation, market = "US" }: Pick<CompetitorOverviewData, "products" | "priceStrategyByAsin"> & { presentation: "page" | "snapshot"; market?: MarketSite }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const showFull = presentation === "snapshot" || expanded;
@@ -669,7 +669,7 @@ export function PriceStrategyRow({ products, priceStrategyByAsin, presentation }
     const strategy = priceStrategyByAsin[p.asin];
     const metric = resolvePriceMetric(strategy as unknown as { status?: string; currentPrice?: unknown } | undefined, p.price);
     return <td key={p.asin}>{strategy && metric.source === "sorftime" ? <div className="price-strategy-cell">
-      <p className="price-strategy-summary"><b>当前价 ${metric.value?.toFixed(2)}</b><small>已取得定价与促销分析</small></p>
+      <p className="price-strategy-summary"><b>当前价 {market === "US" ? "$" : `${marketSiteCurrency(market)} `}{metric.value?.toFixed(2)}</b><small>已取得定价与促销分析</small></p>
       <div id={`${id}-${p.asin}`} className="price-strategy-details" hidden={!showFull}><p><b>定价锚点</b>{strategy.anchor}</p><p><b>促销手法</b>{strategy.promotion}</p><p><b>折扣心理</b>{strategy.psychology}</p><small>{strategy.evidence}</small></div>
     </div> : <div id={`${id}-${p.asin}`}><span className="no-data-text">{metric.label ?? sorftimePriceStrategyMeta.emptyMessage}</span></div>}</td>;
   })}</tr>;
@@ -687,18 +687,18 @@ function ProductSpecifications({ product, listing, market }: { product: Product;
 export function CompetitorOverviewMatrix(props: MatrixProps) {
   const {products, market, slugParam, salesTrendByAsin, ratingByAsin, fbaFeeByAsin, childSalesByAsin, priceStrategyByAsin, presentation} = props;
   return <ComparisonOverviewCard description={<>{slugParam ? `当前工作区 /p/${slugParam} · 仅展示本批对标 ASIN` : "同一工作区内的竞品对齐查看；不同品类请用各自的 /p/ 地址"}；点击 ASIN 可打开对应站点前台</>} badge={<span className="source-badge">MCP 综合</span>} presentation={presentation}><div className="matrix-wrap"><table className="compare-matrix"><thead><tr><th>指标</th>{products.map((p,i)=><th key={p.asin}><ProductHeader product={p} index={i} market={market}/></th>)}</tr></thead><tbody>
-          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`$${overview.value}`}</strong></td>})}</tr>
+          <tr><th>当前售价</th>{products.map(p=>{const overview=resolveOverviewPrice(p.price, salesTrendByAsin[p.asin]);return <td key={p.asin}><strong>{overview.value===null?"—":`${market === "US" ? "$" : `${marketSiteCurrency(market)} `}${overview.value}`}</strong></td>})}</tr>
           <tr><th>30天销量<small className="insight-source">Sorftime · 悬停趋势图</small></th>{products.map((p,i)=><td key={p.asin}>{presentation === "snapshot" ? <SnapshotSalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/> : <SalesTrendSparkline asin={p.asin} sales30d={p.sales} color={colors[i]} trendByAsin={salesTrendByAsin}/>}</td>)}</tr>
           <tr><th>评分 / 评论<small className="insight-source">Sorftime MCP</small></th>{products.map(p=>{const metric=resolveRatingMetric(ratingByAsin[p.asin],p);return <td key={p.asin}>{metric.value?<>{metric.value.rating===null?<span>— / {metric.value.reviewCount?.toLocaleString() ?? "—"}</span>:<RatingCell rating={metric.value.rating} reviews={metric.value.reviewCount}/>} {metric.label?<small className="no-data-text">{metric.label}</small>:null}</>:<span className="no-data-text">{metric.label}</span>}</td>})}</tr>
           <tr><th>Best Seller Rank</th>{products.map(p=>{const overview=resolveOverviewRank(p.rank, p.subRank, salesTrendByAsin[p.asin]);return <td key={p.asin}>{overview.value===null?"—":overview.source==="sellerSprite"?<div className="rank-lines"><b>#{overview.value.toLocaleString()} in {p.rankCategory}</b>{p.subRank===null?null:<small>#{p.subRank} in {p.subRankCategory}</small>}</div>:<div className="rank-lines"><b>#{overview.value.toLocaleString()}</b><small>类目：卖家精灵未返回</small></div>}</td>})}</tr>
           <tr><th>购物车卖家</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="buyBoxSeller" /></td>)}</tr>
           <tr><th>配送方式</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="fulfillment" /></td>)}</tr>
           <tr><th>产品包装</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="packageSize" /><CatalogProfileValue product={p} field="packageWeight" /></td>)}</tr>
-          <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];const metric=resolveFbaMetric(record);return <td key={p.asin}>{metric.value!=null?<div className="fba-fee-cell"><strong>${metric.value.toFixed(2)}</strong>{record?.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record?.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{metric.label ?? sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
+          <tr><th>FBA 费用</th>{products.map(p=>{const record=fbaFeeByAsin[p.asin];const metric=resolveFbaMetric(record);return <td key={p.asin}>{metric.value!=null?<div className="fba-fee-cell"><strong>{market === "US" ? "$" : `${marketSiteCurrency(market)} `}{metric.value.toFixed(2)}</strong>{record?.packageSize?<small title={record.note??undefined}>{record.packageSize}{record.packageWeight?` · ${record.packageWeight}`:""}</small>:null}<small className="insight-source">{record?.source === "keepa" ? "Keepa · 配送费" : "Sorftime · FBA 费用估算"}</small></div>:<span className="no-data-text">{metric.label ?? sorftimeFbaFeeMeta.emptyMessage}</span>}</td>})}</tr>
           <tr><th>产品规格<small className="insight-source">Features &amp; Specs</small></th>{products.map(p=><td key={p.asin}><ProductSpecifications product={p} listing={props.listingContentByAsin?.[p.asin]} market={market} /></td>)}</tr>
           <tr><th>上架时间</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="launch" /></td>)}</tr><tr><th>变体主题</th>{products.map(p=><td key={p.asin}><VariationTheme product={p} childVariants={childSalesByAsin[p.asin]?.map(item => item.variant)} /></td>)}</tr><tr><th>变体数量</th>{products.map(p=><td key={p.asin}><CatalogProfileValue product={p} field="variants" /></td>)}</tr>
           <tr><th>近期披露子体销量<small className="insight-source">Sorftime · 页面披露口径</small><small className="insight-source">统计周期未提供</small></th>{products.map(p=>{const items=[...((childSalesByAsin[p.asin] as typeof sorftimeChildSales30d[string] | undefined)??[])].sort((a,b)=>b.sales-a.sales||a.variant.localeCompare(b.variant));return <td key={p.asin}><ChildSalesBars items={items.slice(0,5)}/>{presentation === "snapshot" && items.length > 5 ? <details><summary>查看其余 {items.length - 5} 个子体</summary><ChildSalesBars items={items.slice(5)}/></details> : null}</td>})}</tr>
-          <PriceStrategyRow products={products} priceStrategyByAsin={priceStrategyByAsin} presentation={presentation} />
+          <PriceStrategyRow market={market} products={products} priceStrategyByAsin={priceStrategyByAsin} presentation={presentation} />
           <SellingPointsRow {...props} />
         </tbody></table></div></ComparisonOverviewCard>;
 }
