@@ -701,7 +701,9 @@ function persistedDataAsins(stageId, data) {
   if (stageId === "keywords") return keyed("analysisByAsin");
   // Ratings do not determine review readiness or remove bounded sample gaps.
   if (stageId === "reviews") return keyed("analysisByAsin");
-  if (stageId === "sales_trend") return keyed("trendByAsin");
+  // Incomplete observation records are retained as evidence, not ready ASINs.
+  if (stageId === "sales_trend") return keyed("trendByAsin").filter(asin =>
+    !["empty", "error"].includes(data.trendByAsin[asin]?.status));
   if (stageId === "fba") return keyed("feeByAsin");
   if (stageId === "listing") return keyed("contentByAsin");
   if (stageId === "traffic") return keyed("listingByAsin", "monthlyByAsin");

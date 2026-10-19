@@ -703,3 +703,12 @@ test('zero-gallery runner scheduling finalizes terminal gaps without subprocess 
   failed.outputs=failed.outputs.filter(o=>o.stage!=='image_remarks').concat(projectStageOutput('image_remarks',asins,{...scope,stageStatus:'failed',gapReasonCode:'CONNECTOR_FAILED'}));
   assert.equal(runner.imageRemarkScheduling(job,failed,asins).shouldRun,false);
 });
+
+test('publication retains incomplete trend observations without promoting them to ready', () => {
+ const asins=['B0READY001','B0GAP00001'];
+ const readExport=()=>({B0READY001:{asin:asins[0],status:'ready',volume:[{month:'2026-09',value:2}]},B0GAP00001:{asin:asins[1],status:'error',volume:[],observationErrors:{volume:'request-failed'}}});
+ const persisted=projectStageOutput('sales_trend',asins,{stageStatus:'partial',dataAsins:[asins[0]],gapItems:[{asin:asins[1],causeCode:'MCP_RPC'}],gapReasonCode:'MCP_RPC',updatedAt:'2026-10-19T08:00:00.000Z',readExport});
+ assert.ok(persisted.data.trendByAsin[asins[1]],'gap evidence retained');
+ const job={jobId:'job-replay',jobVersion:1,asins,stages:[{id:'sales_trend',status:'partial'}],outputs:[persisted]};
+ assert.deepEqual(projectFinalStageHashes('job-replay',job,(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,readExport})),{sales_trend:persisted.contentHash});
+});

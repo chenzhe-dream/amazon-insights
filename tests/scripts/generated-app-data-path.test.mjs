@@ -98,3 +98,17 @@ test("formal image sync updates the external copy and leaves its code module unt
     fs.rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('scoped readiness reads the UK catalog ASIN list, not the process-wide US catalog', () => {
+ const fixture=fs.mkdtempSync(path.join(os.tmpdir(),'uk-catalog-status-'));
+ const env={...process.env,AGENT_FORMAL_WORKTREE_ROOT:repositoryRoot,AGENT_DATA_ROOT:fixture,AGENT_RUNTIME_ROOT:path.join(fixture,'runtime'),AGENT_SYNC_MARKETPLACE:'US'};
+ try {
+ const shared=generatedAppDataPath(repositoryRoot,'competitor-data.ts',env);
+ fs.writeFileSync(shared,'export const refreshedCatalog = [{"asin":"B0US000001"}];');
+ const scoped={...env,AGENT_SYNC_MARKETPLACE:'UK',AGENT_EXECUTION_ORGANIZATION_ID:'org-1',AGENT_SYNC_PROJECT_ID:'uk-1'};
+ fs.writeFileSync(generatedAppDataPath(repositoryRoot,'competitor-data.ts',scoped),'export const refreshedCatalog = [{"asin":"B0UK000001"}];');
+ const result=spawnSync(process.execPath,['--input-type=module','-e',`import {getScopedAsinDataStatus} from './scripts/lib/asin-data-status.mjs'; console.log(JSON.stringify(getScopedAsinDataStatus(['B0US000001','B0UK000001'],{organizationId:'org-1',projectId:'uk-1',marketplace:'UK'})));`],{cwd:repositoryRoot,env,encoding:'utf8'});
+ assert.equal(result.status,0,result.stderr);
+ assert.deepEqual(JSON.parse(result.stdout).map(row=>[row.asin,row.inCatalog]),[['B0US000001',false],['B0UK000001',true]]);
+ }finally{fs.rmSync(fixture,{recursive:true,force:true});}
+});

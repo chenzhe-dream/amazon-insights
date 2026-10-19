@@ -62,9 +62,9 @@ export const SYNC_STAGE_ESTIMATES = {
   alexaVocAutoPerAsin: 120,
 };
 
-export function readCatalogAsins() {
-  if (!fs.existsSync(paths.catalog)) return [];
-  const source = fs.readFileSync(paths.catalog, "utf8");
+export function readCatalogAsins(catalogPath = paths.catalog) {
+  if (!fs.existsSync(catalogPath)) return [];
+  const source = fs.readFileSync(catalogPath, "utf8");
   return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => match[1]);
 }
 
@@ -136,7 +136,7 @@ export function readAsinStatusSources(scopeEnv) {
   const paths = sourcePaths(scopeEnv);
   const imageRemarksMeta = readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta");
   return {
-    catalogAsins: readCatalogAsins(),
+    catalogAsins: readCatalogAsins(paths.catalog),
     catalogProducts: readCachedArrayExport(paths.catalog, "refreshedCatalog"),
     ratings: readCachedDataExport(paths.ratings, "sorftimeRatingData"),
     keywords: readCachedDataExport(paths.keywords, "sifKeywordAnalysisData"),
