@@ -26,6 +26,7 @@ import {
   buildProductDefinitionInput,
   canonicalizeProductDefinitionOutput,
   createProductDefinitionOutputSchema,
+  collectVocEvidenceIds,
   type ProductDefinitionInput,
 } from "../domain/product/product-definition-contracts";
 import { agentDefinitions } from "../skills/agent-definitions";
@@ -68,6 +69,39 @@ export const ProductDefinitionModelOutputSchema = z.strictObject({
     pendingReason: z.string().trim().min(1).max(2_000).nullable(),
   }),
 }).superRefine(validateProductDefinitionOutputStructure).describe("Concise product definition: one row per final-definition dimension, focus on up to ten keyword groups and priorities. Use short actionable sentences, preserve evidence links and all required risk checks.");
+
+export function createProductDefinitionModelOutputSchema(input: ProductDefinitionInput) {
+  const sorted = (values: Iterable<string>) => [...new Set(values)].sort();
+  const vocIds = sorted(collectVocEvidenceIds(input.voc.result));
+  const keywordIds = sorted(input.keywords.evidence.map(item => item.id));
+  const allIds = sorted([...vocIds, ...keywordIds]);
+  const themes = sorted(input.voc.result.themeJudgments.map(item => item.themeKey));
+  const groups = sorted(input.keywords.groups.map(item => item.id));
+  // An empty allowed set permits zero references, never a fabricated sentinel.
+  // Required evidence keeps min(1), making an unsupported row impossible.
+  const ids = (values: string[]) => values.length
+    ? z.array(z.enum(values)).max(100)
+    : z.array(z.string().trim().min(1).max(200)).max(0);
+  const nullableKey = (values: string[]) => values.length ? z.enum(values).nullable() : z.null();
+  const s = ProductDefinitionModelOutputSchema.shape;
+  const feature = s.configurationLayers.shape.mustHave.element.extend({evidenceIds: ids(allIds).min(1)});
+  return ProductDefinitionModelOutputSchema.safeExtend({
+    evidenceMatrix: s.evidenceMatrix.element.extend({
+      themeKey: nullableKey(themes), keywordGroupId: nullableKey(groups),
+      vocEvidenceIds: ids(vocIds), keywordEvidenceIds: ids(keywordIds),
+    }).array().min(1).max(10),
+    finalDefinition: s.finalDefinition.element.extend({vocEvidenceIds: ids(vocIds), keywordEvidenceIds: ids(keywordIds)}).array().min(1).max(16),
+    configurationLayers: s.configurationLayers.extend({
+      mustHave: feature.array().max(5), differentiation: feature.array().max(3),
+      optional: feature.array().max(3), notInV1: feature.array().max(3), p0Avoid: feature.array().max(5),
+    }),
+    keywordLanding: s.keywordLanding.element.extend({
+      groupId: groups.length ? z.enum(groups) : s.keywordLanding.element.shape.groupId.regex(/^(?!)$/),
+      evidenceIds: ids(keywordIds).min(1),
+    }).array().min(1).max(10),
+    priorities: s.priorities.element.extend({evidenceIds: ids(allIds).min(1)}).array().min(1).max(10),
+  });
+}
 
 type ProductDefinitionRepository = AnalysisReportRepository &
   KeywordAnalysisSnapshotRepository & DataSnapshotRepository;
@@ -190,7 +224,7 @@ export class ProductDefinitionExecutionService {
         outputContract: {
           name: ProductDefinitionAgentDefinition.outputSchema,
           schema: createProductDefinitionOutputSchema(input),
-          responseSchema: ProductDefinitionModelOutputSchema,
+          responseSchema: createProductDefinitionModelOutputSchema(input),
           canonicalizeOutput: (candidate) => canonicalizeProductDefinitionOutput(candidate, input),
         },
         input: modelInput,

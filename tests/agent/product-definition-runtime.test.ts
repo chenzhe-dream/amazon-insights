@@ -203,6 +203,9 @@ test("product validation failure preserves persisted VOC and keyword dependencie
   assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE_PRODUCT_OUTPUT|privateSentinel/);
   for (const entry of diagnostics) assert.ok((entry as {issues:unknown[]}).issues.length > 0);
   assert.equal(provider.productRequests.length, 2);
+  assert.deepEqual(provider.productRequests[0].responseFormat, provider.productRequests[1].responseFormat);
+  const input = provider.productRequests[0].input as ProductDefinitionInput;
+  for (const item of input.keywords.evidence) assert.ok(JSON.stringify(provider.productRequests[0].responseFormat).includes(item.id));
   assert.equal((await repository.listAnalysisReports({ actorOrganizationId: subject.organizationId, runId: subject.runId, stage: "product-definition" })).length, 0);
   assert.equal((await repository.listAnalysisReports({ actorOrganizationId: subject.organizationId, runId: subject.runId, stage: "voc-positioning" })).length, 1);
   assert.deepEqual((await repository.listKeywordAnalysisSnapshotsByRun({ actorOrganizationId: subject.organizationId, runId: subject.runId })), [keyword.snapshot]);

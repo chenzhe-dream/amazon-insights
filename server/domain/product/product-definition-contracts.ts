@@ -220,7 +220,7 @@ export function extractVocPositioningProjection(value: unknown) {
   return VocPositioningOutputShapeSchema.parse(value);
 }
 
-function collectVocEvidenceIds(result: z.infer<typeof VocPositioningDependencyResultSchema>) {
+export function collectVocEvidenceIds(result: z.infer<typeof VocPositioningDependencyResultSchema>) {
   const ids = new Set<string>();
   const add = (values: readonly string[]) => values.forEach((id) => ids.add(id));
   add(result.coreConclusion.evidenceIds);

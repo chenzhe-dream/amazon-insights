@@ -1,3 +1,5 @@
+import { createProductDefinitionModelOutputSchema } from '../../server/services/product-definition-execution-service';
+import { createStructuredResponseFormat } from '../../server/runtime/structured-response-format';
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -129,3 +131,50 @@ function validOutput(input: ReturnType<typeof evidenceScopedInput>) {
     dataBoundary: "当前最终产品定义由VOC与关键词需求交叉推导。关键词数据反映搜索需求和市场入口，VOC反映使用体验与需求缺口；机会等级仅代表需求与产品定义机会，不得视为完整立项批准。完整立项仍需验证竞争、成本利润、专利合规、MOQ、供应链和现金投入。" as const,
   };
 }
+
+test('product wire schema freezes evidence and reference sets with a stable digest', () => {
+ const input=evidenceScopedInput('manual'),schema=createProductDefinitionModelOutputSchema(input),base=validOutput(input);
+ const wire={...base,evidenceSelection:null,identity:{...base.identity,inputFingerprint:null},opportunity:{...base.opportunity,pendingReason:null}};
+ assert.equal(schema.safeParse(wire).success,true);
+ for(const field of ['themeKey','keywordGroupId','vocEvidenceIds','keywordEvidenceIds'] as const){
+  const row={...wire.evidenceMatrix[0],[field]:field.endsWith('Ids')?['invented']:'invented'};
+  assert.equal(schema.safeParse({...wire,evidenceMatrix:[row]}).success,false);
+ }
+ assert.equal(schema.safeParse({...wire,finalDefinition:[{...wire.finalDefinition[0],keywordEvidenceIds:['invented']}]}).success,false);
+ assert.equal(schema.safeParse({...wire,keywordLanding:[{...wire.keywordLanding[0],groupId:'invented'}]}).success,false);
+ assert.equal(schema.safeParse({...wire,keywordLanding:[{...wire.keywordLanding[0],evidenceIds:['invented']}]}).success,false);
+ for(const layer of Object.keys(wire.configurationLayers))assert.equal(schema.safeParse({...wire,configurationLayers:{...wire.configurationLayers,[layer]:[{item:'x',evidenceIds:['invented']}]}}).success,false);
+ assert.equal(schema.safeParse({...wire,priorities:[{...wire.priorities[0],evidenceIds:['invented']}]}).success,false);
+ const a=createStructuredResponseFormat(schema,'ProductFrozen');
+ const reverse=structuredClone(input);reverse.voc.result.themeJudgments.reverse();reverse.keywords.evidence.reverse();reverse.keywords.groups.reverse();
+ assert.equal(a.digest,createStructuredResponseFormat(createProductDefinitionModelOutputSchema(reverse),'ProductFrozen').digest);
+ const serialized=JSON.stringify(a.format.schema);assert.match(serialized,/keyword-1/);assert.match(serialized,/group-1/);assert.ok(serialized.includes(input.voc.result.themeJudgments[0].evidenceIds[0]));
+});
+
+test('product wire empty allowed sets do not invent references or relax required evidence',()=>{
+ const input=evidenceScopedInput('manual');input.keywords.groups=[];input.keywords.evidence=[];
+ const schema=createProductDefinitionModelOutputSchema(input),s=schema.shape;
+ assert.equal(s.evidenceMatrix.element.shape.keywordEvidenceIds.safeParse([]).success,true);
+ assert.equal(s.evidenceMatrix.element.shape.keywordEvidenceIds.safeParse(['invented']).success,false);
+ assert.equal(s.evidenceMatrix.element.shape.keywordGroupId.safeParse(null).success,true);
+ assert.equal(s.evidenceMatrix.element.shape.keywordGroupId.safeParse('invented').success,false);
+ assert.equal(s.keywordLanding.safeParse([]).success,false);
+ assert.equal(s.keywordLanding.element.shape.evidenceIds.safeParse(['invented']).success,false);
+ assert.doesNotThrow(()=>createStructuredResponseFormat(schema,'ProductEmpty'));
+});
+
+test('product wire empty VOC and combined evidence sets remain fail closed',()=>{
+ const input=evidenceScopedInput('manual');input.keywords.groups=[];input.keywords.evidence=[];
+ const clear=(value:unknown):void=>{if(!value||typeof value!=='object')return;if(Array.isArray(value)){value.forEach(clear);return;}for(const [key,item] of Object.entries(value)){if(key==='evidenceIds')(value as Record<string,unknown>)[key]=[];else clear(item);}};clear(input.voc.result);
+ input.voc.result.themeJudgments=[];
+ const schema=createProductDefinitionModelOutputSchema(input),s=schema.shape;
+ assert.equal(s.evidenceMatrix.element.shape.vocEvidenceIds.safeParse([]).success,true);
+ assert.equal(s.evidenceMatrix.element.shape.vocEvidenceIds.safeParse(['invented']).success,false);
+ assert.equal(s.evidenceMatrix.element.shape.themeKey.safeParse(null).success,true);
+ assert.equal(s.evidenceMatrix.element.shape.themeKey.safeParse('invented').success,false);
+ assert.equal(s.configurationLayers.shape.mustHave.safeParse([]).success,true);
+ assert.equal(s.configurationLayers.shape.mustHave.safeParse([{item:'x',evidenceIds:['invented']}]).success,false);
+ assert.equal(s.priorities.element.shape.evidenceIds.safeParse([]).success,false);
+ assert.equal(s.priorities.element.shape.evidenceIds.safeParse(['invented']).success,false);
+ assert.doesNotThrow(()=>createStructuredResponseFormat(schema,'ProductAllEmpty'));
+});
