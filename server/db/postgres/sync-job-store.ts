@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../../shared/project-marketplaces";
 import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
@@ -113,7 +114,7 @@ interface SyncJobRow extends QueryResultRow {
   readonly run_id: string | null;
   readonly actor_id: string | null;
   readonly fingerprint: string;
-  readonly marketplace: "US" | "UK";
+  readonly marketplace: ProjectMarketplace;
   readonly asins: unknown;
   readonly status: "queued" | "running" | "completed" | "failed";
   readonly message: string;
@@ -1665,7 +1666,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       actorId: row.actor_id,
       fingerprint: row.fingerprint,
       asins,
-      marketplace: row.marketplace,
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       status: row.status,
       message: row.message,
       currentStageId: row.current_stage_id,
@@ -1684,7 +1685,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         organizationId: row.organization_id,
         projectId: row.project_id,
         runId: row.run_id,
-        marketplace: row.marketplace,
+        marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
         asins,
       },
     };
@@ -1722,7 +1723,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
       actorId: row.actor_id,
       fingerprint: row.fingerprint,
       asins,
-      marketplace: row.marketplace,
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       status: row.status,
       message: row.message,
       currentStageId: row.current_stage_id,
@@ -1744,7 +1745,7 @@ export class PostgresSyncJobStore implements SyncJobRepository {
         organizationId: row.organization_id,
         projectId: row.project_id,
         runId: row.run_id,
-        marketplace: row.marketplace,
+        marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
         asins,
       },
     });
@@ -2421,12 +2422,12 @@ function assertPositiveInteger(value: number, name: string): void {
 
 function normalizeAdmissionInput(input: AdmitSyncJobInput): AdmitSyncJobInput {
   const marketplace = String(input.marketplace).trim().toUpperCase();
-  if (marketplace !== "US" && marketplace !== "UK") {
+  if (!ProjectMarketplaceSchema.safeParse(marketplace).success) {
     throw new TypeError("Unsupported sync job marketplace");
   }
   return {
     ...input,
-    marketplace,
+    marketplace: ProjectMarketplaceSchema.parse(marketplace),
     asins: normalizeStoredAsins(input.asins),
   };
 }

@@ -16,9 +16,9 @@ const NOW = "2026-08-23T08:00:00.000Z";
 const PROBED_AT = "2026-08-23T08:01:00.000Z";
 const SECRET_SENTINEL = "provider-readiness-secret-sentinel";
 
-test("UK admission does not use shared US cache to skip provider work", async () => {
+for (const marketplace of ["UK", "DE", "CA"]) test(`${marketplace} admission does not use shared US cache to skip provider work`, async () => {
   const counters = { admit: 0, workerLaunch: 0 };
-  const requested = { ...scope(), marketplace: "UK", projectId: "10000000-0000-4000-8000-000000000010" };
+  const requested = { ...scope(), marketplace, projectId: "10000000-0000-4000-8000-000000000010" };
   let checked = false;
   const service = new SyncJobService(syncJobs(counters), {
     bypassProviderReadiness: true,
@@ -26,7 +26,7 @@ test("UK admission does not use shared US cache to skip provider work", async ()
       getAsinDataStatus: () => { throw new Error("global US status must not be read"); },
       getScopedAsinDataStatus: (asins, owner) => {
         checked = true;
-        assert.deepEqual(owner, { organizationId: ORGANIZATION_ID, projectId: requested.projectId, marketplace: "UK" });
+        assert.deepEqual(owner, { organizationId: ORGANIZATION_ID, projectId: requested.projectId, marketplace });
         return asins.map(asin => ({ ...allProviderStatusModule().getAsinDataStatus()[0], asin, imageRemarks: "missing", voc: "missing" }));
       },
     }),

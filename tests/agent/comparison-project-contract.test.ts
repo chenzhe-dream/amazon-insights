@@ -192,7 +192,7 @@ test("principal-scoped project routes enforce header idempotency, tenant reads, 
   assert.equal(renamed.statusCode, 200);
   assert.equal(renamed.json().project.name, "Renamed by principal");
 
-  for (const scopePatch of [{ marketplace: "US" }, { asins }]) {
+  for (const scopePatch of [{ marketplace: "US" }, { marketplace: "UK" }, { marketplace: "DE" }, { marketplace: "CA" }, { asins }]) {
     const immutable = await appA.inject({
       method: "PATCH",
       url: `/v1/projects/${createdProjectId}`,
@@ -204,7 +204,7 @@ test("principal-scoped project routes enforce header idempotency, tenant reads, 
   }
 
   for (const malformedPatch of [
-    { marketplace: "CA" },
+    { marketplace: "FR" },
     { asins: ["bad"] },
     { unknown: "field" },
   ]) {

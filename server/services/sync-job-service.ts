@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import { createHash, randomUUID } from "node:crypto";
 import { projectSyncReadiness } from "./project-sync-readiness";
 import {
@@ -437,10 +438,10 @@ async function loadStatusModule(): Promise<StatusModule> {
   return await import("../../scripts/lib/asin-data-status.mjs") as StatusModule;
 }
 
-function normalizeMarketplace(value: string): "US" | "UK" {
+function normalizeMarketplace(value: string): ProjectMarketplace {
   const marketplace = value.trim().toUpperCase();
-  if (marketplace !== "US" && marketplace !== "UK") throw new TypeError("Unsupported sync job marketplace");
-  return marketplace;
+  if (!ProjectMarketplaceSchema.safeParse(marketplace).success) throw new TypeError("Unsupported sync job marketplace");
+  return ProjectMarketplaceSchema.parse(marketplace);
 }
 
 function normalizeAsins(values: readonly string[]): string[] {
@@ -450,7 +451,7 @@ function normalizeAsins(values: readonly string[]): string[] {
 function syncJobFingerprint(input: {
   organizationId: string;
   projectId: string | null;
-  marketplace: "US" | "UK";
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
 }): string {
   return createHash("sha256")

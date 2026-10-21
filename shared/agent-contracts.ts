@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema } from "./project-marketplaces";
 import {ConclusionQuerySchema,ConclusionSaveSchema,ConclusionResponseSchema} from './market-development-conclusion';
 import {MarketKeywordQueryRequestSchema,MarketThemeQueryRequestSchema} from './market-standalone-query-contracts';
 import {ProjectCatalogSchema,ProjectCatalogQuerySchema,ProjectHistoryQuerySchema,ProjectHistorySchema} from './market-project-catalog-contracts';
@@ -122,7 +123,7 @@ export const ProjectSchema = strictObject({
   id: EntityIdSchema,
   organizationId: EntityIdSchema,
   name: z.string().trim().min(1).max(200),
-  marketplace: z.enum(["US", "UK"]),
+  marketplace: ProjectMarketplaceSchema,
   asins: AsinListSchema,
   createdBy: EntityIdSchema,
   currentRunId: EntityIdSchema.nullable(),
@@ -1081,7 +1082,7 @@ export const ChangeFeedbackStatusRequestSchema = strictObject({
 export const CreateProjectRequestSchema = strictObject({
   id: EntityIdSchema.optional(),
   name: z.string().trim().min(1).max(200),
-  marketplace: z.enum(["US", "UK"]),
+  marketplace: ProjectMarketplaceSchema,
   asins: AsinListSchema,
 });
 export type CreateProjectRequest = z.infer<
@@ -1104,7 +1105,7 @@ export const ListProjectsResponseSchema = strictObject({
 export type ListProjectsResponse = z.infer<typeof ListProjectsResponseSchema>;
 export const UpdateProjectRequestSchema = strictObject({
   name: z.string().trim().min(1).max(200).optional(),
-  marketplace: z.literal("US").optional(),
+  marketplace: ProjectMarketplaceSchema.optional(),
   asins: AsinListSchema.optional(),
 }).refine((value) => Object.keys(value).length > 0, "Project update must contain a field");
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;

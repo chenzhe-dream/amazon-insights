@@ -2263,3 +2263,16 @@ function canonicalize(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalize(record[key])]));
 }
+
+for (const marketplace of ["DE", "CA"] as const) {
+  test(`${marketplace} PostgreSQL sync admission persists exact marketplace and submission scope`, async () => {
+    const { first, second, firstPool } = await createRepositories();
+    const input = syncJobInput({ marketplace });
+    const created = await first.admit(input);
+    assert.equal(created.disposition, "created");
+    assert.equal(created.job.marketplace, marketplace);
+    assert.equal((await second.findById(created.job.jobId))?.marketplace, marketplace);
+    const submissions = await firstPool.query("SELECT marketplace FROM sync_job_submissions WHERE job_id = $1", [created.job.jobId]);
+    assert.deepEqual(submissions.rows.map(row => row.marketplace), [marketplace]);
+  });
+}

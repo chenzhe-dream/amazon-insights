@@ -1,3 +1,4 @@
+import { type ProjectMarketplace } from "../../shared/project-marketplaces";
 import type { AnalysisReport } from "../../shared/agent-contracts";
 import type { TrafficAnalysisOutput } from "../domain/traffic/traffic-analysis-contracts";
 import type { ProductDefinitionOutput } from "../domain/product/product-definition-contracts";
@@ -269,7 +270,7 @@ export interface ProjectRecord {
   id: string;
   organizationId: string;
   name: string;
-  marketplace: "US" | "UK";
+  marketplace: ProjectMarketplace;
   asins: string[];
   createdBy: string;
   currentRunId: string | null;
@@ -293,7 +294,7 @@ export interface UpdateProjectMetadataInput {
   readonly organizationId: string;
   readonly projectId: string;
   readonly name?: string;
-  readonly marketplace?: "US" | "UK";
+  readonly marketplace?: ProjectMarketplace;
   readonly asins?: readonly string[];
   readonly updatedAt: string;
 }
