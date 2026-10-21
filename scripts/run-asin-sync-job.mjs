@@ -1297,7 +1297,8 @@ async function main() {
           generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData");
         const fallbackAsins = selectUkReviewFallbackAsins(reviewAsins, sorftimeReviewRecords, {
           marketplace,
-          enabled: process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1" && reviewResult.succeeded,
+          enabled: process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1",
+          attempts: [ratingResult, reviewResult],
         });
         const sellerResult = fallbackAsins.length ? providers.run({
           connector: "sellerSprite", stage: "reviews", asins: fallbackAsins,

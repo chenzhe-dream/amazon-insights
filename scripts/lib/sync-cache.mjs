@@ -168,7 +168,7 @@ export function hasUsableTrendRecord(record) {
 export function createRepairSafeRecordMap(existing, { repair = isRepairIncomplete(), onPreserve = reportIncompleteRepair } = {}) {
   const records = { ...existing };
   if (!repair) return records;
-  const metadata = new Set(["status", "statusMessage", "fetchedAt", "provenance", "provenanceByAsin", "terminalReason", "errorCode"]);
+  const metadata = new Set(["status", "statusMessage", "fetchedAt", "provenance", "provenanceByAsin", "terminalReason", "errorCode", "observationErrors"]);
   function losesContent(old, next) {
     if (Array.isArray(old)) return old.length > 0 && (!Array.isArray(next) || !next.length);
     if (old && typeof old === "object" && next && typeof next === "object") {
@@ -179,8 +179,15 @@ export function createRepairSafeRecordMap(existing, { repair = isRepairIncomplet
   return new Proxy(records, {
     set(target, key, value) {
       const previous = target[key];
-      const failed = value?.status && !["ready", "empty"].includes(value.status);
-      if (previous && (failed || losesContent(previous, value))) onPreserve(key);
+      // A validated empty provider response remains pending for business readiness,
+      // but is a successful observation needed by the bounded review fallback.
+      const validEmpty = value?.status === "pending" && value.terminalReason === "valid-empty"
+        && value.sampledReviews === 0 && value.mentionTopics === 0
+        && Array.isArray(value.blocks) && value.blocks.every(block => Array.isArray(block?.rows) && block.rows.length === 0);
+      const clearsReviewEvidence = validEmpty && ((previous?.sampledReviews ?? 0) > 0 || (previous?.mentionTopics ?? 0) > 0
+        || (Array.isArray(previous?.blocks) && previous.blocks.some(block => Array.isArray(block?.rows) && block.rows.length > 0)));
+      const failed = value?.status && !["ready", "empty"].includes(value.status) && !validEmpty;
+      if (previous && (failed || clearsReviewEvidence || losesContent(previous, value))) onPreserve(key);
       else target[key] = value;
       return true;
     },

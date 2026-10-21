@@ -2,6 +2,42 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as cache from '../../scripts/lib/sync-cache.mjs';
 
+test('repair records a validated empty review observation over an old pending shell', () => {
+  const old = {asin:'B0C6FP6LMY',marketplace:'UK',status:'pending',sampledReviews:0,mentionTopics:0,blocks:[{key:'positive',rows:[]}]};
+  const events=[];
+  const records=cache.createRepairSafeRecordMap({a:old},{repair:true,onPreserve:key=>events.push(key)});
+  const observed={...old,terminalReason:'valid-empty',fetchedAt:'2026-10-21'};
+  records.a=observed;
+  assert.deepEqual(records.a,observed);
+  assert.deepEqual(events,[]);
+});
+
+test('validated empty cannot remove prior review evidence and unverified pending remains a failed repair', () => {
+  const old={status:'pending',blocks:[{rows:[{label:'quality'}]}]};
+  const events=[];
+  const records=cache.createRepairSafeRecordMap({a:old,b:{status:'pending',blocks:[]}},{repair:true,onPreserve:key=>events.push(key)});
+  records.a={status:'pending',terminalReason:'valid-empty',blocks:[]};
+  records.b={status:'pending',blocks:[],fetchedAt:'2026-10-21'};
+  assert.deepEqual(records.a,old);
+  assert.equal(records.b.fetchedAt,undefined);
+  assert.deepEqual(events,['a','b']);
+});
+
+test('validated empty cannot hide review loss inside nonempty block containers', () => {
+  const old={status:'pending',sampledReviews:1,blocks:[{key:'positive',rows:[{label:'quality'}]}]};
+  const records=cache.createRepairSafeRecordMap({a:old},{repair:true,onPreserve:()=>{}});
+  records.a={status:'pending',terminalReason:'valid-empty',sampledReviews:0,mentionTopics:0,blocks:[{key:'positive',rows:[]}]};
+  assert.deepEqual(records.a,old);
+});
+
+test('resolved error diagnostics are not protected as business observations', () => {
+  const old={status:'error',volume:[],observationErrors:{volume:'upstream unavailable'}};
+  const records=cache.createRepairSafeRecordMap({a:old},{repair:true,onPreserve:()=>assert.fail('diagnostics are not observed sales')});
+  const next={status:'empty',volume:[],observationOutcomes:{volume:{status:'source-unavailable'}}};
+  records.a=next;
+  assert.deepEqual(records.a,next);
+});
+
 test('repair refuses ready keyword shells and review blocks without rows', () => {
   assert.equal(cache.hasCompleteKeywordRecord?.({status:'ready', keywords:[]}), false);
   assert.equal(cache.hasCompleteReviewRecord?.({status:'ready', sampledReviews:10, blocks:[{rows:[]}]}), false);

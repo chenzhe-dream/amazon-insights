@@ -10,6 +10,7 @@ import test from "node:test";
 import { deriveAsinModuleStatus } from "../../scripts/lib/asin-data-status.mjs";
 import { readCachedDataExport } from "../../scripts/lib/sync-cache.mjs";
 import { shouldReuseSorftimeReviewRecord } from "../../scripts/build-sorftime-review-analysis.mjs";
+import { selectUkReviewFallbackAsins } from "../../scripts/lib/uk-review-fallback.mjs";
 
 const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const asin = "B0G5N593D6";
@@ -23,6 +24,18 @@ const readyEmpty = {
   statusMessage: "Sorftime product_detail 已确认该 ASIN 评论数为 0",
   blocks: [],
 };
+
+test("repair of an old UK pending shell persists validated emptiness and enables bounded review fallback", async t => {
+  const provider = await fakeSorftimeProvider("no-review-records");
+  t.after(provider.close);
+  const result = await runProductionReviewScript(t, provider.endpoint,
+    {asin,marketplace:"UK",fetchedAt:"2026-10-21",status:"ready",reviewCount:682},
+    {marketplace:"UK",repair:true,existingRecord:{...readyEmpty,marketplace:"UK",status:"pending",blocks:[]}});
+  assert.equal(result.exitCode,0,result.stderr);
+  assert.equal(result.records[asin].terminalReason,"valid-empty");
+  assert.deepEqual(selectUkReviewFallbackAsins([asin],result.records,{marketplace:"UK",enabled:true}),[asin]);
+  assert.equal(deriveAsinModuleStatus(asin,statusSources(result.records)).reviews,"missing");
+});
 
 test("ready-empty review cache requires current non-conflicting zero evidence", () => {
   assert.equal(shouldReuseSorftimeReviewRecord({
@@ -279,6 +292,8 @@ async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}
     forceRefresh: options.forceRefresh ?? true,
     asins: fixtureAsins,
     hasProviderKey: options.hasProviderKey ?? true,
+    repair: options.repair ?? false,
+    marketplace: options.marketplace ?? "US",
   });
   return {
     ...outcome,
@@ -306,7 +321,7 @@ function statusSources(reviews) {
   };
 }
 
-function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh, asins, hasProviderKey }) {
+function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh, asins, hasProviderKey, repair, marketplace }) {
   return new Promise((resolve, reject) => {
     const args = [
       "--experimental-loader",
@@ -322,7 +337,8 @@ function spawnReviewScript({ directory, endpoint, loaderPath, forceRefresh, asin
         SORFTIME_MCP_KEY: hasProviderKey ? "fixture-secret" : "",
         SORFTIME_MCP_ENDPOINT: endpoint,
         SORFTIME_ASINS: asins.join(","),
-        SORFTIME_MARKETPLACE: "US",
+        SORFTIME_MARKETPLACE: marketplace,
+        AGENT_SYNC_REPAIR_INCOMPLETE: repair ? "1" : "0",
         AGENT_SYNC_JOB_ID: "verified-empty-fixture-job",
         AGENT_SYNC_STAGE_ID: "reviews",
       },

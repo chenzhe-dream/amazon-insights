@@ -19,6 +19,25 @@ test("UK opt-in selects only exact ASINs with a valid Sorftime empty observation
   assert.deepEqual(selectUkReviewFallbackAsins([asin], { [asin]: { ...empty, asin: "B000000001" } }, { marketplace: "UK", enabled: true }), []);
 });
 
+test("an isolated sibling schema failure does not suppress successful empty review fallback", () => {
+  const sibling="B0FJ4T6V2C";
+  const diagnostic={asin:sibling,failureKind:"schema",causeCode:"MCP_SCHEMA"};
+  const options={marketplace:"UK",enabled:true,attempts:[{succeeded:true,diagnostics:[]},{succeeded:false,diagnostics:[diagnostic]}]};
+  assert.deepEqual(selectUkReviewFallbackAsins([asin,sibling],{[asin]:empty,[sibling]:{...empty,asin:sibling}},options),[asin]);
+});
+
+test("failed or unclassified review attempts cannot reuse stale valid-empty records for fallback", () => {
+  for (const attempt of [
+    {succeeded:false,diagnostics:[]},
+    {succeeded:false,diagnostics:[{asin,failureKind:"schema",causeCode:"MCP_SCHEMA"}]},
+    {succeeded:false,diagnostics:[{asin:"UNKNOWNASIN",failureKind:"schema",causeCode:"MCP_SCHEMA"}]},
+    ...["HTTP_4XX","MCP_RPC","RESOURCE_GOVERNOR","PROVIDER_DEGRADED","UNKNOWN_TRANSPORT"].map(causeCode=>
+      ({succeeded:false,diagnostics:[{asin:"B0FJ4T6V2C",causeCode,failureKind:"rpc"}]})),
+  ]) {
+    assert.deepEqual(selectUkReviewFallbackAsins([asin,"B0FJ4T6V2C"],{[asin]:empty},{marketplace:"UK",enabled:true,attempts:[attempt]}),[]);
+  }
+});
+
 test("project UK evidence uses SellerSprite UK request identity", () => {
   assert.deepEqual(sellerSpriteReviewMarkets({ AGENT_SYNC_MARKETPLACE: "UK" }), { project: "UK", provider: "UK" });
   assert.deepEqual(sellerSpriteReviewMarkets({ SELLERSPRITE_MARKETPLACE: "US" }), { project: "US", provider: "US" });
