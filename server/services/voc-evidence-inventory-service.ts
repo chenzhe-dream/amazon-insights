@@ -13,6 +13,7 @@ const QueryWindowSchema = z.object({ time_type: z.string(), time_value: z.string
 const KeywordRecordSchema = z.object({ asin: z.string(), marketplace: ProjectMarketplaceSchema, status: z.enum(["ready", "empty", "error"]), fetchedAt: z.string(),
   queryWindow: QueryWindowSchema.nullable().optional(),
   currentEmpty: z.object({ queryWindow: QueryWindowSchema, observedAt: z.string(), terminalReason: z.literal("valid-empty") }).optional(),
+  historicalAttempt: z.object({ queryWindow: QueryWindowSchema, outcome: z.enum(["schema-error", "error"]), errorCode: z.string().optional() }).optional(),
   keywords: z.array(z.object({ keyword: z.string().trim().min(1), searchVolume: z.number().finite().nonnegative().nullable() })) });
 type Input = { repository: RuntimeAgentRepository; project: ProjectRecord; baseSyncRunId: string; selectedAsins: readonly string[]; dataCutoffAt: string };
 export async function buildVocEvidenceInventory(input: Input) {
@@ -32,11 +33,23 @@ export async function buildVocEvidenceInventory(input: Input) {
   };
   const [reviews, keywords] = await Promise.all([read("reviews"), read("keywords")]);
   const reviewData = reviews && reviews.stage === "reviews" && "data" in reviews ? reviews.data.analysisByAsin : {};
-  const reader = new RepositoryVocSourceReader({ manualVoc: repository.manualAlexaVoc, legacyFallbackEnabled: false, reviewSources: { sorftime: { meta: { marketplace: project.marketplace }, ...(reviews ? { publishedAt: reviews.updatedAt } : {}), data: reviewData }, sellerSprite: { meta: { marketplace: project.marketplace }, data: {} } } });
+  const sorftimeData: Record<string, unknown> = {}, sellerSpriteData: Record<string, unknown> = {};
+  for (const [asin, value] of Object.entries(reviewData)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const { sourceProvider, ...record } = value as Record<string, unknown>;
+    if (sourceProvider === "sellerSprite") sellerSpriteData[asin] = record;
+    else if (sourceProvider === "sorftime" || sourceProvider === undefined) sorftimeData[asin] = record;
+  }
+  const reader = new RepositoryVocSourceReader({ manualVoc: repository.manualAlexaVoc, legacyFallbackEnabled: false, reviewSources: {
+    sorftime: { meta: { marketplace: project.marketplace }, ...(reviews ? { publishedAt: reviews.updatedAt } : {}), data: sorftimeData },
+    sellerSprite: { meta: { marketplace: project.marketplace }, ...(reviews ? { publishedAt: reviews.updatedAt } : {}), data: sellerSpriteData },
+  } });
   const source = await reader.read({ organizationId: project.organizationId, marketplace: project.marketplace, asins: selectedAsins, dataCutoffAt, sourcePolicy: "manual-with-review-fallback" });
   const payload = source.candidate?.payload;
   const manualRecords = (payload?.records.alexaVoc ?? []).filter(record => manualEvidenceDimensions(record).length);
-  const reviewRecords = payload?.records.sorftimeReviewAnalysis ?? [];
+  const sorftimeReviewRecords = payload?.records.sorftimeReviewAnalysis ?? [];
+  const sellerSpriteReviewRecords = payload?.records.sellerSpriteReviewAnalysis ?? [];
+  const reviewRecords = [...sorftimeReviewRecords, ...sellerSpriteReviewRecords];
   const sourceRef = (stage: NonNullable<typeof reviews>) => ({ id: `repository://sync/${baseRun.id}/${stage.stage}/${stage.jobId}`, version: String(stage.outputVersion), contentHash: stage.contentHash, capturedAt: stage.updatedAt });
   const manualSource = source.candidate?.sources.find(item => item.type === "manual-voc");
   let keywordInvalid = false, keywordMissing = false;
@@ -48,7 +61,7 @@ export async function buildVocEvidenceInventory(input: Input) {
     const parsed = KeywordRecordSchema.safeParse(keywords.data.analysisByAsin[asin]);
     const record = parsed.success ? parsed.data : null;
     if (!keywords.data.analysisByAsin[asin]) keywordMissing = true;
-    else if (!record || record.asin !== asin || record.marketplace !== project.marketplace || record.status === "error" || !Number.isFinite(Date.parse(record.fetchedAt)) || Date.parse(record.fetchedAt) > Date.parse(keywords.updatedAt) ||
+    else if (!record || record.asin !== asin || record.marketplace !== project.marketplace || record.status === "error" || record.historicalAttempt?.outcome === "schema-error" || record.historicalAttempt?.outcome === "error" || !Number.isFinite(Date.parse(record.fetchedAt)) || Date.parse(record.fetchedAt) > Date.parse(keywords.updatedAt) ||
       (record.status === "ready" && record.queryWindow?.time_type === "month" && (
         project.marketplace !== "UK" || record.queryWindow.time_value !== previousMonth || !record.queryWindow.listingSearch ||
         !record.currentEmpty || record.currentEmpty.queryWindow.time_type !== "lately" || record.currentEmpty.queryWindow.time_value !== "30" ||
@@ -62,14 +75,15 @@ export async function buildVocEvidenceInventory(input: Input) {
   const makeManifest = (fallback: boolean): VocEvidenceManifest => {
     const coverage = selectedAsins.map(asin => {
       const manual = manualRecords.find(record => record.asin === asin);
-      const review = reviewRecords.find(record => record.asin === asin);
+      const sellerSpriteReview = sellerSpriteReviewRecords.find(record => record.asin === asin);
+      const review = sorftimeReviewRecords.find(record => record.asin === asin) ?? sellerSpriteReview;
       const provenance = manualSource?.recordProvenance?.find(record => record.asin === asin);
       const manualDimensions = manual ? manualEvidenceDimensions(manual) : [];
       const reviewDimensions = fallback && review ? reviewEvidenceDimensions(review) : [];
       return { asin, primary: manual ? "manual" as const : reviewDimensions.length ? "review" as const : "missing" as const,
         manualDimensions, ...selectEvidenceDimensions(manualDimensions, reviewDimensions, fallback),
         manual: manual && provenance ? { id: `repository://manual-voc/${asin}`, version: provenance.revision, contentHash: provenance.contentHash, capturedAt: provenance.capturedAt } : null,
-        review: fallback && review && reviews ? sourceRef(reviews) : null };
+        review: fallback && review && reviews ? { ...sourceRef(reviews), id: `${sourceRef(reviews).id}#${sellerSpriteReview ? "sellerSprite" : "sorftime"}` } : null };
     });
     const unsigned = { schemaVersion: "voc-evidence/v1" as const, organizationId: project.organizationId, projectId: project.id, baseSyncRunId, marketplace: project.marketplace, selectedAsins,
       sourcePolicy: fallback ? "manual-with-review-fallback" as const : "manual-only" as const,
@@ -84,9 +98,17 @@ export async function buildVocEvidenceInventory(input: Input) {
       const provenance = manualSource.recordProvenance.filter(p => manualRecords.some(r => r.asin === p.asin));
       bundles.push({ sourceId: "alexa-voc", type: "manual-voc", reference: "repository://manual-alexa-voc/selected-revisions", marketplace: project.marketplace, capturedAt: provenance.map(p => p.capturedAt).sort().at(-1)!, records: manualRecords, recordProvenance: provenance });
     }
-    if (manifest.sourcePolicy === "manual-with-review-fallback" && reviewRecords.length) {
-      const reviewSource = source.candidate!.sources.find(item => item.type === "connector")!;
-      bundles.push({ sourceId: "sorftime-review-analysis", type: "connector", reference: "app/sorftime-review-analysis-data.ts#sorftimeReviewAnalysisData", marketplace: project.marketplace, capturedAt: reviewSource.capturedAt, records: reviewRecords });
+    if (manifest.sourcePolicy === "manual-with-review-fallback") {
+      if (sorftimeReviewRecords.length) {
+        const reference = "app/sorftime-review-analysis-data.ts#sorftimeReviewAnalysisData";
+        const reviewSource = source.candidate!.sources.find(item => item.reference === reference)!;
+        bundles.push({ sourceId: "sorftime-review-analysis", type: "connector", reference, marketplace: project.marketplace, capturedAt: reviewSource.capturedAt, records: sorftimeReviewRecords });
+      }
+      if (sellerSpriteReviewRecords.length) {
+        const reference = "app/seller-sprite-mcp-review-analysis-data.ts#sellerSpriteMcpReviewAnalysisData";
+        const reviewSource = source.candidate!.sources.find(item => item.reference === reference)!;
+        bundles.push({ sourceId: "seller-sprite-review-analysis", type: "connector", reference, marketplace: project.marketplace, capturedAt: reviewSource.capturedAt, records: sellerSpriteReviewRecords });
+      }
     }
     return bundles.length ? buildVocSnapshotCandidate({ marketplace: project.marketplace, asins: selectedAsins, dataCutoffAt, sourceBundles: bundles, evidenceSelection: manifest }) : null;
   };

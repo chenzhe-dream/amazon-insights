@@ -160,6 +160,7 @@ export function buildSorftimeReviewAnalysis(asin, marketplace, customersSay, rev
     mentionTopics: details.length,
     fetchedAt,
     status: details.length || mappedReviews.length ? "ready" : "pending",
+    ...(!details.length && !mappedReviews.length ? { terminalReason: "valid-empty" } : {}),
     statusMessage: details.length || mappedReviews.length ? undefined : "Sorftime 未返回 Customers Say 或评论样本",
     family,
     blocks: localizeReviewBlocks(blocks, family),

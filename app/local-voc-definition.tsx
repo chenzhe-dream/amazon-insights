@@ -16,6 +16,11 @@ import { vocNormalizationFailureMessage } from "./lib/voc-normalization-message"
 import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
 const SavedVocEvidenceDefinition = lazy(() => import("./voc-evidence-definition").then(module => ({ default: module.VocEvidenceDefinition })));
 
+function reviewFallbackSourceName(record: unknown) {
+  return record && typeof record === "object" && "sourceProvider" in record && record.sourceProvider === "sellerSprite"
+    ? "卖家精灵" : "Sorftime";
+}
+
 export function selectLocalVocSources(products: LaunchProductInput[], sources: ProductLaunchRuntimeSources, reviewFallback: boolean): ProductLaunchRuntimeSources {
   const manualVocByAsin = Object.fromEntries(products.map(p => [p.asin, sources.manualVocByAsin[p.asin]]));
   // Reviews only fill missing ASINs when explicitly requested.
@@ -157,7 +162,7 @@ function LocalVocRuleFlow({products, sources, enabled, initialSelectedAsins, pro
         <strong className="voc-status-heading">{!ready && !missing.length && !normalization.error && enabled && <span className="voc-status-spinner" aria-hidden="true" />}{heading}</strong>
         <p>{message}</p><small>{sourceLabel}</small>
       </div>
-      <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p>{sourceLabel}</p>{selectedProducts.map(p=><p key={p.asin}>{p.asin}：{hasVocDevelopmentData([p],scoped.manualVocByAsin) ? "手工 VOC" : scoped.reviewAnalysisByAsin?.[p.asin] ? "Sorftime 评论兜底" : "等待输入"}</p>)}<p>只使用所选商品的数据；缺失关键词信息保留为待验证。</p></details>
+      <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p>{sourceLabel}</p>{selectedProducts.map(p=><p key={p.asin}>{p.asin}：{hasVocDevelopmentData([p],scoped.manualVocByAsin) ? "手工 VOC" : scoped.reviewAnalysisByAsin?.[p.asin] ? `${reviewFallbackSourceName(scoped.reviewAnalysisByAsin[p.asin])} 评论兜底` : "等待输入"}</p>)}<p>只使用所选商品的数据；缺失关键词信息保留为待验证。</p></details>
       <div className="voc-actions"><button onClick={()=>setRefresh(value=>value+1)}>重新检查输入</button><button disabled={!reviewFallback && !Object.keys(sources.reviewFallbackCandidates ?? {}).length} onClick={()=>setReviewFallback(value=>!value)}>{reviewFallback ? "恢复仅手工 VOC 分析" : "使用评论兜底分析"}</button>
         <button disabled={!ready || !projectId || savingRuleReport} onClick={async () => {
           if (!projectId) return;

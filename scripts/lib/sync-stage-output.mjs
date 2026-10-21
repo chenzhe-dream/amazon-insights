@@ -4,6 +4,7 @@ import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 
 import { readCachedDataExport } from "./sync-cache.mjs";
 import { getProjectRoot } from "./project-root.mjs";
+import { selectReviewEvidence } from "./uk-review-fallback.mjs";
 
 export const PROJECTABLE_SYNC_STAGE_IDS = [
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
@@ -18,6 +19,7 @@ const projectionSources = {
   },
   reviews: {
     analysis: [generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData"],
+    sellerSprite: [generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts"), "sellerSpriteMcpReviewAnalysisData"],
     rating: [generatedAppDataPath(root, "sorftime-rating-data.ts"), "sorftimeRatingData"],
   },
   sales_trend: {
@@ -78,6 +80,7 @@ export function isProjectableSyncStage(stageId) {
  *   runId?: string;
  *   jobId?: string;
  *   marketplace?: string;
+ *   ukSellerSpriteReviewFallback?: boolean;
  * }} options
  */
 export function projectStageOutput(stageId, asins, {
@@ -94,6 +97,7 @@ export function projectStageOutput(stageId, asins, {
   runId,
   jobId,
   marketplace = "US",
+  ukSellerSpriteReviewFallback = process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1",
 } = {}) {
   const source = projectionSources[stageId];
   if (!source) throw new TypeError(`Stage ${stageId} cannot be projected`);
@@ -118,7 +122,7 @@ export function projectStageOutput(stageId, asins, {
     const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, readyAsins);
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
-  const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData);
+  const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData, { marketplace, ukSellerSpriteReviewFallback });
   if (stageId === "keywords") {
     // Terminal empty observations remain evidence in a partial stage, without
     // promoting those ASINs into the ready cohort or removing their gaps.
@@ -180,7 +184,7 @@ function validTerminalKeywordEmpty(record, asin, marketplace, updatedAt) {
     record.queryWindow?.listingSearch === true;
 }
 
-function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {
+function projectDoneData(stageId, source, asins, readExport, imageRemarksData, { marketplace = "US", ukSellerSpriteReviewFallback = false } = {}) {
   if (stageId === "keywords") {
     const analysisByAsin = pickRequestedAsins(readSource(source.analysis, readExport), asins);
     const requestedKeywords = new Set(Object.values(analysisByAsin)
@@ -192,10 +196,17 @@ function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {
       enrichmentByKeyword: pickObjectKeys(enrichment, requestedKeywords),
     };
   }
-  if (stageId === "reviews") return {
-    analysisByAsin: pickRequestedAsins(readSource(source.analysis, readExport), asins),
-    ratingByAsin: pickRequestedAsins(readSource(source.rating, readExport), asins),
-  };
+  if (stageId === "reviews") {
+    const sorftime = readSource(source.analysis, readExport);
+    const sellerSprite = ukSellerSpriteReviewFallback && marketplace === "UK" ? readSource(source.sellerSprite, readExport) : {};
+    return {
+      analysisByAsin: Object.fromEntries(asins.flatMap(asin => {
+        const selected = selectReviewEvidence(asin, marketplace, sorftime?.[asin], sellerSprite?.[asin]);
+        return selected ? [[asin, selected]] : sorftime?.[asin] ? [[asin, sorftime[asin]]] : [];
+      })),
+      ratingByAsin: pickRequestedAsins(readSource(source.rating, readExport), asins),
+    };
+  }
   if (stageId === "sales_trend") return {
     trendByAsin: pickRequestedAsins(readSource(source, readExport), asins),
   };

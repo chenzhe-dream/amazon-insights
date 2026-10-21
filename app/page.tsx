@@ -2304,8 +2304,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         {reviewRefreshFailed ? <p role="status">本次评论结果读取失败；如有本项目已验证结果，将继续保留显示。重新进入 VOC 页可重试读取。</p> : null}
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
-          description="Sorftime MCP · 按实际返回的 Customers Say 主题及评论样本展示 · 六维同屏对齐 · 格式：【分类】+ 提及占比；各 ASIN 的样本数和采集时间见表头。"
-          badge="Sorftime MCP"
+          description="按各 ASIN 实际来源的评论样本与 Customers Say 主题展示 · 六维同屏对齐 · 格式：【分类】+ 提及占比；来源、样本数和采集时间见表头。"
+          badge={Object.values(reviewAnalysisByAsin).some(record => record.sourceProvider === "sellerSprite") ? "Sorftime / 卖家精灵 MCP" : "Sorftime MCP"}
           data={reviewAnalysisByAsin}
           missingMessages={Object.fromEntries(activeAsins.map(asin => [asin, reviewMissingMessage(stageOutputSnapshot.reviews, asin)]))}
           dataMeta={{ ...sorftimeReviewDataMeta, updatedAt: stageOutputSnapshot.reviews && "updatedAt" in stageOutputSnapshot.reviews ? stageOutputSnapshot.reviews.updatedAt : "当前项目结果尚未读取" }}

@@ -37,6 +37,7 @@ export function ReviewAnalysisMatrixSection({
   missingMessages?: Record<string, string>;
 }) {
   const hasProducts = products.length > 0;
+  const hasSellerSprite = products.some(product => data[product.asin]?.sourceProvider === "sellerSprite");
 
   return (
     <section className="card ss-review-matrix-card">
@@ -125,7 +126,7 @@ export function ReviewAnalysisMatrixSection({
         </div>
       )}
       <p className="voc-source-footnote">
-        数据源：{dataMeta.source} · {configMeta.method} · {dataMeta.updatedAt}
+        数据源：{hasSellerSprite ? "Sorftime MCP / 卖家精灵 MCP（逐 ASIN 见表头）" : dataMeta.source} · {hasSellerSprite ? "评论样本关键词聚类；Sorftime 记录另含 Customers Say 主题" : configMeta.method} · {dataMeta.updatedAt}
       </p>
     </section>
   );

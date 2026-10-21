@@ -127,7 +127,8 @@ export const VocSnapshotPayloadSchema = z
       if (payload.evidenceSelection.sourceMode !== expectedSourceMode) context.addIssue({ code: "custom", path: ["evidenceSelection", "sourceMode"], message: "Evidence source mode mismatch" });
       for (const row of payload.evidenceSelection.coverage) {
         const manual = payload.records.alexaVoc.find(record => record.asin === row.asin);
-        const review = payload.records.sorftimeReviewAnalysis.find(record => record.asin === row.asin);
+        const review = payload.records.sorftimeReviewAnalysis.find(record => record.asin === row.asin)
+          ?? payload.records.sellerSpriteReviewAnalysis.find(record => record.asin === row.asin);
         const manualDimensions = manual ? manualEvidenceDimensions(manual) : [];
         const selected = selectEvidenceDimensions(manualDimensions, review ? reviewEvidenceDimensions(review) : [], payload.evidenceSelection.sourcePolicy === "manual-with-review-fallback");
         const primary = manualDimensions.length ? "manual" : selected.reviewDimensions.length ? "review" : "missing";

@@ -19,3 +19,9 @@ test("scoped records discard other ASIN and marketplace records", () => {
   assert.deepEqual(Object.keys(scopedReviewRecords(records, [base.asin], "US")), [base.asin]);
   assert.deepEqual(scopedReviewRecords(records, [base.asin], "UK"), {});
 });
+test("SellerSprite fallback is attributed by provider in the review UI", () => {
+  const seller = { ...base, marketplace: "GB", sourceProvider: "sellerSprite" as const, sampledReviews: 8 };
+  assert.match(reviewEvidenceText(seller), /卖家精灵/);
+  assert.doesNotMatch(reviewEvidenceText(seller), /Customers Say/);
+  assert.match(reviewEmptyMessage(seller), /8.*本维度暂无匹配主题/);
+});

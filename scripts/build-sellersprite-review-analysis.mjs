@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildReviewAnalysisFromRecords } from "./lib/review-analysis-aggregate.mjs";
 import { fetchSellerSpriteReviews, readSellerSpriteSecretKey } from "./lib/sellersprite-mcp-client.mjs";
+import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
+import { sellerSpriteReviewMarkets } from "./lib/uk-review-fallback.mjs";
 import { localizeReviewBlocks } from "./lib/review-label-zh.mjs";
 import {
+  createRepairSafeRecordMap,
+  hasCompleteReviewRecord,
   isForceRefresh,
   logCacheHit,
   readCachedDataExport,
@@ -11,7 +15,7 @@ import {
 } from "./lib/sync-cache.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
-const catalogPath = path.join(root, "app", "competitor-data.ts");
+const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
 
 function readCatalogAsins() {
   const source = fs.readFileSync(catalogPath, "utf8");
@@ -20,21 +24,24 @@ function readCatalogAsins() {
 
 async function main() {
   const secretKey = readSellerSpriteSecretKey();
-  const marketplace = process.env.SELLERSPRITE_MARKETPLACE ?? "US";
+  const { project: marketplace, provider: providerMarketplace } = sellerSpriteReviewMarkets();
   const asins = process.env.SELLERSPRITE_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
   const fetchedAt = new Date().toISOString().slice(0, 10);
-  const target = path.join(root, "app", "seller-sprite-mcp-review-analysis-data.ts");
+  const target = generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts");
   const existing = readCachedDataExport(target, "sellerSpriteMcpReviewAnalysisData");
-  const records = { ...existing };
+  const records = createRepairSafeRecordMap(existing);
+  const reusable = (asin) => existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace &&
+    hasCompleteReviewRecord(existing[asin]) && shouldUseCachedRecord(existing[asin]);
 
-  if (!secretKey && !Object.values(existing).some(record => record.status === "ready")) {
+  if (!secretKey && !asins.every(reusable)) {
     console.error("[error] 未找到 sellersprite-mcp secret-key，且无可用缓存");
     process.exitCode = 1;
     asins.forEach(asin => {
-      if (records[asin]?.status === "ready") return;
+      if (reusable(asin)) return;
       records[asin] = {
         asin,
         marketplace,
+        sourceProvider: "sellerSprite",
         sampledReviews: 0,
         fetchedAt,
         status: "error",
@@ -46,7 +53,7 @@ async function main() {
     if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
     for (const asin of asins) {
-      if (shouldUseCachedRecord(existing[asin])) {
+      if (reusable(asin)) {
         logCacheHit(asin, existing[asin]);
         continue;
       }
@@ -58,24 +65,26 @@ async function main() {
 
       process.stdout.write(`[sellersprite] ${asin} ... `);
       try {
-        const reviews = await fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize: 50, maxPages: 5 });
+        const reviews = await fetchSellerSpriteReviews(secretKey, providerMarketplace, asin, { pageSize: 50, maxPages: 5 });
         const analysis = buildReviewAnalysisFromRecords(asin, marketplace, reviews, fetchedAt, {
           title: asin,
           category: "",
         });
         records[asin] = {
           ...analysis,
+          sourceProvider: "sellerSprite",
           blocks: localizeReviewBlocks(analysis.blocks),
         };
         console.log(`${reviews.length} reviews`);
       } catch (error) {
-        if (existing[asin]?.status === "ready") {
+        if (reusable(asin)) {
           console.log(`skipped · keep cache (${error instanceof Error ? error.message : String(error)})`);
           continue;
         }
         records[asin] = {
           asin,
           marketplace,
+          sourceProvider: "sellerSprite",
           sampledReviews: 0,
           fetchedAt,
           status: "error",
@@ -96,6 +105,7 @@ export const sellerSpriteMcpReviewAnalysisMeta = ${JSON.stringify(
       source: "卖家精灵 MCP · review",
       updatedAt: fetchedAt,
       marketplace,
+      providerMarketplace,
       syncStatus: Object.values(records).some(record => record.status === "ready") ? "ok" : "failed",
       syncCommand: "npm run review:sellersprite:sync",
       cachePolicy: "默认使用本地缓存；FORCE_REFRESH=1 或 --force 强制刷新",

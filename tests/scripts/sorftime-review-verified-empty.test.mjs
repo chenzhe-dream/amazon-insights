@@ -212,8 +212,9 @@ test("explicit no-review text remains a missing sample rather than inventing zer
   const result = await runProductionReviewScript(t, provider.endpoint, {
     asin, marketplace: "US", fetchedAt: "2026-09-10", status: "ready", rating: 4.5, reviewCount: 100,
   }, { existingRecords: { [sibling.asin]: sibling } });
-  assert.equal(result.exitCode, 0);
+  assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(result.records[asin].status, "pending");
+  assert.equal(result.records[asin].terminalReason, "valid-empty");
   assert.equal(deriveAsinModuleStatus(asin, statusSources(result.records)).reviews, "missing");
   assert.deepEqual(result.records[sibling.asin], sibling);
   assert.doesNotMatch(result.stderr, /MCP_SCHEMA/);
@@ -333,6 +334,7 @@ const mapped = new Map([
   ["sorftime-mcp-client.mjs", "scripts/lib/sorftime-mcp-client.mjs"],
   ["sorftime-source-policy.mjs", "scripts/lib/sorftime-source-policy.mjs"],
   ["sorftime-catalog-fallback.mjs", "scripts/lib/sorftime-catalog-fallback.mjs"],
+  ["project-marketplace-money.mjs", "scripts/lib/project-marketplace-money.mjs"],
   ["sync-cache.mjs", "scripts/lib/sync-cache.mjs"],
   ["commerce-data-validity.mjs", "scripts/lib/commerce-data-validity.mjs"],
   ["sellersprite-mcp-client.mjs", "scripts/lib/sellersprite-mcp-client.mjs"],

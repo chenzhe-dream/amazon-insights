@@ -18,6 +18,28 @@ test("inventory is scoped, separates manual and explicit fallback, preserves key
  assert.equal(result.inventory.fallback.keywords.state, "missing");
  assert.notEqual(result.inventory.manual.fingerprint, result.inventory.fallback.fingerprint);
 });
+test("UK SellerSprite review fallback freezes its own source and coverage provenance", async () => {
+ const marketData = structuredClone(data);
+ marketData.analysisByAsin[asin].marketplace = "UK";
+ (marketData.analysisByAsin[asin] as Record<string, unknown>).sourceProvider = "sellerSprite";
+ const projection = { ...output, data: marketData, contentHash: canonicalJsonSha256({stage:"reviews", data:marketData}) };
+ const repo = fixture(projection);repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace:"UK",asins:[asin]});
+ const result = await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK"} as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
+ assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis.length,0);
+ assert.equal(result.fallbackCandidate?.payload.records.sellerSpriteReviewAnalysis.length,1);
+ assert.match(result.inventory.fallback.coverage[0].review?.id ?? "",/sellerSprite/);
+});
+test("historical keyword schema failure is failed in frozen inventory despite current valid empty", async () => {
+ const window = { time_type: "lately", time_value: "30", listingSearch: true };
+ const keywordData = { analysisByAsin: { [asin]: { asin, marketplace: "UK", fetchedAt: "2026-09-09", status: "empty", terminalReason: "valid-empty", queryWindow: window, keywords: [],
+  historicalAttempt: { queryWindow: { time_type: "month", time_value: "2026-08-01", listingSearch: true }, outcome: "schema-error", errorCode: "SIF_KEYWORD_SCHEMA_INVALID" } } }, enrichmentByKeyword: {} };
+ const keywordOutput = { ...output, stage: "keywords", data: keywordData, contentHash: canonicalJsonSha256({ stage: "keywords", data: keywordData }) };
+ const repo=fixture();repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace:"UK",asins:[asin]});
+ repo.syncJobs.readStageOutput=async({stage})=>stage==="keywords"?keywordOutput as never:null;
+ const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK"} as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
+ assert.equal(result.inventory.fallback.keywords.state,"failed");
+ assert.equal(result.keywordCandidate,null);
+});
 test("correct project with forged stage content hash is rejected", async () => {
  await assert.rejects(buildVocEvidenceInventory({ repository: fixture({ ...output, contentHash: "a".repeat(64) }) as never, project: project as never, baseSyncRunId: runId, selectedAsins: [asin], dataCutoffAt: now }));
 });

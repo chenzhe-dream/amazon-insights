@@ -186,7 +186,16 @@ function providerOperation(method, params) {
   return method === "tools/list" ? "tools/list" : params?.name;
 }
 
-export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50 } = {}) {
+export function parseSellerSpriteReviewPage(payload) {
+  if (payload?.code !== "OK") throw new Error(`${payload?.code ?? "MCP_SCHEMA"}: ${payload?.message ?? "SellerSprite review 请求失败"}`);
+  const data = payload.data;
+  if (!data || typeof data !== "object" || !Array.isArray(data.items)) throw new Error("MCP_SCHEMA: SellerSprite review items must be an array");
+  const total = Number.isInteger(data.total) && data.total >= 0 ? data.total : 0;
+  const pages = Number.isInteger(data.pages) && data.pages >= 0 ? data.pages : 0;
+  return { items: data.items, total, pages };
+}
+
+export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50, ...options } = {}) {
   const reviews = [];
   const seen = new Set();
 
@@ -196,15 +205,9 @@ export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { p
       asin,
       page,
       size: pageSize,
-    });
+    }, options);
 
-    if (payload?.code && payload.code !== "OK") {
-      throw new Error(`${payload.code}: ${payload.message ?? "review 请求失败"}`);
-    }
-
-    const items = payload?.data?.items ?? payload?.items ?? [];
-    const total = payload?.data?.total ?? 0;
-    const pages = payload?.data?.pages ?? 0;
+    const { items, total, pages } = parseSellerSpriteReviewPage(payload);
     if (!Array.isArray(items) || !items.length) break;
 
     items.forEach(item => {

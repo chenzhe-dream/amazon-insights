@@ -5,6 +5,7 @@ import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport, readCachedArrayExport, hasCompleteKeywordRecord, hasCompleteReviewRecord } from "./sync-cache.mjs";
 import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-data-validity.mjs";
+import { selectReviewEvidence } from "./uk-review-fallback.mjs";
 
 const root = getProjectRoot();
 
@@ -12,6 +13,7 @@ function sourcePaths(env = process.env) { return {
   keywords: generatedAppDataPath(root, "sif-keyword-analysis-data.ts", env),
   ratings: generatedAppDataPath(root, "sorftime-rating-data.ts", env),
   reviews: generatedAppDataPath(root, "sorftime-review-analysis-data.ts", env),
+  sellerSpriteReviews: generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts", env),
   sales: generatedAppDataPath(root, "sorftime-sales-trend-data.ts", env),
   childSales: generatedAppDataPath(root, "sorftime-child-sales-data.ts", env),
   priceStrategies: generatedAppDataPath(root, "sorftime-price-strategy-data.ts", env),
@@ -134,13 +136,22 @@ export function countPendingImageRemarks(asins, sources = readAsinStatusSources(
 
 export function readAsinStatusSources(scopeEnv) {
   const paths = sourcePaths(scopeEnv);
+  const env = scopeEnv ?? process.env;
+  const sorftimeReviews = readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData");
+  const sellerSpriteReviews = env.AGENT_SYNC_MARKETPLACE === "UK" && env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1"
+    ? readCachedDataExport(paths.sellerSpriteReviews, "sellerSpriteMcpReviewAnalysisData") : {};
+  const reviews = { ...sorftimeReviews };
+  for (const asin of Object.keys(sellerSpriteReviews)) {
+    const selected = selectReviewEvidence(asin, "UK", sorftimeReviews[asin], sellerSpriteReviews[asin]);
+    if (selected?.sourceProvider === "sellerSprite") reviews[asin] = selected;
+  }
   const imageRemarksMeta = readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta");
   return {
     catalogAsins: readCatalogAsins(paths.catalog),
     catalogProducts: readCachedArrayExport(paths.catalog, "refreshedCatalog"),
     ratings: readCachedDataExport(paths.ratings, "sorftimeRatingData"),
     keywords: readCachedDataExport(paths.keywords, "sifKeywordAnalysisData"),
-    reviews: readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData"),
+    reviews,
     sales: readCachedDataExport(paths.sales, "sorftimeSalesTrendData"),
     childSales: readCachedDataExport(paths.childSales, "sorftimeChildSales30d"),
     priceStrategies: readCachedDataExport(paths.priceStrategies, "sorftimePriceStrategies"),

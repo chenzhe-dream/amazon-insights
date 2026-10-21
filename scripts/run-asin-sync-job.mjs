@@ -43,6 +43,7 @@ import {
   validatePersistedImageStageOutput,
 } from "./lib/image-remark-job-candidate.mjs";
 import { readCachedDataExport } from "./lib/sync-cache.mjs";
+import { selectUkReviewFallbackAsins } from "./lib/uk-review-fallback.mjs";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   shouldBuildForSync,
@@ -940,8 +941,8 @@ export function sifKeywordSchemaDiagnostics(asins, records) {
   const allowed = new Set(asins);
   return Object.entries(records ?? {}).flatMap(([asin, record]) => (
     allowed.has(asin)
-    && record?.status === "schema-error"
-    && record?.errorCode === "SIF_KEYWORD_SCHEMA_INVALID"
+    && ((record?.status === "schema-error" && record?.errorCode === "SIF_KEYWORD_SCHEMA_INVALID") ||
+      (record?.historicalAttempt?.outcome === "schema-error" && record?.historicalAttempt?.errorCode === "SIF_KEYWORD_SCHEMA_INVALID"))
       ? [{ asin, connector: "sif", stage: "keywords", failureKind: "schema", causeCode: "SIF_KEYWORD_SCHEMA_INVALID" }]
       : []
   ));
@@ -1292,10 +1293,21 @@ async function main() {
           label: "review:sync", command: "npm", args: ["run", "review:sync"],
           env: { SORFTIME_ASINS: reviewAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
         });
-        const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics];
+        const sorftimeReviewRecords = readCachedDataExport(
+          generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData");
+        const fallbackAsins = selectUkReviewFallbackAsins(reviewAsins, sorftimeReviewRecords, {
+          marketplace,
+          enabled: process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1" && reviewResult.succeeded,
+        });
+        const sellerResult = fallbackAsins.length ? providers.run({
+          connector: "sellerSprite", stage: "reviews", asins: fallbackAsins,
+          label: "review:sellersprite:sync", command: "npm", args: ["run", "review:sellersprite:sync"],
+          env: { SELLERSPRITE_ASINS: fallbackAsins.join(","), SELLERSPRITE_MARKETPLACE: "UK", AGENT_SYNC_MARKETPLACE: marketplace },
+        }) : null;
+        const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics, ...(sellerResult?.diagnostics ?? [])];
         finalizeProcessedStageCohort(jobId, "reviews", reviewAsins, asins, {
           initialJob: job,
-          commandSucceeded: ratingResult.succeeded && reviewResult.succeeded,
+          commandSucceeded: ratingResult.succeeded && reviewResult.succeeded && (sellerResult?.succeeded ?? true),
           resultStatusesByAsin: diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
           diagnostics: reviewDiagnostics,
         });

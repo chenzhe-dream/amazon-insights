@@ -151,7 +151,7 @@ function harness(item, options = {}) {
   const result = applyPersistedStagePostcondition("job-1", options.stageId ?? "sales_trend", [asin], {
     commandSucceeded: options.commandSucceeded ?? true,
     unavailableReason: options.unavailableReason ?? null,
-    resultStatusesByAsin: options.imageStatusByAsin ?? null,
+    resultStatusesByAsin: options.imageStatusByAsin ?? options.resultStatusesByAsin ?? null,
     readReadiness: stageId => ({
       items: [item],
       ready: stageId === "catalog" ? item.inCatalog : item[options.field ?? "sales"] === "ready",
@@ -355,6 +355,17 @@ test("strict SIF keyword schema records become bounded per-ASIN diagnostics", ()
     failureKind: "schema",
     causeCode: "SIF_KEYWORD_SCHEMA_INVALID",
   }]);
+});
+
+test("historical keyword schema failure remains a bounded schema diagnostic", () => {
+  const diagnostics = sifKeywordSchemaDiagnostics(["B0SCHEMA01"], {
+    B0SCHEMA01: { status: "empty", terminalReason: "valid-empty", historicalAttempt: { outcome: "schema-error", errorCode: "SIF_KEYWORD_SCHEMA_INVALID" } },
+  });
+  assert.deepEqual(diagnostics, [{ asin: "B0SCHEMA01", connector: "sif", stage: "keywords", failureKind: "schema", causeCode: "SIF_KEYWORD_SCHEMA_INVALID" }]);
+  const readiness = harness({ ...base, keywords: "missing" }, { stageId: "keywords", field: "keywords",
+    resultStatusesByAsin: { [asin]: diagnosticStatusesByAsin(["B0SCHEMA01", asin], [{ ...diagnostics[0], asin }])[asin] } });
+  assert.equal(readiness.result.status, "partial");
+  assert.equal(readiness.modules.at(-1)[3].status, "connector-failed");
 });
 
 test("a failed command records a connector gap rather than erasing ready ASIN results", () => {

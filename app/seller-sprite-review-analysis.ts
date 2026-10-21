@@ -37,6 +37,7 @@ export type SellerSpriteReviewAnalysisRecord = {
   mentionTopics?: number;
   fetchedAt: string;
   status: "ready" | "pending" | "error";
+  sourceProvider?: "sorftime" | "sellerSprite";
   statusMessage?: string;
   family?: "scooter" | "lighting" | "generic";
   blocks: ReviewAnalysisBlock[];
