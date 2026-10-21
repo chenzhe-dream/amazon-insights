@@ -1,4 +1,7 @@
-import { createProductDefinitionModelOutputSchema } from '../../server/services/product-definition-execution-service';
+import { PRODUCT_VALIDATION_RULES, productDefinitionRepairGuidance } from '../../shared/product-validation-rules';
+import { freezeSafeValidationIssues } from '../../server/runtime/safe-validation-issues';
+import { summarizeZodValidationIssues } from '../../server/runtime/safe-validation-issues';
+import { createProductDefinitionModelOutputContract, createProductDefinitionModelOutputSchema } from '../../server/services/product-definition-execution-service';
 import { createStructuredResponseFormat } from '../../server/runtime/structured-response-format';
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -154,10 +157,10 @@ test('product wire schema freezes evidence and reference sets with a stable dige
 test('product wire empty allowed sets do not invent references or relax required evidence',()=>{
  const input=evidenceScopedInput('manual');input.keywords.groups=[];input.keywords.evidence=[];
  const schema=createProductDefinitionModelOutputSchema(input),s=schema.shape;
- assert.equal(s.evidenceMatrix.element.shape.keywordEvidenceIds.safeParse([]).success,true);
- assert.equal(s.evidenceMatrix.element.shape.keywordEvidenceIds.safeParse(['invented']).success,false);
- assert.equal(s.evidenceMatrix.element.shape.keywordGroupId.safeParse(null).success,true);
- assert.equal(s.evidenceMatrix.element.shape.keywordGroupId.safeParse('invented').success,false);
+ assert.equal(s.evidenceMatrix.element.options[0].shape.keywordEvidenceIds.safeParse([]).success,true);
+ assert.equal(s.evidenceMatrix.element.options[0].shape.keywordEvidenceIds.safeParse(['invented']).success,false);
+ assert.equal(s.evidenceMatrix.element.options[0].shape.keywordGroupId.safeParse(null).success,true);
+ assert.equal(s.evidenceMatrix.element.options[0].shape.keywordGroupId.safeParse('invented').success,false);
  assert.equal(s.keywordLanding.safeParse([]).success,false);
  assert.equal(s.keywordLanding.element.shape.evidenceIds.safeParse(['invented']).success,false);
  assert.doesNotThrow(()=>createStructuredResponseFormat(schema,'ProductEmpty'));
@@ -168,13 +171,57 @@ test('product wire empty VOC and combined evidence sets remain fail closed',()=>
  const clear=(value:unknown):void=>{if(!value||typeof value!=='object')return;if(Array.isArray(value)){value.forEach(clear);return;}for(const [key,item] of Object.entries(value)){if(key==='evidenceIds')(value as Record<string,unknown>)[key]=[];else clear(item);}};clear(input.voc.result);
  input.voc.result.themeJudgments=[];
  const schema=createProductDefinitionModelOutputSchema(input),s=schema.shape;
- assert.equal(s.evidenceMatrix.element.shape.vocEvidenceIds.safeParse([]).success,true);
- assert.equal(s.evidenceMatrix.element.shape.vocEvidenceIds.safeParse(['invented']).success,false);
- assert.equal(s.evidenceMatrix.element.shape.themeKey.safeParse(null).success,true);
- assert.equal(s.evidenceMatrix.element.shape.themeKey.safeParse('invented').success,false);
+ assert.equal(s.evidenceMatrix.element.options[1].shape.vocEvidenceIds.safeParse([]).success,true);
+ assert.equal(s.evidenceMatrix.element.options[1].shape.vocEvidenceIds.safeParse(['invented']).success,false);
+ assert.equal(s.evidenceMatrix.element.options[1].shape.themeKey.safeParse(null).success,true);
+ assert.equal(s.evidenceMatrix.element.options[1].shape.themeKey.safeParse('invented').success,false);
  assert.equal(s.configurationLayers.shape.mustHave.safeParse([]).success,true);
  assert.equal(s.configurationLayers.shape.mustHave.safeParse([{item:'x',evidenceIds:['invented']}]).success,false);
  assert.equal(s.priorities.element.shape.evidenceIds.safeParse([]).success,false);
  assert.equal(s.priorities.element.shape.evidenceIds.safeParse(['invented']).success,false);
  assert.doesNotThrow(()=>createStructuredResponseFormat(schema,'ProductAllEmpty'));
+});
+
+test('product semantic diagnostics expose closed rule ids without candidate text',()=>{
+ const input=evidenceScopedInput('manual'),base=canonicalizeProductDefinitionOutput(validOutput(input),input) as ReturnType<typeof validOutput>;
+ const parsed=createProductDefinitionOutputSchema(input).safeParse({...base,finalDefinition:[{...base.finalDefinition[0],conclusion:'PRIVATE_BODY',vocEvidenceIds:[],keywordEvidenceIds:[]}]});
+ assert.equal(parsed.success,false);if(parsed.success)return;
+ const issues=summarizeZodValidationIssues(parsed.error,createStructuredResponseFormat(createProductDefinitionModelOutputSchema(input),'Product'));
+ assert.ok(issues.some(i=>i.ruleId==='product-final-definition-needs-evidence'));
+ assert.ok(issues.some(i=>i.ruleId==='product-supported-requires-both-evidence'));
+ assert.doesNotMatch(JSON.stringify(issues),/PRIVATE_BODY|message/);
+});
+
+test('product wire row unions encode evidence sides before root semantic validation',()=>{
+ const input=evidenceScopedInput('manual'),p=createProductDefinitionModelOutputSchema(input).shape,base=validOutput(input);
+ const row=base.evidenceMatrix[0];
+ for(const judgment of ['dual-validation','conflict','avoid']){
+  assert.equal(p.evidenceMatrix.element.safeParse({...row,judgment}).success,true);
+  for(const change of [{vocEvidenceIds:[]},{keywordEvidenceIds:[]},{themeKey:null},{keywordGroupId:null}])assert.equal(p.evidenceMatrix.element.safeParse({...row,judgment,...change}).success,false);
+ }
+ const voc={...row,judgment:'voc-only',keywordGroupId:null,keywordEvidenceIds:[]};
+ const kw={...row,judgment:'keyword-candidate',themeKey:null,vocEvidenceIds:[]};
+ assert.equal(p.evidenceMatrix.element.safeParse(voc).success,true);assert.equal(p.evidenceMatrix.element.safeParse(kw).success,true);
+ assert.equal(p.evidenceMatrix.element.safeParse({...voc,keywordEvidenceIds:row.keywordEvidenceIds}).success,false);
+ assert.equal(p.evidenceMatrix.element.safeParse({...kw,vocEvidenceIds:row.vocEvidenceIds}).success,false);
+ const final=base.finalDefinition[0];assert.equal(p.finalDefinition.element.safeParse(final).success,true);
+ assert.equal(p.finalDefinition.element.safeParse({...final,vocEvidenceIds:[]}).success,false);
+ for(const change of [{vocEvidenceIds:[]},{keywordEvidenceIds:[]}])assert.equal(p.finalDefinition.element.safeParse({...final,validationStatus:'requires-validation',...change}).success,true);
+ assert.equal(p.finalDefinition.element.safeParse({...final,validationStatus:'requires-validation',vocEvidenceIds:[],keywordEvidenceIds:[]}).success,false);
+});
+
+test('product closed guidance and shared definitions are safe and deterministic',()=>{
+ const input=evidenceScopedInput('manual'),contract=createProductDefinitionModelOutputContract(input);
+ const format=createStructuredResponseFormat(contract.schema,'Product',contract.schemaDefinitions);
+ assert.match(JSON.stringify(format.format.schema),/#\/definitions\/ProductVocEvidenceId/);
+ assert.ok(JSON.stringify(format.format.schema).length < JSON.stringify(createStructuredResponseFormat(contract.schema,'Product').format.schema).length);
+ const clone=structuredClone(input);clone.voc.result.themeJudgments.reverse();const repeat=createProductDefinitionModelOutputContract(clone);
+ assert.equal(format.digest,createStructuredResponseFormat(repeat.schema,'Product',repeat.schemaDefinitions).digest);
+ const declared=format.format.schema;
+ for(const ruleId of Object.keys(PRODUCT_VALIDATION_RULES)){
+  const safe=freezeSafeValidationIssues([{path:['finalDefinition'],code:'custom',ruleId}],declared);
+  assert.equal(safe[0].ruleId,ruleId);assert.match(productDefinitionRepairGuidance(safe).join('\n'),new RegExp(ruleId));
+ }
+ const unsafe=freezeSafeValidationIssues([{path:['PRIVATE_FIELD'],code:'custom',ruleId:'PRIVATE_RULE'}],declared);
+ assert.equal(unsafe[0].ruleId,undefined);assert.deepEqual(productDefinitionRepairGuidance(unsafe),[]);assert.doesNotMatch(JSON.stringify(unsafe),/PRIVATE/);
 });

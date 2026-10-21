@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { z } from "zod";
+import { productDefinitionRepairGuidance } from "../../shared/product-validation-rules";
 
 import { EntityIdSchema } from "../../shared/agent-contracts";
 import {
@@ -71,6 +72,10 @@ export const ProductDefinitionModelOutputSchema = z.strictObject({
 }).superRefine(validateProductDefinitionOutputStructure).describe("Concise product definition: one row per final-definition dimension, focus on up to ten keyword groups and priorities. Use short actionable sentences, preserve evidence links and all required risk checks.");
 
 export function createProductDefinitionModelOutputSchema(input: ProductDefinitionInput) {
+  return createProductDefinitionModelOutputContract(input).schema;
+}
+
+export function createProductDefinitionModelOutputContract(input: ProductDefinitionInput) {
   const sorted = (values: Iterable<string>) => [...new Set(values)].sort();
   const vocIds = sorted(collectVocEvidenceIds(input.voc.result));
   const keywordIds = sorted(input.keywords.evidence.map(item => item.id));
@@ -79,28 +84,43 @@ export function createProductDefinitionModelOutputSchema(input: ProductDefinitio
   const groups = sorted(input.keywords.groups.map(item => item.id));
   // An empty allowed set permits zero references, never a fabricated sentinel.
   // Required evidence keeps min(1), making an unsupported row impossible.
-  const ids = (values: string[]) => values.length
-    ? z.array(z.enum(values)).max(100)
+  const enumValue = (values: string[]) => values.length ? z.enum(values) : z.string().trim().min(1).max(200);
+  const vocId = enumValue(vocIds), keywordId = enumValue(keywordIds), anyId = enumValue(allIds);
+  const theme = themes.length ? z.enum(themes) : z.string().regex(/^(?!)$/);
+  const group = groups.length ? z.enum(groups) : z.string().regex(/^(?!)$/);
+  const ids = (values: string[], item: z.ZodType<string>) => values.length
+    ? z.array(item).max(100)
     : z.array(z.string().trim().min(1).max(200)).max(0);
-  const nullableKey = (values: string[]) => values.length ? z.enum(values).nullable() : z.null();
+  const voc = ids(vocIds, vocId), keyword = ids(keywordIds, keywordId), all = ids(allIds, anyId);
   const s = ProductDefinitionModelOutputSchema.shape;
-  const feature = s.configurationLayers.shape.mustHave.element.extend({evidenceIds: ids(allIds).min(1)});
-  return ProductDefinitionModelOutputSchema.safeExtend({
-    evidenceMatrix: s.evidenceMatrix.element.extend({
-      themeKey: nullableKey(themes), keywordGroupId: nullableKey(groups),
-      vocEvidenceIds: ids(vocIds), keywordEvidenceIds: ids(keywordIds),
-    }).array().min(1).max(10),
-    finalDefinition: s.finalDefinition.element.extend({vocEvidenceIds: ids(vocIds), keywordEvidenceIds: ids(keywordIds)}).array().min(1).max(16),
+  const feature = s.configurationLayers.shape.mustHave.element.extend({evidenceIds: all.min(1)});
+  const matrix = s.evidenceMatrix.element;
+  const both = {themeKey: theme, keywordGroupId: group, vocEvidenceIds: voc.min(1), keywordEvidenceIds: keyword.min(1)};
+  const final = s.finalDefinition.element;
+  const schema = ProductDefinitionModelOutputSchema.safeExtend({
+    evidenceMatrix: z.union([
+      matrix.extend({judgment:z.literal('voc-only'),themeKey:theme,keywordGroupId:z.null(),vocEvidenceIds:voc.min(1),keywordEvidenceIds:keyword.max(0)}),
+      matrix.extend({judgment:z.literal('keyword-candidate'),themeKey:z.null(),keywordGroupId:group,vocEvidenceIds:voc.max(0),keywordEvidenceIds:keyword.min(1)}),
+      matrix.extend({judgment:z.literal('dual-validation'),...both}),
+      matrix.extend({judgment:z.literal('conflict'),...both}),
+      matrix.extend({judgment:z.literal('avoid'),...both}),
+    ]).array().min(1).max(10),
+    finalDefinition: z.union([
+      final.extend({validationStatus:z.literal('supported'),vocEvidenceIds:voc.min(1),keywordEvidenceIds:keyword.min(1)}),
+      final.extend({validationStatus:z.literal('requires-validation'),vocEvidenceIds:voc.min(1),keywordEvidenceIds:keyword}),
+      final.extend({validationStatus:z.literal('requires-validation'),vocEvidenceIds:voc,keywordEvidenceIds:keyword.min(1)}),
+    ]).array().min(1).max(16),
     configurationLayers: s.configurationLayers.extend({
       mustHave: feature.array().max(5), differentiation: feature.array().max(3),
       optional: feature.array().max(3), notInV1: feature.array().max(3), p0Avoid: feature.array().max(5),
     }),
     keywordLanding: s.keywordLanding.element.extend({
-      groupId: groups.length ? z.enum(groups) : s.keywordLanding.element.shape.groupId.regex(/^(?!)$/),
-      evidenceIds: ids(keywordIds).min(1),
+      groupId: group,
+      evidenceIds: keyword.min(1),
     }).array().min(1).max(10),
-    priorities: s.priorities.element.extend({evidenceIds: ids(allIds).min(1)}).array().min(1).max(10),
-  });
+    priorities: s.priorities.element.extend({evidenceIds: all.min(1)}).array().min(1).max(10),
+  }).describe("Only emit rows supported by exact frozen evidence; omit unsupported dimensions and never guess or fill references. supported requires both VOC and keyword evidence; requires-validation still needs at least one side. Place commercial unknowns or deferred checks only in risks, opportunity.pendingReason, commercialValidation or dataBoundary. Ordinary narratives must not contain profit, profitability, margin, ROI, 盈利, 利润, 毛利, 投资回报, approval claims or validation-bypass wording, even when negated. Keep concise narratives and every required risk gate.");
+  return {schema, schemaDefinitions: {ProductVocEvidenceId:vocId, ProductKeywordEvidenceId:keywordId, ProductAnyEvidenceId:anyId, ProductThemeKey:theme, ProductKeywordGroupId:group}};
 }
 
 type ProductDefinitionRepository = AnalysisReportRepository &
@@ -214,6 +234,7 @@ export class ProductDefinitionExecutionService {
           ? { evidenceSelection: toModelEvidenceSelection(input.evidenceSelection) }
           : {}),
       };
+      const wire = createProductDefinitionModelOutputContract(input);
       audited = await this.#auditedRunner.run({
         skill: ProductDefinitionAgentDefinition.skill,
         inputContract: {
@@ -224,7 +245,9 @@ export class ProductDefinitionExecutionService {
         outputContract: {
           name: ProductDefinitionAgentDefinition.outputSchema,
           schema: createProductDefinitionOutputSchema(input),
-          responseSchema: createProductDefinitionModelOutputSchema(input),
+          responseSchema: wire.schema,
+          schemaDefinitions: wire.schemaDefinitions,
+          repairGuidance: productDefinitionRepairGuidance,
           canonicalizeOutput: (candidate) => canonicalizeProductDefinitionOutput(candidate, input),
         },
         input: modelInput,

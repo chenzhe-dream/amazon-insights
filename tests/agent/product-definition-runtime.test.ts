@@ -167,7 +167,7 @@ test("commercial-data gaps are machine-closed and profit or approval claims fail
   );
 });
 
-test("product validation failure preserves persisted VOC and keyword dependencies", async (t) => {
+for (const semantic of [false, true]) test(`product validation failure preserves persisted dependencies and safe guidance: ${semantic}`, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-product-failure-"));
   const databasePath = join(directory, "agent.sqlite");
   const repository = openSqliteAgentRepository({ path: databasePath, busyTimeoutMs: 5_000 });
@@ -186,7 +186,7 @@ test("product validation failure preserves persisted VOC and keyword dependencie
   });
   const provider = new ProductRuntimeProvider(
     realVocFacts(SCOOTER_ASINS, subject.snapshotId, subject.runId),
-    true,
+    semantic ? "semantic" : true,
   );
   const diagnostics: unknown[] = [];
   const service = await createAgentService({ repository, provider, providerName: "product-invalid-fixture", env: runtimeEnv(databasePath), validationLogger: entry => diagnostics.push(entry) });
@@ -203,6 +203,7 @@ test("product validation failure preserves persisted VOC and keyword dependencie
   assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE_PRODUCT_OUTPUT|privateSentinel/);
   for (const entry of diagnostics) assert.ok((entry as {issues:unknown[]}).issues.length > 0);
   assert.equal(provider.productRequests.length, 2);
+  if (semantic) {assert.match(provider.productRequests[1].instructions,/product-final-definition-needs-evidence/);assert.match(provider.productRequests[1].instructions,/Omit unsupported dimensions/);}
   assert.deepEqual(provider.productRequests[0].responseFormat, provider.productRequests[1].responseFormat);
   const input = provider.productRequests[0].input as ProductDefinitionInput;
   for (const item of input.keywords.evidence) assert.ok(JSON.stringify(provider.productRequests[0].responseFormat).includes(item.id));
@@ -217,7 +218,7 @@ class ProductRuntimeProvider implements ModelProvider {
 
   constructor(
     private readonly vocFacts: ReturnType<typeof realVocFacts>,
-    private readonly invalidProduct = false,
+    private readonly invalidProduct: boolean | "semantic" = false,
   ) {}
 
   async generateStructured<T>(request: StructuredGenerationRequest<T>) {
@@ -232,6 +233,10 @@ class ProductRuntimeProvider implements ModelProvider {
     }
     assert.equal(input.kind, "amazon-product-definition-input");
     this.productRequests.push(request as StructuredGenerationRequest<unknown>);
+    if (this.invalidProduct === "semantic") {
+      const value = validProductOutput(request.input as ProductDefinitionInput);
+      return {value: {...value, finalDefinition: [{...value.finalDefinition[0], vocEvidenceIds: [], keywordEvidenceIds: []}]} as T, responseId: "semantic-product-response", inputTokens: 10, outputTokens: 5};
+    }
     if (this.invalidProduct) {
       return { value: { privateSentinel: "PRIVATE_PRODUCT_OUTPUT" } as T, responseId: "invalid-product-response", inputTokens: 10, outputTokens: 5 };
     }

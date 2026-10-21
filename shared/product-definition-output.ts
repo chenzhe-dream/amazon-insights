@@ -1,3 +1,4 @@
+import { productValidationRule } from './product-validation-rules';
 import { z } from "zod";
 
 import { DateTimeSchema, EntityIdSchema, Sha256Schema } from "./agent-contracts";
@@ -48,7 +49,7 @@ export const ProductDefinitionOutputShapeSchema = z.strictObject({
     projectApproval: z.literal("not-approved"),
   }).superRefine((value, context) => {
     if (value.grade === null && !value.pendingReason) {
-      context.addIssue({ code: "custom", path: ["pendingReason"], message: "A null opportunity grade requires an explicit pending reason" });
+      context.addIssue({ code: "custom", path: ["pendingReason"], message: "A null opportunity grade requires an explicit pending reason", params: productValidationRule("product-pending-reason-required") });
     }
   }),
   evidenceMatrix: z.array(z.strictObject({
@@ -84,22 +85,22 @@ export function validateProductDefinitionOutputStructure(output: {
   finalDefinition: Array<{ vocEvidenceIds: string[]; keywordEvidenceIds: string[]; validationStatus: "supported" | "requires-validation" }>;
 }, context: z.RefinementCtx) {
   if (output.evidenceSelection?.sourceMode === "review-fallback" && output.opportunity.grade === "A") {
-    context.addIssue({ code: "custom", path: ["opportunity", "grade"], message: "Review fallback evidence cannot support grade A" });
+    context.addIssue({ code: "custom", path: ["opportunity", "grade"], message: "Review fallback evidence cannot support grade A", params: productValidationRule("product-review-fallback-grade") });
   }
   output.evidenceMatrix.forEach((row, index) => {
     const hasVoc = row.vocEvidenceIds.length > 0;
     const hasKeywords = row.keywordEvidenceIds.length > 0;
-    if (!hasVoc && !hasKeywords) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Evidence matrix row needs at least one evidence source" });
-    if (row.judgment === "voc-only" && (!hasVoc || hasKeywords || row.themeKey === null || row.keywordGroupId !== null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "VOC-only row has invalid evidence sides" });
-    if (row.judgment === "keyword-candidate" && (hasVoc || !hasKeywords || row.themeKey !== null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Keyword candidate row has invalid evidence sides" });
-    if (row.judgment === "dual-validation" && (!hasVoc || !hasKeywords || row.themeKey === null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Dual validation requires both evidence sides" });
-    if ((row.judgment === "conflict" || row.judgment === "avoid") && (!hasVoc || !hasKeywords || row.themeKey === null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Conflict and avoidance judgments require substantive evidence" });
+    if (!hasVoc && !hasKeywords) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Evidence matrix row needs at least one evidence source", params: productValidationRule("product-matrix-needs-evidence") });
+    if (row.judgment === "voc-only" && (!hasVoc || hasKeywords || row.themeKey === null || row.keywordGroupId !== null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "VOC-only row has invalid evidence sides", params: productValidationRule("product-matrix-voc-only-sides") });
+    if (row.judgment === "keyword-candidate" && (hasVoc || !hasKeywords || row.themeKey !== null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Keyword candidate row has invalid evidence sides", params: productValidationRule("product-matrix-keyword-only-sides") });
+    if (row.judgment === "dual-validation" && (!hasVoc || !hasKeywords || row.themeKey === null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Dual validation requires both evidence sides", params: productValidationRule("product-matrix-dual-sides") });
+    if ((row.judgment === "conflict" || row.judgment === "avoid") && (!hasVoc || !hasKeywords || row.themeKey === null || row.keywordGroupId === null)) context.addIssue({ code: "custom", path: ["evidenceMatrix", index], message: "Conflict and avoidance judgments require substantive evidence", params: productValidationRule("product-matrix-conflict-avoid-sides") });
   });
   output.finalDefinition.forEach((row, index) => {
     const hasVoc = row.vocEvidenceIds.length > 0;
     const hasKeywords = row.keywordEvidenceIds.length > 0;
-    if (!hasVoc && !hasKeywords) context.addIssue({ code: "custom", path: ["finalDefinition", index], message: "Final definition row needs evidence" });
-    if (row.validationStatus === "supported" && (!hasVoc || !hasKeywords)) context.addIssue({ code: "custom", path: ["finalDefinition", index, "validationStatus"], message: "Supported definition requires both evidence sides" });
+    if (!hasVoc && !hasKeywords) context.addIssue({ code: "custom", path: ["finalDefinition", index], message: "Final definition row needs evidence", params: productValidationRule("product-final-definition-needs-evidence") });
+    if (row.validationStatus === "supported" && (!hasVoc || !hasKeywords)) context.addIssue({ code: "custom", path: ["finalDefinition", index, "validationStatus"], message: "Supported definition requires both evidence sides", params: productValidationRule("product-supported-requires-both-evidence") });
   });
 }
 
