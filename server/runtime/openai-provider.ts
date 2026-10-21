@@ -403,7 +403,7 @@ function parseStructuredOutput<T>(
     if (trailingBrace?.enabled && finishReason === "stop") {
       const trimmed = outputText.trimEnd();
       if (trimmed.endsWith("}")) {
-        const normalizedText = trimmed.slice(0, -1);
+        const normalizedText = trimmed.slice(0, -1) + outputText.slice(trimmed.length);
         try {
           const candidate = JSON.parse(normalizedText);
           if (candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)) {

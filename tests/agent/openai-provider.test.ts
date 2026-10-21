@@ -999,7 +999,7 @@ test('single trailing object brace requires explicit relay opt-in and logs only 
  const client={responses:{create:async()=>completedResponse({output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]})},chat:{completions:{create:async()=>completedChat({choice:{message:{content:text}}})}}} as never;
  const provider=new OpenAIProvider({client,transport:'relay-chat-json',allowSingleTrailingObjectBrace:true,outputNormalizationLogger:(event:unknown)=>events.push(event)} as never);
  assert.equal((await provider.generateStructured(request())).value.summary,'PRIVATE_BODY');
- const event=events[0] as Record<string,unknown>;assert.equal(event.event,'relay_json_compatibility_applied');assert.equal(event.rule,'single-trailing-object-brace-v1');assert.equal(event.removedChars,1);assert.equal(event.originalLength,text.length);assert.equal(event.normalizedLength,text.trimEnd().length-1);assert.equal(event.finishReason,'stop');
+ const event=events[0] as Record<string,unknown>;assert.equal(event.event,'relay_json_compatibility_applied');assert.equal(event.rule,'single-trailing-object-brace-v1');assert.equal(event.removedChars,1);assert.equal(event.originalLength,text.length);assert.equal(event.normalizedLength,text.length-1);assert.equal(event.finishReason,'stop');
  for(const key of ['originalSha256','normalizedSha256','responseIdSha256'])assert.match(String(event[key]),/^[0-9a-f]{64}$/);
  assert.doesNotMatch(JSON.stringify(events),/PRIVATE_BODY|summary/);
  await assert.rejects(new OpenAIProvider({client,transport:'relay-chat-json'}).generateStructured(request()));
