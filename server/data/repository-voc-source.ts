@@ -39,6 +39,8 @@ import {
 } from "./voc-data-snapshot";
 
 interface StaticReviewSource {
+  /** Publication timestamp from an integrity-checked persisted stage, never a client date. */
+  readonly publishedAt?: string;
   readonly meta: Readonly<{ marketplace: string }>;
   readonly data: Readonly<Record<string, unknown>>;
 }
@@ -375,7 +377,13 @@ function readReviewSource(
     }
     let recordCapturedAt: string;
     try {
-      recordCapturedAt = normalizeRepositoryDateOnlyUtc(parsed.data.fetchedAt);
+      recordCapturedAt = source.publishedAt
+        ? new Date(DateTimeSchema.parse(source.publishedAt)).toISOString()
+        : normalizeRepositoryDateOnlyUtc(parsed.data.fetchedAt);
+      if (source.publishedAt && parsed.data.fetchedAt > recordCapturedAt.slice(0, 10)) {
+        addMissing(missing, sourceId, asin, "after-cutoff");
+        continue;
+      }
     } catch {
       addMissing(missing, sourceId, asin, "source-error");
       continue;

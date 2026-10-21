@@ -79,3 +79,26 @@ for (const marketplace of ["DE", "CA"] as const) test(`${marketplace} rejects US
  assert.equal(result.fallbackCandidate,null);
  assert.equal(result.inventory.fallback.coverage[0].primary,"missing");
 });
+test("same-day persisted Customers Say evidence uses verified publication time, preserving missing cohort", async () => {
+ const stageTime="2026-10-21T03:00:00.000Z", cutoff="2026-10-21T04:00:00.000Z";
+ const missingAsin="B07498JDX4";
+ const reviewData={analysisByAsin:{[asin]:{asin,marketplace:"DE",sampledReviews:0,mentionTopics:2,fetchedAt:"2026-10-21",status:"ready",family:"generic",blocks:[{key:"positives",label:"好评点",rows:[{label:"Qualität",sharePct:58.33,metricKind:"customers_say_topic_share",numerator:7,denominator:12,reason:""},{label:"Aufbau",sharePct:41.67,metricKind:"customers_say_topic_share",numerator:5,denominator:12,reason:""}]}]}},ratingByAsin:{}};
+ const projection={...output,updatedAt:stageTime,data:reviewData,contentHash:canonicalJsonSha256({stage:"reviews",data:reviewData})};
+ const repo=fixture(projection);repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace:"DE",asins:[asin,missingAsin]});
+ const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"DE",asins:[asin,missingAsin]} as never,baseSyncRunId:runId,selectedAsins:[asin,missingAsin],dataCutoffAt:cutoff});
+ assert.equal(result.inventory.fallback.sourceMode,"review-fallback");
+ assert.equal(result.fallbackCandidate?.sources[0].capturedAt,stageTime);
+ assert.equal(result.inventory.fallback.coverage.find(row=>row.asin===missingAsin)?.primary,"missing");
+ assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis[0].sampledReviews,0);
+});
+test("trusted publication preserves cached dates but never admits a future record or weakens static cutoff", async () => {
+ const {RepositoryVocSourceReader}=await import("../../server/data/repository-voc-source");
+ const stageTime="2026-10-21T03:00:00.000Z", cutoff="2026-10-21T04:00:00.000Z";
+ const read=async(fetchedAt:string,publishedAt?:string)=>new RepositoryVocSourceReader({manualVoc:{listAtCutoff:async()=>[]},legacyFallbackEnabled:false,reviewSources:{sorftime:{meta:{marketplace:"DE"},...(publishedAt?{publishedAt}:{}),data:{[asin]:{...data.analysisByAsin[asin],marketplace:"DE",fetchedAt}}},sellerSprite:{meta:{marketplace:"DE"},data:{}}}}).read({organizationId:org,marketplace:"DE",asins:[asin],dataCutoffAt:cutoff,sourcePolicy:"manual-with-review-fallback"});
+ assert.equal((await read("2026-10-21")).candidate,null);
+ assert.equal((await read("2026-10-22",stageTime)).candidate,null);
+ assert.equal((await read("2026-10-20","2026-10-21T05:00:00.000Z")).candidate,null);
+ const cached=await read("2026-10-20",stageTime);
+ assert.equal(cached.candidate?.payload.records.sorftimeReviewAnalysis[0].fetchedAt,"2026-10-20");
+ assert.equal(cached.candidate?.sources[0].capturedAt,stageTime);
+});

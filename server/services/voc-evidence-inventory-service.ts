@@ -28,7 +28,7 @@ export async function buildVocEvidenceInventory(input: Input) {
   };
   const [reviews, keywords] = await Promise.all([read("reviews"), read("keywords")]);
   const reviewData = reviews && reviews.stage === "reviews" && "data" in reviews ? reviews.data.analysisByAsin : {};
-  const reader = new RepositoryVocSourceReader({ manualVoc: repository.manualAlexaVoc, legacyFallbackEnabled: false, reviewSources: { sorftime: { meta: { marketplace: project.marketplace }, data: reviewData }, sellerSprite: { meta: { marketplace: project.marketplace }, data: {} } } });
+  const reader = new RepositoryVocSourceReader({ manualVoc: repository.manualAlexaVoc, legacyFallbackEnabled: false, reviewSources: { sorftime: { meta: { marketplace: project.marketplace }, ...(reviews ? { publishedAt: reviews.updatedAt } : {}), data: reviewData }, sellerSprite: { meta: { marketplace: project.marketplace }, data: {} } } });
   const source = await reader.read({ organizationId: project.organizationId, marketplace: project.marketplace, asins: selectedAsins, dataCutoffAt, sourcePolicy: "manual-with-review-fallback" });
   const payload = source.candidate?.payload;
   const manualRecords = (payload?.records.alexaVoc ?? []).filter(record => manualEvidenceDimensions(record).length);
