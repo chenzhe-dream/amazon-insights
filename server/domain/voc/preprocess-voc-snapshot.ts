@@ -415,14 +415,23 @@ function collectAlexaRecord(
 }
 
 function reviewRecordCapturedAt(snapshot: VocDataSnapshotRecord, sourceId: VocSnapshotSourceId, capturedAt: string, record: ReviewRecord): string {
-  const selection = snapshot.payload.evidenceSelection;
-  const reference = selection?.coverage.find(row => row.asin === record.asin)?.review;
-  if (sourceId === "sorftime-review-analysis" && selection?.sourcePolicy === "manual-with-review-fallback" &&
-      reference?.id.startsWith(`repository://sync/${selection.baseSyncRunId}/reviews/`) && reference.capturedAt === capturedAt) {
+  if (hasVerifiedReviewPublication(snapshot.payload.evidenceSelection, sourceId, record.asin, capturedAt)) {
     if (record.fetchedAt > capturedAt.slice(0, 10)) throw new TypeError("VOC review date is after verified publication");
     return capturedAt;
   }
   return normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+}
+
+function hasVerifiedReviewPublication(selection: VocDataSnapshotRecord["payload"]["evidenceSelection"], sourceId: VocSnapshotSourceId, asin: string, capturedAt: string): boolean {
+  if (selection?.sourcePolicy !== "manual-with-review-fallback") return false;
+  const reference = selection.coverage.find(row => row.asin === asin)?.review;
+  if (!reference || reference.capturedAt !== capturedAt) return false;
+  const prefix = `repository://sync/${selection.baseSyncRunId}/reviews/`;
+  if (!reference.id.startsWith(prefix)) return false;
+  const suffix = reference.id.slice(prefix.length);
+  if (sourceId === "sorftime-review-analysis") return /^[^/#]+$/.test(suffix);
+  if (sourceId === "seller-sprite-review-analysis") return /^[^/#]+#sellerSprite$/.test(suffix);
+  return false;
 }
 
 function collectReviewRecord(
@@ -929,11 +938,8 @@ function assertVocDeterministicResultIntegrity(
           (config.sourceId === "alexa-voc"
             ? denominator.family === "generic"
             : denominator.recordCapturedAt.endsWith("T23:59:59.999Z") || (
-                config.sourceId === "sorftime-review-analysis" &&
-                value.evidenceSelection?.sourcePolicy === "manual-with-review-fallback" &&
-                value.evidenceSelection.coverage.some(row => row.asin === denominator.asin &&
-                  row.review?.id.startsWith(`repository://sync/${value.evidenceSelection!.baseSyncRunId}/reviews/`) &&
-                  row.review.capturedAt === availability.capturedAt && row.review.capturedAt === denominator.recordCapturedAt)
+                hasVerifiedReviewPublication(value.evidenceSelection, config.sourceId, denominator.asin, denominator.recordCapturedAt) &&
+                denominator.recordCapturedAt === availability.capturedAt
               )),
       ),
       "VOC record scope time or family is invalid",

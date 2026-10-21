@@ -220,6 +220,21 @@ test("explicit no-review text remains a missing sample rather than inventing zer
   assert.doesNotMatch(result.stderr, /MCP_SCHEMA/);
 });
 
+for (const mode of ["missing-details", "null-details"]) {
+  test(`${mode} Customers Say cannot persist verified empty reviews`, async (t) => {
+    const provider = await fakeSorftimeProvider(mode);
+    t.after(provider.close);
+    const result = await runProductionReviewScript(t, provider.endpoint, {
+      asin, marketplace: "US", fetchedAt: "2026-09-10", status: "ready", rating: 4.5, reviewCount: 100,
+    });
+    assert.deepEqual(provider.toolCalls().sort(), ["product_customers_say", "product_reviews"]);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.records[asin]?.status, "error");
+    assert.notEqual(result.records[asin]?.terminalReason, "valid-empty");
+    assert.match(result.stderr, /MCP_SCHEMA/);
+  });
+}
+
 async function runProductionReviewScript(t, endpoint, ratingRecord, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "sorftime-review-empty-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -375,6 +390,11 @@ async function fakeSorftimeProvider(mode) {
             { title: "Useful light", content: "The lamp is bright and easy to use.", star_rating: 5 },
           ] }),
         }] } }
+      : mode === "missing-details" || mode === "null-details"
+      ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text: JSON.stringify(
+          payload.params.name === "product_customers_say"
+            ? { data: mode === "missing-details" ? {} : { details: null } }
+            : { data: [] }) }] } }
       : mode === "schema"
       ? { jsonrpc: "2.0", id: payload.id, result: { content: [{ type: "text", text: "not-json" }] } }
       : mode === "consumer-shape"

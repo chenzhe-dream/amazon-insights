@@ -182,9 +182,9 @@ export async function projectSorftimeConsumerCandidate(toolName, args, response,
   }, async () => {
     const candidate = response?.data ?? response;
     const valid = toolName === "product_customers_say"
-      ? candidate?.details == null || Array.isArray(candidate.details)
+      ? Array.isArray(candidate?.details)
       : toolName === "product_reviews"
-        ? candidate == null || Array.isArray(candidate)
+        ? Array.isArray(candidate)
         : true;
     if (!valid) throw createMcpConsumerShapeError(response);
     return candidate;

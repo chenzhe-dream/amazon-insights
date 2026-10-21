@@ -25,7 +25,7 @@ export function selectUkReviewFallbackAsins(asins, sorftimeByAsin, { marketplace
 
 export function selectReviewEvidence(asin, marketplace, sorftime, sellerSprite) {
   if (exactRecord(sorftime, asin, marketplace) && hasCompleteReviewRecord(sorftime)) {
-    return { ...sorftime, sourceProvider: "sorftime" };
+    return sorftime;
   }
   if (marketplace === "UK" && isValidSorftimeEmptyReview(sorftime, asin, marketplace) &&
     exactRecord(sellerSprite, asin, marketplace) && hasCompleteReviewRecord(sellerSprite)) {

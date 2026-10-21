@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildVocEvidenceInventory } from "../../server/services/voc-evidence-inventory-service";
 import { canonicalJsonSha256 } from "../../server/runtime/model-request-accounting";
+import { preprocessVocSnapshot } from "../../server/domain/voc/preprocess-voc-snapshot";
+import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 const org = "22222222-2222-4222-8222-222222222222", projectId = "11111111-1111-4111-8111-111111111111", runId = "33333333-3333-4333-8333-333333333333";
 const asin = "B08L7DD8L9", now = "2026-09-10T00:00:00.000Z";
 const data = { analysisByAsin: { [asin]: { asin, marketplace: "US", status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "positives", label: "喜爱", rows: [{ label: "明亮", reason: "适合阅读", sharePct: 50 }] }] } }, ratingByAsin: {} };
@@ -19,6 +21,21 @@ test("inventory is scoped, separates manual and explicit fallback, preserves key
  assert.equal(result.inventory.fallback.keywords.state, "missing");
  assert.notEqual(result.inventory.manual.fingerprint, result.inventory.fallback.fingerprint);
 });
+test("reprojected legacy Sorftime review keeps its stage hash and downstream inventory fingerprint", async () => {
+ const baseline=await buildVocEvidenceInventory({repository:fixture() as never,project:project as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
+ const readExport=(_file:string,name:string)=>name==="sorftimeReviewAnalysisData"?data.analysisByAsin
+   :name==="sorftimeRatingData"?data.ratingByAsin:{};
+ const stage=projectStageOutput("reviews",[asin],{marketplace:"US",ukSellerSpriteReviewFallback:false,
+  readExport,updatedAt:output.updatedAt});
+ assert.ok("data" in stage);
+ assert.deepEqual(stage.data,data);
+ assert.equal(stage.contentHash,output.contentHash);
+ const replay={...output,data:stage.data,contentHash:stage.contentHash};
+ const inventory=await buildVocEvidenceInventory({repository:fixture(replay) as never,project:project as never,
+  baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
+ assert.equal(inventory.inventory.fallback.coverage[0].review?.contentHash,baseline.inventory.fallback.coverage[0].review?.contentHash);
+ assert.equal(inventory.inventory.fallback.fingerprint,baseline.inventory.fallback.fingerprint);
+});
 test("UK SellerSprite review fallback freezes its own source and coverage provenance", async () => {
  const marketData = structuredClone(data);
  marketData.analysisByAsin[asin].marketplace = "UK";
@@ -29,6 +46,36 @@ test("UK SellerSprite review fallback freezes its own source and coverage proven
  assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis.length,0);
  assert.equal(result.fallbackCandidate?.payload.records.sellerSpriteReviewAnalysis.length,1);
  assert.match(result.inventory.fallback.coverage[0].review?.id ?? "",/sellerSprite/);
+});
+test("same-day UK SellerSprite stage review reaches VOC preprocessing only with its provider reference", async () => {
+ const stageTime="2026-10-21T08:00:00.000Z", cutoff="2026-10-21T09:00:00.000Z";
+ const marketData=structuredClone(data);
+ marketData.analysisByAsin[asin].marketplace="UK";
+ marketData.analysisByAsin[asin].fetchedAt="2026-10-21";
+ (marketData.analysisByAsin[asin] as Record<string, unknown>).sourceProvider="sellerSprite";
+ const projection={...output,updatedAt:stageTime,data:marketData,contentHash:canonicalJsonSha256({stage:"reviews",data:marketData})};
+ const repo=fixture(projection);repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace:"UK",asins:[asin]});
+ const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK"} as never,
+  baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:cutoff});
+ const candidate=result.fallbackCandidate!;
+ const facts=preprocessVocSnapshot({...candidate,id:projectId,runId,createdAt:cutoff});
+ assert.equal(facts.evidenceIndex.length,1);
+ assert.equal(facts.evidenceIndex[0].capturedAt,stageTime);
+ assert.equal(facts.evidenceIndex[0].sourceId,"seller-sprite-review-analysis");
+ const wrong=structuredClone(candidate);
+ wrong.payload.evidenceSelection!.coverage[0].review!.id=`repository://sync/${runId}/reviews/job`;
+ const {fingerprint: _fingerprint,...unsigned}=wrong.payload.evidenceSelection!;
+ wrong.payload.evidenceSelection!.fingerprint=canonicalJsonSha256(unsigned);
+ wrong.contentHash=canonicalJsonSha256({schemaVersion:wrong.schemaVersion,marketplace:wrong.marketplace,
+  asins:wrong.asins,dataCutoffAt:wrong.dataCutoffAt,sources:wrong.sources,payload:wrong.payload});
+ assert.throws(()=>preprocessVocSnapshot({...wrong,id:projectId,runId,createdAt:cutoff}),
+  /VOC review record is after its source or snapshot cutoff/);
+ marketData.analysisByAsin[asin].fetchedAt="2026-10-22";
+ const future={...projection,data:marketData,contentHash:canonicalJsonSha256({stage:"reviews",data:marketData})};
+ repo.syncJobs.readStageOutput=async({stage})=>stage==="reviews"?future as never:null;
+ const rejected=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK"} as never,
+  baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:cutoff});
+ assert.equal(rejected.fallbackCandidate,null);
 });
 test("historical keyword schema failure is failed in frozen inventory despite current valid empty", async () => {
  const window = { time_type: "lately", time_value: "30", listingSearch: true };

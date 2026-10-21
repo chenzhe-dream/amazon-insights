@@ -34,7 +34,10 @@ function buildAsinKeywordStatus(
   analysisByAsin: typeof sifKeywordAnalysisData,
   enrichmentByKeyword: typeof sifKeywordEnrichmentData,
 ) {
-  const record = analysisByAsin[asin];
+  const record = analysisByAsin[asin] as (typeof analysisByAsin[string] & {
+    terminalReason?: string;
+    historicalAttempt?: { outcome?: string };
+  }) | undefined;
   const keywords = record?.status === "ready" ? record.keywords : [];
   const keywordCount = keywords.length;
   let enrichedCount = 0;
@@ -46,7 +49,9 @@ function buildAsinKeywordStatus(
   return {
     asin,
     ready,
-    status: record?.status ?? "empty",
+    status: record?.status ?? "missing",
+    verifiedEmpty: record?.status === "empty" && record.terminalReason === "valid-empty" &&
+      record.historicalAttempt?.outcome !== "schema-error" && record.historicalAttempt?.outcome !== "error",
     statusMessage: record?.statusMessage ?? null,
     period: sifKeywordRecordPeriod(record),
     fetchedAt: record?.fetchedAt ?? null,
@@ -183,7 +188,7 @@ export function KeywordFetchStatusSection({
             </div>
             <div className="keyword-fetch-state">
               <span className={`keyword-fetch-pill ${row.ready ? "ok" : "wait"}`}>
-                {row.ready ? row.period?.startsWith("历史 ") ? "历史词已就绪" : "已就绪" : row.status === "empty" ? "已核实无词" : "待拉取"}
+                {row.ready ? row.period?.startsWith("历史 ") ? "历史词已就绪" : "已就绪" : row.verifiedEmpty ? "已核实无词" : "待拉取"}
               </span>
               <small>{row.period ?? "来源周期未记录"} · {row.fetchedAt ? `同步 ${row.fetchedAt}` : row.statusMessage ?? "尚无本地缓存"}</small>
             </div>

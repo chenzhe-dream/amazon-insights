@@ -4,6 +4,9 @@ import test from "node:test";
 import { selectUkReviewFallbackAsins, selectReviewEvidence, sellerSpriteReviewMarkets } from "../../scripts/lib/uk-review-fallback.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 import { deriveAsinModuleStatus } from "../../scripts/lib/asin-data-status.mjs";
+import { projectSorftimeConsumerCandidate } from "../../scripts/lib/sorftime-mcp-client.mjs";
+import { buildSorftimeReviewAnalysis } from "../../scripts/lib/sorftime-review-transform.mjs";
+import { createHash } from "node:crypto";
 
 const asin = "B0C6FP6LMY";
 const empty = { asin, marketplace: "UK", status: "pending", terminalReason: "valid-empty", sampledReviews: 0, mentionTopics: 0, fetchedAt: "2026-10-21", blocks: [] };
@@ -28,10 +31,38 @@ test("usable Sorftime, errors, and unverified pending observations never trigger
 });
 
 test("review evidence keeps the provider and does not replace usable Sorftime or accept wrong identity", () => {
-  assert.deepEqual(selectReviewEvidence(asin, "UK", ready, { ...ready, sourceProvider: "sellerSprite" }), { ...ready, sourceProvider: "sorftime" });
+  assert.deepEqual(selectReviewEvidence(asin, "UK", ready, { ...ready, sourceProvider: "sellerSprite" }), ready);
   assert.deepEqual(selectReviewEvidence(asin, "UK", empty, ready), { ...ready, sourceProvider: "sellerSprite" });
   assert.equal(selectReviewEvidence(asin, "UK", empty, { ...ready, marketplace: "US" }), null);
   assert.equal(selectReviewEvidence(asin, "UK", empty, { ...ready, asin: "B000000001" }), null);
+});
+
+test("only explicit empty Sorftime consumer arrays authorize UK review fallback", async () => {
+  const reviews = await projectSorftimeConsumerCandidate("product_reviews", { asin }, { data: [] });
+  const details = await projectSorftimeConsumerCandidate("product_customers_say", { asin }, { data: { details: [] } });
+  const verified = buildSorftimeReviewAnalysis(asin, "UK", details, reviews, "2026-10-21");
+  assert.equal(verified.terminalReason, "valid-empty");
+  assert.deepEqual(selectUkReviewFallbackAsins([asin], { [asin]: verified }, { marketplace: "UK", enabled: true }), [asin]);
+  for (const invalid of [{ data: {} }, { data: { details: null } }]) {
+    await assert.rejects(projectSorftimeConsumerCandidate("product_customers_say", { asin }, invalid));
+  }
+  await assert.rejects(projectSorftimeConsumerCandidate("product_reviews", { asin }, { data: null }));
+});
+
+test("unchanged Sorftime stage payload retains its legacy content hash with fallback off and on", () => {
+  const rating = { asin, marketplace: "UK", status: "ready", reviewCount: 8, fetchedAt: "2026-10-21" };
+  const legacyData = { analysisByAsin: { [asin]: ready }, ratingByAsin: { [asin]: rating } };
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const legacyHash = createHash("sha256").update(JSON.stringify(canonical({ stage: "reviews", data: legacyData }))).digest("hex");
+  const readExport = (_file, name) => name === "sorftimeReviewAnalysisData" ? { [asin]: ready }
+    : name === "sellerSpriteMcpReviewAnalysisData" ? {} : name === "sorftimeRatingData" ? { [asin]: rating } : {};
+  for (const enabled of [false, true]) {
+    const projected = projectStageOutput("reviews", [asin], { marketplace: "UK", ukSellerSpriteReviewFallback: enabled,
+      readExport, updatedAt: "2026-10-21T08:00:00.000Z" });
+    assert.deepEqual(projected.data, legacyData);
+    assert.equal(projected.contentHash, legacyHash);
+  }
 });
 
 test("partial seven-ASIN stage projects only real SellerSprite fallback with explicit provenance", () => {
