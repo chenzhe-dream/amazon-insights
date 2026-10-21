@@ -18,7 +18,7 @@ async function api(route:string,body?:unknown,headers:Record<string,string>={}){
  if(!res.ok)throw new Error(`${route}: HTTP ${res.status} ${JSON.stringify(payload)}`);
  return payload;
 }
-type Entry={marketplace:'DE'|'CA';asins:string[];name:string;projectId?:string;slug?:string;jobId?:string;baseSyncRunId?:string;analysisRunId?:string;initialJobId?:string;initialBaseSyncRunId?:string;diagnosticAnalysisRunId?:string;analysisCreationMethod?:string;publicHttpReplay?:string};
+type Entry={marketplace:'DE'|'CA';asins:string[];name:string;projectId?:string;slug?:string;jobId?:string;baseSyncRunId?:string;analysisRunId?:string;analysisIdempotencyKey?:string;initialAnalysisRunId?:string;initialJobId?:string;initialBaseSyncRunId?:string;diagnosticAnalysisRunId?:string;analysisCreationMethod?:string;publicHttpReplay?:string};
 const statePath=path.join(root,'evidence','live-run-state.json');
 const entries:Entry[]=fs.existsSync(statePath)?JSON.parse(fs.readFileSync(statePath,'utf8')):[
  {marketplace:'DE',asins:['B09Q8MJP3R','B09GY72DX2','B09VP9LJQX','B0GCNJJDZP','B07KSDSSS1'],name:'Playground Fitness Equipment DE Candidate'},
@@ -65,7 +65,7 @@ for(const entry of entries){
    continue;
   }
   assert.deepEqual([...inventory.fallback.selectedAsins].sort(),[...entry.asins].sort());
-  const analysis=await api(`/v1/projects/${entry.projectId}/runs`,{mode:'existing-data',idempotencyKey:`de-ca-analysis:${entry.jobId}`,evidenceSelection:{baseSyncRunId:entry.baseSyncRunId,selectedAsins:entry.asins,sourcePolicy:'manual-with-review-fallback',expectedInputFingerprint:inventory.fallback.fingerprint}});
+  const analysis=await api(`/v1/projects/${entry.projectId}/runs`,{mode:'existing-data',idempotencyKey:entry.analysisIdempotencyKey??`de-ca-analysis:${entry.jobId}`,evidenceSelection:{baseSyncRunId:entry.baseSyncRunId,selectedAsins:entry.asins,sourcePolicy:'manual-with-review-fallback',expectedInputFingerprint:inventory.fallback.fingerprint}});
   entry.analysisRunId=analysis.run.id;save();
   entry.analysisCreationMethod='public HTTP POST /v1/projects/:id/runs';entry.publicHttpReplay='pending';save();
   console.log(JSON.stringify({marketplace:entry.marketplace,analysisCreated:true,runId:entry.analysisRunId}));
@@ -82,7 +82,7 @@ for(const entry of entries){
     assert.ok(reports.reports.some((item:any)=>item.stage===stage),`${entry.marketplace} ${stage} report must be persisted`);
    }
    const inventory=await api(`/v1/projects/${entry.projectId}/voc-inputs?baseSyncRunId=${entry.baseSyncRunId}&asins=${entry.asins.join(',')}`);
-   const replay=await api(`/v1/projects/${entry.projectId}/runs`,{mode:'existing-data',idempotencyKey:`de-ca-analysis:${entry.jobId}`,evidenceSelection:{baseSyncRunId:entry.baseSyncRunId,selectedAsins:entry.asins,sourcePolicy:'manual-with-review-fallback',expectedInputFingerprint:inventory.fallback.fingerprint}});
+   const replay=await api(`/v1/projects/${entry.projectId}/runs`,{mode:'existing-data',idempotencyKey:entry.analysisIdempotencyKey??`de-ca-analysis:${entry.jobId}`,evidenceSelection:{baseSyncRunId:entry.baseSyncRunId,selectedAsins:entry.asins,sourcePolicy:'manual-with-review-fallback',expectedInputFingerprint:inventory.fallback.fingerprint}});
    assert.equal(replay.run.id,entry.analysisRunId,'Public HTTP replay must retain exact analysis identity');
    entry.publicHttpReplay='passed';save();
    console.log(JSON.stringify({marketplace:entry.marketplace,acceptance:'passed',publicHttpReplay:true,persistedReports:reports.reports.map((item:any)=>({id:item.id,stage:item.stage,version:item.version}))}));
