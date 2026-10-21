@@ -310,7 +310,7 @@ export type AgentAuthenticationMode =
 export interface AgentAuthenticationConfig {
   mode: AgentAuthenticationMode;
   cookie: Readonly<{
-    name: "__Host-agent_session" | "agent_session";
+    name: "__Host-agent_session" | "agent_session" | `__Host-agent_session_${string}` | `agent_session_${string}`;
     secure: boolean;
     maxAgeSeconds: number;
   }>;
@@ -512,12 +512,14 @@ export function loadAgentAuthenticationConfig(
   if (namespace !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(namespace)) {
     throw new Error("Agent authentication configuration is invalid");
   }
-  const cookieSuffix = namespace === undefined ? "" : `_${namespace}`;
+  const cookieName = allowInsecureCookie
+    ? namespace === undefined ? "agent_session" : `agent_session_${namespace}` as const
+    : namespace === undefined ? "__Host-agent_session" : `__Host-agent_session_${namespace}` as const;
 
   return Object.freeze({
     mode: anonymousLoopback ? "anonymous-loopback" : "authenticated",
     cookie: Object.freeze({
-      name: `${allowInsecureCookie ? "agent_session" : "__Host-agent_session"}${cookieSuffix}`,
+      name: cookieName,
       secure: !allowInsecureCookie,
       maxAgeSeconds: 28_800,
     }),
