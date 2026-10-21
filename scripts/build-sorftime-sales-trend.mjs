@@ -44,7 +44,7 @@ export async function collectSalesTrendResponses({key, asin, marketplace, callTo
   }
   return {responses, requestErrors};
 }
-export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, sourceUnavailable, previous = {}}) {
+export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, sourceUnavailable = undefined, previous = {}}) {
   const next = {...previous, asin, marketplace, fetchedAt:sourceFetchedDate(Object.values(responses),fetchedAt),
     missingDailyObservations:{...previous.missingDailyObservations}, missingMonthlyObservations:{...previous.missingMonthlyObservations},
     dailyObservationFetchedAt:{...previous.dailyObservationFetchedAt}, monthlyObservationFetchedAt:{...previous.monthlyObservationFetchedAt},
