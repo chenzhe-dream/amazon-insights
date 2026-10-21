@@ -711,7 +711,7 @@ export function CompetitorOverviewCategoryTrend({products, market, categoryTrend
   return <div className="overview-category-snapshot">{records.map((record, index) => <details key={record.nodeId} open={index === 0}><summary>{record.categoryName} · Node {record.nodeId}</summary><CategoryNodeTrendSection marketplace={market} products={refs} trendByNode={categoryTrendByNode} snapshotNodeId={record.nodeId}/></details>)}</div>;
 }
 
-export function CompetitorOverviewHistory({products, salesTrendByAsin, metric, onMetricChange}: Readonly<{products: Product[]; salesTrendByAsin: typeof sorftimeSalesTrendData; metric: ChartMetric; onMetricChange: (metric: ChartMetric) => void}>) {
+export function CompetitorOverviewHistory({products, market, salesTrendByAsin, metric, onMetricChange}: Readonly<{products: Product[]; market: MarketCode; salesTrendByAsin: typeof sorftimeSalesTrendData; metric: ChartMetric; onMetricChange: (metric: ChartMetric) => void}>) {
   return <section className="card compare-chart-card sales-combined-card">
           <div className="section-head">
             <div>
@@ -720,9 +720,9 @@ export function CompetitorOverviewHistory({products, salesTrendByAsin, metric, o
                 {metric === "history"
                   ? "月销量 · 同一坐标系查看增速、体量与拐点"
                   : metric === "revenue"
-                    ? "月销售额 · Sorftime SalesAmount · USD"
+                    ? `月销售额 · Sorftime SalesAmount · ${marketSiteCurrency(market)}`
                     : metric === "prices"
-                      ? "历史价格 · 月均价 · USD"
+                      ? `历史价格 · 月均价 · ${marketSiteCurrency(market)}`
                       : "大类 BSR · 越靠上表现越优"}
                 {sorftimeSalesTrendMeta.updatedAt ? ` · 同步至 ${sorftimeSalesTrendMeta.updatedAt}` : ""}
               </p>

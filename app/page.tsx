@@ -2214,7 +2214,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         ) : null}
         <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} listingContentByAsin={listingContentByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationVersionId={authSession.logoutPending ? null : currentDisplayVersion?.versionId ?? null} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
 
-        <CompetitorOverviewHistory products={products} salesTrendByAsin={salesTrendByAsin} metric={salesView} onMetricChange={setSalesView} />
+        <CompetitorOverviewHistory products={products} market={market} salesTrendByAsin={salesTrendByAsin} metric={salesView} onMetricChange={setSalesView} />
 
         <XydcVariantSection
           products={products.map(product => ({

@@ -10,6 +10,17 @@ registerHooks({load(url, context, nextLoad) {
 }});
 const {CompetitorOverviewSnapshotView} = await import("../../app/project-report-views/competitor-overview");
 
+test('DE and CA history charts label observed revenue and prices with their project currency',async()=>{
+ const {CompetitorOverviewHistory}=await import('../../app/project-report-views/competitor-overview');
+ for(const [market,currency] of [['US','USD'],['UK','GBP'],['DE','EUR'],['CA','CAD']] as const){
+  for(const metric of ['revenue','prices'] as const){
+   const html=renderToStaticMarkup(<CompetitorOverviewHistory market={market} products={[]} salesTrendByAsin={{}} metric={metric} onMetricChange={()=>{}}/>);
+   assert.ok(html.includes(metric==='revenue'?`Sorftime SalesAmount · ${currency}`:`月均价 · ${currency}`));
+   if(market!=='US')assert.doesNotMatch(html,/· USD/);
+  }
+ }
+});
+
 test("overview snapshot retains the native matrix and complete cached selling points", () => {
   const asin = "B012345678";
   const props = {
