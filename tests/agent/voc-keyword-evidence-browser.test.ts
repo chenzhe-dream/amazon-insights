@@ -135,16 +135,19 @@ test("failed replacement preserves saved history across reload without creating 
 });
 
 for (const marketplace of ["DE", "CA"]) test(`${marketplace} panel uses scoped fallback without manual automation`, async t => {
- const page=await browser.newPage();t.after(()=>page.close());let automationCalls=0,posts=0;
+ const page=await browser.newPage();t.after(()=>page.close());let automationCalls=0,posts=0,inventoryReads=0;
  const scoped=inventory();scoped.manual.marketplace=marketplace;scoped.fallback.marketplace=marketplace;
  await page.route("**/*", async route => {
   const req=route.request();if(!req.url().startsWith(origin))return route.abort();if(!req.url().includes("/api/agent/"))return route.continue();
   if(req.url().includes("voc-automation")){automationCalls++;return route.fulfill({status:500,json:{}});}
   if(req.method()==="POST"){posts++;assert.equal(req.postDataJSON().evidenceSelection.sourcePolicy,"manual-with-review-fallback");return route.fulfill({status:409,json:{error:{message:"fixture input changed"}}});}
-  return route.fulfill({json:scoped});
+  inventoryReads++;return route.fulfill({json:scoped});
  });
  await page.goto(`${origin}/tests/agent/helpers/voc-evidence-browser-harness.html?marketplace=${marketplace}`);
  await page.getByText("本站评论已就绪",{exact:true}).waitFor();
  assert.equal(automationCalls,0);assert.equal(posts,0);
+ await page.waitForTimeout(1500);
+ assert.equal(inventoryReads,1,"clock renders must not repeat inventory requests");
+ assert.equal(await page.evaluate(()=>document.visibilityState),"visible");
  await page.getByRole("button",{name:"使用评论兜底分析"}).click();await page.getByRole("alert").waitFor();assert.equal(posts,1);assert.equal(automationCalls,0);
 });
