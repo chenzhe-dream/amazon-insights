@@ -14,6 +14,7 @@ import {
 } from "./lib/sync-cache.mjs";
 import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evidence.mjs";
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
+import { childSalesOutcome } from './lib/child-sales-outcomes.mjs';
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -38,6 +39,9 @@ function normalizeVariant(property) {
 
 export function parseVariationRows(raw) {
   const sourceRows = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw) ? raw : null;
+  const unavailableSalesRowCount = (sourceRows ?? []).filter(row =>
+    row && /^[A-Z0-9]{10}$/.test(String(row.Asin ?? row.asin ?? '').toUpperCase()) &&
+    Number(row.SalesAmount ?? row.sales_amount) === -1).length;
   const rows = (sourceRows ?? [])
     .map(row => {
       const asin = String(row.Asin ?? row.asin ?? "").toUpperCase();
@@ -56,6 +60,7 @@ export function parseVariationRows(raw) {
     containerRecognized: sourceRows !== null,
     rawRowCount: sourceRows?.length ?? 0,
     validSalesRowCount: rows.length,
+    ...(unavailableSalesRowCount ? { unavailableSalesRowCount } : {}),
     rows,
   };
 }
@@ -77,6 +82,7 @@ export async function fetchAllVariations(key, asin, marketplace, options = {}) {
   let containerRecognized = firstResult.containerRecognized;
   let rawRowCount = firstResult.rawRowCount;
   let validSalesRowCount = firstResult.validSalesRowCount;
+  let unavailableSalesRowCount = firstResult.unavailableSalesRowCount ?? 0;
   const total = Number(first?.data?.[0]?.ItemTotal ?? first?.data?.[0]?.item_total ?? items.length);
   const pageSize = 20;
   const pages = Math.max(1, Math.ceil((total || items.length) / pageSize));
@@ -90,6 +96,7 @@ export async function fetchAllVariations(key, asin, marketplace, options = {}) {
     containerRecognized &&= nextResult.containerRecognized;
     rawRowCount += nextResult.rawRowCount;
     validSalesRowCount += nextResult.validSalesRowCount;
+    unavailableSalesRowCount += nextResult.unavailableSalesRowCount ?? 0;
     items.push(...nextResult.rows);
     await sleep(200);
   }
@@ -97,7 +104,8 @@ export async function fetchAllVariations(key, asin, marketplace, options = {}) {
   const map = new Map();
   for (const item of items) map.set(item.asin, item);
   const rows = [...map.values()].sort((a, b) => b.sales - a.sales || a.variant.localeCompare(b.variant));
-  return attachSourceMetadata({ containerRecognized, rawRowCount, validSalesRowCount, rows },sourceMetadata(first)??{});
+  return attachSourceMetadata({ containerRecognized, rawRowCount, validSalesRowCount, rows,
+    ...(unavailableSalesRowCount ? { unavailableSalesRowCount } : {}) },sourceMetadata(first)??{});
 }
 
 export async function syncSorftimeChildSales({ outputPath = outPath, asins: selectedAsins, key: suppliedKey, callTool } = {}) {
@@ -193,14 +201,14 @@ export const sorftimeChildSalesOutcomeByAsin = ${JSON.stringify(outcomes, null, 
       const result = normalRows.length ? null : selectChildSalesFallback(parsed, fallback);
       records[parentAsin] = result?.rows ?? normalRows;
       outcomes[parentAsin] = result ?? {
-        asin: parentAsin, marketplace, fetchedAt:sourceFetchedDate([parsed],fetchedAt), source: "Sorftime",
-        status: normalRows.length ? "ready" : parsed.containerRecognized && parsed.rawRowCount === 0 ? "empty" : "schema-error",
-        verifiedEmpty: parsed.containerRecognized && parsed.rawRowCount === 0,
+        asin: parentAsin, marketplace, ...(jobId ? { jobId } : {}), fetchedAt:sourceFetchedDate([parsed],fetchedAt), source: "Sorftime",
+        ...childSalesOutcome(parsed),
         containerRecognized: parsed.containerRecognized,
         rawRowCount: parsed.rawRowCount,
         validSalesRowCount: parsed.validSalesRowCount,
+        ...(parsed.unavailableSalesRowCount ? { unavailableSalesRowCount: parsed.unavailableSalesRowCount } : {}),
       };
-      if (!normalRows.length && !result && !(parsed.containerRecognized && parsed.rawRowCount === 0)) {
+      if (!result && childSalesOutcome(parsed).status === 'schema-error') {
         missingFallback = true;
       }
       console.log(`${parsed.rows.length} children`);

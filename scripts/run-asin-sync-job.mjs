@@ -1,4 +1,5 @@
 import { runSorftimeCommand } from "./lib/sorftime-stream.mjs";
+import { childSalesResultStatuses } from './lib/child-sales-outcomes.mjs';
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -1336,10 +1337,14 @@ async function main() {
         const childDiagnostics = childSalesResult.succeeded
           ? childSalesResult.diagnostics
           : [...variantResult.diagnostics, ...childSalesResult.diagnostics];
+        const childOutcomes = childSalesResultStatuses(readCachedDataExport(
+          generatedAppDataPath(root, 'sorftime-child-sales-data.ts'), 'sorftimeChildSalesOutcomeByAsin'),
+          childAsins, { jobId, marketplace });
         finalizeProcessedStageCohort(jobId, "child_sales", childAsins, asins, {
           initialJob: job,
           commandSucceeded: childSalesResult.succeeded,
-          resultStatusesByAsin: diagnosticStatusesByAsin(childAsins, childDiagnostics),
+          resultStatusesByAsin: { ...diagnosticStatusesByAsin(childAsins, childDiagnostics), ...childOutcomes.statuses },
+          resultReasonsByAsin: childOutcomes.reasons,
           diagnostics: childDiagnostics,
         });
       }
