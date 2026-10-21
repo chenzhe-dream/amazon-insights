@@ -22,6 +22,7 @@ test('US captured commercial unknowns remain valid without implying profitabilit
     'balance board近30天搜索量120,787、wobble board 22,373，搜索需求存在；但购买率、竞争和价格缺失，不能据此判断销量或利润。',
     '价格档位无法判断；需竞品价格带、成本、平台费用和毛利验证，当前不设具体售价。',
     '补齐竞品价格带、成本、费用和毛利模型后再定档。',
+    '完成BOM、物流、平台费、退货和毛利测算后再确定入门/中端价格档。',
     '现有证据无法判断盈利能力。',
     '利润仍需验证。',
     'Profitability cannot be determined from the available evidence.',
@@ -36,6 +37,8 @@ test('US captured commercial unknowns remain valid without implying profitabilit
 test('commercial disclaimers do not hide unsupported claims or approval bypasses', () => {
   for (const conclusion of [
     '利润率高', '预计毛利30%', 'ROI 80%', 'profit margin is attractive', '完成利润',
+    '完成高毛利测算后再定价', '完成毛利30%测算后再定价',
+    '完成利润高和毛利测算后再定价', '完成BOM与毛利测算后再保证ROI80%',
     '利润仍需验证，但预计毛利30%', '不能判断利润；本产品盈利能力强',
     '不能判断利润但盈利能力很强', '利润率30%仍需验证',
     '公司已批准立项', '无需成本验证', '当前无需合规验证即可销售', '无需成本、专利，验证就能上市',

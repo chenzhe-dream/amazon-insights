@@ -58,7 +58,7 @@ export const ProductDefinitionInputSchema = z.strictObject({
 });
 export type ProductDefinitionInput = z.infer<typeof ProductDefinitionInputSchema>;
 
-const commercialClaimPattern = /profit(?:ability)?|\broi\b|margin|company approved|project approved|盈利|利润|毛利|投资回报|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
+const commercialClaimPattern = /profit(?:ability)?|\broi(?=\b|\d)|margin|company approved|project approved|盈利|利润|毛利|投资回报|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
 const approvalOrBypassPattern = /company approved|project approved|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
 
 export function createProductDefinitionOutputSchema(input: ProductDefinitionInput) {
@@ -175,9 +175,19 @@ const financialSubject = '(?:利润率|毛利率|利润|毛利|盈利能力|盈�
 const financialUnknownPatterns = [
   new RegExp(`^(?:现有证据|现有数据|当前|目前)?(?:无法|不能|尚不能|不足以)(?:据此)?(?:判断|推断|确定|证明|确认|评估|预测)(?:销量[或和与及])?${financialSubject}(?:[、和与及或]${financialSubject})*$`, 'i'),
   new RegExp(`^${financialSubject}(?:仍|尚|还)?(?:需|需要|有待|待)(?:验证|评估|测算)$`, 'i'),
-  /^(?:需|需要|仍需|尚需|有待|待|必须|应先|补齐|完成|建立)(?:竞品价格带|成本|平台费用|费用|税费|运费|售价|利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报|ROI|[、和与及]|模型|测算|验证|评估)+(?:模型|测算|验证|评估)(?:后再(?:定档|定价|判断|决策))?$/i,
   /^(?:profitability|profit margin|profit|margin|ROI)(?: cannot be determined(?: from the available evidence)?| (?:still )?requires? (?:validation|verification|assessment))$/i,
 ];
+
+function isFinancialValidationStep(clause: string): boolean {
+  const step = clause.match(/^(?:需要|需|仍需|尚需|有待|待|必须|应先|补齐|完成|建立)(.+?)(?:验证|评估|测算|模型)(?:后再(.+))?$/i);
+  if (!step || (step[2] && commercialClaimPattern.test(step[2]))) return false;
+  // Cost inputs can be BOM, freight, returns, platform fees, etc. Only the
+  // financial items must be bare unknowns: never "high margin" or "margin 30%".
+  const bareFinancialItem = new RegExp(`^(?:成本)?${financialSubject}$`, 'i');
+  return step[1].split(/[、和与及]+/u).every(item =>
+    !commercialClaimPattern.test(item) || bareFinancialItem.test(item.trim()),
+  );
+}
 
 function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string | number)[][] {
   const issues: (string | number)[][] = [];
@@ -185,7 +195,8 @@ function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string
     if (typeof item === 'string') {
       const invalid = approvalOrBypassPattern.test(item) || item.split(/[，,。；;！？!?\n]+/u).some(part => {
         const clause = part.trim().replace(/[.]+$/, '');
-        return commercialClaimPattern.test(clause) && !financialUnknownPatterns.some(pattern => pattern.test(clause));
+        return commercialClaimPattern.test(clause) &&
+          !financialUnknownPatterns.some(pattern => pattern.test(clause)) && !isFinancialValidationStep(clause);
       });
       if (invalid) issues.push(path);
     } else if (Array.isArray(item)) item.forEach((entry, index) => visit(entry, [...path, index]));
