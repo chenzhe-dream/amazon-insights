@@ -7,6 +7,7 @@ import {buildSalesTrendRecord, collectSalesTrendResponses, runSalesTrendSync} fr
 import {readCachedDataExport} from '../../scripts/lib/sync-cache.mjs';
 import {projectStageOutput} from '../../scripts/lib/sync-stage-output.mjs';
 import {attachSourceMetadata} from '../../scripts/lib/sorftime-source-policy.mjs';
+import {ProviderDiagnosticError,runWithProviderDiagnostics} from '../../scripts/lib/provider-diagnostics.mjs';
 
 const missingAsin = 'B0DLB22T15';
 const sibling = 'B0DQCF6ZVZ';
@@ -97,6 +98,66 @@ test('preflight transport and quota errors remain failures and never call trends
       productAvailabilityPreflight:true,callTool:async (_key,name)=>{calls.push(name);throw error;}}),error);
     assert.deepEqual(calls,['product_detail']);
   }
+});
+
+test('failed detail preflight retains scoped daily evidence and processes the next ASIN', async () => {
+  const previous=buildSalesTrendRecord({asin:missingAsin,marketplace:'GB',fetchedAt:'2026-10-18',
+    responses:{volume:trend(missingAsin,'SalesVolume',[20260901,12])}});
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-preflight-failure-'));
+  const oldExit=process.exitCode;
+  const calls=[];
+  try {
+    process.exitCode=0;
+    const outPath=path.join(directory,'sales.ts');
+    await runSalesTrendSync({key:'offline',asins:[missingAsin,sibling],marketplace:'GB',fetchedAt:'2026-10-21',
+      existing:{[missingAsin]:previous},outPath,repair:true,delayMs:0,productAvailabilityPreflight:true,
+      callTool:async (_key,name,args)=>{
+        calls.push(`${name}:${args.asin}`);
+        if(name==='product_detail' && args.asin===missingAsin) throw new ProviderDiagnosticError({
+          connector:'sorftime',stage:'sales_trend',asin:missingAsin,operation:'product_detail',
+          failureKind:'rpc',causeCode:'MCP_RPC',boundary:'tool-content'});
+        if(name==='product_detail') return {data:{asin:args.asin,title:'Real darts'}};
+        return trend(args.asin,args.type,[202609,-1]);
+      }});
+    const records=readCachedDataExport(outPath,'sorftimeSalesTrendData');
+    assert.equal(records[missingAsin].status,'error');
+    assert.deepEqual(records[missingAsin].dailyObservations.volume,previous.dailyObservations.volume);
+    assert.deepEqual(records[missingAsin].dailyObservationFetchedAt.volume,previous.dailyObservationFetchedAt.volume);
+    assert.equal(records[missingAsin].dailyFieldFetchedAt.volume,'2026-10-18');
+    assert.deepEqual(records[missingAsin].sourceAvailabilityError,{
+      category:'request-failed',operation:'product_detail',fetchedAt:'2026-10-21',causeCode:'MCP_RPC'});
+    assert.equal(records[missingAsin].fetchedAt,'2026-10-18');
+    assert.equal(records[sibling].observationOutcomes.volume.category,'source-unknown');
+    assert.deepEqual(calls.filter(call=>call.includes(missingAsin)),[`product_detail:${missingAsin}`]);
+    assert.equal(calls.filter(call=>call.includes(sibling)).length,5);
+    assert.equal(process.exitCode,1);
+  } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('preflight provider failure still opens the job breaker without discarding partial evidence',async()=>{
+  const prior=buildSalesTrendRecord({asin:missingAsin,marketplace:'GB',fetchedAt:'2026-10-18',
+    responses:{volume:trend(missingAsin,'SalesVolume',[20260901,12])}});
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-preflight-breaker-'));
+  const oldExit=process.exitCode;
+  const physical=[];
+  try {
+    process.exitCode=0;
+    const outPath=path.join(directory,'sales.ts');
+    const env={AGENT_SYNC_JOB_ID:'sales-preflight-breaker-regression'};
+    await runSalesTrendSync({key:'offline',asins:[missingAsin,sibling],marketplace:'GB',fetchedAt:'2026-10-21',
+      existing:{[missingAsin]:prior},outPath,repair:true,delayMs:0,productAvailabilityPreflight:true,
+      callTool:(_key,name,args)=>runWithProviderDiagnostics({connector:'sorftime',stage:'sales_trend',
+        asin:args.asin,operation:name,env},async()=>{
+        physical.push(`${name}:${args.asin}`);
+        throw Object.assign(new Error('fixture quota failure'),{kind:'http',status:429});
+      })});
+    const records=readCachedDataExport(outPath,'sorftimeSalesTrendData');
+    assert.deepEqual(physical,[`product_detail:${missingAsin}`]);
+    assert.deepEqual(records[missingAsin].dailyObservations.volume,prior.dailyObservations.volume);
+    assert.equal(records[missingAsin].sourceAvailabilityError.causeCode,'HTTP_4XX');
+    assert.equal(records[sibling].sourceAvailabilityError.causeCode,'PROVIDER_DEGRADED');
+    assert.equal(process.exitCode,1);
+  } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
 });
 
 test('disabled preflight and complete repair cache do not add detail requests', async () => {

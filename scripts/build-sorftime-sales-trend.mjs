@@ -144,10 +144,11 @@ export async function runSalesTrendSync(options = {}) {
     }
 
     process.stdout.write(`[sorftime] ${asin} trend ... `);
+    const previous = existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace ? existing[asin] : {};
+    let preflightPending = false;
     try {
       // The formal Sorftime policy permits one request at a time. Avoid spending
       // the other metrics' admission deadlines while the first request runs.
-      const previous = existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace ? existing[asin] : {};
       const fields = Object.keys(trendTypes).filter(field => !repair || !(
         hasUsableTrendRecord({status:'ready', [field]:previous[field]}) ||
         Array.isArray(previous.dailyObservations?.[field]) &&
@@ -158,8 +159,10 @@ export async function runSalesTrendSync(options = {}) {
         console.log('complete cached fields');
         continue;
       }
+      preflightPending = productAvailabilityPreflight;
       const collected = await collectSalesTrendResponses({key, asin, marketplace, callTool, fields,
         productAvailabilityPreflight});
+      preflightPending = false;
       records[asin] = buildSalesTrendRecord({asin, marketplace, fetchedAt,
         ...collected, previous});
       for (const field of Object.keys(records[asin].observationErrors)) {
@@ -178,6 +181,18 @@ export async function runSalesTrendSync(options = {}) {
       process.exitCode = 1;
       if (hasFullTrend(existing[asin])) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
+        continue;
+      }
+      if (preflightPending) {
+        records[asin] = {
+          ...previous, asin, marketplace, fetchedAt:previous.fetchedAt ?? fetchedAt,
+          status:'error', statusMessage:'Sorftime product_detail 预检请求失败；已保留先前可验证趋势观测',
+          sourceAvailabilityError:{category:'request-failed',operation:'product_detail',fetchedAt,
+            ...(error instanceof ProviderDiagnosticError ? {causeCode:error.diagnostic.causeCode} : {})},
+          volume:previous.volume ?? [], amount:previous.amount ?? [],
+          price:previous.price ?? [], rank:previous.rank ?? [],
+        };
+        console.log('error · product_detail preflight failed; keep prior observations');
         continue;
       }
       records[asin] = {
@@ -212,6 +227,7 @@ export type SorftimeSalesTrendRecord = {
   dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
   observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
   observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
+  sourceAvailabilityError?: {category: "request-failed"; operation: "product_detail"; fetchedAt:string; causeCode?:string};
   observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "source-unknown" | "source-unavailable" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null; sourceTool?: "product_detail"; reasonCode?: "SORFTIME_PRODUCT_NOT_FOUND"; detailAsin?: string; marketplace?: string}>>;
   dailyFieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
