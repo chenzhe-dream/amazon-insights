@@ -349,6 +349,19 @@ function lostCoverage(previous: unknown, candidate: unknown, field: string): str
   return null;
 }
 
+function salesCoverageEvidence(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  // These describe the latest request attempt, not verified observations. A
+  // successful retry or a verified source-unavailable result may clear them.
+  // Filter only this sales-record level; keep the persisted source unchanged,
+  // including observations, their timestamps, provenance and readiness status.
+  const evidence = { ...record(value) };
+  delete evidence.observationErrors;
+  delete evidence.sourceAvailabilityError;
+  delete evidence.statusMessage;
+  return evidence;
+}
+
 function stageData(output: DisplayStageOutput): Record<string, unknown> {
   return output.stageStatus === "missing-output" ? {} : record(output.data);
 }
@@ -409,7 +422,9 @@ function assertNoCoverageRegression(current: CurrentProjectDisplayVersion | null
         if (stage === "image_remarks" && field === "remarksByAsin") continue;
         const previous = record(stageData(current.stageOutputs[stage])[field])[asin];
         const next = record(stageData(candidate[stage])[field])[asin];
-        const lost = lostCoverage(previous, next, `${stage}.${field}.${asin}`);
+        const sales = stage === "sales_trend" && field === "trendByAsin";
+        const lost = lostCoverage(sales ? salesCoverageEvidence(previous) : previous,
+          sales ? salesCoverageEvidence(next) : next, `${stage}.${field}.${asin}`);
         if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
       }
     }

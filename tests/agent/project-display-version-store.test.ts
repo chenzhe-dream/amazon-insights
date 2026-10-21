@@ -383,6 +383,58 @@ test("a partial result cannot replace an existing successful ASIN field with nul
   assert.equal(((reviewStage.data as Record<string, unknown>).ratingByAsin as Record<string, { rating: number }>)[asin]?.rating, 4.8);
 });
 
+test("sales publication may resolve operational errors without losing observation evidence", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const oldRecord = { asin, marketplace: "US", status: "error", fetchedAt: NOW,
+    volume: [], amount: [], price: [], rank: [],
+    observationErrors: { volume: "Provider request failed" },
+    sourceAvailabilityError: { category: "request-failed", operation: "product_detail", fetchedAt: NOW },
+    statusMessage: "Request failed", observationOutcomes: { volume: { category: "request-failed", fetchedAt: NOW } } };
+  const output = (value: unknown) => ({ trendByAsin: { [asin]: value } });
+  await replaceDoneOutput(pool, ids, "sales_trend", output(oldRecord));
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  const repairedIds = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+  const repaired = { asin, marketplace: "US", status: "empty", fetchedAt: NOW,
+    volume: [], amount: [], price: [], rank: [], observationErrors: {},
+    observationOutcomes: { volume: { category: "source-unavailable", fetchedAt: NOW,
+      sourceTool: "product_detail", reasonCode: "SORFTIME_PRODUCT_NOT_FOUND", detailAsin: `#${asin}` } } };
+  await replaceDoneOutput(pool, repairedIds, "sales_trend", output(repaired));
+  const published = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: repairedIds.jobId, expectedCurrentVersionId: current.versionId });
+  const sales = published.stageOutputs.sales_trend;
+  if (sales.stageStatus === "missing-output") assert.fail("Expected persisted sales output");
+  assert.deepEqual((sales.data as { trendByAsin: Record<string, unknown> }).trendByAsin[asin], repaired);
+  assert.ok(published.gaps.some(gap => gap.asin === asin && gap.field === "sales_trend.trendByAsin"));
+  const source = await pool.query("SELECT data_json FROM sync_job_stage_outputs WHERE job_id=$1 AND stage_id='sales_trend'", [ids.jobId]);
+  assert.deepEqual(source.rows[0].data_json.trendByAsin[asin], oldRecord, "original diagnostic evidence stays immutable");
+});
+
+test("sales diagnostic exemption retains numeric observations, timestamps, provenance and ready status protection", async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const record = { asin, marketplace: "US", status: "ready", fetchedAt: NOW,
+    volume: [{ month: "2026-09", value: 12 }], amount: [], price: [], rank: [],
+    dailyObservations: { volume: [{ date: "20260921", value: 2 }] },
+    fieldFetchedAt: { volume: NOW }, monthlyObservationFetchedAt: { volume: { "2026-09": NOW } },
+    provenance: { source: "Sorftime", tool: "product_trend" },
+    observationErrors: { rank: "Provider request failed" }, statusMessage: "Rank unavailable" };
+  const output = (value: unknown) => ({ trendByAsin: { [asin]: value } });
+  await replaceDoneOutput(pool, ids, "sales_trend", output(record));
+  const current = await store.publishFromCompletedJob({ organizationId: ids.organizationId,
+    projectId: ids.projectId, jobId: ids.jobId, expectedCurrentVersionId: null });
+  for (const [field, replacement] of Object.entries({ volume: [], dailyObservations: {}, fieldFetchedAt: {},
+    monthlyObservationFetchedAt: {}, provenance: {}, status: "empty" })) {
+    const losing = await addJob(pool, ids, "2026-09-22T10:00:00.000Z");
+    await replaceDoneOutput(pool, losing, "sales_trend", output({ ...record, observationErrors: {}, statusMessage: undefined, [field]: replacement }));
+    await assert.rejects(store.publishFromCompletedJob({ organizationId: ids.organizationId,
+      projectId: ids.projectId, jobId: losing.jobId, expectedCurrentVersionId: current.versionId }),
+    new RegExp(`Candidate would lose verified data: sales_trend.trendByAsin.${asin}.${field}`));
+    assert.equal((await store.readCurrent({ organizationId: ids.organizationId, projectId: ids.projectId }))?.versionId, current.versionId);
+  }
+});
+
 test("a verified catalog field cannot regress to an upstream null", async () => {
   const { pool, ids, store } = await fixture();
   const asin = ASINS[0]!;
