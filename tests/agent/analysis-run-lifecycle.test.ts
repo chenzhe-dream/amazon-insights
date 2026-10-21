@@ -39,6 +39,7 @@ const trustedOrigin = "http://127.0.0.1:3001";
 const securityEnv = {
   AGENT_SERVICE_PROXY_TOKEN: proxyToken,
   AGENT_SERVICE_TRUSTED_ORIGINS: trustedOrigin,
+  AGENT_MANUAL_ALEXA_VOC_DYNAMIC_READ_ENABLED: "1",
 };
 const proxyHeaders = {
   origin: trustedOrigin,
@@ -1251,6 +1252,7 @@ test("an authenticated local workspace registration makes the same project ident
   });
   const workspaceId = "a081d838-ffcb-4e36-b4ad-e38937f7336a";
   const workspaceAsins = ["B07ZPGD8YR", "B088LPLNPK", "B0G5N593D6"];
+  const registrationHeaders = sessionHeaders({ "idempotency-key": "workspace-registration" });
   const capturedScopes: Array<Record<string, unknown>> = [];
   const localDataBridgeDeps = createDefaultLocalDataBridgeDeps(repository);
   localDataBridgeDeps.startAsinSyncJob = async (input) => {
@@ -1299,7 +1301,7 @@ test("an authenticated local workspace registration makes the same project ident
   const registered = await app.inject({
     method: "POST",
     url: "/v1/projects",
-    headers: sessionHeaders(),
+    headers: registrationHeaders,
     payload: {
       id: workspaceId,
       name: "Kick Scooters 3ASIN 真实验收",
@@ -1316,7 +1318,7 @@ test("an authenticated local workspace registration makes the same project ident
   const repeated = await app.inject({
     method: "POST",
     url: "/v1/projects",
-    headers: sessionHeaders(),
+    headers: registrationHeaders,
     payload: {
       id: workspaceId,
       name: "Kick Scooters 3ASIN 真实验收",
@@ -1330,7 +1332,7 @@ test("an authenticated local workspace registration makes the same project ident
   const spoofedOwnership = await app.inject({
     method: "POST",
     url: "/v1/projects",
-    headers: sessionHeaders(),
+    headers: registrationHeaders,
     payload: {
       id: workspaceId,
       name: "Kick Scooters 3ASIN 真实验收",
@@ -1365,7 +1367,7 @@ test("an authenticated local workspace registration makes the same project ident
   const crossTenant = await otherApp.inject({
     method: "POST",
     url: "/v1/projects",
-    headers: sessionHeaders(),
+    headers: registrationHeaders,
     payload: {
       id: workspaceId,
       name: "Kick Scooters 3ASIN 真实验收",
@@ -1373,14 +1375,15 @@ test("an authenticated local workspace registration makes the same project ident
       asins: workspaceAsins,
     },
   });
-  assert.equal(crossTenant.statusCode, 404);
+  assert.equal(crossTenant.statusCode, 409);
+  assert.equal(crossTenant.json().error.code, "IDEMPOTENCY_KEY_REUSED");
   assert.equal((await repository.findProjectById(workspaceId))?.organizationId, organizationId);
   assert.equal((await repository.findProjectById(workspaceId))?.createdBy, actorId);
 
   const conflicting = await app.inject({
     method: "POST",
     url: "/v1/projects",
-    headers: sessionHeaders(),
+    headers: registrationHeaders,
     payload: {
       id: workspaceId,
       name: "Conflicting replacement",
