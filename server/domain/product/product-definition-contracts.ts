@@ -173,20 +173,41 @@ export function assertProductDefinitionCapabilityLanguage(value: unknown): void 
 // Check each clause independently so a disclaimer cannot hide an adjacent claim.
 const financialSubject = '(?:利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报|ROI)';
 const financialUnknownPatterns = [
-  new RegExp(`^(?:现有证据|现有数据|当前|目前)?(?:无法|不能|尚不能|不足以)(?:据此)?(?:判断|推断|确定|证明|确认|评估|预测)(?:销量[或和与及])?${financialSubject}(?:[、和与及或]${financialSubject})*$`, 'i'),
   new RegExp(`^${financialSubject}(?:仍|尚|还)?(?:需|需要|有待|待)(?:验证|评估|测算)$`, 'i'),
   /^(?:profitability|profit margin|profit|margin|ROI)(?: cannot be determined(?: from the available evidence)?| (?:still )?requires? (?:validation|verification|assessment))$/i,
 ];
 
+function onlyFinancialSubjects(list: string): boolean {
+  const subject = new RegExp(`^(?:成本)?${financialSubject}(?:表现|预测|保证|结论|数据|证据)?$`, 'i');
+  return list.split(/[、和与及或]+/u).every(item =>
+    !commercialClaimPattern.test(item) || subject.test(item.trim()),
+  );
+}
+
+function isFinancialUnknown(clause: string): boolean {
+  if (financialUnknownPatterns.some(pattern => pattern.test(clause))) return true;
+  const unknownPredicate = clause.match(/^(.+?)(?:(?:尚未|未)(?:评估|测算|验证|确认)|(?:(?:仍|尚|还)?(?:需|需要|待)|另行)(?:另行)?(?:验证|评估|测算)|(?:不能|无法|不可)(?:由此|据此)?(?:判断|推断|确定|确认|预测))$/u);
+  if (unknownPredicate && onlyFinancialSubjects(unknownPredicate[1])) return true;
+  const missing = clause.match(/^(?:当前|目前)?(?:缺少|缺乏|缺失|尚缺|未提供)(.+?)(?:数据|证据)$/u);
+  if (missing && onlyFinancialSubjects(missing[1])) return true;
+  const conditional = clause.match(/^(?:不得|不能|不应|不可)在(?:无|缺少)(.+?)(?:数据|证据)时(?:输出|给出|作出|做出)(.+)$/u);
+  if (conditional && onlyFinancialSubjects(conditional[1]) &&
+    onlyFinancialSubjects(conditional[2].replace(/(^|[、和与及或])(?:承诺|保证|预测)/gu, '$1'))) return true;
+  const denial = clause.match(/^(?:现有证据|现有数据|当前|目前)?(?:无法|不能|尚不能|不足以|不得|不应|不可|不)(?:(?:据|根据)(.+?))?(?:判断|推断|推定|确定|证明|确认|评估|预测|宣称|承诺|保证|认定)(.+)$/u);
+  if (denial && (!denial[1] || !commercialClaimPattern.test(denial[1])) && onlyFinancialSubjects(denial[2])) return true;
+  const inference = clause.match(/^(?:不得|不能|不应|不可)(?:把|将)(.+?)(?:当作|视为|作为)(.+)$/u);
+  return Boolean(inference && !commercialClaimPattern.test(inference[1]) && onlyFinancialSubjects(inference[2]));
+}
+
 function isFinancialValidationStep(clause: string): boolean {
-  const step = clause.match(/^(?:需要|需|仍需|尚需|有待|待|必须|应先|补齐|完成|建立)(.+?)(?:验证|评估|测算|模型)(?:后再(.+))?$/i);
-  if (!step || (step[2] && commercialClaimPattern.test(step[2]))) return false;
+  const prerequisite = clause.match(/^(.*?)(?:需要|需)补齐(.+?)后再(.+)$/u);
+  if (prerequisite && !commercialClaimPattern.test(prerequisite[1]) &&
+    onlyFinancialSubjects(prerequisite[2]) && !commercialClaimPattern.test(prerequisite[3])) return true;
+  const step = clause.match(/^(.*?)(?:需要|仍需|尚需|有待|必须|应先|补齐|完成|建立|需|待)(.+?)(?:验证|评估|测算|模型)(?:(?:后再|和|与|及)(.+))?$/i);
+  if (!step || commercialClaimPattern.test(step[1]) || (step[3] && commercialClaimPattern.test(step[3]))) return false;
   // Cost inputs can be BOM, freight, returns, platform fees, etc. Only the
   // financial items must be bare unknowns: never "high margin" or "margin 30%".
-  const bareFinancialItem = new RegExp(`^(?:成本)?${financialSubject}$`, 'i');
-  return step[1].split(/[、和与及]+/u).every(item =>
-    !commercialClaimPattern.test(item) || bareFinancialItem.test(item.trim()),
-  );
+  return onlyFinancialSubjects(step[2]);
 }
 
 function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string | number)[][] {
@@ -196,7 +217,7 @@ function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string
       const invalid = approvalOrBypassPattern.test(item) || item.split(/[，,。；;！？!?\n]+/u).some(part => {
         const clause = part.trim().replace(/[.]+$/, '');
         return commercialClaimPattern.test(clause) &&
-          !financialUnknownPatterns.some(pattern => pattern.test(clause)) && !isFinancialValidationStep(clause);
+          !isFinancialUnknown(clause) && !isFinancialValidationStep(clause);
       });
       if (invalid) issues.push(path);
     } else if (Array.isArray(item)) item.forEach((entry, index) => visit(entry, [...path, index]));
