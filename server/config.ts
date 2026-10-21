@@ -508,11 +508,16 @@ export function loadAgentAuthenticationConfig(
     assertPrivateNetworkCompatibilityAllowed(env, readNetworkInterfaces);
   }
   const allowInsecureCookie = insecureCookie || insecurePrivateNetworkCookie;
+  const namespace = env.AGENT_AUTH_COOKIE_NAMESPACE;
+  if (namespace !== undefined && !/^[a-zA-Z0-9_-]{1,64}$/.test(namespace)) {
+    throw new Error("Agent authentication configuration is invalid");
+  }
+  const cookieSuffix = namespace === undefined ? "" : `_${namespace}`;
 
   return Object.freeze({
     mode: anonymousLoopback ? "anonymous-loopback" : "authenticated",
     cookie: Object.freeze({
-      name: allowInsecureCookie ? "agent_session" : "__Host-agent_session",
+      name: `${allowInsecureCookie ? "agent_session" : "__Host-agent_session"}${cookieSuffix}`,
       secure: !allowInsecureCookie,
       maxAgeSeconds: 28_800,
     }),
@@ -1028,7 +1033,8 @@ function assertPrivateNetworkCompatibilityAllowed(
   if (!isLoopbackHost(agentHost)) fail();
   const supportedPortPair =
     (env.WEB_PORT === "31900" && env.AGENT_SERVICE_PORT === "31901") ||
-    (env.WEB_PORT === "32900" && env.AGENT_SERVICE_PORT === "32901");
+    (env.WEB_PORT === "32900" && env.AGENT_SERVICE_PORT === "32901") ||
+    (env.WEB_PORT === "33900" && env.AGENT_SERVICE_PORT === "33901");
   if (!supportedPortPair) {
     fail();
   }

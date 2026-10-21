@@ -36,6 +36,24 @@ const assignedLanInterfaces = () => ({
   }],
 });
 
+test('independent DE CA candidate uses authenticated private LAN and its own cookie name', () => {
+ const candidate={...privateLan,WEB_PORT:'33900',AGENT_SERVICE_PORT:'33901',AGENT_SERVICE_INTERNAL_URL:'http://127.0.0.1:33901',AGENT_SERVICE_TRUSTED_ORIGINS:'http://192.168.1.109:33900',AGENT_AUTH_COOKIE_NAMESPACE:'candidate33900deca'};
+ const config=loadAgentAuthenticationConfig(candidate,assignedLanInterfaces);
+ assert.equal(config.mode,'authenticated');
+ assert.equal(config.cookie.name,'agent_session_candidate33900deca');
+ assert.equal(config.cookie.secure,false);
+ assert.throws(()=>loadAgentAuthenticationConfig({...candidate,AGENT_AUTH_ALLOW_ANONYMOUS_LOOPBACK:'1'},assignedLanInterfaces));
+ assert.throws(()=>loadAgentAuthenticationConfig({...candidate,AGENT_SERVICE_PORT:'31901'},assignedLanInterfaces));
+ assert.throws(()=>loadAgentAuthenticationConfig({...candidate,NODE_ENV:'production'},assignedLanInterfaces));
+ assert.throws(()=>loadAgentAuthenticationConfig({...candidate,AGENT_SERVICE_TRUSTED_ORIGINS:'http://8.8.8.8:33900'},assignedLanInterfaces));
+});
+
+test('cookie namespaces reject unsafe values and retain default secure cookie without a namespace',()=>{
+ assert.equal(loadAgentAuthenticationConfig(loopback).cookie.name,'__Host-agent_session');
+ assert.equal(loadAgentAuthenticationConfig({...loopback,AGENT_AUTH_COOKIE_NAMESPACE:'candidate33900deca'}).cookie.name,'__Host-agent_session_candidate33900deca');
+ for(const namespace of ['', 'bad;cookie','../formal','x'.repeat(65)])assert.throws(()=>loadAgentAuthenticationConfig({...loopback,AGENT_AUTH_COOKIE_NAMESPACE:namespace}));
+});
+
 function assignedPrivateInterface(address: string) {
   return () => ({
     Ethernet: [{
