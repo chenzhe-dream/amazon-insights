@@ -53,7 +53,7 @@ export type ModelProviderErrorKind =
 
 export type ModelValidationDiagnostic = Readonly<
   | { stage: 'response-envelope'; code: 'invalid_envelope' }
-  | { stage: 'json'; code: 'invalid_json' }
+  | { stage: 'json'; code: 'invalid_json'; contentLength?: number; startsWithFence?: boolean; parseError?: 'unexpected-end' | 'unexpected-token' | 'invalid-syntax'; position?: number; finishReason?: 'stop' | 'completed' }
   | { stage: 'schema'; code: 'contract_mismatch' }
   | { stage: 'semantic'; code: 'evidence_mismatch' }
   | { stage: 'sdk'; code: 'sdk_parse_failed' }
@@ -62,6 +62,18 @@ export type ModelValidationDiagnostic = Readonly<
 export function safeModelValidationDiagnostic(value: unknown): ModelValidationDiagnostic | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const {stage,code}=value as Record<string,unknown>;
+  if (stage === 'json' && code === 'invalid_json') {
+    const raw=value as Record<string,unknown>;
+    const contentLength=typeof raw.contentLength==='number' && Number.isSafeInteger(raw.contentLength) && raw.contentLength>=0 ? raw.contentLength : undefined;
+    const position=typeof raw.position==='number' && Number.isSafeInteger(raw.position) && raw.position>=0 && contentLength!==undefined && raw.position<=contentLength ? raw.position : undefined;
+    return Object.freeze({stage,code,
+      ...(contentLength!==undefined?{contentLength}:{}),
+      ...(typeof raw.startsWithFence==='boolean'?{startsWithFence:raw.startsWithFence}:{}),
+      ...(typeof raw.parseError==='string' && ['unexpected-end','unexpected-token','invalid-syntax'].includes(raw.parseError)?{parseError:raw.parseError as 'unexpected-end'|'unexpected-token'|'invalid-syntax'}:{}),
+      ...(position!==undefined?{position}:{}),
+      ...(raw.finishReason==='stop'||raw.finishReason==='completed'?{finishReason:raw.finishReason}:{}),
+    });
+  }
   if ((stage==='response-envelope' && code==='invalid_envelope') ||
       (stage==='json' && code==='invalid_json') ||
       (stage==='schema' && code==='contract_mismatch') ||

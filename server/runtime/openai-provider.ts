@@ -367,6 +367,7 @@ function parseStructuredOutput<T>(
   usage: ModelProviderUsage,
   deferOutputValidation = false,
   allowSingleJsonFence = false,
+  finishReason?: "stop" | "completed",
 ) {
   let outputValue: unknown;
   try {
@@ -385,7 +386,15 @@ function parseStructuredOutput<T>(
       "invalid_output",
       "OpenAI structured output was not valid JSON",
       {
-        validationDiagnostic: {stage:"json",code:"invalid_json"},
+        validationDiagnostic: {
+          stage:"json",code:"invalid_json",contentLength:outputText.length,
+          startsWithFence:/^\s*```/.test(outputText),
+          parseError:error instanceof SyntaxError && /(?:unexpected end|unterminated)/i.test(error.message) ? "unexpected-end"
+            : error instanceof SyntaxError && /unexpected token/i.test(error.message) ? "unexpected-token" : "invalid-syntax",
+          ...(error instanceof SyntaxError && /position (\d+)/.test(error.message)
+            ? {position:Number(/position (\d+)/.exec(error.message)![1])} : {}),
+          ...(finishReason ? {finishReason} : {}),
+        },
         cause: error instanceof Error ? error : undefined,
         usage,
       },
@@ -509,7 +518,7 @@ export class OpenAIProvider implements ModelProvider {
         const usage = validatedChatUsage(completion);
         this.assertOutputLimit(request, usage);
         const outputText = extractCompletedChatOutputText(completion, usage);
-        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence);
+        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence, "stop");
       }
       const response = await this.runGovernedModelAttempt(request, () =>
         this.client.responses.create(
@@ -556,7 +565,7 @@ export class OpenAIProvider implements ModelProvider {
         );
       }
       const outputText = extractCompletedOutputText(response.output, usage);
-      return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence);
+      return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence, "completed");
     } catch (error) {
       throw classifyOpenAIError(error);
     }

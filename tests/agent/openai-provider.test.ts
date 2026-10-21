@@ -160,7 +160,9 @@ test('format failures expose closed stages without raw response contents', async
       const provider=new OpenAIProvider({transport,client:{responses:{create:invoke},chat:{completions:{create:invoke}}} as never});
       await assert.rejects(provider.generateStructured(request()),(error:unknown)=>{
         assert.ok(error instanceof ModelProviderError);
-        assert.deepEqual(Reflect.get(error,'validationDiagnostic'),expected);
+        const diagnostic=error.validationDiagnostic;
+        assert.deepEqual(diagnostic && {stage:diagnostic.stage,code:diagnostic.code},expected);
+        if(diagnostic?.stage==='json'){assert.equal(diagnostic.contentLength,text.length);assert.equal(diagnostic.startsWithFence,false);}
         assert.equal(error.usage?.outputTokens,10);
         assert.doesNotMatch(JSON.stringify(error),new RegExp(sentinel));return true;
       });
@@ -971,4 +973,24 @@ test('saved real relay result remains invalid after fence unwrap; never map resu
       assert.ok(error.validationIssues?.some(issue => issue.path?.[0] === 'products' && issue.code === 'invalid_type'));
       return true;
     });
+});
+test('JSON parse diagnostics report only bounded metadata for both transports and keep strict rejection', async()=>{
+ for(const transport of ['responses-strict','relay-chat-json'] as const) for(const text of ['```json\n{"summary":"PRIVATE_TEXT"}\n```','{"summary":"PRIVATE_TEXT"']){
+  const invoke=async()=>transport==='responses-strict'?completedResponse({output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]}):completedChat({choice:{message:{content:text}}});
+  const provider=new OpenAIProvider({transport,client:{responses:{create:invoke},chat:{completions:{create:invoke}}} as never});
+  await assert.rejects(provider.generateStructured(request()),(error:unknown)=>{
+   assert.ok(error instanceof ModelProviderError);const d=error.validationDiagnostic as unknown as Record<string,unknown>;
+   assert.equal(d.contentLength,text.length);assert.equal(d.startsWithFence,text.startsWith('```'));
+   assert.equal(d.finishReason,transport==='responses-strict'?'completed':'stop');
+   assert.ok(['unexpected-end','unexpected-token','invalid-syntax'].includes(String(d.parseError)));
+   assert.ok(d.position===undefined || Number.isSafeInteger(d.position));
+   assert.doesNotMatch(JSON.stringify(d),/PRIVATE_TEXT|summary/);return true;
+  });
+ }
+});
+
+test('JSON diagnostics sanitizer drops raw fields, invalid categories and unsafe numeric positions',()=>{
+ const error=new ModelProviderError('invalid_output','safe',{validationDiagnostic:{stage:'json',code:'invalid_json',contentLength:5,startsWithFence:false,position:6,parseError:'PRIVATE',finishReason:'PRIVATE',raw:'PRIVATE'}} as never);
+ assert.deepEqual(error.validationDiagnostic,{stage:'json',code:'invalid_json',contentLength:5,startsWithFence:false});
+ assert.doesNotMatch(JSON.stringify(error.validationDiagnostic),/PRIVATE/);
 });

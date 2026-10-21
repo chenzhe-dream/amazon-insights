@@ -1218,7 +1218,7 @@ test("OpenAI raw JSON failures settle usage and receive exactly one runner forma
   const result = await runSkill(runner, executionRequest());
 
   assert.equal(requests.length, 2);
-  assert.deepEqual(diagnostics, [{event:"model_validation_failed",attemptKind:"initial",issueCount:0,issues:[],diagnostic:{stage:"json",code:"invalid_json"}}]);
+  assert.deepEqual(diagnostics, [{event:"model_validation_failed",attemptKind:"initial",issueCount:0,issues:[],diagnostic:{stage:"json",code:"invalid_json",contentLength:11,startsWithFence:false,parseError:"unexpected-end",finishReason:"completed"}}]);
   assert.doesNotMatch(requests[0].instructions ?? "", /repair/i);
   assert.match(requests[1].instructions ?? "", /repair/i);
   assert.equal(result.record.attemptCount, 2);
