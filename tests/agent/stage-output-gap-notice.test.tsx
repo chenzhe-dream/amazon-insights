@@ -67,23 +67,23 @@ test("complete ASIN output renders no gap notice", () => {
   assert.equal(notice, null);
 });
 
-test("page renders late-stage gap cards and supplies every late-stage fallback", () => {
+test("page keeps contextual gaps and fallbacks without duplicate overview notices", () => {
   const pageSource = readFileSync(new URL("../../app/page.tsx", import.meta.url), "utf8");
   const harnessSource = readFileSync(
     new URL("./helpers/asin-sync-funnel-browser-harness.tsx", import.meta.url),
     "utf8",
   );
 
-  assert.equal(pageSource.match(/<StageOutputGapNotice/g)?.length, 3);
-  assert.doesNotMatch(pageSource, /<StageOutputGapCard[^>]+stage="(?:reviews|fba)"/);
-  for (const stage of ["category", "sales_trend", "listing", "keywords", "traffic", "child_sales", "price_strategy", "image_remarks"]) {
+  assert.equal(pageSource.match(/<StageOutputGapNotice/g)?.length, 1);
+  assert.doesNotMatch(pageSource, /<StageOutputGapCard[^>]+stage="(?:reviews|fba|child_sales)"/);
+  for (const stage of ["category", "sales_trend", "listing", "keywords", "traffic", "price_strategy", "image_remarks"]) {
     assert.match(pageSource, new RegExp(`<StageOutputGapCard[^>]+stage="${stage}"`));
   }
   for (const fallback of ["childSalesByAsin", "priceStrategyByAsin", "imageRemarksByAsin", "imageRemarkOutcomesByAsin"]) {
-    assert.match(pageSource, new RegExp(`${fallback}: runtimeAnalysisData`));
+    assert.match(pageSource, new RegExp(`${fallback}: scopedRuntimeAnalysisData`));
   }
   assert.match(pageSource, /records=\{reviewAnalysisByAsin\}/);
-  assert.match(pageSource, /records=\{fbaFeeByAsin\}/);
+  assert.match(pageSource, /fbaFeeByAsin=\{fbaFeeByAsin\}/);
 
   assert.equal(harnessSource.match(/createElement\(StageOutputGapNotice/g)?.length, 2);
   assert.doesNotMatch(harnessSource, /createElement\(StageOutputGapCard, \{ snapshot: stageOutputs, stage: "(?:reviews|fba)" \}\)/);
