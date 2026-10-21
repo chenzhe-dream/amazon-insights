@@ -133,18 +133,22 @@ export async function runSalesTrendSync(options = {}) {
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (!repair && shouldUseCachedRecord(existing[asin]) && hasFullTrend(existing[asin])) {
-      logCacheHit(asin, existing[asin]);
+    const previous = existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace ? existing[asin] : {};
+    if (!repair && shouldUseCachedRecord(previous) && hasFullTrend(previous)) {
+      logCacheHit(asin, previous);
       continue;
     }
 
     if (!key) {
+      if (existing[asin] && previous !== existing[asin]) {
+        delete records[asin];
+        process.exitCode = 1;
+      }
       console.log(`[skip] ${asin} · 无 MCP key，保留已有缓存或跳过`);
       continue;
     }
 
     process.stdout.write(`[sorftime] ${asin} trend ... `);
-    const previous = existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace ? existing[asin] : {};
     let preflightPending = false;
     try {
       // The formal Sorftime policy permits one request at a time. Avoid spending
@@ -179,7 +183,7 @@ export async function runSalesTrendSync(options = {}) {
       );
     } catch (error) {
       process.exitCode = 1;
-      if (hasFullTrend(existing[asin])) {
+      if (hasFullTrend(previous)) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
       }

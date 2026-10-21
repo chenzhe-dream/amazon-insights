@@ -160,6 +160,76 @@ test('preflight provider failure still opens the job breaker without discarding 
   } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
 });
 
+test('GB preflight failure cannot retain a ready US trend under the same ASIN',async()=>{
+  const oldUS={asin:missingAsin,marketplace:'US',fetchedAt:'2026-10-18',status:'ready',
+    volume:[{month:'2026-09',value:99}],amount:[],price:[],rank:[]};
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-cross-site-failure-'));
+  const oldExit=process.exitCode;
+  const physical=[];
+  try {
+    process.exitCode=0;
+    const outPath=path.join(directory,'sales.ts');
+    const env={AGENT_SYNC_JOB_ID:'sales-cross-site-preflight-regression'};
+    await runSalesTrendSync({key:'offline',asins:[missingAsin,sibling],marketplace:'GB',fetchedAt:'2026-10-21',
+      existing:{[missingAsin]:oldUS},outPath,repair:true,delayMs:0,productAvailabilityPreflight:true,
+      callTool:(_key,name,args)=>runWithProviderDiagnostics({connector:'sorftime',stage:'sales_trend',
+        asin:args.asin,operation:name,env},async()=>{
+        physical.push(`${name}:${args.asin}`);
+        throw Object.assign(new Error('fixture auth failure'),{kind:'http',status:403});
+      })});
+    const records=readCachedDataExport(outPath,'sorftimeSalesTrendData');
+    assert.deepEqual(physical,[`product_detail:${missingAsin}`]);
+    assert.equal(records[missingAsin].marketplace,'GB');
+    assert.equal(records[missingAsin].status,'error');
+    assert.equal(records[missingAsin].fetchedAt,'2026-10-21');
+    assert.deepEqual(records[missingAsin].volume,[]);
+    assert.equal(records[missingAsin].sourceAvailabilityError.causeCode,'HTTP_4XX');
+    assert.equal(records[sibling].sourceAvailabilityError.causeCode,'PROVIDER_DEGRADED');
+    assert.equal(process.exitCode,1);
+  } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('default cache admission does not skip a different marketplace ready record',async()=>{
+  const oldUS={asin:missingAsin,marketplace:'US',fetchedAt:'2026-10-18',status:'ready',
+    volume:[{month:'2026-09',value:99}],amount:[],price:[],rank:[]};
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-cross-site-cache-'));
+  const oldExit=process.exitCode;
+  const calls=[];
+  try {
+    process.exitCode=0;
+    const outPath=path.join(directory,'sales.ts');
+    await runSalesTrendSync({key:'offline',asins:[missingAsin],marketplace:'GB',fetchedAt:'2026-10-21',
+      existing:{[missingAsin]:oldUS},outPath,repair:false,delayMs:0,productAvailabilityPreflight:true,
+      callTool:async(_key,name,args)=>{
+        calls.push(name);
+        return name==='product_detail'?{data:{asin:missingAsin,title:'Real GB product'}}:
+          trend(args.asin,args.type,[202609,7]);
+      }});
+    const record=readCachedDataExport(outPath,'sorftimeSalesTrendData')[missingAsin];
+    assert.deepEqual(calls,['product_detail','product_trend','product_trend','product_trend','product_trend']);
+    assert.equal(record.marketplace,'GB');
+    assert.deepEqual(record.volume,[{month:'2026-09',value:7}]);
+    assert.equal(process.exitCode,0);
+  } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('missing credential does not publish a different marketplace ready cache',async()=>{
+  const oldUS={asin:missingAsin,marketplace:'US',fetchedAt:'2026-10-18',status:'ready',
+    volume:[{month:'2026-09',value:99}],amount:[],price:[],rank:[]};
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'sales-cross-site-no-key-'));
+  const oldExit=process.exitCode;
+  try {
+    process.exitCode=0;
+    const outPath=path.join(directory,'sales.ts');
+    await runSalesTrendSync({key:'',asins:[missingAsin],marketplace:'GB',fetchedAt:'2026-10-21',
+      existing:{[missingAsin]:oldUS},outPath,repair:false,delayMs:0,productAvailabilityPreflight:true,
+      callTool:async()=>{throw new Error('must not query without key');}});
+    const records=readCachedDataExport(outPath,'sorftimeSalesTrendData');
+    assert.equal(records[missingAsin],undefined);
+    assert.equal(process.exitCode,1);
+  } finally {process.exitCode=oldExit;fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 test('disabled preflight and complete repair cache do not add detail requests', async () => {
   const calls=[];
   await collectSalesTrendResponses({key:'offline',asin:missingAsin,marketplace:'GB',fields:['volume'],
