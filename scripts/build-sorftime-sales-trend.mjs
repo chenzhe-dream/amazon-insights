@@ -6,6 +6,7 @@ import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
 import { parseSorftimeProductTrend } from "./lib/sorftime-trend-parse.mjs";
 import {ProviderDiagnosticError, formatProviderDiagnosticLine} from './lib/provider-diagnostics.mjs';
+import {isExactMissingProductDetail} from './lib/sorftime-product-availability.mjs';
 import {
   isForceRefresh,
   logCacheHit,
@@ -25,22 +26,6 @@ function readCatalogAsins() {
 function hasFullTrend(record) { return hasUsableTrendRecord(record); }
 
 const trendTypes = {volume:'SalesVolume', amount:'SalesAmount', price:'Price', rank:'Rank'};
-const placeholderNullFields = ['parent_asin','title','sub_title','brand','store_name','seller_name','seller_id',
-  'category','sub_category','online_date','listing_date','ships_from','seller_country','extra_savings',
-  'peak_season','package_size_cm'];
-const placeholderZeroFields = ['days_on_shelf','price','list_price','coupon','star_rating','review_count',
-  'monthly_sales_volume','monthly_sales_amount','yearly_sales_volume','fba_fee','ship_cost','platform_fee',
-  'profit','profit_rate','seller_count','variation_count','weight_g'];
-const placeholderFalseFields = ['a_plus','has_video','has_brand_store','is_fba'];
-function isExactMissingProductDetail(raw, asin) {
-  const data = raw?.data;
-  if (!data || typeof data !== 'object' || Array.isArray(data) || data.asin !== `#${asin}`) return false;
-  const expectedCount = 1 + placeholderNullFields.length + placeholderZeroFields.length + placeholderFalseFields.length;
-  return Object.keys(data).length === expectedCount &&
-    placeholderNullFields.every(field => Object.hasOwn(data,field) && data[field] === null) &&
-    placeholderZeroFields.every(field => Object.hasOwn(data,field) && data[field] === 0) &&
-    placeholderFalseFields.every(field => Object.hasOwn(data,field) && data[field] === false);
-}
 export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool,
   fields = Object.keys(trendTypes), productAvailabilityPreflight = false}) {
   const responses = {}, requestErrors = {};

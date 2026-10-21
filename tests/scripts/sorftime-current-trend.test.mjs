@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
 import test from 'node:test';
 import * as trend from '../../scripts/lib/sorftime-trend-parse.mjs';
 import { parsePriceStrategyResponse } from '../../scripts/build-sorftime-price-strategy.mjs';
@@ -78,13 +76,20 @@ test('coupon semantics follow detail contract even with legacy or absent trend d
 });
 test('ASIN sales and price requests send the current type parameter',async()=>{
   for(const file of ['sales-trend','price-strategy']){
-    const source=fs.readFileSync(new URL('../../scripts/build-sorftime-'+file+'.mjs',import.meta.url),'utf8');
     const calls=[];
     const callTool=async(_key,name,args)=>{if(name==='product_trend')calls.push(args);return {};};
     if(file==='sales-trend') await collectSalesTrendResponses({key:'fixture',asin,marketplace:'US',callTool});
     else {
-      const expression=source.split('const [detailRaw, priceRaw] = ')[1].split(';')[0];
-      await vm.runInNewContext('(async()=>'+expression+')()',{key:'fixture',asin,marketplace:'US',callSorftimeTool:callTool});
+      const {runSorftimePriceStrategyCli}=await import('../../scripts/build-sorftime-price-strategy.mjs');
+      const oldExit=process.exitCode;
+      try {
+        await runSorftimePriceStrategyCli({key:'fixture',jobId:'test-job',asins:[asin],marketplace:'US',
+          fetchedAt:'2026-10-12',existing:{},repair:true,env:{},wait:async()=>{},readEvidence:()=>({}),
+          writeFileSync:()=>{},callTool:async(_key,name,args)=>{
+            if(name==='product_detail') return {data:{asin,price:59.99,coupon:0}};
+            return callTool(_key,name,args);
+          }});
+      } finally {process.exitCode=oldExit;}
     }
     assert.ok(calls.length);
     assert.deepEqual(calls.map(c=>c.type),file==='sales-trend'?['SalesVolume','SalesAmount','Price','Rank']:['Price']);

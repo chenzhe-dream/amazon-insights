@@ -10,6 +10,7 @@ import { readScopedSorftimeEvidenceByOperation } from "./lib/scoped-sorftime-evi
 import { buildScopedSorftimeModuleResult } from "./lib/scoped-sorftime-fallbacks.mjs";
 import { positiveMoneyOrNull } from "./lib/commerce-data-validity.mjs";
 import { ProviderDiagnosticError, formatProviderDiagnosticLine } from "./lib/provider-diagnostics.mjs";
+import { isExactMissingProductDetail } from "./lib/sorftime-product-availability.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const catalogPath = generatedAppDataPath(root, "competitor-data.ts");
@@ -221,6 +222,8 @@ export async function runSorftimePriceStrategyCli(options = {}) {
   const readEvidence = options.readEvidence ?? readScopedSorftimeEvidenceByOperation;
   const wait = options.wait ?? sleep;
   const writeFileSync = options.writeFileSync ?? fs.writeFileSync;
+  const productAvailabilityPreflight = options.productAvailabilityPreflight ??
+    env.AGENT_SORFTIME_PRODUCT_AVAILABILITY_PREFLIGHT === '1';
 
   if (!key && !jobId && !Object.values(existing).some(Boolean)) {
     console.error("[error] 未找到 Sorftime MCP key，且无可用缓存");
@@ -259,14 +262,26 @@ export async function runSorftimePriceStrategyCli(options = {}) {
 
     process.stdout.write(`[price-strategy] ${asin} ... `);
     try {
-      const [detailRaw, priceRaw] = [
-        await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace }),
-        await callSorftimeTool(key, "product_trend", {
+      const detailRaw = await callSorftimeTool(key, "product_detail", { asin, amz_site: marketplace });
+      if (productAvailabilityPreflight && isExactMissingProductDetail(detailRaw, asin)) {
+        const sourceDate = sourceFetchedDate([detailRaw],fetchedAt);
+        const result = fallback();
+        records[asin] = result ?? {
+          asin, marketplace, fetchedAt:sourceDate, status:'empty', source:'Sorftime',
+          reasonCode:'SORFTIME_PRODUCT_NOT_FOUND',
+          statusMessage:'Sorftime product_detail returned the verified missing-product placeholder',
+          provenance:{...(jobId ? {jobId} : {}),asin,marketplace,fetchedAt:sourceDate,
+            connector:'sorftime',stageId:'price_strategy',operation:'product_detail',tool:'product_detail'},
+        };
+        console.log('source-unavailable · SORFTIME_PRODUCT_NOT_FOUND');
+        await wait(300);
+        continue;
+      }
+      const priceRaw = await callSorftimeTool(key, "product_trend", {
           asin,
           amz_site: marketplace,
           type: "Price",
-        }),
-      ];
+        });
       const strategy = parsePriceStrategyResponse({ asin, detailRaw, priceRaw });
       const sourceDate = sourceFetchedDate([detailRaw,priceRaw],fetchedAt);
       if (!strategy) {

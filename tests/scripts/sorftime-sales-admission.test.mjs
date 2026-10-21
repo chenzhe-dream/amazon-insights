@@ -1,29 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import fs from "node:fs";
-import vm from "node:vm";
 import {collectSalesTrendResponses} from '../../scripts/build-sorftime-sales-trend.mjs';
+import {runSorftimePriceStrategyCli} from '../../scripts/build-sorftime-price-strategy.mjs';
 
-for (const [file, names, expected] of [
-  ["price-strategy", "detailRaw, priceRaw", ["product_detail", "product_trend"]],
-]) {
-  test(`${file} does not compete with itself for the single Sorftime permit`, async () => {
-    const source = fs.readFileSync(new URL(`../../scripts/build-sorftime-${file}.mjs`, import.meta.url), "utf8");
-    const expression = source.split(`const [${names}] = `)[1].split(";")[0];
+test("price-strategy does not compete with itself for the single Sorftime permit", async () => {
     let active = false;
-    const result = await vm.runInNewContext(`(async () => ${expression})()`, {
-      key: "fixture", asin: "B085DV8T75", marketplace: "US", Promise,
-      callSorftimeTool: async (_key, tool) => {
+    const asin="B085DV8T75";
+    const calls=[];
+    const oldExit=process.exitCode;
+    try {
+      await runSorftimePriceStrategyCli({key:'fixture',jobId:'test-job',asins:[asin],marketplace:'US',
+        fetchedAt:'2026-10-12',existing:{},repair:true,env:{},wait:async()=>{},readEvidence:()=>({}),
+        writeFileSync:()=>{},callTool:async (_key, tool) => {
         if (active) throw new Error("Local admission capacity exceeded");
         active = true;
         await new Promise(resolve => setTimeout(resolve, 5));
         active = false;
-        return tool;
-      },
-    });
-    assert.deepEqual(Array.from(result), expected);
-  });
-}
+        calls.push(tool);
+        return tool==='product_detail'?{data:{asin,price:59.99,coupon:0}}:
+          {data:{asin,type:'Price',data:[202609,60]}};
+      }});
+    } finally {process.exitCode=oldExit;}
+    assert.deepEqual(calls,["product_detail", "product_trend"]);
+});
 
 test("sales collection completes all four metrics with a single provider permit", async () => {
   let active = 0;
