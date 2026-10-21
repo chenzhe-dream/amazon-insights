@@ -59,6 +59,7 @@ export const ProductDefinitionInputSchema = z.strictObject({
 export type ProductDefinitionInput = z.infer<typeof ProductDefinitionInputSchema>;
 
 const commercialClaimPattern = /profit(?:ability)?|\broi\b|margin|company approved|project approved|盈利|利润|毛利|投资回报|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
+const approvalOrBypassPattern = /company approved|project approved|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
 
 export function createProductDefinitionOutputSchema(input: ProductDefinitionInput) {
   const vocEvidenceIds = collectVocEvidenceIds(input.voc.result);
@@ -117,10 +118,8 @@ export function createProductDefinitionOutputSchema(input: ProductDefinitionInpu
     });
     const riskAreas = new Set(output.risks.map(({ area }) => area));
     if (riskAreas.size !== 5) context.addIssue({ code: "custom", path: ["risks"], message: "Every commercial gate must remain explicit", params: productValidationRule("product-commercial-gates-required") });
-    try {
-      assertProductDefinitionCapabilityLanguage(output);
-    } catch {
-      context.addIssue({ code: "custom", path: ["dataBoundary"], message: "Product definition commercial capability boundary failed", params: productValidationRule("product-commercial-capability-language") });
+    for (const path of commercialCapabilityIssuePaths(output)) {
+      context.addIssue({ code: "custom", path, message: "Product definition commercial capability boundary failed", params: productValidationRule("product-commercial-capability-language") });
     }
   });
 }
@@ -165,15 +164,37 @@ export function canonicalizeProductDefinitionOutput(
 }
 
 export function assertProductDefinitionCapabilityLanguage(value: unknown): void {
-  if (!isRecord(value)) throw new Error("Product definition commercial capability boundary failed");
-  const claims = { ...value };
-  delete claims.dataBoundary;
-  delete claims.commercialValidation;
-  delete claims.opportunity;
-  delete claims.risks;
-  if (commercialClaimPattern.test(JSON.stringify(claims))) {
+  if (!isRecord(value) || commercialCapabilityIssuePaths(value).length > 0) {
     throw new Error("Product definition commercial capability boundary failed");
   }
+}
+
+// These are explicit unknown/check statements, not a general negation escape.
+// Check each clause independently so a disclaimer cannot hide an adjacent claim.
+const financialSubject = '(?:利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报|ROI)';
+const financialUnknownPatterns = [
+  new RegExp(`^(?:现有证据|现有数据|当前|目前)?(?:无法|不能|尚不能|不足以)(?:据此)?(?:判断|推断|确定|证明|确认|评估|预测)(?:销量[或和与及])?${financialSubject}(?:[、和与及或]${financialSubject})*$`, 'i'),
+  new RegExp(`^${financialSubject}(?:仍|尚|还)?(?:需|需要|有待|待)(?:验证|评估|测算)$`, 'i'),
+  /^(?:需|需要|仍需|尚需|有待|待|必须|应先|补齐|完成|建立)(?:竞品价格带|成本|平台费用|费用|税费|运费|售价|利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报|ROI|[、和与及]|模型|测算|验证|评估)+(?:模型|测算|验证|评估)(?:后再(?:定档|定价|判断|决策))?$/i,
+  /^(?:profitability|profit margin|profit|margin|ROI)(?: cannot be determined(?: from the available evidence)?| (?:still )?requires? (?:validation|verification|assessment))$/i,
+];
+
+function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string | number)[][] {
+  const issues: (string | number)[][] = [];
+  const visit = (item: unknown, path: (string | number)[]) => {
+    if (typeof item === 'string') {
+      const invalid = approvalOrBypassPattern.test(item) || item.split(/[，,。；;！？!?\n]+/u).some(part => {
+        const clause = part.trim().replace(/[.]+$/, '');
+        return commercialClaimPattern.test(clause) && !financialUnknownPatterns.some(pattern => pattern.test(clause));
+      });
+      if (invalid) issues.push(path);
+    } else if (Array.isArray(item)) item.forEach((entry, index) => visit(entry, [...path, index]));
+    else if (isRecord(item)) Object.entries(item).forEach(([key, entry]) => visit(entry, [...path, key]));
+  };
+  for (const [key, item] of Object.entries(value)) {
+    if (!['dataBoundary', 'commercialValidation', 'opportunity', 'risks'].includes(key)) visit(item, [key]);
+  }
+  return issues;
 }
 
 export function buildProductDefinitionInput(input: {

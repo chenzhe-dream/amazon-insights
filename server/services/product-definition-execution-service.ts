@@ -119,7 +119,7 @@ export function createProductDefinitionModelOutputContract(input: ProductDefinit
       evidenceIds: keyword.min(1),
     }).array().min(1).max(10),
     priorities: s.priorities.element.extend({evidenceIds: all.min(1)}).array().min(1).max(10),
-  }).describe("Only emit rows supported by exact frozen evidence; omit unsupported dimensions and never guess or fill references. supported requires both VOC and keyword evidence; requires-validation still needs at least one side. Place commercial unknowns or deferred checks only in risks, opportunity.pendingReason, commercialValidation or dataBoundary. Ordinary narratives must not contain profit, profitability, margin, ROI, 盈利, 利润, 毛利, 投资回报, approval claims or validation-bypass wording, even when negated. Keep concise narratives and every required risk gate.");
+  }).describe("Only emit rows supported by exact frozen evidence; omit unsupported dimensions and never guess or fill references. supported requires both VOC and keyword evidence; requires-validation still needs at least one side. Keep detailed commercial checks in risks, opportunity.pendingReason, commercialValidation or dataBoundary. Explicit unknowns such as 不能据此判断销量或利润 or 利润仍需验证 are allowed; never attach a positive profit, margin, ROI, approval or validation-bypass claim to a disclaimer. Keep concise narratives and every required risk gate.");
   return {schema, schemaDefinitions: {ProductVocEvidenceId:vocId, ProductKeywordEvidenceId:keywordId, ProductAnyEvidenceId:anyId, ProductThemeKey:theme, ProductKeywordGroupId:group}};
 }
 

@@ -12,7 +12,46 @@ import {
   canonicalizeProductDefinitionOutput,
   createProductDefinitionOutputSchema,
   extractVocPositioningProjection,
+  assertProductDefinitionCapabilityLanguage,
 } from "../../server/domain/product/product-definition-contracts";
+
+test('US captured commercial unknowns remain valid without implying profitability', () => {
+  const input = evidenceScopedInput('manual');
+  const base = canonicalizeProductDefinitionOutput(validOutput(input), input) as ReturnType<typeof validOutput>;
+  for (const conclusion of [
+    'balance board近30天搜索量120,787、wobble board 22,373，搜索需求存在；但购买率、竞争和价格缺失，不能据此判断销量或利润。',
+    '价格档位无法判断；需竞品价格带、成本、平台费用和毛利验证，当前不设具体售价。',
+    '补齐竞品价格带、成本、费用和毛利模型后再定档。',
+    '现有证据无法判断盈利能力。',
+    '利润仍需验证。',
+    'Profitability cannot be determined from the available evidence.',
+    'Profit margin requires validation.',
+  ]) {
+    const result = {...base, finalDefinition: [{...base.finalDefinition[0], conclusion}]};
+    assert.doesNotThrow(() => assertProductDefinitionCapabilityLanguage(result), conclusion);
+    assert.equal(createProductDefinitionOutputSchema(input).safeParse(result).success, true, conclusion);
+  }
+});
+
+test('commercial disclaimers do not hide unsupported claims or approval bypasses', () => {
+  for (const conclusion of [
+    '利润率高', '预计毛利30%', 'ROI 80%', 'profit margin is attractive', '完成利润',
+    '利润仍需验证，但预计毛利30%', '不能判断利润；本产品盈利能力强',
+    '不能判断利润但盈利能力很强', '利润率30%仍需验证',
+    '公司已批准立项', '无需成本验证', '当前无需合规验证即可销售', '无需成本、专利，验证就能上市',
+    'Profitability cannot be determined, but ROI is 80%',
+  ]) assert.throws(() => assertProductDefinitionCapabilityLanguage({finalDefinition:[{conclusion}]}), /commercial capability boundary/i, conclusion);
+});
+
+test('commercial validation reports the real field path without disclosing its text', () => {
+  const input = evidenceScopedInput('manual');
+  const base = canonicalizeProductDefinitionOutput(validOutput(input), input) as ReturnType<typeof validOutput>;
+  const parsed = createProductDefinitionOutputSchema(input).safeParse({...base, priorities:[{...base.priorities[0], acceptance:'PRIVATE_SENTINEL ROI 80%'}]});
+  assert.equal(parsed.success, false); if (parsed.success) return;
+  const issues = summarizeZodValidationIssues(parsed.error, createStructuredResponseFormat(createProductDefinitionModelOutputSchema(input), 'Product'));
+  assert.deepEqual(issues.filter(i => i.ruleId === 'product-commercial-capability-language').map(i => i.path), [['priorities',0,'acceptance']]);
+  assert.doesNotMatch(JSON.stringify(issues), /PRIVATE_SENTINEL|80%/);
+});
 import {
   SCOOTER_ASINS,
   realVocFacts,

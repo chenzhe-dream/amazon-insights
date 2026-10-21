@@ -15,7 +15,7 @@ export const PRODUCT_VALIDATION_RULES = Object.freeze({
  'product-unknown-keyword-group': 'Use only a keyword group ID present in the frozen keyword input.',
  'product-unknown-evidence-reference': 'Use exact evidence IDs from the appropriate frozen dependency. Never guess or manufacture an ID.',
  'product-commercial-gates-required': 'Keep all five distinct risks explicit: cost, profitability, patent, compliance, supply-chain.',
- 'product-commercial-capability-language': 'Place commercial unknowns or deferred checks only in risks, opportunity.pendingReason, commercialValidation or dataBoundary. Ordinary narratives must not contain profit, profitability, margin, ROI, 盈利, 利润, 毛利, 投资回报, approval claims or validation-bypass wording, including negated or deferred claims.',
+ 'product-commercial-capability-language': 'Never assert profitability, profit, margin, ROI, approval or bypass of commercial validation without evidence. Explicit unknowns such as 不能据此判断销量或利润, 利润仍需验证, or Profitability cannot be determined from the available evidence are allowed. Keep detailed commercial checks in risks, opportunity.pendingReason, commercialValidation or dataBoundary. Do not attach a positive claim or estimate to a disclaimer.',
 });
 export type ProductValidationRuleId = keyof typeof PRODUCT_VALIDATION_RULES;
 export function isProductValidationRuleId(value: unknown): value is ProductValidationRuleId {
