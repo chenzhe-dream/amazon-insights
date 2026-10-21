@@ -67,6 +67,56 @@ test("a saved US run from another project scope cannot become the current report
   assert.equal(await page.getByText("PERSISTED_RESULT_MARKER", { exact: true }).count(), 0);
 });
 
+test("explicit US ASIN selection does not present a different saved cohort as current", async t => {
+  const page = await browser.newPage(); t.after(() => page.close());
+  let posts = 0;
+  await page.route("**/api/agent/**", async route => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "POST") { posts++; return route.fulfill({ status: 500, json: {} }); }
+    if (url.pathname.includes("voc-inputs")) {
+      const selectedAsin = url.searchParams.get("asins") ?? asin;
+      const selectedManifest = { ...manifest, selectedAsins: [selectedAsin], fingerprint: selectedAsin === asin ? manifest.fingerprint : "e".repeat(64) };
+      return route.fulfill({ json: { manual: { ...selectedManifest, sourcePolicy: "manual-only" }, fallback: selectedManifest } });
+    }
+    if (url.pathname.endsWith("/reports")) return route.fulfill({ json: { reports: [report] } });
+    if (url.pathname.includes(`/runs/${runId}`)) return route.fulfill({ json: { run, stages: [stage], evidenceSelection: manifest } });
+    return route.fulfill({ status: 404, json: {} });
+  });
+  const differentAsin = "B0BVFX154J";
+  await page.goto(`${origin}/tests/agent/helpers/voc-local-browser-harness.html?vocRun=${runId}&vocAsins=${differentAsin}`);
+  await page.getByRole("checkbox", { name: new RegExp(differentAsin) }).waitFor();
+  assert.equal(await page.getByRole("checkbox", { name: new RegExp(differentAsin) }).isChecked(), true);
+  assert.equal(await page.getByText("当前结果已保存", { exact: true }).count(), 0);
+  assert.equal(posts, 0);
+});
+
+test("manual VOC update clears the saved US current marker before refreshed inventory returns", async t => {
+  const page = await browser.newPage(); t.after(() => page.close());
+  let posts = 0;
+  let manualChanged = false;
+  let inventoryReads = 0;
+  await page.route("**/api/agent/**", async route => {
+    if (route.request().method() === "POST") { posts++; return route.fulfill({ status: 500, json: {} }); }
+    const url = route.request().url();
+    if (url.includes("voc-inputs")) {
+      inventoryReads++;
+      if (manualChanged) await new Promise(resolve => setTimeout(resolve, 150));
+      const currentManifest = manualChanged ? { ...manifest, fingerprint: "e".repeat(64) } : manifest;
+      return route.fulfill({ json: { manual: { ...currentManifest, sourcePolicy: "manual-only" }, fallback: currentManifest } });
+    }
+    if (url.endsWith("/reports")) return route.fulfill({ json: { reports: [report] } });
+    if (url.includes(`/runs/${runId}`)) return route.fulfill({ json: { run, stages: [stage], evidenceSelection: manifest } });
+    return route.fulfill({ status: 404, json: {} });
+  });
+  await page.goto(`${origin}/tests/agent/helpers/voc-local-browser-harness.html?vocRun=${runId}`);
+  await page.getByText("当前结果已保存", { exact: true }).waitFor();
+  manualChanged = true;
+  await page.getByRole("button", { name: "Update manual VOC" }).click();
+  await page.getByText("当前结果已保存", { exact: true }).waitFor({ state: "hidden" });
+  assert.ok(inventoryReads >= 2);
+  assert.equal(posts, 0);
+});
+
 test("US manual rule flow stays available without vocRun, including when only vocHistory is present", async t => {
   const page = await browser.newPage(); t.after(() => page.close());
   let posts = 0;

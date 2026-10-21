@@ -939,6 +939,10 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     () => Object.fromEntries(activeAsins.map(asin => [asin, manualVoc.effectiveVocByAsin[asin]?.normalizedRecord])),
     [activeAsins, manualVoc.effectiveVocByAsin],
   );
+  const manualVocSourceVersion = JSON.stringify(activeAsins.map(asin => {
+    const record = manualVoc.effectiveVocByAsin[asin];
+    return [asin, record?.revision ?? null, record?.contentHash ?? null];
+  }));
   const [trafficSnapshotReceipt, setTrafficSnapshotReceipt] = useState<{ key: string; state: TrafficSnapshotClientState } | null>(null);
   const trafficBindingKey = trafficSnapshotBindingKey({
     sessionIdentity: authSession.sessionIdentity, organizationId: authSession.user.organizationId,
@@ -2532,7 +2536,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           initialRunId={new URLSearchParams(appSearch).get("vocRun")}
           initialHistoryRunId={new URLSearchParams(appSearch).get("vocHistory")}
           organizationId={authSession.user.organizationId} sessionKey={runtimeSessionKey}
-          refreshToken={[stageOutputSnapshot.reviews, stageOutputSnapshot.keywords].map(output => output && "outputVersion" in output ? output.outputVersion : "").join(":")}
+          refreshToken={`${[stageOutputSnapshot.reviews, stageOutputSnapshot.keywords].map(output => output && "outputVersion" in output ? output.outputVersion : "").join(":")}:${manualVocSourceVersion}`}
           projectId={currentProjectId} baseSyncRunId={baseSyncRunId} jobId={stageOutputJobId} onImported={manualVoc.onImported}
           products={products} sources={productLaunchSources}
           initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}

@@ -29,8 +29,8 @@ type LocalVocProps = {
 };
 
 export function LocalVocDefinition(props: LocalVocProps) {
-  const { projectId, baseSyncRunId, initialRunId, organizationId, sessionKey, enabled, products } = props;
-  const owner = JSON.stringify([sessionKey, organizationId, projectId, baseSyncRunId, initialRunId, enabled, products.map(product => product.asin)]);
+  const { projectId, baseSyncRunId, initialRunId, initialSelectedAsins, organizationId, sessionKey, enabled, products } = props;
+  const owner = JSON.stringify([sessionKey, organizationId, projectId, baseSyncRunId, initialRunId, initialSelectedAsins, enabled, products.map(product => product.asin)]);
   const [savedState, setSavedState] = useState<{ owner: string; selectedAsins?: string[]; error?: string } | null>(null);
   const [localOpen, setLocalOpen] = useState(false);
   useEffect(() => {
@@ -40,15 +40,16 @@ export function LocalVocDefinition(props: LocalVocProps) {
       if (controller.signal.aborted) return;
       const manifest = value.evidenceSelection;
       const selectedAsins = manifest?.selectedAsins ?? [];
+      const currentSelectedAsins = initialSelectedAsins ?? selectedAsins;
       const productAsins = new Set(products.map(product => product.asin));
       const report = value.reports.find(item => item.stage === "product-definition");
       const output = report ? ProductDefinitionOutputSchema.safeParse(report.result) : null;
       const reportManifest = output?.success ? output.data.evidenceSelection : undefined;
-      if (!manifest || manifest.organizationId !== organizationId || manifest.projectId !== projectId || manifest.baseSyncRunId !== baseSyncRunId || manifest.marketplace !== "US" || !selectedAsins.length || new Set(selectedAsins).size !== selectedAsins.length || selectedAsins.some(asin => !productAsins.has(asin)) || (report && (!reportManifest || reportManifest.fingerprint !== manifest.fingerprint || reportManifest.organizationId !== organizationId || reportManifest.projectId !== projectId || reportManifest.baseSyncRunId !== baseSyncRunId || reportManifest.marketplace !== "US" || [...reportManifest.selectedAsins].sort().join(",") !== [...selectedAsins].sort().join(",")))) {
+      if (!manifest || manifest.organizationId !== organizationId || manifest.projectId !== projectId || manifest.baseSyncRunId !== baseSyncRunId || manifest.marketplace !== "US" || !selectedAsins.length || new Set(selectedAsins).size !== selectedAsins.length || selectedAsins.some(asin => !productAsins.has(asin)) || !currentSelectedAsins.length || new Set(currentSelectedAsins).size !== currentSelectedAsins.length || currentSelectedAsins.some(asin => !productAsins.has(asin)) || (report && (!reportManifest || reportManifest.fingerprint !== manifest.fingerprint || reportManifest.organizationId !== organizationId || reportManifest.projectId !== projectId || reportManifest.baseSyncRunId !== baseSyncRunId || reportManifest.marketplace !== "US" || [...reportManifest.selectedAsins].sort().join(",") !== [...selectedAsins].sort().join(",")))) {
         setSavedState({ owner, error: "已保存分析的项目、站点或商品范围不匹配，无法作为当前结果展示。" });
         return;
       }
-      setSavedState({ owner, selectedAsins });
+      setSavedState({ owner, selectedAsins: currentSelectedAsins });
     }).catch(error => { if (!controller.signal.aborted) setSavedState({ owner, error: error instanceof Error ? error.message : "已保存分析暂时无法读取。" }); });
     return () => controller.abort();
   }, [owner, enabled, projectId, baseSyncRunId, initialRunId, organizationId, sessionKey, products]);
