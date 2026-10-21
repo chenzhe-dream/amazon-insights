@@ -30,3 +30,9 @@ Sorftime 工具的英国站参数是 `GB`，SIF 和 SellerSprite 使用 `UK`。�
 - 阶段终结、来源可用和分析成功分别验证；最终报告必须保留有限样本和部分覆盖说明，不扩大为全部数据完整。
 
 证据根目录：`C:/Users/EDY/Amazon-Product-Opportunity-Insights.runtime/de-ca-analysis-20261021/evidence/uk-darts-investigation/`。原始探针保存 JSON、gzip 和 SHA256；本轮状态文件与旧四站验收文件隔离。具体运行身份、实跑结果、报告入口和测试结论待实际验收后补充。
+
+## 并行正式服务变更观察
+
+本任务尚未切换候选时，六端口比较发现正式服务被并行操作变更：31900 从 PID 31676 / `7efbc72a` 变为 PID 329436 / `aa923008`，31901 从 PID 69464 / `7efbc72a` 变为 PID 330504 / `4bf06b02`。新进程来自独立的 `stable-persistent-20261006` 工作树，分别创建于本地 14:08:02 和 13:59:44；本任务没有对这两个端口执行停止、启动或发布操作。
+
+原始 `baseline-before.json` 保留，发现时快照为 `external-formal-change-observed.json`，进程依据为 `external-formal-processes.json`。后续候选切换的保护检查以该已观察状态为比较基线，最终仍报告与最初状态的差异，不能声称整个会话期间正式进程完全未变。32900/32901 与本候选 33900/33901 在发现时均维持原 PID 和源码身份。
