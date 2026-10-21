@@ -90,6 +90,10 @@ test("same-day persisted Customers Say evidence uses verified publication time, 
  assert.equal(result.fallbackCandidate?.sources[0].capturedAt,stageTime);
  assert.equal(result.inventory.fallback.coverage.find(row=>row.asin===missingAsin)?.primary,"missing");
  assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis[0].sampledReviews,0);
+ const {preprocessVocSnapshot}=await import("../../server/domain/voc/preprocess-voc-snapshot");
+ const facts=preprocessVocSnapshot({...result.fallbackCandidate!,id:projectId,runId,createdAt:cutoff});
+ assert.ok(facts.evidenceIndex.length>0);
+ assert.ok(facts.evidenceIndex.every(row=>row.capturedAt===stageTime));
 });
 test("trusted publication preserves cached dates but never admits a future record or weakens static cutoff", async () => {
  const {RepositoryVocSourceReader}=await import("../../server/data/repository-voc-source");

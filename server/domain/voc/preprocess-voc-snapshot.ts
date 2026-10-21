@@ -414,6 +414,17 @@ function collectAlexaRecord(
   }
 }
 
+function reviewRecordCapturedAt(snapshot: VocDataSnapshotRecord, sourceId: VocSnapshotSourceId, capturedAt: string, record: ReviewRecord): string {
+  const selection = snapshot.payload.evidenceSelection;
+  const reference = selection?.coverage.find(row => row.asin === record.asin)?.review;
+  if (sourceId === "sorftime-review-analysis" && selection?.sourcePolicy === "manual-with-review-fallback" &&
+      reference?.id.startsWith(`repository://sync/${selection.baseSyncRunId}/reviews/`) && reference.capturedAt === capturedAt) {
+    if (record.fetchedAt > capturedAt.slice(0, 10)) throw new TypeError("VOC review date is after verified publication");
+    return capturedAt;
+  }
+  return normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+}
+
 function collectReviewRecord(
   snapshot: VocDataSnapshotRecord,
   config: SourceConfig,
@@ -423,7 +434,7 @@ function collectReviewRecord(
   themesByDimension: Map<VocDimension, Map<string, MutableTheme>>,
   evidenceById: Map<string, EvidenceFact>,
 ) {
-  const recordCapturedAt = normalizeRepositoryDateOnlyUtc(record.fetchedAt);
+  const recordCapturedAt = reviewRecordCapturedAt(snapshot, config.sourceId, capturedAt, record);
   if (
     recordCapturedAt > capturedAt ||
     recordCapturedAt > snapshot.dataCutoffAt
@@ -624,7 +635,7 @@ function buildAvailability(snapshot: VocDataSnapshotRecord) {
         asin: record.asin,
         kind: "sampled-reviews" as const,
         sampleCount: review.sampledReviews,
-        recordCapturedAt: normalizeRepositoryDateOnlyUtc(review.fetchedAt),
+        recordCapturedAt: reviewRecordCapturedAt(snapshot, config.sourceId, source!.capturedAt, review),
         family: review.family ?? ("generic" as const),
       };
     });
@@ -917,7 +928,13 @@ function assertVocDeterministicResultIntegrity(
           denominator.recordCapturedAt <= value.snapshot.dataCutoffAt &&
           (config.sourceId === "alexa-voc"
             ? denominator.family === "generic"
-            : denominator.recordCapturedAt.endsWith("T23:59:59.999Z")),
+            : denominator.recordCapturedAt.endsWith("T23:59:59.999Z") || (
+                config.sourceId === "sorftime-review-analysis" &&
+                value.evidenceSelection?.sourcePolicy === "manual-with-review-fallback" &&
+                value.evidenceSelection.coverage.some(row => row.asin === denominator.asin &&
+                  row.review?.id.startsWith(`repository://sync/${value.evidenceSelection!.baseSyncRunId}/reviews/`) &&
+                  row.review.capturedAt === availability.capturedAt && row.review.capturedAt === denominator.recordCapturedAt)
+              )),
       ),
       "VOC record scope time or family is invalid",
     );

@@ -20,7 +20,13 @@ for (const [marketplace, scenario] of [["US","missing"], ["US","fallback"], ["US
  await repository.createProject({ id: projectId, organizationId, name: "Fixture original", marketplace, asins: ASINS, createdBy: actorId, createdAt: now, updatedAt: now });
  await repository.createAnalysisRun({ id: baseSyncRunId, projectId, createdBy: actorId, mode: "existing-data", status: "succeeded", dataCutoffAt: now, idempotencyScope: `sync:${organizationId}:${projectId}`, idempotencyKey: "job", createdAt: now, updatedAt: now });
  const data = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "negatives", label: "问题", rows: [{ label: "结构断裂", reason: "支架断裂", sharePct: 50 }] }] } }, ratingByAsin: {} };
- const output = { projectId, runId: baseSyncRunId, jobId: "job", jobVersion: 1, outputVersion: 1, stage: "reviews", stageStatus: "done", updatedAt: "2026-09-09T23:59:59.999Z", data, contentHash: canonicalJsonSha256({ stage: "reviews", data }) };
+ if(marketplace!=="US") {
+  const record=data.analysisByAsin[ASINS[0]];
+  record.fetchedAt=new Date().toISOString().slice(0,10);record.sampledReviews=0;
+  Object.assign(record,{mentionTopics:1});
+  Object.assign(record.blocks[0].rows[0],{metricKind:"customers_say_topic_share",numerator:1,denominator:2});
+ }
+ const output = { projectId, runId: baseSyncRunId, jobId: "job", jobVersion: 1, outputVersion: 1, stage: "reviews", stageStatus: "done", updatedAt: marketplace==="US" ? "2026-09-09T23:59:59.999Z" : new Date().toISOString(), data, contentHash: canonicalJsonSha256({ stage: "reviews", data }) };
  const keywordData = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", keywords: [{ keyword: "reading light", searchVolume: 123 }] } }, enrichmentByKeyword: {} };
  const keywordOutput = { ...output, stage: "keywords", data: keywordData, contentHash: canonicalJsonSha256({ stage: "keywords", data: keywordData }) };
  const syncJobs = { findById: async () => ({ jobId: "job", organizationId, projectId, runId: baseSyncRunId, marketplace, asins: ASINS }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? output : keywordsAvailable ? keywordOutput : null };
