@@ -27,8 +27,8 @@ test('outdated same-market fallback profiles upgrade verified fields without era
   const products = [old, primary, elsewhere, latest, unscoped];
   fs.writeFileSync(file, `export const refreshedCatalog = ${JSON.stringify(products)};\n`);
   assert.equal(typeof fallback.asinsNeedingSorftimeCatalogSync, 'function');
-  assert.deepEqual(fallback.asinsNeedingSorftimeCatalogSync([...products.map(item => item.asin), 'B0TEST0004'], { catalogProducts: products, marketplace: 'US' }), [old.asin, 'B0TEST0004']);
-  assert.deepEqual(selectFileProfileSync(products.map(item => item.asin), 'US', file), [old.asin]);
+  assert.deepEqual(fallback.asinsNeedingSorftimeCatalogSync([...products.map(item => item.asin), 'B0TEST0004'], { catalogProducts: products, marketplace: 'US' }), [old.asin, elsewhere.asin, 'B0TEST0004']);
+  assert.deepEqual(selectFileProfileSync(products.map(item => item.asin), 'US', file), [old.asin, elsewhere.asin]);
   const entry = fallback.buildCatalogEntryFromSorftime({ asin: old.asin, marketplace: 'US', detail: { asin: old.asin, brand: 'Kilindeer', listing_date: '2026-07-13', weight_g: -1 } });
   assert.equal(appendCatalogEntry(entry, file), true);
   const [upgraded] = readCachedArrayExport(file, 'refreshedCatalog');

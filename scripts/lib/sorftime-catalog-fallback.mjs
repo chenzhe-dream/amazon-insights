@@ -1,4 +1,5 @@
 import { normalizeSorftimeProfile } from './sorftime-profile-normalize.mjs';
+import { projectMarketplaceCurrency, formatMarketplaceMoney } from './project-marketplace-money.mjs';
 
 export const SORFTIME_CATALOG_PROFILE_VERSION = 1;
 export const SORFTIME_CATALOG_PROFILE_FIELDS = Object.freeze([
@@ -8,7 +9,9 @@ export const SORFTIME_CATALOG_PROFILE_FIELDS = Object.freeze([
 
 export function asinsNeedingSorftimeCatalogSync(asins, { catalogProducts = [], marketplace = 'US' } = {}) {
   return asins.filter(asin => {
-    const entry = catalogProducts.find(item => item.asin === asin);
+    const site = marketplace.trim().toUpperCase();
+    const entry = catalogProducts.find(item => item.asin === asin &&
+      (item.marketplace === site || site === 'US' && item.marketplace == null));
     return !entry || entry.catalogSource === 'sorftime-fallback'
       && entry.marketplace === marketplace.trim().toUpperCase()
       && !(Number.isInteger(entry.catalogProfileVersion) && entry.catalogProfileVersion >= SORFTIME_CATALOG_PROFILE_VERSION);
@@ -23,6 +26,7 @@ export function buildCatalogEntryFromSorftime({ asin, marketplace, detail }) {
   return {
     asin,
     marketplace: marketplace.trim().toUpperCase(),
+    currency: projectMarketplaceCurrency(marketplace),
     catalogSource: "sorftime-fallback",
     catalogProfileVersion: SORFTIME_CATALOG_PROFILE_VERSION,
     catalogFieldSources,
@@ -43,7 +47,7 @@ export function buildCatalogEntryFromSorftime({ asin, marketplace, detail }) {
     packageWeight: profile.packageWeight ?? "—",
     specifications: [
       "Sorftime 基础商品兜底",
-      ...(fbaFee == null ? [] : [`Sorftime FBA 费用估算：$${fbaFee.toFixed(2)}`]),
+      ...(fbaFee == null ? [] : [`Sorftime FBA 费用估算：${formatMarketplaceMoney(fbaFee, marketplace)}`]),
     ],
     launch: profile.launch ?? "—",
     format: "—",

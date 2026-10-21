@@ -9,14 +9,16 @@ export function generatedAppDataPath(codeRoot, fileName, env = process.env) {
   if (!/^[a-z0-9-]+\.ts$/.test(fileName)) throw new TypeError("Invalid generated data file name");
   const root = path.resolve(codeRoot);
   const source = path.join(root, "app", fileName);
-  if (!env.AGENT_FORMAL_WORKTREE_ROOT) return source;
-  if (path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) !== root) {
+  const formal = Boolean(env.AGENT_FORMAL_WORKTREE_ROOT);
+  const nonUs = Boolean(env.AGENT_SYNC_MARKETPLACE && env.AGENT_SYNC_MARKETPLACE !== "US");
+  if (!formal && !nonUs) return source;
+  if (formal && path.resolve(env.AGENT_FORMAL_WORKTREE_ROOT) !== root) {
     throw new Error("Formal generated data root does not match code root");
   }
-  const { dataRoot } = resolveRuntimeRoots({ codeRoot: root, formal: true, env });
+  const { dataRoot } = resolveRuntimeRoots({ codeRoot: root, formal, env });
   // The legacy shared cache is US-only. Non-US jobs must never seed from it.
   // Hash the full owner identity so different organizations/projects cannot mix.
-  if (env.AGENT_SYNC_MARKETPLACE && env.AGENT_SYNC_MARKETPLACE !== "US") {
+  if (nonUs) {
     const scope = [env.AGENT_EXECUTION_ORGANIZATION_ID, env.AGENT_SYNC_PROJECT_ID, env.AGENT_SYNC_MARKETPLACE];
     if (scope.some(value => !value)) throw new Error("Non-US generated data requires an exact project scope");
     const owner = createHash("sha256").update(JSON.stringify(scope)).digest("hex");

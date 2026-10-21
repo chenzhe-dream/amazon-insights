@@ -4,6 +4,7 @@ import path from "node:path";
 import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 import { callSellerSpriteMcpTool, readSellerSpriteSecretKey } from "./sellersprite-mcp-client.mjs";
 import { detectProductFamily } from "./product-family.mjs";
+import { projectMarketplaceCurrency } from './project-marketplace-money.mjs';
 import { localizeSellingPoints } from "./selling-point-zh.mjs";
 import { localizeSpecifications } from "./specification-zh.mjs";
 import { extractExportArrayLiteral, readCachedArrayExport } from "./sync-cache.mjs";
@@ -105,7 +106,7 @@ function pickSalesValue(point) {
   return toNumber(point?.parentUnitSales) ?? toNumber(point?.childUnitSales) ?? 0;
 }
 
-export function buildCatalogEntryFromSellerSprite(detail, trendPoints) {
+export function buildCatalogEntryFromSellerSprite(detail, trendPoints, marketplace = 'US') {
   const points = last12TrendPoints(trendPoints);
   const subRank = detail.subcategories?.[0]?.rank ?? null;
   const history = points.map(pickSalesValue);
@@ -123,6 +124,8 @@ export function buildCatalogEntryFromSellerSprite(detail, trendPoints) {
 
   return {
     asin: detail.asin,
+    marketplace,
+    currency: projectMarketplaceCurrency(marketplace),
     catalogSource: "sellerSprite",
     brand: detail.brand || "—",
     image: normalizeCatalogImageUrl(detail.zoomImageUrl || detail.imageUrl || ""),
@@ -234,7 +237,7 @@ export function appendCatalogEntry(entry, filePath = catalogPath) {
         .filter(([field, source]) => SORFTIME_CATALOG_PROFILE_FIELDS.includes(field) && source === 'sorftime' && entry[field] != null && entry[field] !== '' && entry[field] !== '—')
         .map(([field]) => [field, entry[field]]));
       const catalogFieldSources = { ...previous.catalogFieldSources, ...Object.fromEntries(Object.keys(verified).map(field => [field, 'sorftime'])) };
-      catalog[index] = { ...previous, ...verified, marketplace: entry.marketplace, catalogProfileVersion: entry.catalogProfileVersion, catalogFieldSources, synced: false };
+      catalog[index] = { ...previous, ...verified, marketplace: entry.marketplace, currency: projectMarketplaceCurrency(entry.marketplace), catalogProfileVersion: entry.catalogProfileVersion, catalogFieldSources, synced: false };
     } else return false;
   } else {
     catalog.push(entry);
@@ -311,9 +314,9 @@ export async function syncCatalogAsins(asins, marketplace = "US") {
         // 趋势可选，不影响底库入库
       }
 
-      const entry = buildCatalogEntryFromSellerSprite(detail, trendPoints);
+      const entry = buildCatalogEntryFromSellerSprite(detail, trendPoints, marketplace);
       if (appendCatalogEntry(entry)) {
-        ensureRufusVocPendingStub(asin, entry.rating ?? 0, entry.reviews ?? 0);
+        if (marketplace === 'US') ensureRufusVocPendingStub(asin, entry.rating ?? 0, entry.reviews ?? 0);
         added.push(asin);
         console.log(`${entry.brand} · ${entry.subRankCategory}`);
       } else {
