@@ -85,7 +85,10 @@ for (const field of ['adChannels','recommendationSources','children'] as const) 
   test(`invalid ${field} retains valid published traffic and its field warning`,async()=>{
     const ctx=context(), asin=ctx.asins[0], stage=ctx.version.stageOutputs.traffic!;
     assert.ok(stage.stage==='traffic'&&'data'in stage);
-    stage.data.listingByAsin[asin][field]=[{label:'invalid-detail',score:-1,ratio:150}];
+    const listing=stage.data.listingByAsin[asin];
+    assert.ok(listing&&typeof listing==='object');
+    const listingFields=listing as Record<string,unknown>;
+    listingFields[field]=[{label:'invalid-detail',score:-1,ratio:150}];
     const before=JSON.stringify(ctx.version);
     const result=await prepare(ctx,noRequests);
     const data=result.trafficData.overview[asin]!;
@@ -96,7 +99,7 @@ for (const field of ['adChannels','recommendationSources','children'] as const) 
     for (const other of ['adChannels','recommendationSources','children'] as const) {
       if (other!==field) {
         assert.equal(result.trafficData.detailAvailability?.[asin]?.[other],'complete');
-        assert.deepEqual(data[other],stage.data.listingByAsin[asin][other]);
+        assert.deepEqual(data[other],listingFields[other]);
       }
     }
     assert.equal(result.monthlyTrendByAsin[asin].points.length,20);
@@ -109,7 +112,9 @@ test('partial traffic still rejects a listing with a foreign ASIN or marketplace
   for (const foreign of [{asin:'B099999999'},{marketplace:'DE'}]) {
     const ctx=context(), stage=ctx.version.stageOutputs.traffic!;
     assert.ok(stage.stage==='traffic'&&'data'in stage);
-    Object.assign(stage.data.listingByAsin[ctx.asins[0]],foreign,{recommendationSources:null});
+    const listing=stage.data.listingByAsin[ctx.asins[0]];
+    assert.ok(listing&&typeof listing==='object');
+    Object.assign(listing,foreign,{recommendationSources:null});
     await assert.rejects(prepare(ctx,noRequests),/来源范围不匹配/);
   }
 });
