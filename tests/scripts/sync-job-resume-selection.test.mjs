@@ -3,8 +3,42 @@ import test from "node:test";
 
 import {
   asinsForSyncStage,
+  markPreflightUnavailableStages,
   shouldRunSyncStage,
 } from "../../scripts/run-asin-sync-job.mjs";
+
+test("build-only recovery leaves every persisted partial-stage ASIN outcome unchanged", () => {
+  const asins = ["B0C6FP6LMY", "B0DLB22T15", "B0DQCF6ZVZ", "B0F5NRLWB6", "B0FJ4T6V2C", "B0FPXDD2D4", "B0GHQW7GYY"];
+  const states = ["ready", "upstream-empty", "upstream-empty", "upstream-empty", "connector-failed", "upstream-empty", "ready"];
+  const job = { asins, resumeStages: ["build"], stages: [{ id: "reviews", status: "partial", detail: "2 ready, 4 empty, 1 failed" },
+    { id: "keywords", status: "partial" }], asinProgress: Object.fromEntries(asins.map((asin, index) =>
+    [asin, { reviews: { status: states[index], reason: "persisted outcome", updatedAt: "2026-10-21T07:00:41.364Z" },
+      keywords: { status: index === 0 ? "ready" : "timeout" } }])) };
+  const original = structuredClone(job);
+  let reads = 0;
+  markPreflightUnavailableStages("build-recovery", job, {
+    readStatuses: () => { reads++; return asins.map(asin => ({ asin, reviews: "pending", keywords: "pending" })); },
+    markModule: (_id, asin, stage, patch) => { job.asinProgress[asin][stage] = patch; },
+  });
+  assert.deepEqual(job, original, "mutable cache readiness cannot rewrite immutable collection outcomes");
+  assert.equal(reads, 0, "excluded collection stages need no cache inspection");
+});
+
+test("preflight still marks genuinely unavailable selected stages and initial jobs", () => {
+  const job = { asins: ["B0C6FP6LMY"], stages: [
+    { id: "reviews", status: "partial", detail: "Review connector unavailable" },
+    { id: "keywords", status: "partial", detail: "Keyword connector unavailable" },
+  ] };
+  for (const resumeStages of [undefined, ["keywords"]]) {
+    const calls = [];
+    markPreflightUnavailableStages("preflight-job", { ...job, ...(resumeStages ? { resumeStages } : {}) }, {
+      readStatuses: () => [{ asin: job.asins[0], reviews: "pending", keywords: "pending" }],
+      markModule: (_id, asin, stage, patch) => calls.push({ asin, stage, ...patch }),
+    });
+    assert.deepEqual(calls.map(call => call.stage), resumeStages ?? ["reviews", "keywords"]);
+    assert.ok(calls.every(call => call.status === "connector-failed" && call.reason.endsWith("unavailable")));
+  }
+});
 
 test("repair runner selects only explicitly resumed stages", () => {
   const repairJob = { resumeStages: ["keywords", "reviews"] };

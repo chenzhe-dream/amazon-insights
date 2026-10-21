@@ -192,14 +192,22 @@ export function shouldRunSyncStage(job, stageId) {
   return stage?.status !== "partial";
 }
 
-export function markPreflightUnavailableStages(jobId, job) {
-  const statusByAsin = new Map(getAsinDataStatus(job?.asins ?? []).map(item => [item.asin, item]));
-  for (const stage of job?.stages ?? []) {
-    if (stage?.status !== "partial" || !BASE_COHORT_STAGE_IDS.includes(stage.id)) continue;
+export function markPreflightUnavailableStages(jobId, job, {
+  readStatuses = getAsinDataStatus,
+  markModule = markAsinModule,
+} = {}) {
+  // A build-only resume reuses frozen provider outcomes. Cache readiness must
+  // not turn an earlier valid empty result into a new connector failure.
+  const unavailableStages = (job?.stages ?? []).filter(stage =>
+    stage?.status === "partial" && BASE_COHORT_STAGE_IDS.includes(stage.id)
+    && (!Array.isArray(job?.resumeStages) || job.resumeStages.includes(stage.id)));
+  if (!unavailableStages.length) return;
+  const statusByAsin = new Map(readStatuses(job?.asins ?? []).map(item => [item.asin, item]));
+  for (const stage of unavailableStages) {
     for (const asin of job?.asins ?? []) {
       const status = statusByAsin.get(asin);
       if (!status || isAsinStageReady(status, stage.id)) continue;
-      markAsinModule(jobId, asin, stage.id, {
+      markModule(jobId, asin, stage.id, {
         status: "connector-failed",
         reason: stage.detail ?? "数据源不可用，本阶段已跳过。",
       });
