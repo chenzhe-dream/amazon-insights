@@ -2529,7 +2529,10 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           }}
         /> : <LocalVocDefinition
           key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
-          initialRunId={new URLSearchParams(appSearch).get("vocRun") ?? new URLSearchParams(appSearch).get("vocHistory")}
+          initialRunId={new URLSearchParams(appSearch).get("vocRun")}
+          initialHistoryRunId={new URLSearchParams(appSearch).get("vocHistory")}
+          organizationId={authSession.user.organizationId} sessionKey={runtimeSessionKey}
+          refreshToken={[stageOutputSnapshot.reviews, stageOutputSnapshot.keywords].map(output => output && "outputVersion" in output ? output.outputVersion : "").join(":")}
           projectId={currentProjectId} baseSyncRunId={baseSyncRunId} jobId={stageOutputJobId} onImported={manualVoc.onImported}
           products={products} sources={productLaunchSources}
           initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}

@@ -19,7 +19,7 @@ function requestUuid() {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 
-type Props = { projectId: string | null; baseSyncRunId: string | null; sessionKey: string; organizationId: string; marketplace: string; asins: string[]; initialSelectedAsins?: string[]; products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; initialRunId: string | null; initialHistoryRunId?: string | null; refreshToken: string; enabled: boolean; onRunStarted?: (runId: string, selectedAsins: string[], previousRunId: string | null) => void; fetchImpl?: EvidenceFetch };
+type Props = { projectId: string | null; baseSyncRunId: string | null; sessionKey: string; organizationId: string; marketplace: string; asins: string[]; initialSelectedAsins?: string[]; products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; initialRunId: string | null; initialHistoryRunId?: string | null; refreshToken: string; enabled: boolean; savedRunOnly?: boolean; onRunStarted?: (runId: string, selectedAsins: string[], previousRunId: string | null) => void; fetchImpl?: EvidenceFetch };
 type Observation = Awaited<ReturnType<typeof readEvidenceRun>>;
 export function VocEvidenceDefinition(props: Props) {
   const { onRunStarted } = props;
@@ -83,7 +83,7 @@ export function VocEvidenceDefinition(props: Props) {
     }
   }, [owner, props.projectId, props.baseSyncRunId, selectedKey]);
   const register = useCallback(async (retry = false) => {
-    if (!enabled || !manualSupported || registration.current) return;
+    if (!enabled || !manualSupported || props.savedRunOnly || registration.current) return;
     const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
     try {
       const observed = observedRunRef.current?.owner === owner ? observedRunRef.current.value : null;
@@ -102,7 +102,7 @@ export function VocEvidenceDefinition(props: Props) {
     } catch(error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({owner,phase:"register",message:error instanceof Error ? error.message : "登记自动分析失败"}); }
     finally { if (registration.current === controller) registration.current = null; // Completion belongs to this request, even if the UI left and returned to its owner.
       setBusy(current => current?.controller === controller ? null : current); }
-  }, [enabled, manualSupported, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, selectedKey, acceptAutomation]);
+  }, [enabled, manualSupported, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, props.savedRunOnly, selectedKey, acceptAutomation]);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) void register(); });
@@ -208,9 +208,9 @@ export function VocEvidenceDefinition(props: Props) {
     <section className="voc-evidence-panel">
       <header><div><span className="voc-eyebrow">VOC · 新品定义</span><h3>分析来源与范围</h3></div><span className="voc-scope-count">已选 {selected.length} 个 ASIN</span></header>
       <div className="voc-asin-grid">{props.asins.map(asin => <label key={asin} className={selected.includes(asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(asin)} onChange={() => setSelected(values => values.includes(asin) ? values.filter(value => value !== asin) : [...values, asin])} /><strong>{asin}</strong><small>{inventory?.manual.coverage.find(row => row.asin === asin)?.primary === "manual" ? "手工 VOC 已就绪" : manualSupported ? "等待手工 VOC" : inventory?.fallback.coverage.find(row => row.asin === asin)?.review ? "本站评论已就绪" : "等待本站评论"}</small></label>)}</div>
-      <div className="voc-automation-status" data-testid="automation-status" data-state={automation?.state ?? "registering"}>
-        <strong className="voc-status-heading">{(busyOwner === owner || analyzing) && <span className="voc-status-spinner" aria-hidden="true" />}{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : manualSupported ? "尚未登记自动分析" : activeRun ? "本站评论分析进行中" : "本站评论分析"}</strong>
-        <p>{automation?.message ?? (manualSupported ? "所选范围将交由后台持续检查，输入齐全后自动分析。" : "此站点使用已保存的本站评论；点击评论兜底分析后固定来源版本。")}</p>
+      <div className="voc-automation-status" data-testid="automation-status" data-state={props.savedRunOnly ? current ? "succeeded" : activeRun ? "running" : failedAnalysis ? "failed" : "waiting-input" : automation?.state ?? "registering"}>
+        <strong className="voc-status-heading">{(busyOwner === owner || analyzing) && <span className="voc-status-spinner" aria-hidden="true" />}{props.savedRunOnly ? current ? "分析已完成" : activeRun ? "分析进行中" : failedAnalysis ? "分析失败" : report ? "已保存历史报告" : "正在读取已保存分析" : busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : manualSupported ? "尚未登记自动分析" : activeRun ? "本站评论分析进行中" : "本站评论分析"}</strong>
+        <p>{props.savedRunOnly ? "已保存的固定来源分析；来源版本与当前输入会重新核对。" : automation?.message ?? (manualSupported ? "所选范围将交由后台持续检查，输入齐全后自动分析。" : "此站点使用已保存的本站评论；点击评论兜底分析后固定来源版本。")}</p>
         {automation ? <small>最后更新：{new Date(automation.updatedAt).toLocaleTimeString("zh-CN")}{automation.startedAt ? ` · 已耗时 ${Math.max(0, Math.floor(((automation.state === "succeeded" || automation.state === "failed" ? Date.parse(automation.updatedAt) : clock) - Date.parse(automation.startedAt)) / 1000))} 秒` : ""}</small> : null}
       </div>
       <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p data-testid="evidence-source">{sourceLabel}</p>{inventory?.fallback.coverage.map(row => <p key={row.asin}>{row.asin}：{row.primary === "manual" ? "手工主来源" : row.primary === "review" ? "可用评论兜底" : "缺少 VOC"}；缺失维度 {row.missingDimensions.length || "无"}</p>)}</details>
@@ -219,7 +219,7 @@ export function VocEvidenceDefinition(props: Props) {
       {errorState?.owner === owner && (errorState.phase === "read" || errorState.phase === "automation-read") ? <button onClick={() => { setError(null); setObservationRefresh(value => value + 1); setAutomationRefresh(value => value + 1); }}>重试读取分析状态</button> :
         automation?.state === "failed" ? <button disabled={busyOwner === owner} onClick={() => void register(true)}>{observation?.stages.some(stage => stage.stage === "voc-positioning" && stage.status === "succeeded") && observation?.stages.some(stage => stage.stage === "product-definition" && stage.status === "failed") ? "重试新品定义（复用 VOC）" : "重试手工 VOC 分析"}</button> : errorState?.owner === owner && errorState.phase === "register" ? <button disabled={busyOwner === owner} onClick={() => void register()}>重试登记自动分析</button> : null}
       {errorState?.owner === owner && errorState.phase === "inventory" ? <button onClick={() => {setError(null);setRefresh(value=>value+1);}}>重试读取输入</button> : null}
-      <button disabled={!inventory?.fallback.coverage.some(row => row.review) || busyOwner === owner || activeRun || ["queued","voc-running","definition-running"].includes(automation?.state ?? "")} onClick={() => inventory && void start(inventory.fallback)}>{failedFallback ? "重试评论兜底分析" : "使用评论兜底分析"}</button>
+      {!props.savedRunOnly && <button disabled={!inventory?.fallback.coverage.some(row => row.review) || busyOwner === owner || activeRun || ["queued","voc-running","definition-running"].includes(automation?.state ?? "")} onClick={() => inventory && void start(inventory.fallback)}>{failedFallback ? "重试评论兜底分析" : "使用评论兜底分析"}</button>}
       </div>
       {errorState?.owner === owner ? <p role="alert">{errorState.message}</p> : null}
       {observation?.stages.filter(item => item.status === "failed").map(item => <p role="alert" key={item.id}>{item.stage === "voc-positioning" ? "VOC 分析" : item.stage === "product-definition" ? "新品定义" : item.stage}失败：{item.lastError?.message ?? "请重试分析"}</p>)}

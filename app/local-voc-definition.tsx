@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { buildKeywordDemandAnalysis } from "./keyword-demand-analysis";
 import { readAlexaVocNormalizationStatuses, pollAlexaVocNormalizationOnce } from "./lib/alexa-voc-normalization-status-client";
 import type { ManualAlexaVocRecord } from "../shared/agent-contracts";
@@ -13,6 +13,8 @@ import { saveLocalRuleReport, readLocalRuleReports } from "./lib/local-rule-repo
 import type { LocalRuleReport } from "../shared/local-rule-report";
 import { AnalysisRuleExplanation } from "./analysis-rule-explanation";
 import { vocNormalizationFailureMessage } from "./lib/voc-normalization-message";
+import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
+const SavedVocEvidenceDefinition = lazy(() => import("./voc-evidence-definition").then(module => ({ default: module.VocEvidenceDefinition })));
 
 export function selectLocalVocSources(products: LaunchProductInput[], sources: ProductLaunchRuntimeSources, reviewFallback: boolean): ProductLaunchRuntimeSources {
   const manualVocByAsin = Object.fromEntries(products.map(p => [p.asin, sources.manualVocByAsin[p.asin]]));
@@ -21,9 +23,47 @@ export function selectLocalVocSources(products: LaunchProductInput[], sources: P
   return {analysisScope:sources.analysisScope, manualVocByAsin, reviewAnalysisByAsin, keywordDemand: buildKeywordDemandAnalysis(products, sources.keywordSources ?? {analysisByAsin:{},enrichmentByKeyword:{}})};
 }
 
-export function LocalVocDefinition({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, jobId, onImported, initialRunId}: {
-  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialRunId?: string | null; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; jobId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
-}) {
+type LocalVocProps = {
+  products: LaunchProductInput[]; sources: ProductLaunchRuntimeSources; enabled: boolean; initialRunId?: string | null; initialHistoryRunId?: string | null; initialSelectedAsins?: string[]; projectId?: string | null; baseSyncRunId?: string | null; jobId?: string | null; onImported?: (record: ManualAlexaVocRecord) => unknown;
+  organizationId?: string; sessionKey?: string; refreshToken?: string;
+};
+
+export function LocalVocDefinition(props: LocalVocProps) {
+  const { projectId, baseSyncRunId, initialRunId, organizationId, sessionKey, enabled, products } = props;
+  const owner = JSON.stringify([sessionKey, organizationId, projectId, baseSyncRunId, initialRunId, enabled, products.map(product => product.asin)]);
+  const [savedState, setSavedState] = useState<{ owner: string; selectedAsins?: string[]; error?: string } | null>(null);
+  const [localOpen, setLocalOpen] = useState(false);
+  useEffect(() => {
+    if (!enabled || !projectId || !baseSyncRunId || !initialRunId || !organizationId || !sessionKey) return;
+    const controller = new AbortController();
+    void readEvidenceRun(projectId, initialRunId, controller.signal).then(value => {
+      if (controller.signal.aborted) return;
+      const manifest = value.evidenceSelection;
+      const selectedAsins = manifest?.selectedAsins ?? [];
+      const productAsins = new Set(products.map(product => product.asin));
+      const report = value.reports.find(item => item.stage === "product-definition");
+      const output = report ? ProductDefinitionOutputSchema.safeParse(report.result) : null;
+      const reportManifest = output?.success ? output.data.evidenceSelection : undefined;
+      if (!manifest || manifest.organizationId !== organizationId || manifest.projectId !== projectId || manifest.baseSyncRunId !== baseSyncRunId || manifest.marketplace !== "US" || !selectedAsins.length || new Set(selectedAsins).size !== selectedAsins.length || selectedAsins.some(asin => !productAsins.has(asin)) || (report && (!reportManifest || reportManifest.fingerprint !== manifest.fingerprint || reportManifest.organizationId !== organizationId || reportManifest.projectId !== projectId || reportManifest.baseSyncRunId !== baseSyncRunId || reportManifest.marketplace !== "US" || [...reportManifest.selectedAsins].sort().join(",") !== [...selectedAsins].sort().join(",")))) {
+        setSavedState({ owner, error: "已保存分析的项目、站点或商品范围不匹配，无法作为当前结果展示。" });
+        return;
+      }
+      setSavedState({ owner, selectedAsins });
+    }).catch(error => { if (!controller.signal.aborted) setSavedState({ owner, error: error instanceof Error ? error.message : "已保存分析暂时无法读取。" }); });
+    return () => controller.abort();
+  }, [owner, enabled, projectId, baseSyncRunId, initialRunId, organizationId, sessionKey, products]);
+  if (!enabled || !projectId || !baseSyncRunId || !initialRunId || !organizationId || !sessionKey) return <LocalVocRuleFlow {...props} />;
+  const saved = savedState?.owner === owner ? savedState : null;
+  if (!saved?.selectedAsins) return <>{saved?.error ? <p role="alert">{saved.error}</p> : <p role="status">正在读取已保存的固定来源分析…</p>}{saved?.error ? <LocalVocRuleFlow {...props} /> : null}</>;
+  const scopedProducts = products.filter(product => saved.selectedAsins!.includes(product.asin));
+  return <>
+    <Suspense fallback={<p role="status">正在打开已保存的固定来源分析…</p>}><SavedVocEvidenceDefinition key={`${owner}:${saved.selectedAsins.join(",")}`} projectId={projectId} baseSyncRunId={baseSyncRunId} sessionKey={sessionKey} organizationId={organizationId} marketplace="US" asins={saved.selectedAsins} initialSelectedAsins={saved.selectedAsins} products={scopedProducts} sources={props.sources} initialRunId={initialRunId} refreshToken={props.refreshToken ?? ""} enabled={enabled} savedRunOnly /></Suspense>
+    <details className="voc-coverage" open={localOpen} onToggle={event => setLocalOpen(event.currentTarget.open)}><summary>手工 VOC 与本地规则分析</summary>{localOpen && <LocalVocRuleFlow {...props} initialSelectedAsins={saved.selectedAsins} />}</details>
+  </>;
+}
+
+function LocalVocRuleFlow({products, sources, enabled, initialSelectedAsins, projectId, baseSyncRunId, jobId, onImported, initialRunId, initialHistoryRunId}: LocalVocProps) {
+  const historyRunId = initialRunId ?? initialHistoryRunId;
   const [selected, setSelected] = useState(() => initialSelectedAsins ?? products.map(p => p.asin));
   const [reviewFallback, setReviewFallback] = useState(false);
   const [ruleReports, setRuleReports] = useState<LocalRuleReport[]>([]);
@@ -95,13 +135,13 @@ export function LocalVocDefinition({products, sources, enabled, initialSelectedA
   const [history, setHistory] = useState<Awaited<ReturnType<typeof readEvidenceRun>> | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   useEffect(() => {
-    if (!historyOpen || !enabled || !projectId || !initialRunId) return;
+    if (!historyOpen || !enabled || !projectId || !historyRunId) return;
     const controller = new AbortController();
-    void readEvidenceRun(projectId, initialRunId, controller.signal).then(result => {
+    void readEvidenceRun(projectId, historyRunId, controller.signal).then(result => {
       if (!controller.signal.aborted) {setHistory(result); setHistoryError(null);}
     }).catch(() => {if (!controller.signal.aborted) setHistoryError("历史报告暂时无法读取，请稍后重试。");});
     return () => controller.abort();
-  }, [historyOpen, enabled, projectId, initialRunId, refresh]);
+  }, [historyOpen, enabled, projectId, historyRunId, refresh]);
   const missing = selectedProducts.filter(p => !hasVocDevelopmentData([p],scoped.manualVocByAsin,scoped.reviewAnalysisByAsin)).map(p=>p.asin);
   const checking = Boolean(enabled && projectId && baseSyncRunId && (normalization.scope !== selected.join(",") || !normalization.checked));
   const pending = normalization.blocked.filter(asin=>selected.includes(asin));
@@ -137,7 +177,7 @@ export function LocalVocDefinition({products, sources, enabled, initialSelectedA
         <summary>已保存的规则结果</summary>
         {loadingRuleReports ? <p role="status">正在读取规则报告…</p> : !ruleReports.length ? <p>当前所选商品暂无已保存的规则结果。</p> : ruleReports.map(report=><div key={report.id} className="voc-actions"><span>{new Date(report.createdAt).toLocaleString("zh-CN")} · {report.ruleSetVersion}</span><button onClick={()=>setSavedRuleReport(report)}>查看此版本</button></div>)}
       </details>
-      {initialRunId && <details className="voc-coverage" onToggle={event=>setHistoryOpen(event.currentTarget.open)}><summary>查看已保存的 VOC 分析</summary>{historyError ? <p role="alert">{historyError}</p> : !history ? <p>正在读取历史报告…</p> : history.reports.filter(report=>report.stage === "voc-positioning").map(report=><div key={report.id}><p>历史版本 {report.version}（不代表本次规则结果）</p><p>{String((report.result.insight as {summary?:unknown} | undefined)?.summary ?? "该报告暂无摘要。")}</p></div>)}</details>}
+      {historyRunId && <details className="voc-coverage" onToggle={event=>setHistoryOpen(event.currentTarget.open)}><summary>查看已保存的 VOC 分析</summary>{historyError ? <p role="alert">{historyError}</p> : !history ? <p>正在读取历史报告…</p> : history.reports.filter(report=>report.stage === "voc-positioning").map(report=><div key={report.id}><p>历史版本 {report.version}（不代表本次规则结果）</p><p>{String((report.result.insight as {summary?:unknown} | undefined)?.summary ?? "该报告暂无摘要。")}</p></div>)}</details>}
     </section>
     {savedRuleReport ? <><section className="voc-evidence-panel"><p>正在查看已保存的规则结果 · {new Date(savedRuleReport.createdAt).toLocaleString("zh-CN")} · {savedRuleReport.ruleSetVersion}</p><p>{savedRuleReport.inputSourceNote}</p>{savedRuleReport.sourceAvailability && <p role="status">{savedRuleReport.sourceAvailability.message}</p>}<button onClick={()=>setSavedRuleReport(null)}>返回当前分析</button></section><LocalProductDefinitionSection products={savedRuleReport.products} sources={scoped} savedAnalysis={savedRuleReport.analysis} savedReport={savedRuleReport.finalDefinition} /></> : ready ? <LocalProductDefinitionSection products={selectedProducts} sources={scoped} /> : <><AnalysisRuleExplanation /><ProductDefinitionSection products={selectedProducts} sources={scoped} current={false} executionState="waiting-input" sourceLabel={message} /></>}
   </div>;
