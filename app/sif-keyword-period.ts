@@ -15,6 +15,10 @@ export function sifKeywordRecordPeriod(record: KeywordRecordPeriod | null | unde
 
 export function sifKeywordCohortPeriod(records: readonly (KeywordRecordPeriod & {status:string;keywords:readonly unknown[]} | undefined)[]): string | null {
   const periods = new Set(records.filter(record => record?.status === "ready" && record.keywords.length)
-    .map(record => sifKeywordRecordPeriod(record)));
-  return periods.size === 1 ? [...periods][0] : periods.size > 1 ? "混合来源周期（查看逐 ASIN 来源）" : null;
+    .map(record => sifKeywordRecordPeriod(record) ?? "来源周期未记录"));
+  return formatSifKeywordPeriods(periods);
+}
+
+export function formatSifKeywordPeriods(periods: ReadonlySet<string>): string | null {
+  return periods.size === 1 ? [...periods][0] : periods.size > 1 ? `混合来源周期：${[...periods].join("；")}` : null;
 }

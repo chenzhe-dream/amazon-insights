@@ -121,3 +121,16 @@ test("published UK historical words retain September label and current-empty obs
   assert.equal((source.sources.analysisByAsin?.[asin] as typeof historical).currentEmpty?.terminalReason,"valid-empty");
   assert.equal(source.sourceMeta.period,"历史 2026-09 · 站内搜索（近30天无词）");
 });
+
+test("mixed ready query windows name both periods in summary and matrix", () => {
+  const historical={...record([keyword("historical darts")]),asin,queryWindow:{time_type:"month",time_value:"2026-09-01",listingSearch:true},
+    currentEmpty:{queryWindow:{time_type:"lately",time_value:"30",listingSearch:true},observedAt:"2026-10-21",terminalReason:"valid-empty"}};
+  const recent={...record([keyword("recent darts")]),asin:other};
+  const data={analysisByAsin:{[asin]:historical,[other]:recent},enrichmentByKeyword:{}};
+  const source=readPageSnapshotKeywords(context(data),products);
+  const html=renderToStaticMarkup(<PageSnapshotKeywords {...source} page="keyword-analysis"/>);
+  assert.match(source.sourceMeta.period!,/混合来源周期：历史 2026-09.*近30天 · 站内搜索/);
+  assert.match(html,/混合来源周期：历史 2026-09/);
+  assert.match(html,/近30天 · 站内搜索/);
+  assert.doesNotMatch(html,/统计周期 <b>来源周期未记录<\/b>/);
+});

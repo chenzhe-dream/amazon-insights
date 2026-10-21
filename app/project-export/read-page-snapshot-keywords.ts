@@ -3,7 +3,7 @@ import {MarketSiteSchema} from "../../shared/market-sites";
 import type {KeywordDemandProduct, KeywordDemandSources} from "../keyword-demand-analysis";
 import type {AnalysisInputScope} from "../../shared/product-structure-rules";
 import type {ExportModuleContext} from "./export-module-context";
-import {sifKeywordRecordPeriod} from "../sif-keyword-period";
+import {formatSifKeywordPeriods,sifKeywordRecordPeriod} from "../sif-keyword-period";
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -65,7 +65,7 @@ export function readPageSnapshotKeywords(context: ExportModuleContext, products:
     if (record.asin !== asin || record.marketplace !== site) throw new Error("关键词来源范围不匹配");
     analysisByAsin[asin] = record;
     const period = sifKeywordRecordPeriod(record);
-    if (period && record.status === "ready" && record.keywords.length) periods.add(period);
+    if (record.status === "ready" && record.keywords.length) periods.add(period ?? "来源周期未记录");
     const fetchedAt = sourceDate(record.fetchedAt);
     if (fetchedAt) dates.push(fetchedAt);
     sourceRows.push({asin,fetchedAt,status:record.status,
@@ -84,6 +84,6 @@ export function readPageSnapshotKeywords(context: ExportModuleContext, products:
   }
   return structuredClone({products:[...products],sources:{analysisByAsin,enrichmentByKeyword},
     analysisScope:{projectId:context.projectId,organizationId:context.organizationId,marketplace:site},
-    sourceMeta:{period:periods.size === 1 ? [...periods][0] : null, updatedAt:dates.length ? dates.sort().at(-1)! : null},
+    sourceMeta:{period:formatSifKeywordPeriods(periods), updatedAt:dates.length ? dates.sort().at(-1)! : null},
     sourceRows});
 }

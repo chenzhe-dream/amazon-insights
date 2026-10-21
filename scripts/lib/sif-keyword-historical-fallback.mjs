@@ -17,7 +17,8 @@ export async function collectSifKeywordWithPreviousMonth({ asin, marketplace, fe
     const historical = await invoke(window);
     if (historical.status === "ready") return { ...historical, currentEmpty };
     if (historical.status === "empty") return { ...current, historicalEmpty: { queryWindow: window, observedAt: fetchedAt, terminalReason: "valid-empty" } };
-    return { ...current, historicalAttempt: { queryWindow: window, outcome: "schema-error" } };
+    return { ...current, historicalAttempt: { queryWindow: window, outcome: "schema-error", errorCode: historical.errorCode },
+      statusMessage: `${current.statusMessage}; 上月历史查询响应格式无效` };
   } catch (error) {
     return { ...current, historicalAttempt: { queryWindow: window, outcome: "error" },
       statusMessage: `${current.statusMessage}; 上月查询失败：${error instanceof Error ? error.message : String(error)}` };

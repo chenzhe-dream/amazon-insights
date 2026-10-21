@@ -56,7 +56,7 @@ export type SifKeywordAnalysisRecord = {
   queryWindow?: SifKeywordQueryWindow | null;
   currentEmpty?: { queryWindow: SifKeywordQueryWindow; observedAt: string; terminalReason: "valid-empty" };
   historicalEmpty?: { queryWindow: SifKeywordQueryWindow; observedAt: string; terminalReason: "valid-empty" };
-  historicalAttempt?: { queryWindow: SifKeywordQueryWindow; outcome: "schema-error" | "error" };
+  historicalAttempt?: { queryWindow: SifKeywordQueryWindow; outcome: "schema-error"; errorCode: "SIF_KEYWORD_SCHEMA_INVALID" } | { queryWindow: SifKeywordQueryWindow; outcome: "error" };
   status: "ready" | "empty" | "schema-error" | "error";
   terminalReason?: "valid-empty" | "schema-invalid";
   errorCode?: "SIF_KEYWORD_SCHEMA_INVALID";

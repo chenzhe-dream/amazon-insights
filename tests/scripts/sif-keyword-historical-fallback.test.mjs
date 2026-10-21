@@ -62,3 +62,20 @@ test("transport and schema failures never trigger historical query", async () =>
     assert.equal(count, 1);
   }
 });
+
+test("malformed historical response keeps current valid-empty proof and records schema failure", async () => {
+  let count = 0;
+  const record = await collectSifKeywordWithPreviousMonth({ asin, marketplace: "UK", fetchedAt: "2026-10-21",
+    now: new Date("2026-10-21T00:00:00Z"), enabled: true,
+    call: async () => ++count === 1 ? current : { asin, marketplace: "UK", top_keywords: "invalid" },
+  });
+  assert.equal(count, 2);
+  assert.equal(record.status, "empty");
+  assert.equal(record.terminalReason, "valid-empty");
+  assert.deepEqual(record.queryWindow, { time_type: "lately", time_value: "30", listingSearch: true });
+  assert.deepEqual(record.historicalAttempt, {
+    queryWindow: { time_type: "month", time_value: "2026-09-01", listingSearch: true },
+    outcome: "schema-error", errorCode: "SIF_KEYWORD_SCHEMA_INVALID",
+  });
+  assert.match(record.statusMessage, /上月历史查询响应格式无效/);
+});
