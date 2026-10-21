@@ -88,7 +88,7 @@ export function createProductDefinitionModelOutputContract(input: ProductDefinit
   const vocId = enumValue(vocIds), keywordId = enumValue(keywordIds), anyId = enumValue(allIds);
   const theme = themes.length ? z.enum(themes) : z.string().regex(/^(?!)$/);
   const group = groups.length ? z.enum(groups) : z.string().regex(/^(?!)$/);
-  const ids = (values: string[], item: z.ZodType<string>) => values.length
+  const ids = (values: string[], item: z.ZodType<string, string>) => values.length
     ? z.array(item).max(100)
     : z.array(z.string().trim().min(1).max(200)).max(0);
   const voc = ids(vocIds, vocId), keyword = ids(keywordIds, keywordId), all = ids(allIds, anyId);
