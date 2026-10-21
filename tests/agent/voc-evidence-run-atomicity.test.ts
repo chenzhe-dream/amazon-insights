@@ -11,7 +11,7 @@ let postgres: PostgresTestContainer;
 before(async()=>{postgres=await startPostgresTestContainer();await runPostgresMigrations(postgres.pool);});
 after(async()=>{await postgres?.close();});
 const ASINS = ["B08L7DD8L9", "B07498JDX4", "B0829MZFDP"];
-for (const marketplace of ["US", "DE", "CA"] as const) for (const dialect of ["sqlite", "postgres"] as const) test(`${dialect} ${marketplace}: scoped fallback persists one-ASIN evidence, replays and rejects changed input`, async t => {
+for (const marketplace of ["US", "UK", "DE", "CA"] as const) for (const dialect of ["sqlite", "postgres"] as const) test(`${dialect} ${marketplace}: scoped fallback persists one-ASIN evidence, replays and rejects changed input`, async t => {
  const repository = dialect === "sqlite" ? openSqliteAgentRepository({ path: ":memory:", busyTimeoutMs: 5000 }) : new PostgresAgentRepository(postgres.createPool()); t.after(() => repository.close());
  const organizationId = randomUUID(), actorId = randomUUID(), projectId = randomUUID(), baseSyncRunId = randomUUID(), now = "2026-09-10T00:00:00.000Z";
  await repository.createUser({ id: actorId, organizationId, email: `${actorId}@example.invalid`, displayName: "fixture", role: "member", status: "active", createdAt: now, updatedAt: now });

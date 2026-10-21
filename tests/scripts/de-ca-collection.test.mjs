@@ -12,7 +12,8 @@ import { callSifTool } from '../../scripts/lib/sif-mcp-client.mjs';
 import { callSellerSpriteMcpTool } from '../../scripts/lib/sellersprite-mcp-client.mjs';
 
 const asin = 'B0TEST0001';
-for (const marketplace of ['DE', 'CA']) {
+const currencies = { US: 'USD', UK: 'GBP', DE: 'EUR', CA: 'CAD' };
+for (const marketplace of ['UK', 'DE', 'CA']) {
   test(`${marketplace} catalog cannot reuse the same ASIN from a foreign marketplace`, () => {
     const catalogProducts = [{ asin, marketplace: 'US', catalogSource: 'sorftime-fallback', catalogProfileVersion: 1 }];
     assert.deepEqual(asinsNeedingSorftimeCatalogSync([asin], { marketplace, catalogProducts }), [asin]);
@@ -20,7 +21,7 @@ for (const marketplace of ['DE', 'CA']) {
     assert.deepEqual(asinsNeedingSorftimeCatalogSync([asin], { marketplace, catalogProducts }), []);
   });
   test(`${marketplace} catalog persists marketplace and correct fee currency`, () => {
-    const currency = marketplace === 'DE' ? 'EUR' : 'CAD';
+    const currency = currencies[marketplace];
     const entry = buildCatalogEntryFromSorftime({ asin, marketplace, detail: { asin, fba_fee: 4.2 } });
     assert.equal(entry.currency, currency);
     assert.match(entry.specifications.join(' '), new RegExp(`${currency} 4\\.20`));
@@ -35,7 +36,7 @@ for (const marketplace of ['DE', 'CA']) {
       fs.writeFileSync(file, `export const refreshedCatalog = ${JSON.stringify([{ asin, marketplace, catalogSource: 'sorftime-fallback', title: 'preserved' }])};\n`);
       appendCatalogEntry(buildCatalogEntryFromSorftime({ asin, marketplace, detail: { asin, brand: 'verified' } }), file);
       const [upgraded] = readCachedArrayExport(file, 'refreshedCatalog');
-      assert.equal(upgraded.currency, marketplace === 'DE' ? 'EUR' : 'CAD');
+      assert.equal(upgraded.currency, currencies[marketplace]);
       assert.equal(upgraded.title, 'preserved');
     } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
   });
@@ -65,8 +66,9 @@ for (const marketplace of ['DE', 'CA']) {
       if (provider === 'sorftime') await callSorftimeTool('test-key', 'product_detail', args, options);
       else if (provider === 'sif') await callSifTool('market_get_asin_keyword_signals', args, options);
       else await callSellerSpriteMcpTool('test-key', 'asin_detail', args, options);
-      assert.deepEqual(sent, args);
-      assert.deepEqual(cached, args);
+      const expected = provider === 'sorftime' && marketplace === 'UK' ? { ...args, amz_site: 'GB' } : args;
+      assert.deepEqual(sent, expected);
+      assert.deepEqual(cached, expected);
     }
   });
   test(`${marketplace} every collection stage uses an isolated cache with no US seed`, () => {
@@ -89,3 +91,14 @@ for (const marketplace of ['DE', 'CA']) {
     } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
   });
 }
+
+test('US catalog keeps USD while the other three marketplace currencies stay distinct', () => {
+  for (const [marketplace, currency] of Object.entries(currencies)) {
+    const fallback = buildCatalogEntryFromSorftime({ asin, marketplace, detail: { asin, fba_fee: 4.2 } });
+    const primary = buildCatalogEntryFromSellerSprite({ asin, price: 20 }, [], marketplace);
+    assert.equal(fallback.marketplace, marketplace);
+    assert.equal(fallback.currency, currency);
+    assert.equal(primary.marketplace, marketplace);
+    assert.equal(primary.currency, currency);
+  }
+});

@@ -59,7 +59,7 @@ test("snapshot rejects a changed manifest fingerprint even with valid source rec
  const payload=structuredClone(result.fallbackCandidate!.payload);payload.evidenceSelection!.fingerprint="a".repeat(64);
  assert.equal(VocSnapshotPayloadSchema.safeParse(payload).success,false);
 });
-for (const marketplace of ["DE", "CA"] as const) test(`${marketplace} fallback freezes same-site evidence without manual vault access`, async () => {
+for (const marketplace of ["UK", "DE", "CA"] as const) test(`${marketplace} fallback freezes same-site evidence without manual vault access`, async () => {
  const marketData = structuredClone(data); marketData.analysisByAsin[asin].marketplace = marketplace;
  const projection = {...output, data: marketData, contentHash: canonicalJsonSha256({stage:"reviews", data:marketData})};
  const repo = fixture(projection);
@@ -73,7 +73,7 @@ for (const marketplace of ["DE", "CA"] as const) test(`${marketplace} fallback f
  assert.equal(result.inventory.fallback.coverage[0].review?.contentHash,projection.contentHash);
  assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis[0].marketplace,marketplace);
 });
-for (const marketplace of ["DE", "CA"] as const) test(`${marketplace} rejects US review cache as available evidence`, async () => {
+for (const marketplace of ["UK", "DE", "CA"] as const) test(`${marketplace} rejects US review cache as available evidence`, async () => {
  const repo=fixture(); repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace,asins:[asin]});
  const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace} as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
  assert.equal(result.fallbackCandidate,null);
