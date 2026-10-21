@@ -547,6 +547,8 @@ export async function createAgentService(
             (env.AGENT_VOC_LOCAL_FAKE === "1"
               ? new LocalVocFakeProvider()
               : new OpenAIProvider({
+                  allowSingleTrailingObjectBrace: env.AGENT_VOC_RELAY_SINGLE_TRAILING_OBJECT_BRACE === "1",
+                  outputNormalizationLogger: entry => app.log.info(entry, entry.event),
                   apiKey: resolution.config.apiKey,
                   transport: resolution.config.transport,
                   baseUrl: resolution.config.baseUrl,

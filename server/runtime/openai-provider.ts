@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { createModelDiagnosticFetch, type ModelNetworkDiagnostic } from './model-network-diagnostics';
 import { ZodError } from "zod";
@@ -16,7 +17,22 @@ import {
   type StructuredGenerationRequest,
 } from "./model-provider";
 
+export interface RelayJsonNormalizationDiagnostic {
+  event: "relay_json_compatibility_applied";
+  rule: "single-trailing-object-brace-v1";
+  originalLength: number;
+  normalizedLength: number;
+  removedChars: 1;
+  originalSha256: string;
+  normalizedSha256: string;
+  responseIdSha256: string;
+  finishReason: "stop";
+}
+
 export interface OpenAIProviderOptions {
+  /** Explicit relay compatibility; never applied to Responses or valid JSON. */
+  allowSingleTrailingObjectBrace?: boolean;
+  outputNormalizationLogger?: (entry: Readonly<RelayJsonNormalizationDiagnostic>) => void;
   /** Opt-in safe fetch phases. Injected clients own their transport instrumentation. */
   networkLogger?: (entry: ModelNetworkDiagnostic) => void;
   /** Market-only protocol policy; existing callers retain their current behavior. */
@@ -368,6 +384,7 @@ function parseStructuredOutput<T>(
   deferOutputValidation = false,
   allowSingleJsonFence = false,
   finishReason?: "stop" | "completed",
+  trailingBrace?: { enabled: boolean; logger?: OpenAIProviderOptions["outputNormalizationLogger"] },
 ) {
   let outputValue: unknown;
   try {
@@ -382,7 +399,27 @@ function parseStructuredOutput<T>(
       }
     } else outputValue = JSON.parse(outputText);
   } catch (error) {
-    throw new ModelProviderError(
+    let recovered = false;
+    if (trailingBrace?.enabled && finishReason === "stop") {
+      const trimmed = outputText.trimEnd();
+      if (trimmed.endsWith("}")) {
+        const normalizedText = trimmed.slice(0, -1);
+        try {
+          const candidate = JSON.parse(normalizedText);
+          if (candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)) {
+            outputValue = candidate;
+            recovered = true;
+            const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+            try {
+              trailingBrace.logger?.(Object.freeze({event:"relay_json_compatibility_applied",rule:"single-trailing-object-brace-v1",
+                originalLength:outputText.length,normalizedLength:normalizedText.length,removedChars:1,
+                originalSha256:hash(outputText),normalizedSha256:hash(normalizedText),responseIdSha256:hash(usage.responseId),finishReason:"stop"}));
+            } catch { /* Observability cannot change parsing or validation. */ }
+          }
+        } catch { /* Do not infer or repair any other malformed JSON. */ }
+      }
+    }
+    if (!recovered) throw new ModelProviderError(
       "invalid_output",
       "OpenAI structured output was not valid JSON",
       {
@@ -401,9 +438,20 @@ function parseStructuredOutput<T>(
     );
   }
   if (deferOutputValidation) return { value: outputValue as T, ...usage };
-  const normalized = request.canonicalizeOutput
-    ? request.canonicalizeOutput(outputValue)
-    : outputValue;
+  let normalized: unknown;
+  try {
+    normalized = request.canonicalizeOutput ? request.canonicalizeOutput(outputValue) : outputValue;
+  } catch (error) {
+    if (!(error instanceof ZodError)) throw error;
+    const issues = summarizeZodValidationIssues(error, request.responseFormat);
+    throw new ModelProviderError("invalid_output", "OpenAI structured output failed runtime canonicalization", {
+      usage, cause: error, validationIssues: issues,
+      validationJsonSchema: request.responseFormat.format.schema,
+      validationDiagnostic: issues.some(issue => issue.ruleId)
+        ? { stage: "semantic", code: "evidence_mismatch" }
+        : { stage: "schema", code: "contract_mismatch" },
+    });
+  }
   const parsed = request.outputSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new ModelProviderError(
@@ -440,6 +488,8 @@ export class OpenAIProvider implements ModelProvider {
   private readonly deferOutputValidation: boolean;
   private readonly schemaPromptMode: "native" | "duplicated" | "prompt-and-native";
   private readonly allowSingleJsonFence: boolean;
+  private readonly allowSingleTrailingObjectBrace: boolean;
+  private readonly outputNormalizationLogger: OpenAIProviderOptions["outputNormalizationLogger"];
   private readonly client: Pick<OpenAI, "responses" | "chat">;
   private readonly transport: VocProviderTransport;
   private readonly organizationId: string | undefined;
@@ -452,6 +502,8 @@ export class OpenAIProvider implements ModelProvider {
     this.deferOutputValidation = options.deferOutputValidation ?? false;
     this.schemaPromptMode = options.schemaPromptMode ?? "duplicated";
     this.allowSingleJsonFence = options.allowSingleJsonFence ?? false;
+    this.allowSingleTrailingObjectBrace = options.allowSingleTrailingObjectBrace ?? false;
+    this.outputNormalizationLogger = options.outputNormalizationLogger;
     this.transport = options.transport ?? "responses-strict";
     this.organizationId = options.organizationId;
     this.jobId = options.jobId;
@@ -518,7 +570,7 @@ export class OpenAIProvider implements ModelProvider {
         const usage = validatedChatUsage(completion);
         this.assertOutputLimit(request, usage);
         const outputText = extractCompletedChatOutputText(completion, usage);
-        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence, "stop");
+        return parseStructuredOutput(outputText, request, usage, this.deferOutputValidation, this.allowSingleJsonFence, "stop", {enabled:this.allowSingleTrailingObjectBrace,logger:this.outputNormalizationLogger});
       }
       const response = await this.runGovernedModelAttempt(request, () =>
         this.client.responses.create(

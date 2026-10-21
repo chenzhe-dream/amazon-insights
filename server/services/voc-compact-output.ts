@@ -35,7 +35,7 @@ export function hydrateVocOutput(candidate:unknown,facts:VocDeterministicPreproc
  if(!parsed.success)return candidate;
  const value=parsed.data,p=value.positioningProjection;
  const themes=new Map(facts.dimensions.flatMap(d=>d.themes.map(theme=>[JSON.stringify([d.key,theme.key]),theme] as const)));
- const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new z.ZodError([{code:"custom",path:["positioningProjection","themeRefs"],message:"voc-forged-theme-reference"}]);return theme;};
+ const find=(ref:{dimension:string;themeKey:string})=>{const theme=themes.get(JSON.stringify([ref.dimension,ref.themeKey]));if(!theme)throw new z.ZodError([{code:"custom",path:["positioningProjection","themeRefs"],message:"voc-forged-theme-reference",params:{ruleId:"voc-forged-theme-reference"}}]);return theme;};
  const references=<T extends {themeRefs:{dimension:string;themeKey:string}[]}>(row:T)=>({...row,evidenceIds:[...new Set(row.themeRefs.flatMap(ref=>find(ref).evidenceIds))]});
  return {...value,positioningProjection:{...p,
   identity:{snapshotId:facts.snapshot.id,contentHash:facts.snapshot.contentHash,factsDigest:facts.factsDigest,dataCutoffAt:facts.snapshot.dataCutoffAt},

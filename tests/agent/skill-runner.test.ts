@@ -318,7 +318,7 @@ async function createRunner(
 }
 
 async function createRunnerWithOptions(
-  provider: FakeProvider,
+  provider: ModelProvider,
   options: {
     logger?: (summary: unknown) => void;
     now?: () => number;
@@ -1677,4 +1677,25 @@ test("log redaction recursively removes secrets from objects and arrays", () => 
   );
   assert.match(serialized, /\[REDACTED\]/);
   assert.match(serialized, /kept/);
+});
+
+test('relay compatibility semantic failure supplies repair issues and revalidates the repaired output', async () => {
+  for (const deferOutputValidation of [false, true]) {
+    const logged: unknown[] = [], bodies: Array<Record<string, unknown>> = [];
+    const provider = new OpenAIProvider({ transport: 'relay-chat-json', allowSingleTrailingObjectBrace: true, deferOutputValidation,
+      client: { chat: { completions: { create: async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return { id: `safe_${bodies.length}`, choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{"summary":"forged"}}' } }], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } };
+      } } } } as never });
+    const runner = await createRunnerWithOptions(provider, { validationLogger: (entry: unknown) => logged.push(entry) } as never);
+    await assert.rejects(runSkill(runner, executionRequest({ outputContract: {
+      name: 'VocPositioningOutput@1.0.0', schema: outputSchema,
+      canonicalizeOutput: () => { throw new z.ZodError([{ code: 'custom', path: ['summary'], message: 'PRIVATE', params: { ruleId: 'voc-forged-theme-reference' } }]); },
+    } })), (e: unknown) => e instanceof SkillRuntimeError && e.code === 'MODEL_OUTPUT_ERROR');
+    assert.equal(bodies.length, 2);
+    assert.match(JSON.stringify(bodies[1]), /voc-forged-theme-reference/);
+    assert.equal(logged.length, 2);
+    for (const entry of logged) assert.deepEqual(Reflect.get(entry as object, 'issues'), [{ path: ['summary'], code: 'custom', ruleId: 'voc-forged-theme-reference' }]);
+    assert.doesNotMatch(JSON.stringify(logged), /PRIVATE|forged"/);
+  }
 });

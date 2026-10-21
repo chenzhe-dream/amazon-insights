@@ -994,3 +994,44 @@ test('JSON diagnostics sanitizer drops raw fields, invalid categories and unsafe
  assert.deepEqual(error.validationDiagnostic,{stage:'json',code:'invalid_json',contentLength:5,startsWithFence:false});
  assert.doesNotMatch(JSON.stringify(error.validationDiagnostic),/PRIVATE/);
 });
+test('single trailing object brace requires explicit relay opt-in and logs only hashes',async()=>{
+ const text='{"summary":"PRIVATE_BODY"}}  \n',events:unknown[]=[];
+ const client={responses:{create:async()=>completedResponse({output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text}]}]})},chat:{completions:{create:async()=>completedChat({choice:{message:{content:text}}})}}} as never;
+ const provider=new OpenAIProvider({client,transport:'relay-chat-json',allowSingleTrailingObjectBrace:true,outputNormalizationLogger:(event:unknown)=>events.push(event)} as never);
+ assert.equal((await provider.generateStructured(request())).value.summary,'PRIVATE_BODY');
+ const event=events[0] as Record<string,unknown>;assert.equal(event.event,'relay_json_compatibility_applied');assert.equal(event.rule,'single-trailing-object-brace-v1');assert.equal(event.removedChars,1);assert.equal(event.originalLength,text.length);assert.equal(event.normalizedLength,text.trimEnd().length-1);assert.equal(event.finishReason,'stop');
+ for(const key of ['originalSha256','normalizedSha256','responseIdSha256'])assert.match(String(event[key]),/^[0-9a-f]{64}$/);
+ assert.doesNotMatch(JSON.stringify(events),/PRIVATE_BODY|summary/);
+ await assert.rejects(new OpenAIProvider({client,transport:'relay-chat-json'}).generateStructured(request()));
+ await assert.rejects(new OpenAIProvider({client,transport:'responses-strict',allowSingleTrailingObjectBrace:true} as never).generateStructured(request()));
+});
+
+test('trailing brace compatibility rejects other malformed JSON and retains schema checks', async () => {
+  const invoke = (text: string, logger: () => void = () => {}) => new OpenAIProvider({
+    transport: 'relay-chat-json', allowSingleTrailingObjectBrace: true, outputNormalizationLogger: logger,
+    client: { chat: { completions: { create: async () => completedChat({ choice: { message: { content: text } } }) } } } as never,
+  }).generateStructured(request());
+  for (const text of ['{"summary":"x"}}}', '{"summary":"x"}tail', '{"summary":', 'null}', '[]}', '"x"}', '{"summary":"x"}{}', '{"summary":"x"', '```json\n{"summary":"x"}}\n```']) {
+    await assert.rejects(invoke(text), (e: unknown) => e instanceof ModelProviderError && e.validationDiagnostic?.code === 'invalid_json');
+  }
+  let events = 0;
+  assert.equal((await invoke('{"summary":"x"}', () => { events++; })).value.summary, 'x');
+  assert.equal(events, 0);
+  assert.equal((await invoke('{"summary":"x"}}', () => { throw new Error('logger unavailable'); })).value.summary, 'x');
+  await assert.rejects(invoke('{"summary":42}}'), (e: unknown) => e instanceof ModelProviderError && e.validationIssues?.[0]?.path[0] === 'summary');
+});
+
+test('normalized output canonicalizer failures keep safe semantic issues and usage', async () => {
+  const provider = new OpenAIProvider({ transport: 'relay-chat-json', allowSingleTrailingObjectBrace: true,
+    client: { chat: { completions: { create: async () => completedChat({ choice: { message: { content: '{"summary":"PRIVATE"}}' } } }) } } } as never });
+  await assert.rejects(provider.generateStructured({ ...request(), canonicalizeOutput: () => {
+    throw new z.ZodError([{ code: 'custom', path: ['summary'], message: 'PRIVATE', params: { ruleId: 'voc-forged-theme-reference' } }]);
+  } }), (e: unknown) => {
+    assert.ok(e instanceof ModelProviderError);
+    assert.deepEqual(e.validationIssues, [{ path: ['summary'], code: 'custom', ruleId: 'voc-forged-theme-reference' }]);
+    assert.deepEqual(e.validationDiagnostic, { stage: 'semantic', code: 'evidence_mismatch' });
+    assert.equal(e.usage?.outputTokens, 10);
+    assert.doesNotMatch(JSON.stringify(e.validationIssues), /PRIVATE/);
+    return true;
+  });
+});
