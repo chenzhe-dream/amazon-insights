@@ -83,7 +83,9 @@ export async function buildVocEvidenceInventory(input: Input) {
       return { asin, primary: manual ? "manual" as const : reviewDimensions.length ? "review" as const : "missing" as const,
         manualDimensions, ...selectEvidenceDimensions(manualDimensions, reviewDimensions, fallback),
         manual: manual && provenance ? { id: `repository://manual-voc/${asin}`, version: provenance.revision, contentHash: provenance.contentHash, capturedAt: provenance.capturedAt } : null,
-        review: fallback && review && reviews ? { ...sourceRef(reviews), id: `${sourceRef(reviews).id}#${sellerSpriteReview ? "sellerSprite" : "sorftime"}` } : null };
+        review: fallback && review && reviews ? sellerSpriteReview
+          ? { ...sourceRef(reviews), id: `${sourceRef(reviews).id}#sellerSprite` }
+          : sourceRef(reviews) : null };
     });
     const unsigned = { schemaVersion: "voc-evidence/v1" as const, organizationId: project.organizationId, projectId: project.id, baseSyncRunId, marketplace: project.marketplace, selectedAsins,
       sourcePolicy: fallback ? "manual-with-review-fallback" as const : "manual-only" as const,

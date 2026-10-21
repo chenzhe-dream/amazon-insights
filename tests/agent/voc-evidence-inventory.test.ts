@@ -15,6 +15,7 @@ test("inventory is scoped, separates manual and explicit fallback, preserves key
  assert.equal(result.manualCandidate, null);
  assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis.length, 1);
  assert.equal(result.inventory.fallback.coverage[0].primary, "review");
+ assert.equal(result.inventory.fallback.coverage[0].review?.id, `repository://sync/${runId}/reviews/job`);
  assert.equal(result.inventory.fallback.keywords.state, "missing");
  assert.notEqual(result.inventory.manual.fingerprint, result.inventory.fallback.fingerprint);
 });
