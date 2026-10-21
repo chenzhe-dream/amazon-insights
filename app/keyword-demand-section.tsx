@@ -16,7 +16,8 @@ import {
   type KeywordCategory,
 } from "./keyword-classifier";
 import { LaunchSection, LaunchTable } from "./launch-section";
-import { sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
+import { sifKeywordAnalysisData, sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
+import { sifKeywordCohortPeriod } from "./sif-keyword-period";
 import { SegmentStackBar, segmentStackColors } from "./segment-stack-bar";
 import { buildKeywordLaunchConclusions, type KeywordLaunchConclusions } from "./keyword-demand-conclusions";
 import { sifKeywordFieldTitle } from "./sif-keyword-field-glossary";
@@ -526,6 +527,7 @@ function KeywordComparisonMatrixTable({
   snapshotMeta?: {period: string | null; updatedAt: string | null};
 }) {
   const snapshot = useSnapshotPresentation();
+  const period = snapshot ? snapshotMeta?.period ?? "来源周期未记录" : sifKeywordCohortPeriod(products.map(product => (sources?.analysisByAsin ?? sifKeywordAnalysisData)[product.asin])) ?? "来源周期未记录";
   const [filter, setFilter] = useState<KeywordCategory | "all">("all");
   const [sort, setSort] = useState<MatrixSort>("coverageDesc");
   const matrix = useMemo(
@@ -599,7 +601,7 @@ function KeywordComparisonMatrixTable({
           <span><b>{snapshotMeta?.period ?? "来源周期未记录"}</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3</span>
           <span><b>已有月份</b>：月搜索量、ABA 排名、月搜索趋势；各词可展开查看全部已保存月份</span>
         </> : <>
-          <span><b>近30天</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3（SIF listingSearch lately·30）</span>
+          <span><b>{period}</b>：竞品列流量占比、建议竞价、点击转化率、ABA Top3</span>
           <span><b>月粒度</b>：月搜索量、ABA 排名、月搜索趋势（SIF keyword_history · 近12期）</span>
         </>}
       </div>
@@ -684,7 +686,7 @@ function KeywordComparisonMatrixTable({
                 <th
                   key={competitor.asin}
                   className="kw-matrix-competitor-col kw-matrix-help"
-                  title={sifKeywordFieldTitle("trafficShare", `${competitor.brand} · ${competitor.asin} · ${snapshot ? snapshotMeta?.period ?? "来源周期未记录" : "近30天 listingSearch"}`)}
+                  title={sifKeywordFieldTitle("trafficShare", `${competitor.brand} · ${competitor.asin} · ${period}`)}
                 >
                   <div className="kw-matrix-product-head">
                     <span className="series-dot" style={{ background: palette[index % palette.length] }}>
@@ -775,6 +777,7 @@ export function KeywordDemandSection({
   snapshotMeta?: {period: string | null; updatedAt: string | null};
 }) {
   const snapshot = useSnapshotPresentation();
+  const period = snapshot ? snapshotMeta?.period ?? "来源周期未记录" : sifKeywordCohortPeriod(products.map(product => (sources?.analysisByAsin ?? sifKeywordAnalysisData)[product.asin])) ?? "来源周期未记录";
   const analysis = useMemo(() => buildKeywordDemandAnalysis(products, sources), [products, sources]);
   const conclusions = useMemo(
     () => buildKeywordLaunchConclusions(analysis, products, analysisScope, sources),
@@ -811,7 +814,7 @@ export function KeywordDemandSection({
             分类体系 <b>12 类标签</b>
           </span>
           <span>
-            统计周期 <b>{snapshot ? snapshotMeta?.period ?? "来源周期未记录" : analysis.meta.period}</b>
+            统计周期 <b>{period}</b>
           </span>
           <span>
             竞品 <b>
@@ -890,7 +893,7 @@ export function KeywordDemandSection({
 
           <LaunchSection
             title="流量词对比"
-            description={snapshot ? `行=去重关键词 · 列=竞品流量占比（${snapshotMeta?.period ?? "来源周期未记录"}）` : "行=去重关键词 · 列=竞品近30天流量占比（listingSearch）"}
+            description={`行=去重关键词 · 列=竞品流量占比（${period}）`}
           >
             <KeywordComparisonMatrixTable products={products} categories={analysis.categories} sources={sources} snapshotMeta={snapshotMeta} />
           </LaunchSection>

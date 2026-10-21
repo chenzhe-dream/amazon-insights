@@ -3,16 +3,12 @@ import {MarketSiteSchema} from "../../shared/market-sites";
 import type {KeywordDemandProduct, KeywordDemandSources} from "../keyword-demand-analysis";
 import type {AnalysisInputScope} from "../../shared/product-structure-rules";
 import type {ExportModuleContext} from "./export-module-context";
+import {sifKeywordRecordPeriod} from "../sif-keyword-period";
 
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const presentObject = (value: unknown): Record<string, unknown> => z.record(z.string(),z.unknown()).parse(value);
 const sourceDate = (value: string) => /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value) ? value : null;
-const sourcePeriod = (window: {time_type:string;time_value:string;listingSearch:boolean} | null | undefined) => {
-  if (!window) return null;
-  if (window.time_type === "lately" && /^\d+$/.test(window.time_value)) return `近${window.time_value}天 · ${window.listingSearch ? "站内搜索" : "全部搜索"}`;
-  return `${window.time_type} ${window.time_value} · ${window.listingSearch ? "站内搜索" : "全部搜索"}`;
-};
 const finiteOrNull = z.number().finite().nullable();
 const keywordRow = z.object({
   keyword:z.string(), trafficShare:finiteOrNull, searchVolume:finiteOrNull, abaRank:finiteOrNull,
@@ -26,6 +22,7 @@ const analysisRecord = z.object({
   statusMessage:z.string().optional(), dataNotice:z.string().nullable().optional(),
   totalKeywordsInPeriod:finiteOrNull, topKeywordsAnalyzed:z.number().finite(), keywords:z.array(keywordRow),
   queryWindow:z.object({time_type:z.string(),time_value:z.string(),listingSearch:z.boolean()}).nullable().optional(),
+  currentEmpty:z.object({queryWindow:z.object({time_type:z.string(),time_value:z.string(),listingSearch:z.boolean()}),observedAt:z.string(),terminalReason:z.literal("valid-empty")}).optional(),
 });
 const enrichmentRecord = z.object({
   keyword:z.string(), fetchedAt:z.string(), status:z.enum(["ready","partial","error"]), statusMessage:z.string().optional(),
@@ -67,8 +64,8 @@ export function readPageSnapshotKeywords(context: ExportModuleContext, products:
     const record = analysisRecord.parse(raw);
     if (record.asin !== asin || record.marketplace !== site) throw new Error("关键词来源范围不匹配");
     analysisByAsin[asin] = record;
-    const period = sourcePeriod(record.queryWindow);
-    if (period) periods.add(period);
+    const period = sifKeywordRecordPeriod(record);
+    if (period && record.status === "ready" && record.keywords.length) periods.add(period);
     const fetchedAt = sourceDate(record.fetchedAt);
     if (fetchedAt) dates.push(fetchedAt);
     sourceRows.push({asin,fetchedAt,status:record.status,

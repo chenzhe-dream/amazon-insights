@@ -105,3 +105,19 @@ test("seven-day and unknown source windows never claim thirty days or twelve sav
   assert.match(unknownHtml,/来源周期未记录/);
   assert.doesNotMatch(unknownHtml,/近30天|近12期|近 12 个月搜索量|listingSearch lately/);
 });
+
+test("published UK historical words retain September label and current-empty observation", () => {
+  const current={time_type:"lately",time_value:"30",listingSearch:true};
+  const historical={...record([keyword("steel tip darts",120)]),marketplace:"UK",fetchedAt:"2026-10-21",
+    queryWindow:{time_type:"month",time_value:"2026-09-01",listingSearch:true},
+    currentEmpty:{queryWindow:current,observedAt:"2026-10-21",terminalReason:"valid-empty"}};
+  const empty={...record([]),asin:other,marketplace:"UK",fetchedAt:"2026-10-21",status:"empty",terminalReason:"valid-empty",queryWindow:current};
+  const source=readPageSnapshotKeywords({...context({analysisByAsin:{[asin]:historical,[other]:empty},enrichmentByKeyword:{}}),marketplace:"UK",
+    version:{marketplace:"UK",stageOutputs:{keywords:{data:{analysisByAsin:{[asin]:historical,[other]:empty},enrichmentByKeyword:{}}}},catalog:[]} as never},products);
+  const html=renderToStaticMarkup(<PageSnapshotKeywords {...source} page="keyword-analysis"/>);
+  assert.match(html,/历史 2026-09/);
+  assert.match(html,/近30天无词/);
+  assert.match(html,/steel tip darts/);
+  assert.equal((source.sources.analysisByAsin?.[asin] as typeof historical).currentEmpty?.terminalReason,"valid-empty");
+  assert.equal(source.sourceMeta.period,"历史 2026-09 · 站内搜索（近30天无词）");
+});

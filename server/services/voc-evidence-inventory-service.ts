@@ -9,7 +9,11 @@ import { buildKeywordAnalysisSnapshotCandidate } from "../data/keyword-analysis-
 import { manualEvidenceDimensions, reviewEvidenceDimensions, selectEvidenceDimensions } from "../data/voc-evidence-selection";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
-const KeywordRecordSchema = z.object({ asin: z.string(), marketplace: ProjectMarketplaceSchema, status: z.enum(["ready", "empty", "error"]), fetchedAt: z.string(), keywords: z.array(z.object({ keyword: z.string().trim().min(1), searchVolume: z.number().finite().nonnegative().nullable() })) });
+const QueryWindowSchema = z.object({ time_type: z.string(), time_value: z.string(), listingSearch: z.boolean() });
+const KeywordRecordSchema = z.object({ asin: z.string(), marketplace: ProjectMarketplaceSchema, status: z.enum(["ready", "empty", "error"]), fetchedAt: z.string(),
+  queryWindow: QueryWindowSchema.nullable().optional(),
+  currentEmpty: z.object({ queryWindow: QueryWindowSchema, observedAt: z.string(), terminalReason: z.literal("valid-empty") }).optional(),
+  keywords: z.array(z.object({ keyword: z.string().trim().min(1), searchVolume: z.number().finite().nonnegative().nullable() })) });
 type Input = { repository: RuntimeAgentRepository; project: ProjectRecord; baseSyncRunId: string; selectedAsins: readonly string[]; dataCutoffAt: string };
 export async function buildVocEvidenceInventory(input: Input) {
   const { repository, project, dataCutoffAt, baseSyncRunId } = input;
@@ -36,11 +40,21 @@ export async function buildVocEvidenceInventory(input: Input) {
   const sourceRef = (stage: NonNullable<typeof reviews>) => ({ id: `repository://sync/${baseRun.id}/${stage.stage}/${stage.jobId}`, version: String(stage.outputVersion), contentHash: stage.contentHash, capturedAt: stage.updatedAt });
   const manualSource = source.candidate?.sources.find(item => item.type === "manual-voc");
   let keywordInvalid = false, keywordMissing = false;
+  const stageDate = keywords?.updatedAt ? new Date(keywords.updatedAt) : null;
+  const previousMonth = stageDate && Number.isFinite(stageDate.getTime())
+    ? new Date(Date.UTC(stageDate.getUTCFullYear(), stageDate.getUTCMonth() - 1, 1)).toISOString().slice(0, 10) : null;
+  const observedKeywordRecords: Array<z.infer<typeof KeywordRecordSchema>> = [];
   const keywordRows = keywords && keywords.stage === "keywords" && "data" in keywords ? selectedAsins.flatMap(asin => {
     const parsed = KeywordRecordSchema.safeParse(keywords.data.analysisByAsin[asin]);
     const record = parsed.success ? parsed.data : null;
     if (!keywords.data.analysisByAsin[asin]) keywordMissing = true;
-    else if (!record || record.asin !== asin || record.marketplace !== project.marketplace || record.status === "error" || !Number.isFinite(Date.parse(record.fetchedAt)) || Date.parse(record.fetchedAt) > Date.parse(keywords.updatedAt)) keywordInvalid = true;
+    else if (!record || record.asin !== asin || record.marketplace !== project.marketplace || record.status === "error" || !Number.isFinite(Date.parse(record.fetchedAt)) || Date.parse(record.fetchedAt) > Date.parse(keywords.updatedAt) ||
+      (record.status === "ready" && record.queryWindow?.time_type === "month" && (
+        project.marketplace !== "UK" || record.queryWindow.time_value !== previousMonth || !record.queryWindow.listingSearch ||
+        !record.currentEmpty || record.currentEmpty.queryWindow.time_type !== "lately" || record.currentEmpty.queryWindow.time_value !== "30" ||
+        !record.currentEmpty.queryWindow.listingSearch || !Number.isFinite(Date.parse(record.currentEmpty.observedAt)) ||
+        Date.parse(record.currentEmpty.observedAt) > Date.parse(keywords.updatedAt)))) keywordInvalid = true;
+    if (record && !keywordInvalid) observedKeywordRecords.push(record);
     return !keywordInvalid && record && record.asin === asin && record.marketplace === project.marketplace && record.status === "ready" ? record.keywords.map(row => ({ asin, row })) : [];
   }) : [];
   const usableRows = keywordRows.filter(({ row }) => row.keyword.trim());
@@ -78,7 +92,15 @@ export async function buildVocEvidenceInventory(input: Input) {
   };
   const keywordCandidate = keywordState === "ready" && usableRows.length && keywords ? buildKeywordAnalysisSnapshotCandidate({ marketplace: project.marketplace, asins: selectedAsins, dataCutoffAt,
     groups: usableRows.slice(0, 100).map(({ asin, row }, index) => ({ id: `keyword-${index}`, label: row.keyword, keywords: [row.keyword], demand: "unknown", trend: "unknown", seasonality: "unknown", evidenceIds: [`${asin}-keyword-${index}`] })),
-    evidence: usableRows.slice(0, 100).map(({ asin, row }, index) => ({ id: `${asin}-keyword-${index}`, sourceId: `${sourceRef(keywords).id}@${keywords.outputVersion}#${keywords.contentHash}`, capturedAt: keywords.updatedAt, searchVolume: row.searchVolume, purchaseRate: null })),
+    evidence: usableRows.slice(0, 100).map(({ asin, row }, index) => {
+      const record = observedKeywordRecords.find(item => item.asin === asin)!;
+      return { id: `${asin}-keyword-${index}`, sourceId: `${sourceRef(keywords).id}@${keywords.outputVersion}#${keywords.contentHash}`, capturedAt: keywords.updatedAt,
+        searchVolume: row.searchVolume, purchaseRate: null,
+        ...(record.queryWindow ? { queryWindow: record.queryWindow } : {}),
+        ...(record.currentEmpty ? { currentEmpty: record.currentEmpty } : {}) };
+    }),
+    coverage: observedKeywordRecords.map(record => ({ asin: record.asin, status: record.status as "ready" | "empty",
+      queryWindow: record.queryWindow ?? null, ...(record.currentEmpty ? { currentEmpty: record.currentEmpty } : {}) })),
   }) : null;
   return { inventory, manualCandidate: candidate(inventory.manual), fallbackCandidate: candidate(inventory.fallback), keywordCandidate };
 }

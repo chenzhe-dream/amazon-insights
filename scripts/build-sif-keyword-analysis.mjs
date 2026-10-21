@@ -3,8 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSifTool, readSifHeaders } from "./lib/sif-mcp-client.mjs";
-import {sourceFetchedDate} from './lib/sorftime-source-policy.mjs';
-import { buildSifKeywordAnalysis } from "./lib/sif-keyword-transform.mjs";
+import { collectSifKeywordWithPreviousMonth } from "./lib/sif-keyword-historical-fallback.mjs";
 import { collectUniqueKeywords, enrichKeywords } from "./lib/sif-keyword-enrichment.mjs";
 import { matchesKeywordQueryWindow, SIF_KEYWORD_QUERY_WINDOW } from "./lib/sif-keyword-sync-config.mjs";
 import {
@@ -55,6 +54,9 @@ export type SifKeywordAnalysisRecord = {
   marketplace: string;
   fetchedAt: string;
   queryWindow?: SifKeywordQueryWindow | null;
+  currentEmpty?: { queryWindow: SifKeywordQueryWindow; observedAt: string; terminalReason: "valid-empty" };
+  historicalEmpty?: { queryWindow: SifKeywordQueryWindow; observedAt: string; terminalReason: "valid-empty" };
+  historicalAttempt?: { queryWindow: SifKeywordQueryWindow; outcome: "schema-error" | "error" };
   status: "ready" | "empty" | "schema-error" | "error";
   terminalReason?: "valid-empty" | "schema-invalid";
   errorCode?: "SIF_KEYWORD_SCHEMA_INVALID";
@@ -136,6 +138,8 @@ async function main() {
   const existing = readCachedDataExport(outPath, "sifKeywordAnalysisData");
   const existingEnrichment = readCachedDataExport(enrichPath, "sifKeywordEnrichmentData");
   const records = createRepairSafeRecordMap(existing);
+  const historicalFallback = process.env.AGENT_SIF_EMPTY_PREVIOUS_MONTH_FALLBACK === "1";
+  const collectionNow = new Date();
 
   if (!headers && !Object.values(existing).some(record => record.status === "ready")) {
     console.error("[error] 未找到 SIF MCP 密钥，且无可用缓存");
@@ -146,11 +150,11 @@ async function main() {
   if (isForceRefresh()) console.log("[sync] FORCE_REFRESH=1 · 忽略缓存，重新调用 MCP");
 
   for (const asin of asins) {
-    if (hasCompleteKeywordRecord(existing[asin]) && (isRepairIncomplete() || (shouldUseCachedRecord(existing[asin]) && matchesKeywordQueryWindow(existing[asin])))) {
+    if (hasCompleteKeywordRecord(existing[asin]) && matchesKeywordQueryWindow(existing[asin], { enabled: historicalFallback, now: collectionNow, marketplace }) && (isRepairIncomplete() || shouldUseCachedRecord(existing[asin]))) {
       logCacheHit(asin, existing[asin]);
       continue;
     }
-    if (shouldUseCachedRecord(existing[asin]) && !matchesKeywordQueryWindow(existing[asin])) {
+    if (shouldUseCachedRecord(existing[asin]) && !matchesKeywordQueryWindow(existing[asin], { enabled: historicalFallback, now: collectionNow, marketplace })) {
       console.log(`[refresh] ${asin} · 缓存为旧口径（非近30天 listingSearch），重新拉取`);
     }
 
@@ -161,13 +165,10 @@ async function main() {
 
     process.stdout.write(`[sif] ${asin} keyword signals ... `);
     try {
-      const payload = await callSifTool("market_get_asin_keyword_signals", {
-        asin,
-        country: marketplace,
-        ...SIF_KEYWORD_QUERY_WINDOW,
-        topN,
+      records[asin] = await collectSifKeywordWithPreviousMonth({
+        asin, marketplace, fetchedAt, topN, enabled: historicalFallback, now: collectionNow,
+        call: callSifTool,
       });
-      records[asin] = buildSifKeywordAnalysis(asin, marketplace, payload, sourceFetchedDate([payload],fetchedAt), SIF_KEYWORD_QUERY_WINDOW);
       console.log(`${records[asin].keywords.length} keywords`);
     } catch (error) {
       if (existing[asin]?.status === "ready") {

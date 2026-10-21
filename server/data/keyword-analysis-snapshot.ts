@@ -12,12 +12,27 @@ import {
 
 export const KEYWORD_ANALYSIS_SNAPSHOT_SCHEMA_VERSION = "1.0.0" as const;
 
+const KeywordQueryWindowSchema = z.strictObject({
+  time_type: z.string().min(1), time_value: z.string().min(1), listingSearch: z.boolean(),
+});
+const CurrentEmptySchema = z.strictObject({
+  queryWindow: KeywordQueryWindowSchema, observedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  terminalReason: z.literal("valid-empty"),
+});
+const KeywordCoverageSchema = z.strictObject({
+  asin: AsinSchema, status: z.enum(["ready", "empty"]),
+  queryWindow: KeywordQueryWindowSchema.nullable(),
+  currentEmpty: CurrentEmptySchema.optional(),
+});
+
 const KeywordEvidenceSchema = z.strictObject({
   id: z.string().trim().min(1).max(200),
   sourceId: z.string().trim().min(1).max(500),
   capturedAt: DateTimeSchema,
   searchVolume: z.number().finite().nonnegative().nullable(),
   purchaseRate: z.number().finite().min(0).max(1).nullable(),
+  queryWindow: KeywordQueryWindowSchema.optional(),
+  currentEmpty: CurrentEmptySchema.optional(),
 });
 
 const KeywordGroupSchema = z.strictObject({
@@ -46,6 +61,7 @@ export const KeywordAnalysisSnapshotCandidateSchema = z
     payload: z.strictObject({
       groups: z.array(KeywordGroupSchema).min(1).max(100),
       evidence: z.array(KeywordEvidenceSchema).min(1).max(500),
+      coverage: z.array(KeywordCoverageSchema).min(1).max(10).optional(),
     }),
     contentHash: Sha256Schema,
   })
@@ -80,6 +96,7 @@ export function buildKeywordAnalysisSnapshotCandidate(input: {
   dataCutoffAt: string;
   groups: readonly z.input<typeof KeywordGroupSchema>[];
   evidence: readonly z.input<typeof KeywordEvidenceSchema>[];
+  coverage?: readonly z.input<typeof KeywordCoverageSchema>[];
 }): KeywordAnalysisSnapshotCandidate {
   const evidence = z.array(KeywordEvidenceSchema).parse(input.evidence);
   const unsigned = {
@@ -92,11 +109,12 @@ export function buildKeywordAnalysisSnapshotCandidate(input: {
       id: "keyword-analysis",
       type: "deterministic-analysis" as const,
       capturedAt: DateTimeSchema.parse(input.dataCutoffAt),
-      checksum: keywordSnapshotContentHash({ groups: input.groups, evidence }),
+      checksum: keywordSnapshotContentHash({ groups: input.groups, evidence, ...(input.coverage ? { coverage: input.coverage } : {}) }),
     }],
     payload: {
       groups: z.array(KeywordGroupSchema).min(1).max(100).parse(input.groups),
       evidence,
+      ...(input.coverage ? { coverage: z.array(KeywordCoverageSchema).min(1).max(10).parse(input.coverage) } : {}),
     },
   };
   return KeywordAnalysisSnapshotCandidateSchema.parse({
@@ -129,6 +147,15 @@ function validateSnapshot(
   for (const [index, group] of snapshot.payload.groups.entries()) {
     if (group.evidenceIds.some((id) => !evidenceIds.has(id))) {
       context.addIssue({ code: "custom", path: ["payload", "groups", index, "evidenceIds"], message: "Keyword group evidence must exist" });
+    }
+  }
+  if (snapshot.payload.coverage && (snapshot.payload.coverage.length !== snapshot.asins.length ||
+    snapshot.payload.coverage.some((row, index) => row.asin !== snapshot.asins[index]))) {
+    context.addIssue({ code: "custom", path: ["payload", "coverage"], message: "Keyword coverage must match the fixed target" });
+  }
+  for (const [index, row] of snapshot.payload.evidence.entries()) {
+    if (row.queryWindow?.time_type === "month" && !row.currentEmpty) {
+      context.addIssue({ code: "custom", path: ["payload", "evidence", index], message: "Historical keyword evidence needs a verified current empty observation" });
     }
   }
   const unsigned = {

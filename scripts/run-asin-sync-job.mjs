@@ -699,7 +699,8 @@ function publicationContentMismatch(message) {
 function persistedDataAsins(stageId, data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return [];
   const keyed = (...keys) => keys.flatMap(key => Object.keys(data[key] ?? {}));
-  if (stageId === "keywords") return keyed("analysisByAsin");
+  if (stageId === "keywords") return keyed("analysisByAsin").filter(asin =>
+    data.analysisByAsin[asin]?.status === "ready");
   // Ratings do not determine review readiness or remove bounded sample gaps.
   if (stageId === "reviews") return keyed("analysisByAsin");
   // Incomplete observation records are retained as evidence, not ready ASINs.

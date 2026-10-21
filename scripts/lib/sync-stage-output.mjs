@@ -119,6 +119,16 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData);
+  if (stageId === "keywords") {
+    // Terminal empty observations remain evidence in a partial stage, without
+    // promoting those ASINs into the ready cohort or removing their gaps.
+    const analysis = readSource(source.analysis, readExport);
+    for (const asin of requestedAsins) {
+      if (projectedAsins.includes(asin)) continue;
+      const record = analysis?.[asin];
+      if (validTerminalKeywordEmpty(record, asin, marketplace, draft.updatedAt)) data.analysisByAsin[asin] = record;
+    }
+  }
   if (stageStatus === "partial" && stageId === "reviews") {
     // A rating is product_detail evidence, independent of review sample readiness.
     // The analysis cohort and bounded review gaps continue to use readyAsins.
@@ -158,6 +168,16 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, data, gap, contentHash: hashCanonical({ stage: stageId, data, gap }) };
   }
   return { ...draft, data, contentHash: hashCanonical({ stage: stageId, data }) };
+}
+
+function validTerminalKeywordEmpty(record, asin, marketplace, updatedAt) {
+  return record?.asin === asin && record.marketplace === marketplace &&
+    record.status === "empty" && record.terminalReason === "valid-empty" &&
+    Array.isArray(record.keywords) && record.keywords.length === 0 &&
+    typeof record.fetchedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(record.fetchedAt) &&
+    Number.isFinite(Date.parse(record.fetchedAt)) && Date.parse(record.fetchedAt) <= Date.parse(updatedAt) &&
+    record.queryWindow?.time_type === "lately" && record.queryWindow?.time_value === "30" &&
+    record.queryWindow?.listingSearch === true;
 }
 
 function projectDoneData(stageId, source, asins, readExport, imageRemarksData) {

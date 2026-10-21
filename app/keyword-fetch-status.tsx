@@ -5,6 +5,7 @@ import { UrlResumableAsinSyncFunnel, type SyncResumeBundle } from "./asin-sync-f
 import { sifKeywordAnalysisData, sifKeywordAnalysisMeta } from "./sif-keyword-analysis-data";
 import { sifKeywordEnrichmentData } from "./sif-keyword-enrichment-data";
 import { amazonMediaSrc } from "./lib/amazon-image";
+import { sifKeywordRecordPeriod } from "./sif-keyword-period";
 
 type ProductLite = {
   asin: string;
@@ -47,6 +48,7 @@ function buildAsinKeywordStatus(
     ready,
     status: record?.status ?? "empty",
     statusMessage: record?.statusMessage ?? null,
+    period: sifKeywordRecordPeriod(record),
     fetchedAt: record?.fetchedAt ?? null,
     totalKeywordsInPeriod: record?.totalKeywordsInPeriod ?? null,
     keywordCount,
@@ -125,7 +127,7 @@ export function KeywordFetchStatusSection({
               : `${missingAsins.length} 个 ASIN 待拉取流量词`}
           </h3>
           <p>
-            本页只看 SIF 反查流量词 + 月搜索 enrichment · {sifKeywordAnalysisMeta.period} · 更新{" "}
+            本页只看 SIF 反查流量词 + 月搜索 enrichment · 各 ASIN 查询周期见下方 · 更新{" "}
             {sifKeywordAnalysisMeta.updatedAt}
           </p>
         </div>
@@ -171,7 +173,7 @@ export function KeywordFetchStatusSection({
               <em>
                 {row.totalKeywordsInPeriod != null
                   ? `周期内 ${row.totalKeywordsInPeriod.toLocaleString()}`
-                  : "SIF listingSearch"}
+                  : row.period ?? "来源周期未记录"}
               </em>
             </div>
             <div className="keyword-fetch-metric">
@@ -181,9 +183,9 @@ export function KeywordFetchStatusSection({
             </div>
             <div className="keyword-fetch-state">
               <span className={`keyword-fetch-pill ${row.ready ? "ok" : "wait"}`}>
-                {row.ready ? "已就绪" : "待拉取"}
+                {row.ready ? row.period?.startsWith("历史 ") ? "历史词已就绪" : "已就绪" : row.status === "empty" ? "已核实无词" : "待拉取"}
               </span>
-              <small>{row.fetchedAt ? `同步 ${row.fetchedAt}` : row.statusMessage ?? "尚无本地缓存"}</small>
+              <small>{row.period ?? "来源周期未记录"} · {row.fetchedAt ? `同步 ${row.fetchedAt}` : row.statusMessage ?? "尚无本地缓存"}</small>
             </div>
           </article>
         ))}

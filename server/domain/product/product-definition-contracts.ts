@@ -25,6 +25,7 @@ import {
 const CommercialDataStateSchema = z.literal("missing");
 const VocPositioningDependencyResultSchema =
   VocPositioningOutputShapeSchema.omit({ identity: true });
+export const HISTORICAL_KEYWORD_EVIDENCE_RULE = "若关键词 queryWindow.time_type=month 且 currentEmpty 为 valid-empty，该词仅是所标月份的历史证据；近30天查询无词。不得称为近30天流量，不得推断未给出的搜索量、转化率或全样本覆盖；按 coverage 保留未命中的 ASIN。" as const;
 
 export const ProductDefinitionInputSchema = z.strictObject({
   schemaVersion: z.literal("1.0.0"),
@@ -44,6 +45,8 @@ export const ProductDefinitionInputSchema = z.strictObject({
     contentHash: Sha256Schema,
     groups: KeywordAnalysisSnapshotRecordSchema.shape.payload.shape.groups,
     evidence: KeywordAnalysisSnapshotRecordSchema.shape.payload.shape.evidence,
+    coverage: KeywordAnalysisSnapshotRecordSchema.shape.payload.shape.coverage,
+    evidenceUseRule: z.literal(HISTORICAL_KEYWORD_EVIDENCE_RULE).optional(),
   }),
   commercialData: z.strictObject({
     cost: CommercialDataStateSchema,
@@ -178,7 +181,7 @@ export function buildProductDefinitionInput(input: {
   asins: readonly string[];
   dataCutoffAt: string;
   vocReport: { id: string; version: number; snapshotIds: readonly string[]; result: unknown };
-  keywordSnapshot: { id: string; contentHash: string; payload: { groups: unknown; evidence: unknown } };
+  keywordSnapshot: { id: string; contentHash: string; payload: { groups: unknown; evidence: unknown; coverage?: unknown } };
   evidenceSelection?: VocEvidenceManifest;
 }): ProductDefinitionInput {
   return ProductDefinitionInputSchema.parse({
@@ -199,6 +202,8 @@ export function buildProductDefinitionInput(input: {
       contentHash: input.keywordSnapshot.contentHash,
       groups: input.keywordSnapshot.payload.groups,
       evidence: input.keywordSnapshot.payload.evidence,
+      ...(input.keywordSnapshot.payload.coverage ? { coverage: input.keywordSnapshot.payload.coverage } : {}),
+      evidenceUseRule: HISTORICAL_KEYWORD_EVIDENCE_RULE,
     },
     commercialData: {
       cost: "missing",

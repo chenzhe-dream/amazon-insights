@@ -33,6 +33,39 @@ for (const [status, expected] of [["error", "failed"], ["empty", "empty"]] as co
  assert.equal(result.inventory.manual.keywords.state,expected);
 });
 
+test("UK historical keyword snapshot freezes period, current empty and seven-ASIN partial coverage", async () => {
+ const asins=["B0FJ4T6V2C","B0F5NRLWB6","B0C6FP6LMY","B0FPXDD2D4","B0DQCF6ZVZ","B0DLB22T15","B0GHQW7GYY"];
+ const currentWindow={time_type:"lately",time_value:"30",listingSearch:true};
+ const historicalWindow={time_type:"month",time_value:"2026-09-01",listingSearch:true};
+ const keywordData={analysisByAsin:Object.fromEntries(asins.map(item=>[item,{asin:item,marketplace:"UK",fetchedAt:"2026-10-21",
+  status:item===asins[2]?"ready":"empty",...(item===asins[2]?{}:{terminalReason:"valid-empty"}),
+  queryWindow:item===asins[2]?historicalWindow:currentWindow,
+  ...(item===asins[2]?{currentEmpty:{queryWindow:currentWindow,observedAt:"2026-10-21",terminalReason:"valid-empty"}}:{}),
+  keywords:item===asins[2]?[{keyword:"steel tip darts",searchVolume:120}]:[]}])) ,enrichmentByKeyword:{}};
+ const stageTime="2026-10-21T08:00:00.000Z";
+ const keywordOutput={...output,stage:"keywords",stageStatus:"partial",updatedAt:stageTime,data:keywordData,
+  gap:{state:"partial",reasonCode:"UPSTREAM_EMPTY",items:asins.filter(item=>item!==asins[2]).map(asin=>({asin,causeCode:"UPSTREAM_EMPTY"}))},
+  contentHash:canonicalJsonSha256({stage:"keywords",data:keywordData,gap:{state:"partial",reasonCode:"UPSTREAM_EMPTY",items:asins.filter(item=>item!==asins[2]).map(asin=>({asin,causeCode:"UPSTREAM_EMPTY"}))}})};
+ const repo=fixture();repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace:"UK",asins});
+ repo.syncJobs.readStageOutput=async({stage})=>stage==="keywords"?keywordOutput as never:null;
+ const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK",asins} as never,
+  baseSyncRunId:runId,selectedAsins:asins,dataCutoffAt:"2026-10-21T09:00:00.000Z"});
+ assert.equal(result.inventory.fallback.keywords.state,"ready");
+ assert.deepEqual(result.keywordCandidate?.asins,[...asins].sort());
+ assert.equal(result.keywordCandidate?.payload.coverage?.length,7);
+ assert.equal(result.keywordCandidate?.payload.coverage?.filter(row=>row.status==="empty").length,6);
+ assert.deepEqual(result.keywordCandidate?.payload.evidence[0].queryWindow,historicalWindow);
+ assert.deepEqual(result.keywordCandidate?.payload.evidence[0].currentEmpty?.queryWindow,currentWindow);
+ assert.equal(result.keywordCandidate?.payload.evidence[0].searchVolume,120);
+ const stale=structuredClone(keywordData);stale.analysisByAsin[asins[2]].queryWindow.time_value="2026-08-01";
+ const staleOutput={...keywordOutput,data:stale,contentHash:canonicalJsonSha256({stage:"keywords",data:stale,gap:keywordOutput.gap})};
+ repo.syncJobs.readStageOutput=async({stage})=>stage==="keywords"?staleOutput as never:null;
+ const rejected=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:"UK",asins} as never,
+  baseSyncRunId:runId,selectedAsins:asins,dataCutoffAt:"2026-10-21T09:00:00.000Z"});
+ assert.equal(rejected.inventory.fallback.keywords.state,"failed");
+ assert.equal(rejected.keywordCandidate,null);
+});
+
 test("one of three manual ASINs remains primary; overlap preserves independent evidence and gaps", async () => {
  const asins=[asin,"B07498JDX4","B0829MZFDP"];
  const normalizedRecord={asin,captureStatus:"dialog",alexaReport:{asin,title:"Fixture",rating:4,reviewCount:99,prompt:"Fixture",overallConclusion:"Fixture"},attention:[],positives:["手工：适合阅读"],negatives:[],unmet:[],audiences:[],scenarios:[],motives:[]};

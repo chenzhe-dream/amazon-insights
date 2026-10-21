@@ -4,6 +4,21 @@ import { test } from "node:test";
 
 import { PROJECTABLE_SYNC_STAGE_IDS, projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 
+test("partial UK keywords retain all seven valid-empty observations beside historical ready evidence", () => {
+  const asins = ["B0FJ4T6V2C", "B0F5NRLWB6", "B0C6FP6LMY", "B0FPXDD2D4", "B0DQCF6ZVZ", "B0DLB22T15", "B0GHQW7GYY"];
+  const analysis = Object.fromEntries(asins.map(asin => [asin, { asin, marketplace: "UK", fetchedAt: "2026-10-21",
+    status: asin === asins[2] ? "ready" : "empty", terminalReason: asin === asins[2] ? undefined : "valid-empty",
+    queryWindow: asin === asins[2] ? { time_type: "month", time_value: "2026-09-01", listingSearch: true } : { time_type: "lately", time_value: "30", listingSearch: true },
+    keywords: asin === asins[2] ? [{ keyword: "darts" }] : [],
+  }]));
+  const output = projectStageOutput("keywords", asins, { stageStatus: "partial", dataAsins: [asins[2]], marketplace: "UK",
+    readExport: (_file, name) => name === "sifKeywordAnalysisData" ? analysis : {},
+  });
+  assert.deepEqual(Object.keys(output.data.analysisByAsin).sort(), [...asins].sort());
+  assert.equal(output.data.analysisByAsin[asins[0]].status, "empty");
+  assert.equal(output.gap.items.length, 6);
+});
+
 test("partial reviews retain scoped ratings independently without claiming missing review samples ready", () => {
   const asins = ["B07PX9Y715", "B0BT9F1F72"];
   const ratings = Object.fromEntries(asins.map(asin => [asin, {

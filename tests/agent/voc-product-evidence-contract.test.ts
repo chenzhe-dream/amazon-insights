@@ -26,7 +26,8 @@ test("buildProductDefinitionInput carries the trusted VOC evidence manifest", ()
     coverage: SCOOTER_ASINS.map(asin => ({ asin, primary: "manual" as const, manualDimensions: [], reviewDimensions: [], reviewSupplementDimensions: [], conflictDimensions: [], missingDimensions: [], manual: null, review: null })),
     keywords: { state: "ready" as const, source: null },
   };
-  const keyword = buildKeywordAnalysisSnapshotCandidate({ marketplace: "US", asins: SCOOTER_ASINS, dataCutoffAt: CUTOFF, groups: [{ id: "g", label: "group", keywords: ["scooter"], demand: "high", trend: "stable", seasonality: "unknown", evidenceIds: ["k"] }], evidence: [{ id: "k", sourceId: "source", capturedAt: CUTOFF, searchVolume: 1, purchaseRate: null }] });
+  const keyword = buildKeywordAnalysisSnapshotCandidate({ marketplace: "US", asins: SCOOTER_ASINS, dataCutoffAt: CUTOFF, groups: [{ id: "g", label: "group", keywords: ["scooter"], demand: "high", trend: "stable", seasonality: "unknown", evidenceIds: ["k"] }], evidence: [{ id: "k", sourceId: "source", capturedAt: CUTOFF, searchVolume: 1, purchaseRate: null }],
+    coverage: SCOOTER_ASINS.map(asin => ({asin,status:"empty" as const,queryWindow:{time_type:"lately",time_value:"30",listingSearch:true}})) });
   const input = buildProductDefinitionInput({
     marketplace: "US", asins: SCOOTER_ASINS, dataCutoffAt: CUTOFF, evidenceSelection: manifest,
     vocReport: { id: randomUUID(), version: 1, snapshotIds: [snapshotId], result: voc },
@@ -34,6 +35,8 @@ test("buildProductDefinitionInput carries the trusted VOC evidence manifest", ()
   });
   assert.equal(input.evidenceSelection?.fingerprint, manifest.fingerprint);
   assert.deepEqual(input.evidenceSelection?.selectedAsins, manifest.selectedAsins);
+  assert.deepEqual(input.keywords.coverage, keyword.payload.coverage);
+  assert.match(input.keywords.evidenceUseRule!,/不得称为近30天流量/);
 });
 
 test("shared output schema decodes legacy reports without evidence identity", () => {
