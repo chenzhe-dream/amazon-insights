@@ -30,6 +30,8 @@ export interface RelayJsonNormalizationDiagnostic {
 }
 
 export interface OpenAIProviderOptions {
+  /** Relay-only wire mode. JSON-object mode retains the exact schema in the prompt and all local validation. */
+  relayResponseFormat?: "json_schema" | "json_object";
   /** Explicit relay compatibility; never applied to Responses or valid JSON. */
   allowSingleTrailingObjectBrace?: boolean;
   outputNormalizationLogger?: (entry: Readonly<RelayJsonNormalizationDiagnostic>) => void;
@@ -487,6 +489,7 @@ export class OpenAIProvider implements ModelProvider {
   private readonly enforceOutputTokenLimit: boolean;
   private readonly deferOutputValidation: boolean;
   private readonly schemaPromptMode: "native" | "duplicated" | "prompt-and-native";
+  private readonly relayResponseFormat: "json_schema" | "json_object";
   private readonly allowSingleJsonFence: boolean;
   private readonly allowSingleTrailingObjectBrace: boolean;
   private readonly outputNormalizationLogger: OpenAIProviderOptions["outputNormalizationLogger"];
@@ -501,6 +504,7 @@ export class OpenAIProvider implements ModelProvider {
     this.enforceOutputTokenLimit = options.enforceOutputTokenLimit ?? false;
     this.deferOutputValidation = options.deferOutputValidation ?? false;
     this.schemaPromptMode = options.schemaPromptMode ?? "duplicated";
+    this.relayResponseFormat = options.relayResponseFormat ?? "json_schema";
     this.allowSingleJsonFence = options.allowSingleJsonFence ?? false;
     this.allowSingleTrailingObjectBrace = options.allowSingleTrailingObjectBrace ?? false;
     this.outputNormalizationLogger = options.outputNormalizationLogger;
@@ -547,13 +551,13 @@ export class OpenAIProvider implements ModelProvider {
             model: request.model,
             messages: [
               { role: "system", content: request.instructions },
-              ...(this.schemaPromptMode === "native" ? [] : [{
+              ...(this.schemaPromptMode === "native" && this.relayResponseFormat === "json_schema" ? [] : [{
                 role: "system" as const,
                 content: createRelayJsonSchemaInstruction(request.responseFormat.format),
               }]),
               { role: "user", content: input },
             ],
-            response_format: {
+            response_format: this.relayResponseFormat === "json_object" ? { type: "json_object" } : {
               type: "json_schema",
               json_schema: { name, strict, schema },
             },

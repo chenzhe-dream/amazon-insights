@@ -989,6 +989,25 @@ test('JSON parse diagnostics report only bounded metadata for both transports an
  }
 });
 
+test('relay JSON-object opt-in keeps the explicit schema prompt and complete output validation',async()=>{
+ let sent:Record<string,unknown>={};
+ const provider=new OpenAIProvider({transport:'relay-chat-json',relayResponseFormat:'json_object',schemaPromptMode:'native',client:{chat:{completions:{create:async(body:Record<string,unknown>)=>{sent=body;return completedChat();}}}} as never});
+ assert.equal((await provider.generateStructured(request())).value.summary,'structured result');
+ assert.deepEqual(sent.response_format,{type:'json_object'});
+ const messages=sent.messages as {role:string;content:string}[];
+ assert.equal(messages.length,3);
+ assert.deepEqual(JSON.parse(messages[1].content).schema,request().responseFormat.format.schema);
+ const invalid=new OpenAIProvider({transport:'relay-chat-json',relayResponseFormat:'json_object',client:{chat:{completions:{create:async()=>completedChat({choice:{message:{content:'{"wrong":"field"}'}}})}}} as never});
+ await assert.rejects(invalid.generateStructured(request()),error=>error instanceof ModelProviderError&&error.validationDiagnostic?.stage==='schema');
+});
+
+test('relay JSON-object opt-in does not alter Responses strict format',async()=>{
+ let sent:Record<string,unknown>={};
+ const provider=new OpenAIProvider({relayResponseFormat:'json_object',client:{responses:{create:async(body:Record<string,unknown>)=>{sent=body;return completedResponse();}}} as never});
+ assert.equal((await provider.generateStructured(request())).value.summary,'structured result');
+ assert.deepEqual((sent.text as {format:unknown}).format,request().responseFormat.format);
+});
+
 test('JSON diagnostics sanitizer drops raw fields, invalid categories and unsafe numeric positions',()=>{
  const error=new ModelProviderError('invalid_output','safe',{validationDiagnostic:{stage:'json',code:'invalid_json',contentLength:5,startsWithFence:false,position:6,parseError:'PRIVATE',finishReason:'PRIVATE',raw:'PRIVATE'}} as never);
  assert.deepEqual(error.validationDiagnostic,{stage:'json',code:'invalid_json',contentLength:5,startsWithFence:false});

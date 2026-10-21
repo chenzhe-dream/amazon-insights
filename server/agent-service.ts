@@ -548,6 +548,7 @@ export async function createAgentService(
               ? new LocalVocFakeProvider()
               : new OpenAIProvider({
                   allowSingleTrailingObjectBrace: env.AGENT_VOC_RELAY_SINGLE_TRAILING_OBJECT_BRACE === "1",
+                  relayResponseFormat: env.AGENT_VOC_RELAY_RESPONSE_FORMAT === "json_object" ? "json_object" : "json_schema",
                   outputNormalizationLogger: entry => app.log.info(entry, entry.event),
                   apiKey: resolution.config.apiKey,
                   transport: resolution.config.transport,
@@ -557,7 +558,7 @@ export async function createAgentService(
           const providerName = options.providerName ??
             (env.AGENT_VOC_LOCAL_FAKE === "1"
               ? "local-fixture"
-              : resolution.config.providerName);
+              : resolution.config.providerName + (resolution.config.transport === "relay-chat-json" && env.AGENT_VOC_RELAY_RESPONSE_FORMAT === "json_object" ? ":json-object" : ""));
           try {
             normalizationRuntime = await createAlexaVocNormalizationRuntime({
               positioningMode: "local-rules",
