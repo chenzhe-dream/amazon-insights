@@ -937,6 +937,19 @@ export function diagnosticStatusesByAsin(asins, diagnostics) {
   return statuses;
 }
 
+export function sellerSpriteReviewResultStatuses(asins, records, marketplace, diagnostics) {
+  const statuses = diagnosticStatusesByAsin(asins, diagnostics);
+  for (const asin of asins) {
+    const record = records[asin];
+    if (!statuses[asin] && record?.asin === asin && record.marketplace === marketplace
+      && record.status === "pending" && record.terminalReason === "valid-empty"
+      && record.sampledReviews === 0 && Array.isArray(record.blocks) && record.blocks.length === 0) {
+      statuses[asin] = "upstream-empty";
+    }
+  }
+  return statuses;
+}
+
 export function sifKeywordSchemaDiagnostics(asins, records) {
   const allowed = new Set(asins);
   return Object.entries(records ?? {}).flatMap(([asin, record]) => (
@@ -1306,10 +1319,16 @@ async function main() {
           env: { SELLERSPRITE_ASINS: fallbackAsins.join(","), SELLERSPRITE_MARKETPLACE: "UK", AGENT_SYNC_MARKETPLACE: marketplace },
         }) : null;
         const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics, ...(sellerResult?.diagnostics ?? [])];
+        const reviewStatuses = {
+          ...diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
+          ...(sellerResult ? sellerSpriteReviewResultStatuses(fallbackAsins,
+            readCachedDataExport(generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts"), "sellerSpriteMcpReviewAnalysisData"),
+            marketplace, reviewDiagnostics) : {}),
+        };
         finalizeProcessedStageCohort(jobId, "reviews", reviewAsins, asins, {
           initialJob: job,
           commandSucceeded: ratingResult.succeeded && reviewResult.succeeded && (sellerResult?.succeeded ?? true),
-          resultStatusesByAsin: diagnosticStatusesByAsin(reviewAsins, reviewDiagnostics),
+          resultStatusesByAsin: reviewStatuses,
           diagnostics: reviewDiagnostics,
         });
       }

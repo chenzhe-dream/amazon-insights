@@ -8,3 +8,11 @@ test("SellerSprite review page requires a successful array envelope", () => {
     assert.throws(() => parseSellerSpriteReviewPage(payload));
   }
 });
+
+test("malformed review items carry schema classification without including provider content", () => {
+  assert.throws(() => parseSellerSpriteReviewPage({code:"OK",data:{items:"private-body-sentinel"}}), error => {
+    assert.equal(error.kind,"schema");
+    assert.doesNotMatch(error.message,/private-body-sentinel/);
+    return true;
+  });
+});

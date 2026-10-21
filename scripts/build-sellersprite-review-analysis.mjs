@@ -5,6 +5,7 @@ import { fetchSellerSpriteReviews, readSellerSpriteSecretKey } from "./lib/selle
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { sellerSpriteReviewMarkets } from "./lib/uk-review-fallback.mjs";
 import { localizeReviewBlocks } from "./lib/review-label-zh.mjs";
+import { ProviderDiagnosticError, classifyProviderFailure, formatProviderDiagnosticLine } from "./lib/provider-diagnostics.mjs";
 import {
   createRepairSafeRecordMap,
   hasCompleteReviewRecord,
@@ -22,14 +23,23 @@ function readCatalogAsins() {
   return [...source.matchAll(/"asin":\s*"([A-Z0-9]{10})"/g)].map(match => match[1]);
 }
 
-async function main() {
-  const secretKey = readSellerSpriteSecretKey();
-  const { project: marketplace, provider: providerMarketplace } = sellerSpriteReviewMarkets();
-  const asins = process.env.SELLERSPRITE_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
-  const fetchedAt = new Date().toISOString().slice(0, 10);
+export async function runSellerSpriteReviewAnalysis(options = {}) {
+  const env = options.env ?? process.env;
+  const secretKey = options.key ?? readSellerSpriteSecretKey(env);
+  const markets = sellerSpriteReviewMarkets(env);
+  const marketplace = options.marketplace ?? markets.project;
+  const providerMarketplace = options.providerMarketplace ?? markets.provider;
+  const asins = options.asins ?? env.SELLERSPRITE_ASINS?.split(",").map(item => item.trim()).filter(Boolean) ?? readCatalogAsins();
+  const fetchedAt = options.fetchedAt ?? new Date().toISOString().slice(0, 10);
   const target = generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts");
-  const existing = readCachedDataExport(target, "sellerSpriteMcpReviewAnalysisData");
-  const records = createRepairSafeRecordMap(existing);
+  const existing = options.existing ?? readCachedDataExport(target, "sellerSpriteMcpReviewAnalysisData");
+  const emitFailure = (asin, error) => {
+    process.exitCode = 1;
+    if (!(error instanceof ProviderDiagnosticError)) console.error(formatProviderDiagnosticLine(classifyProviderFailure(error, {
+      connector:"sellerSprite",stage:env.AGENT_SYNC_STAGE_ID ?? "reviews",asin,operation:"review",boundary:"consumer-shape",
+    })));
+  };
+  const records = createRepairSafeRecordMap(existing, {repair:options.repair, onPreserve:asin=>emitFailure(asin,Object.assign(new Error('Replacement incomplete'),{kind:'schema'}))});
   const reusable = (asin) => existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace &&
     hasCompleteReviewRecord(existing[asin]) && shouldUseCachedRecord(existing[asin]);
 
@@ -65,7 +75,7 @@ async function main() {
 
       process.stdout.write(`[sellersprite] ${asin} ... `);
       try {
-        const reviews = await fetchSellerSpriteReviews(secretKey, providerMarketplace, asin, { pageSize: 50, maxPages: 5 });
+        const reviews = await (options.fetchReviews ?? fetchSellerSpriteReviews)(secretKey, providerMarketplace, asin, { pageSize: 50, maxPages: 5, env });
         const analysis = buildReviewAnalysisFromRecords(asin, marketplace, reviews, fetchedAt, {
           title: asin,
           category: "",
@@ -73,10 +83,12 @@ async function main() {
         records[asin] = {
           ...analysis,
           sourceProvider: "sellerSprite",
+          ...(reviews.length === 0 ? {terminalReason:"valid-empty",mentionTopics:0} : {}),
           blocks: localizeReviewBlocks(analysis.blocks),
         };
         console.log(`${reviews.length} reviews`);
       } catch (error) {
+        emitFailure(asin,error);
         if (reusable(asin)) {
           console.log(`skipped · keep cache (${error instanceof Error ? error.message : String(error)})`);
           continue;
@@ -93,7 +105,7 @@ async function main() {
         };
         console.log(`failed (${records[asin].statusMessage})`);
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await (options.wait ?? (ms=>new Promise(resolve => setTimeout(resolve,ms))))(2000);
     }
   }
 
@@ -116,12 +128,13 @@ export const sellerSpriteMcpReviewAnalysisMeta = ${JSON.stringify(
 
 export const sellerSpriteMcpReviewAnalysisData: Record<string, SellerSpriteReviewAnalysisRecord> = ${JSON.stringify(records, null, 2)};
 `;
-  fs.writeFileSync(target, body, "utf8");
+  (options.writeFileSync ?? fs.writeFileSync)(target, body, "utf8");
   const ready = Object.values(records).filter(record => record.status === "ready").length;
   console.log(`[done] ${ready}/${asins.length} ASIN → app/seller-sprite-mcp-review-analysis-data.ts`);
+  return records;
 }
 
-main().catch(error => {
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) runSellerSpriteReviewAnalysis().catch(error => {
   console.error(error);
   process.exit(1);
 });

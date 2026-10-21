@@ -189,25 +189,28 @@ function providerOperation(method, params) {
 export function parseSellerSpriteReviewPage(payload) {
   if (payload?.code !== "OK") throw new Error(`${payload?.code ?? "MCP_SCHEMA"}: ${payload?.message ?? "SellerSprite review 请求失败"}`);
   const data = payload.data;
-  if (!data || typeof data !== "object" || !Array.isArray(data.items)) throw new Error("MCP_SCHEMA: SellerSprite review items must be an array");
+  if (!data || typeof data !== "object" || !Array.isArray(data.items)) throw Object.assign(new Error("MCP_SCHEMA: SellerSprite review items must be an array"), {kind:"schema"});
   const total = Number.isInteger(data.total) && data.total >= 0 ? data.total : 0;
   const pages = Number.isInteger(data.pages) && data.pages >= 0 ? data.pages : 0;
   return { items: data.items, total, pages };
 }
 
-export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50, ...options } = {}) {
+export async function fetchSellerSpriteReviews(secretKey, marketplace, asin, { pageSize = 50, maxPages = 50, callTool = callSellerSpriteMcpTool, ...options } = {}) {
   const reviews = [];
   const seen = new Set();
 
   for (let page = 1; page <= maxPages; page += 1) {
-    const payload = await callSellerSpriteMcpTool(secretKey, "review", {
+    const payload = await callTool(secretKey, "review", {
       marketplace,
       asin,
       page,
       size: pageSize,
     }, options);
 
-    const { items, total, pages } = parseSellerSpriteReviewPage(payload);
+    const { items, total, pages } = await runWithProviderDiagnostics({
+      connector:"sellerSprite",stage:options.env?.AGENT_SYNC_STAGE_ID ?? process.env.AGENT_SYNC_STAGE_ID ?? "unknown-stage",
+      asin,operation:"review",boundary:"consumer-shape",env:options.env ?? process.env,
+    }, async () => parseSellerSpriteReviewPage(payload));
     if (!Array.isArray(items) || !items.length) break;
 
     items.forEach(item => {
