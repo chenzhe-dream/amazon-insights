@@ -148,7 +148,7 @@ export type RunCreationFingerprintInput = Readonly<{
   evidenceSelection?: import("../../shared/voc-evidence-contracts").VocEvidenceSelectionRequest;
   organizationId: string;
   projectId: string;
-  marketplace: "US";
+  marketplace: string;
   asins: readonly string[];
   mode: "existing-data" | "collect-missing";
 }>;

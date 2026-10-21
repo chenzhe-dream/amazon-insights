@@ -234,17 +234,17 @@ export class AnalysisRunService {
         if (!project || project.organizationId !== this.#context.organizationId) {
           throw new AnalysisLifecycleError(404, "Project not found");
         }
-        if (project.marketplace !== "US") {
-          throw new AnalysisLifecycleError(409, "Project marketplace is not supported");
-        }
         const selection = input.evidenceSelection;
+        if (project.marketplace !== "US" && (!selection || selection.sourcePolicy !== "manual-with-review-fallback")) {
+          throw new AnalysisLifecycleError(409, "Non-US analysis requires explicit scoped review fallback");
+        }
         if (selection && input.mode !== "existing-data") throw new AnalysisLifecycleError(409, "Evidence analysis uses existing data only");
         const selectedAsins = selection ? [...selection.selectedAsins].sort() : project.asins;
         if (!selectedAsins.length || selectedAsins.some(asin => !project.asins.includes(asin))) throw new AnalysisLifecycleError(409, "Invalid analysis ASIN selection");
         const fingerprint = createRunCreationFingerprint({
           organizationId: project.organizationId,
           projectId: project.id,
-          marketplace: "US",
+          marketplace: project.marketplace,
           asins: selectedAsins,
           mode: input.mode,
           ...(selection ? { evidenceSelection: selection } : {}),
@@ -264,7 +264,7 @@ export class AnalysisRunService {
           );
         }
 
-        await repository.manualAlexaVoc.lockScopes({
+        if (project.marketplace === "US") await repository.manualAlexaVoc.lockScopes({
           organizationId: project.organizationId,
           marketplace: "US",
           asins: [...project.asins].sort(),
@@ -274,7 +274,7 @@ export class AnalysisRunService {
         const manifest = selection?.sourcePolicy === "manual-with-review-fallback" ? evidence?.inventory.fallback : evidence?.inventory.manual;
         if (manifest && manifest.fingerprint !== selection!.expectedInputFingerprint) throw new AnalysisLifecycleError(409, "输入已变化，请刷新来源清单后再次点击分析");
         const source = evidence ? { candidate: selection!.sourcePolicy === "manual-with-review-fallback" ? evidence.fallbackCandidate : evidence.manualCandidate } : await this.#sourceReader.read({
-          organizationId: project.organizationId, marketplace: "US", asins: selectedAsins, dataCutoffAt,
+          organizationId: project.organizationId, marketplace: project.marketplace, asins: selectedAsins, dataCutoffAt,
         });
         if (!source.candidate) {
           throw new AnalysisLifecycleError(
@@ -309,7 +309,7 @@ export class AnalysisRunService {
           organizationId: project.organizationId,
           runId: creation.run.id,
           projectId: project.id,
-          marketplace: "US",
+          marketplace: project.marketplace,
           asins: selectedAsins,
           dataCutoffAt,
           candidateId: this.#createId(),
@@ -319,7 +319,7 @@ export class AnalysisRunService {
         if (evidence?.keywordCandidate) {
           await (repository as RuntimeAgentRepository).createKeywordAnalysisSnapshotForRun({
             actorId: this.#context.actorId, actorOrganizationId: this.#context.organizationId, runId: creation.run.id,
-            expectedProjectId: project.id, expectedMarketplace: "US", expectedAsins: selectedAsins,
+            expectedProjectId: project.id, expectedMarketplace: project.marketplace, expectedAsins: selectedAsins,
             expectedRunCutoffAt: dataCutoffAt, allowAsinSubset: true, candidateId: this.#createId(), createdAt: dataCutoffAt, candidate: evidence.keywordCandidate,
           });
         }

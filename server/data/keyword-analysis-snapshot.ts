@@ -75,7 +75,7 @@ export type KeywordAnalysisSnapshotRecord = z.infer<
 >;
 
 export function buildKeywordAnalysisSnapshotCandidate(input: {
-  marketplace: "US";
+  marketplace: string;
   asins: readonly string[];
   dataCutoffAt: string;
   groups: readonly z.input<typeof KeywordGroupSchema>[];

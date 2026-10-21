@@ -1,5 +1,6 @@
 "use client";
 import "./voc-evidence-definition.css";
+import { ProjectMarketplaceSchema } from "../shared/project-marketplaces";
 import { retryVocStage } from "./lib/voc-run-browser";
 import type { VocAutomationStatus } from "../shared/voc-automation-contracts";
 import { ProductDefinitionOutputSchema } from "../shared/product-definition-output";
@@ -55,7 +56,8 @@ export function VocEvidenceDefinition(props: Props) {
   const inventory = inventoryState?.owner === inventoryOwner ? inventoryState.value : null;
   const observation = observationState?.owner === owner ? observationState.value : null;
   const runId = runState.owner === owner ? runState.id : null;
-  const enabled = props.enabled && !!props.projectId && !!props.baseSyncRunId && props.marketplace === "US" && selected.length > 0;
+  const manualSupported = props.marketplace === "US";
+  const enabled = props.enabled && !!props.projectId && !!props.baseSyncRunId && ProjectMarketplaceSchema.safeParse(props.marketplace).success && selected.length > 0;
   const acceptAutomation = useCallback((value: VocAutomationStatus, force = false) => {
     if (liveOwner.current !== owner) return;
     if (value.projectId !== props.projectId || value.baseSyncRunId !== props.baseSyncRunId || [...value.selectedAsins].sort().join(",") !== selectedKey) throw new Error("自动分析范围不匹配");
@@ -81,7 +83,7 @@ export function VocEvidenceDefinition(props: Props) {
     }
   }, [owner, props.projectId, props.baseSyncRunId, selectedKey]);
   const register = useCallback(async (retry = false) => {
-    if (!enabled || registration.current) return;
+    if (!enabled || !manualSupported || registration.current) return;
     const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
     try {
       const observed = observedRunRef.current?.owner === owner ? observedRunRef.current.value : null;
@@ -100,7 +102,7 @@ export function VocEvidenceDefinition(props: Props) {
     } catch(error) { if (!controller.signal.aborted && liveOwner.current === owner) setError({owner,phase:"register",message:error instanceof Error ? error.message : "登记自动分析失败"}); }
     finally { if (registration.current === controller) registration.current = null; // Completion belongs to this request, even if the UI left and returned to its owner.
       setBusy(current => current?.controller === controller ? null : current); }
-  }, [enabled, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, selectedKey, acceptAutomation]);
+  }, [enabled, manualSupported, owner, props.projectId, props.baseSyncRunId, props.fetchImpl, selectedKey, acceptAutomation]);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) void register(); });
@@ -133,7 +135,7 @@ export function VocEvidenceDefinition(props: Props) {
     readEvidenceInventory(props.projectId!, props.baseSyncRunId!, selectedKey.split(","), controller.signal, props.fetchImpl)
       .then(value => {
         if (controller.signal.aborted || liveOwner.current !== owner) return;
-        if ([value.manual, value.fallback].some(manifest => manifest.organizationId !== props.organizationId || manifest.projectId !== props.projectId || manifest.baseSyncRunId !== props.baseSyncRunId || [...manifest.selectedAsins].sort().join(",") !== selectedKey)) throw new Error("输入清单范围不匹配");
+        if ([value.manual, value.fallback].some(manifest => manifest.marketplace !== props.marketplace || manifest.organizationId !== props.organizationId || manifest.projectId !== props.projectId || manifest.baseSyncRunId !== props.baseSyncRunId || [...manifest.selectedAsins].sort().join(",") !== selectedKey)) throw new Error("输入清单范围不匹配");
         setInventory({ owner: inventoryOwner, value });
       }).catch(error => { if (!controller.signal.aborted && liveOwner.current === owner) { setInventory(null); setError({ owner, phase: "inventory", message: error instanceof Error ? error.message : "读取输入失败" }); } });
     return () => controller.abort();
@@ -196,23 +198,23 @@ export function VocEvidenceDefinition(props: Props) {
   const current = stage?.status === "succeeded" && report?.runId === runId && busyOwner !== owner && observation?.run.id === runId && !!manifest && !!expected && expected.keywords.state === "ready" && manifest.projectId === props.projectId && manifest.organizationId === props.organizationId && manifest.baseSyncRunId === props.baseSyncRunId && manifest.fingerprint === expected.fingerprint && result?.identity?.inputFingerprint === expected.fingerprint && [...manifest.selectedAsins].sort().join(",") === selectedKey;
   const executed = observation?.run.id === runId ? observation?.evidenceSelection : undefined;
   const executedScopeMatches = executed?.organizationId === props.organizationId && executed?.projectId === props.projectId && executed?.baseSyncRunId === props.baseSyncRunId && [...executed.selectedAsins].sort().join(",") === selectedKey;
-  const source = executedScopeMatches ? executed : inventory?.manual;
+  const source = executedScopeMatches ? executed : manualSupported ? inventory?.manual : inventory?.fallback;
   const manualCount = source?.coverage.filter(row => row.primary === "manual").length ?? 0;
   const reviewCount = source?.coverage.filter(row => row.primary === "review").length ?? 0;
   const keywordLabels = { ready: "关键词已就绪", empty: "当前范围无有效关键词", failed: "关键词请求失败", missing: "关键词未获取" };
-  const sourceLabel = source ? `${executedScopeMatches ? "本次固定输入｜" : "可用输入·尚未启用评论兜底｜"}本次覆盖${manualCount + reviewCount}/${source.selectedAsins.length}：手工 VOC ${manualCount} 个，评论兜底 ${reviewCount} 个｜${keywordLabels[source.keywords.state]}｜${source.sourceMode === "review-fallback" ? "评论兜底版·待手工 VOC 验证" : "手工 VOC 版"}` : "等待可信输入";
+  const sourceLabel = source ? `${executedScopeMatches ? "本次固定输入｜" : "可用输入·尚未启用评论兜底｜"}本次覆盖${manualCount + reviewCount}/${source.selectedAsins.length}：手工 VOC ${manualCount} 个，评论兜底 ${reviewCount} 个｜${keywordLabels[source.keywords.state]}｜${source.sourceMode === "review-fallback" ? (manualSupported ? "评论兜底版·待手工 VOC 验证" : "本站评论分析·待进一步验证") : "手工 VOC 版"}` : "等待可信输入";
   const analyzing = ["queued", "voc-running", "definition-running"].includes(automation?.state ?? "");
   return <div data-testid="voc-evidence-definition">
     <section className="voc-evidence-panel">
       <header><div><span className="voc-eyebrow">VOC · 新品定义</span><h3>分析来源与范围</h3></div><span className="voc-scope-count">已选 {selected.length} 个 ASIN</span></header>
-      <div className="voc-asin-grid">{props.asins.map(asin => <label key={asin} className={selected.includes(asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(asin)} onChange={() => setSelected(values => values.includes(asin) ? values.filter(value => value !== asin) : [...values, asin])} /><strong>{asin}</strong><small>{inventory?.manual.coverage.find(row => row.asin === asin)?.primary === "manual" ? "手工 VOC 已就绪" : "等待手工 VOC"}</small></label>)}</div>
+      <div className="voc-asin-grid">{props.asins.map(asin => <label key={asin} className={selected.includes(asin) ? "selected" : ""}><input type="checkbox" checked={selected.includes(asin)} onChange={() => setSelected(values => values.includes(asin) ? values.filter(value => value !== asin) : [...values, asin])} /><strong>{asin}</strong><small>{inventory?.manual.coverage.find(row => row.asin === asin)?.primary === "manual" ? "手工 VOC 已就绪" : manualSupported ? "等待手工 VOC" : inventory?.fallback.coverage.find(row => row.asin === asin)?.review ? "本站评论已就绪" : "等待本站评论"}</small></label>)}</div>
       <div className="voc-automation-status" data-testid="automation-status" data-state={automation?.state ?? "registering"}>
-        <strong className="voc-status-heading">{(busyOwner === owner || analyzing) && <span className="voc-status-spinner" aria-hidden="true" />}{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : "尚未登记自动分析"}</strong>
-        <p>{automation?.message ?? "所选范围将交由后台持续检查，输入齐全后自动分析。"}</p>
+        <strong className="voc-status-heading">{(busyOwner === owner || analyzing) && <span className="voc-status-spinner" aria-hidden="true" />}{busyOwner === owner ? (busyRequest?.kind === "fallback" ? "正在提交评论兜底分析…" : "正在登记分析范围…") : automation ? ({"waiting-voc":"等待手工 VOC", "waiting-keywords":"等待关键词", queued:"已排队", "voc-running":"VOC 分析中", "definition-running":"新品定义生成中", succeeded:"分析已完成", failed:"分析失败"})[automation.state] : manualSupported ? "尚未登记自动分析" : activeRun ? "本站评论分析进行中" : "本站评论分析"}</strong>
+        <p>{automation?.message ?? (manualSupported ? "所选范围将交由后台持续检查，输入齐全后自动分析。" : "此站点使用已保存的本站评论；点击评论兜底分析后固定来源版本。")}</p>
         {automation ? <small>最后更新：{new Date(automation.updatedAt).toLocaleTimeString("zh-CN")}{automation.startedAt ? ` · 已耗时 ${Math.max(0, Math.floor(((automation.state === "succeeded" || automation.state === "failed" ? Date.parse(automation.updatedAt) : clock) - Date.parse(automation.startedAt)) / 1000))} 秒` : ""}</small> : null}
       </div>
       <details className="voc-coverage"><summary>查看输入覆盖与来源</summary><p data-testid="evidence-source">{sourceLabel}</p>{inventory?.fallback.coverage.map(row => <p key={row.asin}>{row.asin}：{row.primary === "manual" ? "手工主来源" : row.primary === "review" ? "可用评论兜底" : "缺少 VOC"}；缺失维度 {row.missingDimensions.length || "无"}</p>)}</details>
-      {!enabled ? <p>请在已同步的美国站项目中选择至少一个 ASIN。</p> : null}
+      {!enabled ? <p>请在已同步的支持站点项目中选择至少一个 ASIN。</p> : null}
       <div className="voc-actions">
       {errorState?.owner === owner && (errorState.phase === "read" || errorState.phase === "automation-read") ? <button onClick={() => { setError(null); setObservationRefresh(value => value + 1); setAutomationRefresh(value => value + 1); }}>重试读取分析状态</button> :
         automation?.state === "failed" ? <button disabled={busyOwner === owner} onClick={() => void register(true)}>{observation?.stages.some(stage => stage.stage === "voc-positioning" && stage.status === "succeeded") && observation?.stages.some(stage => stage.stage === "product-definition" && stage.status === "failed") ? "重试新品定义（复用 VOC）" : "重试手工 VOC 分析"}</button> : errorState?.owner === owner && errorState.phase === "register" ? <button disabled={busyOwner === owner} onClick={() => void register()}>重试登记自动分析</button> : null}

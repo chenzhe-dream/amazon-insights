@@ -20,7 +20,7 @@ try {
   fs.writeFileSync(authPath,JSON.stringify({email:user.user.email,password,organizationId:org,userId:user.user.id}));
  }
  const config=loadVocPositioningRuntimeConfig();
- console.log(JSON.stringify({database:db.pathname.slice(1),runtime:root,model:config.model.model,synthetic:process.env.AGENT_VOC_LOCAL_FAKE==='1',credentials:{sorftime:!!process.env.SORFTIME_MCP_KEY,sif:!!process.env.SIF_MCP_SECRET,sellerSprite:!!process.env.SELLERSPRITE_SECRET_KEY},accountReady:true}));
+ console.log(JSON.stringify({database:db.pathname.slice(1),runtime:root,model:config.model.name,synthetic:process.env.AGENT_VOC_LOCAL_FAKE==='1',credentials:{sorftime:!!process.env.SORFTIME_MCP_KEY,sif:!!process.env.SIF_MCP_SECRET,sellerSprite:!!process.env.SELLERSPRITE_SECRET_KEY},accountReady:true}));
  const schema=await requestSorftimeMcp(readSorftimeKey(),'tools/list',{}, {env:process.env,requireResourceGovernor:false,emitDiagnostics:false});
  const result=(schema as {tools?:{name:string;description?:string;inputSchema?:unknown}[]});
  fs.writeFileSync(path.join(root,'evidence','sorftime-tools.json'),JSON.stringify(result??schema,null,2));

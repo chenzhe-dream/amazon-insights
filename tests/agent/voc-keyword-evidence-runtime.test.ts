@@ -12,18 +12,18 @@ import { validProductOutput, runtimeEnv } from "./helpers/voc-evidence-runtime-f
 import type { ProductDefinitionInput } from "../../server/domain/product/product-definition-contracts";
 import type { ModelProvider, StructuredGenerationRequest } from "../../server/runtime/model-provider";
 const ASINS=["B08L7DD8L9","B07498JDX4","B0829MZFDP"];
-for (const scenario of ["missing", "fallback", "manual", "failure"] as const) test(`fixed evidence full worker chain: ${scenario}`,async t=>{
+for (const [marketplace, scenario] of [["US","missing"], ["US","fallback"], ["US","manual"], ["US","failure"], ["DE","fallback"], ["CA","fallback"]] as const) test(`fixed evidence full worker chain: ${marketplace} ${scenario}`,async t=>{
  const keywordsAvailable=scenario!=="missing", manual=scenario==="manual", fail=scenario==="failure";
  const repository=openSqliteAgentRepository({path:":memory:",busyTimeoutMs:5000});
  const organizationId = randomUUID(), actorId = randomUUID(), projectId = randomUUID(), baseSyncRunId = randomUUID(), now = "2026-09-10T00:00:00.000Z";
  await repository.createUser({ id: actorId, organizationId, email: `${actorId}@example.invalid`, displayName: "fixture", role: "member", status: "active", createdAt: now, updatedAt: now });
- await repository.createProject({ id: projectId, organizationId, name: "Fixture original", marketplace: "US", asins: ASINS, createdBy: actorId, createdAt: now, updatedAt: now });
+ await repository.createProject({ id: projectId, organizationId, name: "Fixture original", marketplace, asins: ASINS, createdBy: actorId, createdAt: now, updatedAt: now });
  await repository.createAnalysisRun({ id: baseSyncRunId, projectId, createdBy: actorId, mode: "existing-data", status: "succeeded", dataCutoffAt: now, idempotencyScope: `sync:${organizationId}:${projectId}`, idempotencyKey: "job", createdAt: now, updatedAt: now });
- const data = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace: "US", status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "negatives", label: "问题", rows: [{ label: "结构断裂", reason: "支架断裂", sharePct: 50 }] }] } }, ratingByAsin: {} };
+ const data = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "negatives", label: "问题", rows: [{ label: "结构断裂", reason: "支架断裂", sharePct: 50 }] }] } }, ratingByAsin: {} };
  const output = { projectId, runId: baseSyncRunId, jobId: "job", jobVersion: 1, outputVersion: 1, stage: "reviews", stageStatus: "done", updatedAt: "2026-09-09T23:59:59.999Z", data, contentHash: canonicalJsonSha256({ stage: "reviews", data }) };
- const keywordData = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace: "US", status: "ready", fetchedAt: "2026-09-09", keywords: [{ keyword: "reading light", searchVolume: 123 }] } }, enrichmentByKeyword: {} };
+ const keywordData = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", keywords: [{ keyword: "reading light", searchVolume: 123 }] } }, enrichmentByKeyword: {} };
  const keywordOutput = { ...output, stage: "keywords", data: keywordData, contentHash: canonicalJsonSha256({ stage: "keywords", data: keywordData }) };
- const syncJobs = { findById: async () => ({ jobId: "job", organizationId, projectId, runId: baseSyncRunId, marketplace: "US", asins: ASINS }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? output : keywordsAvailable ? keywordOutput : null };
+ const syncJobs = { findById: async () => ({ jobId: "job", organizationId, projectId, runId: baseSyncRunId, marketplace, asins: ASINS }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? output : keywordsAvailable ? keywordOutput : null };
  const manualRecord={asin:ASINS[0],captureStatus:"dialog",alexaReport:{asin:ASINS[0],title:"Fixture",rating:4,reviewCount:99,prompt:"Fixture",overallConclusion:"Fixture"},attention:[],positives:[],negatives:["结构断裂"],unmet:[],audiences:[],scenarios:[],motives:[]};
  if(manual) await repository.transaction(async baseTransaction=>{
   const transaction=baseTransaction as typeof repository;

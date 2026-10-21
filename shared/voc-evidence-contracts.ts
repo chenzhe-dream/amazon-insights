@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema } from "./project-marketplaces";
 import { z } from "zod";
 const id = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -28,7 +29,7 @@ export const VocEvidenceCoverageSchema = z.strictObject({
 });
 export const VocEvidenceManifestSchema = z.strictObject({
   schemaVersion: z.literal("voc-evidence/v1"), organizationId: id, projectId: id, baseSyncRunId: id,
-  marketplace: z.literal("US"), selectedAsins: asins, sourcePolicy: VocSourcePolicySchema,
+  marketplace: ProjectMarketplaceSchema, selectedAsins: asins, sourcePolicy: VocSourcePolicySchema,
   fingerprint: hash, sourceMode: z.enum(["manual", "review-fallback"]),
   coverage: z.array(VocEvidenceCoverageSchema).min(1).max(10),
   keywords: z.strictObject({ state: z.enum(["ready", "empty", "failed", "missing"]), source: VocEvidenceReferenceSchema.nullable() }),

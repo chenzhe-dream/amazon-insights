@@ -11,17 +11,17 @@ let postgres: PostgresTestContainer;
 before(async()=>{postgres=await startPostgresTestContainer();await runPostgresMigrations(postgres.pool);});
 after(async()=>{await postgres?.close();});
 const ASINS = ["B08L7DD8L9", "B07498JDX4", "B0829MZFDP"];
-for (const dialect of ["sqlite", "postgres"] as const) test(`${dialect}: scoped fallback persists one-ASIN evidence, replays and rejects changed input`, async t => {
+for (const marketplace of ["US", "DE", "CA"] as const) for (const dialect of ["sqlite", "postgres"] as const) test(`${dialect} ${marketplace}: scoped fallback persists one-ASIN evidence, replays and rejects changed input`, async t => {
  const repository = dialect === "sqlite" ? openSqliteAgentRepository({ path: ":memory:", busyTimeoutMs: 5000 }) : new PostgresAgentRepository(postgres.createPool()); t.after(() => repository.close());
  const organizationId = randomUUID(), actorId = randomUUID(), projectId = randomUUID(), baseSyncRunId = randomUUID(), now = "2026-09-10T00:00:00.000Z";
  await repository.createUser({ id: actorId, organizationId, email: `${actorId}@example.invalid`, displayName: "fixture", role: "member", status: "active", createdAt: now, updatedAt: now });
- await repository.createProject({ id: projectId, organizationId, name: "Fixture original", marketplace: "US", asins: ASINS, createdBy: actorId, createdAt: now, updatedAt: now });
+ await repository.createProject({ id: projectId, organizationId, name: "Fixture original", marketplace, asins: ASINS, createdBy: actorId, createdAt: now, updatedAt: now });
  await repository.createAnalysisRun({ id: baseSyncRunId, projectId, createdBy: actorId, mode: "existing-data", status: "succeeded", dataCutoffAt: now, idempotencyScope: `sync:${organizationId}:${projectId}`, idempotencyKey: "job", createdAt: now, updatedAt: now });
- const data = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace: "US", status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "positives", label: "喜爱", rows: [{ label: "阅读明亮", reason: "阅读时光线充足", sharePct: 50 }] }] } }, ratingByAsin: {} };
+ const data = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", sampledReviews: 2, blocks: [{ key: "positives", label: "喜爱", rows: [{ label: "阅读明亮", reason: "阅读时光线充足", sharePct: 50 }] }] } }, ratingByAsin: {} };
  const output = { projectId, runId: baseSyncRunId, jobId: "job", jobVersion: 1, outputVersion: 1, stage: "reviews", stageStatus: "done", updatedAt: "2026-09-09T23:59:59.999Z", data, contentHash: canonicalJsonSha256({ stage: "reviews", data }) };
- const keywordData = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace: "US", status: "ready", fetchedAt: "2026-09-09", keywords: [{ keyword: "reading light", searchVolume: 123 }] } }, enrichmentByKeyword: {} };
+ const keywordData = { analysisByAsin: { [ASINS[0]]: { asin: ASINS[0], marketplace, status: "ready", fetchedAt: "2026-09-09", keywords: [{ keyword: "reading light", searchVolume: 123 }] } }, enrichmentByKeyword: {} };
  const keywordOutput = { ...output, stage: "keywords", data: keywordData, contentHash: canonicalJsonSha256({ stage: "keywords", data: keywordData }) };
- const syncJobs = { findById: async () => ({ jobId: "job", organizationId, projectId, runId: baseSyncRunId, marketplace: "US", asins: ASINS }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? output : keywordOutput };
+ const syncJobs = { findById: async () => ({ jobId: "job", organizationId, projectId, runId: baseSyncRunId, marketplace, asins: ASINS }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? output : keywordOutput };
  let rejectKeywordWrite = false;
  const wrap = (repo: typeof repository): typeof repository => new Proxy(repo, { get(target, key) {
    if (key === "createKeywordAnalysisSnapshotForRun" && rejectKeywordWrite) return () => { throw new Error("fixture forced rollback"); };
@@ -40,7 +40,7 @@ for (const dialect of ["sqlite", "postgres"] as const) test(`${dialect}: scoped 
  const keywordSnapshots = await repository.listKeywordAnalysisSnapshotsByRun({ actorOrganizationId: organizationId, runId: created.run.id });
  assert.deepEqual(keywordSnapshots[0].asins, [ASINS[0]]);
  assert.match(keywordSnapshots[0].payload.evidence[0].sourceId, /repository:\/\/sync/);
- await assert.rejects(repository.revalidateDataSnapshotSubject({actorId,actorOrganizationId:organizationId,runId:created.run.id,expectedProjectId:projectId,expectedMarketplace:"US",expectedAsins:ASINS,expectedRunCutoffAt:created.run.dataCutoffAt,allowAsinSubset:true}));
+ await assert.rejects(repository.revalidateDataSnapshotSubject({actorId,actorOrganizationId:organizationId,runId:created.run.id,expectedProjectId:projectId,expectedMarketplace:marketplace,expectedAsins:ASINS,expectedRunCutoffAt:created.run.dataCutoffAt,allowAsinSubset:true}));
  assert.equal((await service.createRun(projectId, request)).run.id, created.run.id);
  await assert.rejects(service.createRun(projectId, { ...request, idempotencyKey: "changed", evidenceSelection: { ...request.evidenceSelection, expectedInputFingerprint: "a".repeat(64) } }));
  await assert.rejects(service.createRun(projectId, { ...request, evidenceSelection: { ...request.evidenceSelection, sourcePolicy: "manual-only" } }));

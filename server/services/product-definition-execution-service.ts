@@ -147,11 +147,11 @@ export class ProductDefinitionExecutionService {
     ) {
       throw new WorkerTaskError("data-quality", "Product definition dependencies are unavailable");
     }
-    if (keywordSnapshot.marketplace !== "US") {
+    if (keywordSnapshot.marketplace !== vocSnapshot.marketplace) {
       throw new WorkerTaskError("data-quality", "Product definition dependencies are unavailable");
     }
     const expectedInput = buildProductDefinitionInput({
-      marketplace: "US",
+      marketplace: keywordSnapshot.marketplace,
       asins: keywordSnapshot.asins,
       dataCutoffAt: keywordSnapshot.dataCutoffAt,
       vocReport,

@@ -51,7 +51,7 @@ export async function createProductDefinitionRuntime(options: {
       if (!run) throw unavailableDependencies();
       const project = await options.repository.findProjectById(run.projectId);
       const actor = await options.repository.findUserById(run.createdBy);
-      if (!project || !actor || actor.status !== "active" || actor.organizationId !== project.organizationId || project.marketplace !== "US") {
+      if (!project || !actor || actor.status !== "active" || actor.organizationId !== project.organizationId) {
         throw unavailableDependencies();
       }
       const vocReports = await options.repository.listAnalysisReports({
@@ -77,7 +77,7 @@ export async function createProductDefinitionRuntime(options: {
           vocReportId: vocReport.id,
           keywordSnapshotId: keywordSnapshot.id,
           input: buildProductDefinitionInput({
-            marketplace: "US",
+            marketplace: project.marketplace,
             asins: keywordSnapshot.asins,
             dataCutoffAt: run.dataCutoffAt,
             vocReport,

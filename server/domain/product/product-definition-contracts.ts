@@ -173,7 +173,7 @@ export function assertProductDefinitionCapabilityLanguage(value: unknown): void 
 }
 
 export function buildProductDefinitionInput(input: {
-  marketplace: "US";
+  marketplace: string;
   asins: readonly string[];
   dataCutoffAt: string;
   vocReport: { id: string; version: number; snapshotIds: readonly string[]; result: unknown };

@@ -372,7 +372,7 @@ implements AnalysisReportRepository {
         if (
           !isDeepStrictEqual(vocSnapshot.asins, keywordSnapshot.asins) ||
           !isDeepStrictEqual(stored.snapshotIds, vocReport.snapshotIds) ||
-          keywordSnapshot.marketplace !== "US" ||
+          vocSnapshot.marketplace !== keywordSnapshot.marketplace ||
           subject.project_marketplace !== keywordSnapshot.marketplace ||
           !(vocSnapshot.payload.evidenceSelection ? keywordSnapshot.asins.every(asin => storedTextList(subject.project_asins_json)?.includes(asin)) : isDeepStrictEqual(storedTextList(subject.project_asins_json), keywordSnapshot.asins)) ||
           !sameDateTimeInstant(
@@ -384,7 +384,7 @@ implements AnalysisReportRepository {
         }
         const productInput = buildProductDefinitionInput({
           evidenceSelection: vocSnapshot.payload.evidenceSelection,
-          marketplace: "US",
+          marketplace: keywordSnapshot.marketplace,
           asins: keywordSnapshot.asins,
           dataCutoffAt: keywordSnapshot.dataCutoffAt,
           vocReport,

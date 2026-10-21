@@ -3513,14 +3513,14 @@ export class SqliteAgentRepository
       if (!vocSnapshotRow) throw new AnalysisReportSubjectNotFoundError();
       const vocSnapshot = mapDataSnapshot(vocSnapshotRow);
       if (!isDeepStrictEqual(vocSnapshot.asins, keywordSnapshot.asins) || !isDeepStrictEqual(agentSnapshotIds, vocReport.snapshotIds) ||
-        keywordSnapshot.marketplace !== "US" ||
+        vocSnapshot.marketplace !== keywordSnapshot.marketplace ||
         subject.marketplace !== keywordSnapshot.marketplace ||
         !(vocSnapshot.payload.evidenceSelection ? keywordSnapshot.asins.every(asin => parseStoredTextList(subject.asins_json)?.includes(asin)) : isDeepStrictEqual(parseStoredTextList(subject.asins_json), keywordSnapshot.asins)) ||
         !sameDateTimeInstant(String(subject.run_data_cutoff_at), keywordSnapshot.dataCutoffAt)
       ) throw new AnalysisReportConflictError();
       const productInput = buildProductDefinitionInput({
         evidenceSelection: vocSnapshot.payload.evidenceSelection,
-        marketplace: "US",
+        marketplace: keywordSnapshot.marketplace,
         asins: keywordSnapshot.asins,
         dataCutoffAt: keywordSnapshot.dataCutoffAt,
         vocReport,

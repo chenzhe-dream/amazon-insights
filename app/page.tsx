@@ -38,6 +38,7 @@ import { sorftimeReviewAnalysisMeta as sorftimeReviewDataMeta, type sorftimeRevi
 import { ProductLaunchRecommendationSection } from "./product-launch-recommendation";
 import { VocPositioningSection } from "./voc-positioning-section";
 import { LocalVocDefinition } from "./local-voc-definition";
+import { VocEvidenceDefinition } from "./voc-evidence-definition";
 import "./voc-evidence-definition.css";
 import { LaunchChecklistSection } from "./launch-checklist-section";
 import type { ProductLaunchRuntimeSources } from "./product-launch-analysis";
@@ -2509,14 +2510,31 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       </div>}
 
       {activeTab === "definition" && <div className="page-content compare-page">
-        <LocalVocDefinition
+        {market !== "US" ? <VocEvidenceDefinition
+          key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}`}
+          projectId={currentProjectId} baseSyncRunId={baseSyncRunId}
+          sessionKey={runtimeSessionKey} organizationId={authSession.user.organizationId}
+          marketplace={market} asins={activeAsins} products={products} sources={productLaunchSources}
+          initialRunId={new URLSearchParams(appSearch).get("vocRun")}
+          initialHistoryRunId={new URLSearchParams(appSearch).get("vocHistory")}
+          initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}
+          refreshToken={[stageOutputSnapshot.reviews, stageOutputSnapshot.keywords].map(output => output && "outputVersion" in output ? output.outputVersion : "").join(":")}
+          enabled={!authSession.logoutPending && workspaceReady}
+          onRunStarted={(id, asins, previousRunId) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("vocRun", id);
+            url.searchParams.set("vocAsins", asins.join(","));
+            if (previousRunId) url.searchParams.set("vocHistory", previousRunId);
+            router.replace(`${url.pathname}${url.search}`, { scroll: false });
+          }}
+        /> : <LocalVocDefinition
           key={`${runtimeSessionKey}:${currentProjectId}:${baseSyncRunId}:${market}:${activeAsins.join(",")}`}
           initialRunId={new URLSearchParams(appSearch).get("vocRun") ?? new URLSearchParams(appSearch).get("vocHistory")}
           projectId={currentProjectId} baseSyncRunId={baseSyncRunId} jobId={stageOutputJobId} onImported={manualVoc.onImported}
           products={products} sources={productLaunchSources}
           initialSelectedAsins={new URLSearchParams(appSearch).get("vocAsins")?.split(",")}
           enabled={!authSession.logoutPending && workspaceReady && market === "US"}
-        />
+        />}
       </div>}
 
       {activeTab === "checklist" && <div className="page-content compare-page">
