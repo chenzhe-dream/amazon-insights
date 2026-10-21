@@ -33,13 +33,17 @@ export async function runSellerSpriteReviewAnalysis(options = {}) {
   const fetchedAt = options.fetchedAt ?? new Date().toISOString().slice(0, 10);
   const target = generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts");
   const existing = options.existing ?? readCachedDataExport(target, "sellerSpriteMcpReviewAnalysisData");
+  const failedAsins = new Set();
   const emitFailure = (asin, error) => {
+    failedAsins.add(asin);
     process.exitCode = 1;
     if (!(error instanceof ProviderDiagnosticError)) console.error(formatProviderDiagnosticLine(classifyProviderFailure(error, {
       connector:"sellerSprite",stage:env.AGENT_SYNC_STAGE_ID ?? "reviews",asin,operation:"review",boundary:"consumer-shape",
     })));
   };
-  const records = createRepairSafeRecordMap(existing, {repair:options.repair, onPreserve:asin=>emitFailure(asin,Object.assign(new Error('Replacement incomplete'),{kind:'schema'}))});
+  const records = createRepairSafeRecordMap(existing, {repair:options.repair, onPreserve:asin=>{
+    if (!failedAsins.has(asin)) emitFailure(asin,Object.assign(new Error('Replacement incomplete'),{kind:'schema'}));
+  }});
   const reusable = (asin) => existing[asin]?.asin === asin && existing[asin]?.marketplace === marketplace &&
     hasCompleteReviewRecord(existing[asin]) && shouldUseCachedRecord(existing[asin]);
 
@@ -48,6 +52,7 @@ export async function runSellerSpriteReviewAnalysis(options = {}) {
     process.exitCode = 1;
     asins.forEach(asin => {
       if (reusable(asin)) return;
+      emitFailure(asin,new Error('SellerSprite credential is not configured'));
       records[asin] = {
         asin,
         marketplace,

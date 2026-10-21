@@ -4,6 +4,56 @@ import * as collector from '../../scripts/build-sellersprite-review-analysis.mjs
 import { fetchSellerSpriteReviews } from '../../scripts/lib/sellersprite-mcp-client.mjs';
 import * as runner from '../../scripts/run-asin-sync-job.mjs';
 import { projectStageOutput } from '../../scripts/lib/sync-stage-output.mjs';
+import { runWithProviderDiagnostics } from '../../scripts/lib/provider-diagnostics.mjs';
+
+for (const failure of ['http','rpc','missing-key']) test(`retaining an old empty review after ${failure} does not invent a schema failure`, async t => {
+  const asin='B0FJ4T6V2C';
+  const old={asin,marketplace:'UK',sourceProvider:'sellerSprite',status:'pending',terminalReason:'valid-empty',sampledReviews:0,mentionTopics:0,blocks:[],fetchedAt:'2026-10-20'};
+  const env={AGENT_SYNC_JOB_ID:`review-preserve-${failure}`,AGENT_SYNC_STAGE_ID:'reviews'};
+  const oldExit=process.exitCode;
+  t.after(()=>{process.exitCode=oldExit;});
+  let stderr='';
+  t.mock.method(process.stderr,'write',text=>{stderr+=text;return true;});
+  const records=await collector.runSellerSpriteReviewAnalysis({
+    env,key:failure==='missing-key'?'':'fixture',marketplace:'UK',asins:[asin],existing:{[asin]:old},repair:true,
+    fetchedAt:'2026-10-21',writeFileSync:()=>{},wait:async()=>{},
+    fetchReviews:()=>runWithProviderDiagnostics({connector:'sellerSprite',stage:'reviews',asin,operation:'review',env},async()=>{
+      throw Object.assign(new Error('request failed'),{kind:failure,status:401});
+    }),
+  });
+  const diagnostics=stderr.split('\n').filter(line=>line.startsWith('@@provider-diagnostic@@')).map(line=>JSON.parse(line.slice('@@provider-diagnostic@@'.length)));
+  assert.equal(process.exitCode,1);
+  assert.equal(diagnostics.length,1,stderr);
+  assert.equal(diagnostics[0].causeCode,failure==='http'?'HTTP_4XX':failure==='rpc'?'MCP_RPC':'UNKNOWN_TRANSPORT');
+  assert.equal(diagnostics[0].connector,'sellerSprite');
+  assert.deepEqual(records[asin],old);
+  assert.deepEqual(runner.sellerSpriteReviewResultStatuses([asin],records,'UK',diagnostics),{[asin]:'connector-failed'});
+  const job={asins:[asin],marketplace:'UK',asinProgress:{[asin]:{reviews:{status:'pending'}}}};
+  let output;
+  runner.applyPersistedStagePostcondition('fixture','reviews',[asin],{
+    commandSucceeded:false,resultStatusesByAsin:runner.sellerSpriteReviewResultStatuses([asin],records,'UK',diagnostics),diagnostics,
+    readReadiness:()=>({items:[{asin,reviews:'missing'}],missingAsins:[asin],ready:false}),readJob:()=>job,
+    markModule:(_job,asin,stage,value)=>{job.asinProgress[asin][stage]=value;},
+    commitStage:(_job,input)=>{output=input.output;},
+    projectOutput:(stage,cohort,options)=>projectStageOutput(stage,cohort,{...options,readExport:()=>({})}),
+  });
+  assert.deepEqual(output.gap.items,[{asin,causeCode:'CONNECTOR_FAILED'}]);
+});
+
+test('successful empty replacement that would erase prior review evidence still emits preservation schema failure', async t => {
+  const asin='B0FJ4T6V2C';
+  const old={asin,marketplace:'UK',status:'pending',sampledReviews:1,blocks:[{key:'positives',rows:[{label:'fun'}]}]};
+  const oldExit=process.exitCode;
+  t.after(()=>{process.exitCode=oldExit;});
+  let stderr='';
+  t.mock.method(process.stderr,'write',text=>{stderr+=text;return true;});
+  const records=await collector.runSellerSpriteReviewAnalysis({env:{AGENT_SYNC_STAGE_ID:'reviews'},key:'fixture',marketplace:'UK',asins:[asin],existing:{[asin]:old},repair:true,
+    writeFileSync:()=>{},wait:async()=>{},fetchReviews:async()=>[]});
+  assert.equal(process.exitCode,1);
+  assert.deepEqual(records[asin],old);
+  assert.match(stderr,/"connector":"sellerSprite"/);
+  assert.match(stderr,/"causeCode":"MCP_SCHEMA"/);
+});
 
 test('UK review collector distinguishes malformed sibling from genuine empty and real reviews', async t => {
   const asins=['B0FJ4T6V2C','B0F5NRLWB6','B0C6FP6LMY'];
