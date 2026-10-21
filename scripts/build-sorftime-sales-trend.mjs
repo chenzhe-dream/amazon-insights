@@ -1,6 +1,6 @@
 import { isRepairIncomplete, hasUsableTrendRecord } from "./lib/sync-cache.mjs";
 import fs from "node:fs";
-import {sourceFetchedDate} from "./lib/sorftime-source-policy.mjs";
+import {sourceFetchedDate, sourceMetadata} from "./lib/sorftime-source-policy.mjs";
 import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { callSorftimeTool, readSorftimeKey } from "./lib/sorftime-mcp-client.mjs";
@@ -25,8 +25,33 @@ function readCatalogAsins() {
 function hasFullTrend(record) { return hasUsableTrendRecord(record); }
 
 const trendTypes = {volume:'SalesVolume', amount:'SalesAmount', price:'Price', rank:'Rank'};
-export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool, fields = Object.keys(trendTypes)}) {
+const placeholderNullFields = ['parent_asin','title','sub_title','brand','store_name','seller_name','seller_id',
+  'category','sub_category','online_date','listing_date','ships_from','seller_country','extra_savings',
+  'peak_season','package_size_cm'];
+const placeholderZeroFields = ['days_on_shelf','price','list_price','coupon','star_rating','review_count',
+  'monthly_sales_volume','monthly_sales_amount','yearly_sales_volume','fba_fee','ship_cost','platform_fee',
+  'profit','profit_rate','seller_count','variation_count','weight_g'];
+const placeholderFalseFields = ['a_plus','has_video','has_brand_store','is_fba'];
+function isExactMissingProductDetail(raw, asin) {
+  const data = raw?.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data) || data.asin !== `#${asin}`) return false;
+  const expectedCount = 1 + placeholderNullFields.length + placeholderZeroFields.length + placeholderFalseFields.length;
+  return Object.keys(data).length === expectedCount &&
+    placeholderNullFields.every(field => Object.hasOwn(data,field) && data[field] === null) &&
+    placeholderZeroFields.every(field => Object.hasOwn(data,field) && data[field] === 0) &&
+    placeholderFalseFields.every(field => Object.hasOwn(data,field) && data[field] === false);
+}
+export async function collectSalesTrendResponses({key, asin, marketplace, callTool = callSorftimeTool,
+  fields = Object.keys(trendTypes), productAvailabilityPreflight = false}) {
   const responses = {}, requestErrors = {};
+  if (productAvailabilityPreflight && fields.length) {
+    // The normal governed call path supplies cache, admission and provider diagnostics.
+    // A provider failure must propagate; only the exact observed placeholder can stop dependent calls.
+    const detail = await callTool(key, 'product_detail', {asin, amz_site:marketplace});
+    if (isExactMissingProductDetail(detail, asin)) return {responses,requestErrors,
+      sourceUnavailable:{fields:[...fields],detailAsin:detail.data.asin,sourceTool:'product_detail',
+        sourceFetchedAt:sourceMetadata(detail)?.fetchedAt,marketplace}};
+  }
   for (const [field, type] of Object.entries(trendTypes)) {
     if (!fields.includes(field)) continue;
     try { responses[field] = await callTool(key, 'product_trend', {asin, amz_site:marketplace, type}); }
@@ -34,13 +59,20 @@ export async function collectSalesTrendResponses({key, asin, marketplace, callTo
   }
   return {responses, requestErrors};
 }
-export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, previous = {}}) {
+export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, requestErrors = {}, sourceUnavailable, previous = {}}) {
   const next = {...previous, asin, marketplace, fetchedAt:sourceFetchedDate(Object.values(responses),fetchedAt),
     missingDailyObservations:{...previous.missingDailyObservations}, missingMonthlyObservations:{...previous.missingMonthlyObservations},
     dailyObservationFetchedAt:{...previous.dailyObservationFetchedAt}, monthlyObservationFetchedAt:{...previous.monthlyObservationFetchedAt},
     dailyObservations:{...previous.dailyObservations}, observationPeriods:{...previous.observationPeriods}, observationErrors:{...requestErrors},
     fieldFetchedAt:{...previous.fieldFetchedAt}, dailyFieldFetchedAt:{...previous.dailyFieldFetchedAt}, observationOutcomes:{...previous.observationOutcomes}};
   for (const field of Object.keys(requestErrors)) next.observationOutcomes[field] = {category:"request-failed", fetchedAt};
+  if (sourceUnavailable) for (const field of sourceUnavailable.fields) {
+    next.observationOutcomes[field] = {category:'source-unavailable',
+      fetchedAt:sourceUnavailable.sourceFetchedAt?.slice(0,10) ?? fetchedAt,
+      sourceTool:sourceUnavailable.sourceTool,reasonCode:'SORFTIME_PRODUCT_NOT_FOUND',
+      detailAsin:sourceUnavailable.detailAsin,marketplace:sourceUnavailable.marketplace};
+    delete next.observationErrors[field];
+  }
   for (const [field, type] of Object.entries(trendTypes)) {
     const fetchedAt = sourceFetchedDate([responses[field]],next.fetchedAt);
     next[field] ??= [];
@@ -87,6 +119,7 @@ export function buildSalesTrendRecord({asin, marketplace, fetchedAt, responses, 
   next.status = invalid ? 'error' : hasMonths ? 'ready' : 'empty';
   delete next.statusMessage;
   if (invalid) next.statusMessage = '部分趋势指标请求失败或响应不符，已保留可验证数据';
+  else if (sourceUnavailable) next.statusMessage = 'Sorftime 商品详情返回缺失占位符，依赖趋势不可用；已保留先前可验证观测';
   else if (hasDaily) next.statusMessage = '来源包含日观测序列，月度销量口径待确认；未将日观测累加为月销量';
   return next;
 }
@@ -100,6 +133,8 @@ export async function runSalesTrendSync(options = {}) {
   const existing = options.existing ?? readCachedDataExport(targetPath, "sorftimeSalesTrendData");
   const repair = options.repair ?? isRepairIncomplete();
   const callTool = options.callTool ?? callSorftimeTool;
+  const productAvailabilityPreflight = options.productAvailabilityPreflight ??
+    process.env.AGENT_SORFTIME_PRODUCT_AVAILABILITY_PREFLIGHT === '1';
   // The per-field reducer retains prior data. A whole-record repair proxy would
   // discard usable daily/partial results whenever monthly readiness is absent.
   const records = { ...existing };
@@ -133,7 +168,13 @@ export async function runSalesTrendSync(options = {}) {
         Array.isArray(previous.dailyObservations?.[field]) &&
         previous.dailyObservations[field].length > 0 && previous.dailyObservations[field].every(point =>
           /^\d{4}-\d{2}-\d{2}$/.test(point?.date) && Number.isFinite(point.value) && point.value >= 0)));
-      const collected = await collectSalesTrendResponses({key, asin, marketplace, callTool, fields});
+      if (!fields.length) {
+        records[asin] = previous;
+        console.log('complete cached fields');
+        continue;
+      }
+      const collected = await collectSalesTrendResponses({key, asin, marketplace, callTool, fields,
+        productAvailabilityPreflight});
       records[asin] = buildSalesTrendRecord({asin, marketplace, fetchedAt,
         ...collected, previous});
       for (const field of Object.keys(records[asin].observationErrors)) {
@@ -149,6 +190,7 @@ export async function runSalesTrendSync(options = {}) {
         `${records[asin].volume.length}m vol · ${amount.length}m amt · ${price.length}m price · ${rank.length}m rank`,
       );
     } catch (error) {
+      process.exitCode = 1;
       if (hasFullTrend(existing[asin])) {
         console.log(`error · keep cache (${error instanceof Error ? error.message : String(error)})`);
         continue;
@@ -185,7 +227,7 @@ export type SorftimeSalesTrendRecord = {
   dailyObservations?: Partial<Record<"volume" | "amount" | "price" | "rank", {date:string;value:number}[]>>;
   observationPeriods?: Partial<Record<"volume" | "amount" | "price" | "rank", "month" | "day" | null>>;
   observationErrors?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
-  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "source-unknown" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null}>>;
+  observationOutcomes?: Partial<Record<"volume" | "amount" | "price" | "rank", {category: "monthly-verified" | "daily-unverified" | "source-unknown" | "source-unavailable" | "valid-empty" | "request-failed" | "identity-mismatch" | "malformed-response"; fetchedAt:string; period?: "month" | "day" | null; sourceTool?: "product_detail"; reasonCode?: "SORFTIME_PRODUCT_NOT_FOUND"; detailAsin?: string; marketplace?: string}>>;
   dailyFieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   fieldFetchedAt?: Partial<Record<"volume" | "amount" | "price" | "rank", string>>;
   volume: SorftimeTrendPoint[];
