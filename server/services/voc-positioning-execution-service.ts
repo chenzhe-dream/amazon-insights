@@ -1,4 +1,4 @@
-import { compactVocResponseSchema, hydrateVocOutput } from "./voc-compact-output";
+import { createCompactVocResponseSchema, hydrateVocOutput } from "./voc-compact-output";
 import { vocStrategyRepair } from "./voc-strategy-repair";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -187,7 +187,7 @@ export class VocPositioningExecutionService {
         outputContract: {
           name: VocPositioningAgentDefinition.outputSchema,
           schema: createAmazonVocInsightOutputSchema(input),
-          responseSchema: compactVocResponseSchema,
+          responseSchema: createCompactVocResponseSchema(facts),
           repairPatch: vocStrategyRepair,
           canonicalizeOutput: (candidate) =>
             canonicalizeAmazonVocInsightOutput(candidate, facts),

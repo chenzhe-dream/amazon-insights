@@ -29,6 +29,28 @@ export const compactVocResponseSchema = AmazonVocInsightOutputSchema.extend({
  }),
 });
 
+/** Publish only frozen reference pairs; preserve all narrative and final validation contracts. */
+export function createCompactVocResponseSchema(facts: VocDeterministicPreprocessingResult) {
+ const p = compactVocResponseSchema.shape.positioningProjection.shape;
+ // Sorting makes the prepared response schema digest independent of collection order.
+ const dimensions = facts.dimensions.filter(d => d.themes.length > 0)
+  .map(d => ({dimension: d.key, keys: [...new Set(d.themes.map(t => t.key))].sort()}))
+  .sort((a, b) => a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0);
+ if (!dimensions.length) throw new Error("Frozen VOC response schema requires evidence themes");
+ const pairs = dimensions.map(d => ({dimension: z.literal(d.dimension), themeKey: z.enum(d.keys)}));
+ const themeRefs = z.array(z.union(pairs.map(pair => z.strictObject(pair)))).min(1)
+  .describe("Use an exact frozen dimension/themeKey pair. Never translate, rephrase, or move a theme key to another dimension.");
+ const checklist = referenced.extend({themeRefs});
+ return compactVocResponseSchema.extend({positioningProjection: compactVocResponseSchema.shape.positioningProjection.extend({
+  coreConclusion: p.coreConclusion.extend({themeRefs}),
+  positioning: p.positioning.element.extend({themeRefs}).array().length(10),
+  themeJudgments: z.union(pairs.map(pair => p.themeJudgments.element.extend(pair))).array(),
+  actions: p.actions.element.extend({themeRefs}).array(),
+  nextValidations: p.nextValidations.element.extend({themeRefs}).array(),
+  checklists: p.checklists.extend({mustKeep: checklist.array().max(3), mustAvoid: checklist.array().max(3), differentiationOpportunities: checklist.array().max(3)}),
+ })});
+}
+
 /** Only hydrate the compact wire shape. Full legacy outputs retain all validation checks. */
 export function hydrateVocOutput(candidate:unknown,facts:VocDeterministicPreprocessingResult):unknown {
  const parsed=compactVocResponseSchema.safeParse(candidate);
