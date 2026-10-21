@@ -617,6 +617,7 @@ export async function createAgentService(
             ...(options.clock ? { clock: options.clock } : {}),
             ...(options.workerClock ? { workerClock: options.workerClock } : {}),
             ...(options.workerLogger ? { logger: options.workerLogger } : {}),
+            validationLogger: options.validationLogger ?? ((entry) => app.log.warn(entry, entry.event)),
           });
           normalizationRuntime?.start();
           vocRuntime.start();

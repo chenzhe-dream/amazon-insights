@@ -188,7 +188,8 @@ test("product validation failure preserves persisted VOC and keyword dependencie
     realVocFacts(SCOOTER_ASINS, subject.snapshotId, subject.runId),
     true,
   );
-  const service = await createAgentService({ repository, provider, providerName: "product-invalid-fixture", env: runtimeEnv(databasePath) });
+  const diagnostics: unknown[] = [];
+  const service = await createAgentService({ repository, provider, providerName: "product-invalid-fixture", env: runtimeEnv(databasePath), validationLogger: entry => diagnostics.push(entry) });
   t.after(async () => {
     await service.stop();
     repository.close();
@@ -196,7 +197,11 @@ test("product validation failure preserves persisted VOC and keyword dependencie
   });
 
   await service.start({ host: "127.0.0.1", port: 0 });
-  await waitForStage(repository, subject.productStageId, "failed");
+  const failed = await waitForStage(repository, subject.productStageId, "failed");
+  assert.deepEqual(failed.lastError, { classification: "model-output", message: "Model output failed deterministic product definition validation" });
+  assert.equal(diagnostics.length, 2);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /PRIVATE_PRODUCT_OUTPUT|privateSentinel/);
+  for (const entry of diagnostics) assert.ok((entry as {issues:unknown[]}).issues.length > 0);
   assert.equal(provider.productRequests.length, 2);
   assert.equal((await repository.listAnalysisReports({ actorOrganizationId: subject.organizationId, runId: subject.runId, stage: "product-definition" })).length, 0);
   assert.equal((await repository.listAnalysisReports({ actorOrganizationId: subject.organizationId, runId: subject.runId, stage: "voc-positioning" })).length, 1);
@@ -225,7 +230,7 @@ class ProductRuntimeProvider implements ModelProvider {
     assert.equal(input.kind, "amazon-product-definition-input");
     this.productRequests.push(request as StructuredGenerationRequest<unknown>);
     if (this.invalidProduct) {
-      return { value: {} as T, responseId: "invalid-product-response", inputTokens: 10, outputTokens: 5 };
+      return { value: { privateSentinel: "PRIVATE_PRODUCT_OUTPUT" } as T, responseId: "invalid-product-response", inputTokens: 10, outputTokens: 5 };
     }
     return {
       value: validProductOutput(request.input as ProductDefinitionInput) as T,

@@ -12,7 +12,7 @@ import { AuditedSkillRunner } from "./agent-run-service";
 import { ModelBudgetCoordinator, StaticModelBudgetLimitProvider } from "./model-budget-coordinator";
 import type { ModelProvider } from "./model-provider";
 import { WorkerTaskError } from "./retry-policy";
-import { SkillRunner } from "./skill-runner";
+import { SkillRunner, type ModelValidationLogger } from "./skill-runner";
 import { JobAttemptWorkerLoop, type WorkerClock, type WorkerLogger } from "./worker-loop";
 
 export async function createProductDefinitionRuntime(options: {
@@ -25,6 +25,7 @@ export async function createProductDefinitionRuntime(options: {
   clock?: () => Date;
   workerClock?: WorkerClock;
   logger?: WorkerLogger;
+  validationLogger?: ModelValidationLogger;
 }) {
   const clock = options.clock ?? (() => new Date());
   const registry = await SkillRegistry.open(options.skillsRoot ?? resolve("skills-src"));
@@ -38,6 +39,7 @@ export async function createProductDefinitionRuntime(options: {
       clock,
     }),
     now: () => clock().getTime(),
+    ...(options.validationLogger ? { validationLogger: options.validationLogger } : {}),
   });
   const service = new ProductDefinitionExecutionService({
     repository: options.repository,

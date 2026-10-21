@@ -203,6 +203,9 @@ export class ProductDefinitionExecutionService {
         (error.cause.kind === "transient" || error.cause.kind === "timeout")) {
         throw new WorkerTaskError("upstream-temporary", "Model provider remained temporarily unavailable", { cause: error });
       }
+      if (error instanceof SkillRuntimeError && error.code === "MODEL_OUTPUT_ERROR") {
+        throw new WorkerTaskError("model-output", "Model output failed deterministic product definition validation", { cause: error });
+      }
       throw error;
     }
     if (!audited.logicalExecutionLineage) {
