@@ -1288,33 +1288,6 @@ async function main() {
       });
     }
 
-    // Capture galleries before optional trend calls can degrade the provider.
-    const listingPending = asinsForSyncStage(
-      job,
-      "listing",
-      asinsNeedingListingSync(asins).map((item) => item.asin),
-      asins,
-    );
-    if (shouldRunSyncStage(job, "listing") && listingPending.length) {
-      activateStage(jobId, "listing");
-      patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
-      const listingAsins = listingPending;
-      const listingResult = providers.run({
-        connector: "sorftime", stage: "listing", asins: listingAsins,
-        label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
-        env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
-        allowScopedEvidenceFallback: true,
-      });
-      finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
-        initialJob: job,
-        commandSucceeded: listingResult.succeeded,
-        resultStatusesByAsin: listingResult.statusesByAsin,
-        diagnostics: listingResult.diagnostics,
-      });
-    } else if (shouldRunSyncStage(job, "listing")) {
-      finalizeCachedStage(jobId, "listing", asins);
-    }
-
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
     const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins, asins);
@@ -1394,6 +1367,36 @@ async function main() {
         });
       }
 
+    }
+
+    // Reviews get priority over optional badge requests; galleries precede trends.
+    const listingPending = asinsForSyncStage(
+      job,
+      "listing",
+      asinsNeedingListingSync(asins).map((item) => item.asin),
+      asins,
+    );
+    if (shouldRunSyncStage(job, "listing") && listingPending.length) {
+      activateStage(jobId, "listing");
+      patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
+      const listingAsins = listingPending;
+      const listingResult = providers.run({
+        connector: "sorftime", stage: "listing", asins: listingAsins,
+        label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
+        env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        allowScopedEvidenceFallback: true,
+      });
+      finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
+        initialJob: job,
+        commandSucceeded: listingResult.succeeded,
+        resultStatusesByAsin: listingResult.statusesByAsin,
+        diagnostics: listingResult.diagnostics,
+      });
+    } else if (shouldRunSyncStage(job, "listing")) {
+      finalizeCachedStage(jobId, "listing", asins);
+    }
+
+    if (hasMcpWork) {
       const salesAsins = stageAsins("sales_trend");
       if (shouldRunSyncStage(job, "sales_trend") && salesAsins.length) {
         activateStage(jobId, "sales_trend");
