@@ -87,7 +87,12 @@ function inspectWindowsProcess(pid, { timeoutMs = 2_000 } = {}) {
     "$o|ConvertTo-Json -Compress",
   ].join(";");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", source], {
-    encoding: "utf8", shell: false, windowsHide: true, timeout: Math.min(2_000, Math.ceil(timeoutMs)),
+    // A cold CIM query can exceed two seconds even with no lock contention.
+    // Self identity is captured once; use the caller's remaining budget (capped
+    // at five seconds) without extending short lock deadlines or trusting a PID
+    // whose birth identity could not be established. Other-owner probes stay short.
+    encoding: "utf8", shell: false, windowsHide: true,
+    timeout: Math.min(pid === process.pid ? 5_000 : 2_000, Math.ceil(timeoutMs)),
   });
   if (result.status === 3 || !ownerIsAlive(pid)) return Object.freeze({ alive: false });
   if (result.status !== 0) return Object.freeze({ alive: true });

@@ -116,7 +116,7 @@ test("Windows owner records use the OS CreationDate instead of an uptime estimat
       const query = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", [
         `$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${process.pid}'`,
         "$p.CreationDate.ToUniversalTime().ToString('o')",
-      ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 2_000 });
+      ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 5_000 });
       assert.equal(query.status, 0);
       assert.equal(owner.pidBirth, query.stdout.trim());
     } finally { release(); }
@@ -247,7 +247,7 @@ test("fresh Windows lock attempts enforce 3ms and 25ms deadlines before writing 
       const descendants = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", [
         `$children=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${child.pid}')`,
         "$children.Count",
-      ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 2_000 });
+      ].join(";")], { encoding: "utf8", shell: false, windowsHide: true, timeout: 5_000 });
       assert.equal(descendants.status, 0);
       assert.equal(Number(descendants.stdout.trim()), 0, "timed-out identity query left a PowerShell child");
     });
@@ -268,3 +268,4 @@ test("a failed Windows self identity query leaves no owner", {
     assert.deepEqual(await readdir(`${lockPath}.owners`).catch((error) => error?.code === "ENOENT" ? [] : Promise.reject(error)), []);
   });
 });
+
