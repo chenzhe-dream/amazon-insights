@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../../shared/project-marketplaces";
 import { z } from "zod";
 
 import {
@@ -140,13 +141,13 @@ export type AlexaVocNormalizationExecutionIdentity = Readonly<{
 }>;
 
 export function createAlexaVocNormalizationFingerprint(input: Readonly<{
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asin: string;
   rawReportSha256: string;
   executionIdentity: AlexaVocNormalizationExecutionIdentity;
 }>): string {
   return canonicalJsonSha256({
-    marketplace: z.literal("US").parse(input.marketplace),
+    marketplace: ProjectMarketplaceSchema.parse(input.marketplace),
     asin: AsinSchema.parse(input.asin),
     rawReportSha256: z.string().regex(/^[a-f0-9]{64}$/).parse(input.rawReportSha256),
     parser: { id: "deterministic-alexa-parser", version: "deterministic-alexa-parser/v3" },

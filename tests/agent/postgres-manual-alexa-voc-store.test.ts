@@ -1975,3 +1975,44 @@ function throwingExecutor(code: string, constraint?: string): PostgresQueryExecu
     },
   };
 }
+
+test("four markets persist the same ASIN independently and analysis reads only its site's manual VOC", async t => {
+  const schema = await createSchema();
+  const { repository, pool } = openRepository(t, schema);
+  const organizationId = randomUUID();
+  const actor = await seedUser(repository, organizationId);
+  const markets = ["US", "UK", "DE", "CA"] as const;
+  for (const marketplace of markets) {
+    const input = {
+      ...putInput({ organizationId, createdBy: actor, expectedRevision: "1", contentHash: hash("a"), marker: `${marketplace}-only`, rawSeed: markets.indexOf(marketplace) + 1 }),
+      marketplace,
+    };
+    const write = () => repository.transaction(async () => {
+      await repository.manualAlexaVoc.lockScopes({ organizationId, marketplace, asins: [ASIN] });
+      return repository.manualAlexaVoc.put(input);
+    });
+    const first = await write();
+    const second = await write();
+    assert.equal(first.record.marketplace, marketplace);
+    assert.equal(second.idempotent, true);
+  }
+  let legacyCalls = 0;
+  const reader = new RepositoryVocSourceReader({
+    manualVoc: repository.manualAlexaVoc,
+    legacySource: { readIfEligible: async () => { legacyCalls++; return { status: "missing", reason: "not-found" }; } },
+  });
+  for (const marketplace of markets) {
+    const before = legacyCalls;
+    const result = await reader.read({ organizationId, marketplace, asins: [ASIN, OTHER_ASIN], dataCutoffAt: new Date(Date.now() + 1000).toISOString() });
+    assert.equal(result.recordCount, 1);
+    assert.equal(result.candidate?.marketplace, marketplace);
+    const serialized = JSON.stringify(result.candidate);
+    assert.ok(serialized.includes(`${marketplace}-only`));
+    for (const other of markets.filter(value => value !== marketplace)) {
+      assert.equal(serialized.includes(`${other}-only`), false);
+    }
+    if (marketplace !== "US") assert.equal(legacyCalls, before, "non-US sources must not use legacy US data");
+  }
+  const counts = await pool.query("SELECT marketplace, count(*)::int AS count FROM manual_alexa_voc_revisions GROUP BY marketplace ORDER BY marketplace");
+  assert.deepEqual(counts.rows, [...markets].sort().map(marketplace => ({ marketplace, count: 1 })));
+});

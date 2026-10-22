@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_VOC_QUEUE_TIMEOUT_MS } from "../domain/voc/queue-deadline";
 import { resolve } from "node:path";
@@ -291,11 +292,12 @@ async function trustedNormalizationSubject(
     !actor ||
     actor.status !== "active" ||
     actor.organizationId !== project.organizationId ||
-    project.marketplace !== "US"
+    !ProjectMarketplaceSchema.safeParse(project.marketplace).success
   ) {
     throw trustedSubjectError();
   }
   return {
+    marketplace: ProjectMarketplaceSchema.parse(project.marketplace),
     actorId: actor.id,
     organizationId: actor.organizationId,
     projectId: project.id,
@@ -322,6 +324,7 @@ async function trustedNormalizationCommitSubject(
     subject.actorId !== input.actorId ||
     subject.organizationId !== input.actorOrganizationId ||
     subject.projectId !== input.projectId ||
+    subject.marketplace !== input.marketplace ||
     !subject.asins.includes(input.asin)
   ) {
     throw trustedSubjectError();
@@ -446,6 +449,7 @@ async function commitNormalizationAndWake(
           actorOrganizationId: input.actorOrganizationId,
           projectId: input.projectId,
           runId: input.runId,
+          marketplace: subject.marketplace,
           asins: subject.asins,
           dataCutoffAt: subject.dataCutoffAt,
           createdAt: committedAt,
@@ -460,6 +464,7 @@ async function commitNormalizationAndWake(
 }
 
 export type AlexaVocCumulativePublicationInput = Readonly<{
+  marketplace: ProjectMarketplace;
   positioningMode?: VocPositioningMode;
   actorId: string;
   actorOrganizationId: string;
@@ -476,7 +481,7 @@ export async function publishCumulativeVocSnapshotAndWake(
 ): Promise<Readonly<{ snapshotCreated: boolean; wakeCreated: boolean }>> {
   const storedRevisions = await repository.manualAlexaVoc.listAtCutoff({
     organizationId: input.actorOrganizationId,
-    marketplace: "US",
+    marketplace: input.marketplace,
     asins: input.asins,
     dataCutoffAt: input.dataCutoffAt,
   });
@@ -485,7 +490,7 @@ export async function publishCumulativeVocSnapshotAndWake(
   const byAsin = new Map(storedRevisions.map((revision) => [revision.asin, revision]));
   if (byAsin.size !== storedRevisions.length ||
     new Set(input.asins).size !== input.asins.length ||
-    storedRevisions.some((revision) => !input.asins.includes(revision.asin))) {
+    storedRevisions.some((revision) => revision.marketplace !== input.marketplace || revision.organizationId !== input.actorOrganizationId || !input.asins.includes(revision.asin))) {
     throw trustedSubjectError();
   }
   const revisions = input.asins.flatMap((asin) => {
@@ -496,14 +501,14 @@ export async function publishCumulativeVocSnapshotAndWake(
     throw new WorkerTaskError("infrastructure", "Committed Alexa VOC revision was not readable");
   }
   const candidate = buildVocSnapshotCandidate({
-    marketplace: "US",
+    marketplace: input.marketplace,
     asins: input.asins,
     dataCutoffAt: input.dataCutoffAt,
     sourceBundles: [{
       sourceId: "alexa-voc",
       type: "manual-voc",
       reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
-      marketplace: "US",
+      marketplace: input.marketplace,
       capturedAt: revisions.reduce(
         (latest, revision) => latest > revision.capturedAt ? latest : revision.capturedAt,
         revisions[0]!.capturedAt,
@@ -526,7 +531,7 @@ export async function publishCumulativeVocSnapshotAndWake(
     actorOrganizationId: input.actorOrganizationId,
     runId: input.runId,
     expectedProjectId: input.projectId,
-    expectedMarketplace: "US",
+    expectedMarketplace: input.marketplace,
     expectedAsins: input.asins,
     expectedRunCutoffAt: input.dataCutoffAt,
     candidateId: randomUUID(),
@@ -573,7 +578,7 @@ async function recordReplayedNormalizationTerminal(
     const committed = await scoped.manualAlexaVoc
       .findCommittedNormalizationReplayByFingerprint({
         actorOrganizationId: subject.organizationId,
-        marketplace: "US",
+        marketplace: subject.marketplace,
         asin: replay.asin,
         executionFingerprint: replay.executionFingerprint,
         dataCutoffAt: subject.dataCutoffAt,
@@ -612,6 +617,7 @@ async function recordReplayedNormalizationTerminal(
       actorOrganizationId: subject.organizationId,
       projectId: subject.projectId,
       runId: replay.job.runId,
+      marketplace: subject.marketplace,
       asins: subject.asins,
       dataCutoffAt: subject.dataCutoffAt,
       createdAt: completedAt,

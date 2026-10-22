@@ -1,3 +1,4 @@
+import type { ProjectMarketplace } from "../../shared/project-marketplaces";
 import { randomUUID } from "node:crypto";
 
 import { DateTimeSchema } from "../../shared/agent-contracts";
@@ -101,7 +102,7 @@ export class ManualAlexaVocRetentionService {
 
   async decryptRaw(input: Readonly<{
     principal: RequestPrincipal;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     revision: string;
     purpose: "decrypt" | "reparse" | "export";
@@ -228,7 +229,7 @@ export class ManualAlexaVocRetentionService {
 
   #recordRawAccess(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     revision: string;
     actorUserId: string;

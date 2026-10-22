@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema } from "../../shared/project-marketplaces";
 import { Buffer } from "node:buffer";
 import {
   createCipheriv,
@@ -136,7 +137,7 @@ function parseKeyring(env: ManualAlexaVocCipherEnvironment): ParsedKeyring {
 function canonicalAad(identity: ManualAlexaVocIdentity): Buffer {
   if (
     !isBoundedText(identity.organizationId, 200) ||
-    identity.marketplace !== "US" ||
+    !ProjectMarketplaceSchema.safeParse(identity.marketplace).success ||
     !/^[A-Z0-9]{10}$/.test(identity.asin) ||
     !/^[1-9]\d*$/.test(identity.revision) ||
     identity.revision.length > 20 ||

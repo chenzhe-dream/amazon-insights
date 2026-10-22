@@ -1,3 +1,4 @@
+import type { ProjectMarketplace } from "../../shared/project-marketplaces";
 import {
   AlexaVocNormalizationStatusResponseSchema,
   ManualAlexaVocListResponseSchema,
@@ -5,6 +6,9 @@ import {
   type AlexaVocNormalizationStatusResponse,
   type AlexaVocNormalizationStatus,
 } from "../../shared/agent-contracts";
+
+class AlexaVocScopeError extends Error {}
+const scopeErrorMessage = "当前项目或站点与导入任务不匹配，或登录权限已失效，请刷新项目后重试。";
 
 export type AlexaVocNormalizationStatusFetch = (
   input: RequestInfo | URL,
@@ -22,6 +26,7 @@ function normalizedAsins(asins: readonly string[]) {
 export async function readAlexaVocNormalizationStatuses(input: Readonly<{
   projectId: string;
   runId: string;
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
   request?: AlexaVocNormalizationStatusFetch;
   signal?: AbortSignal;
@@ -32,7 +37,7 @@ export async function readAlexaVocNormalizationStatuses(input: Readonly<{
   const query = new URLSearchParams({
     projectId: input.projectId,
     runId: input.runId,
-    marketplace: "US",
+    marketplace: input.marketplace,
   });
   for (const asin of asins) query.append("asins", asin);
 
@@ -42,6 +47,7 @@ export async function readAlexaVocNormalizationStatuses(input: Readonly<{
     ...(input.signal ? { signal: input.signal } : {}),
   });
   const payload: unknown = await response.json().catch(() => null);
+  if (response.status === 401 || response.status === 403) throw new AlexaVocScopeError(scopeErrorMessage);
   if (!response.ok) throw new Error("Alexa VOC 标准化状态暂不可用");
   const parsed = AlexaVocNormalizationStatusResponseSchema.safeParse(payload);
   if (!parsed.success) throw new Error("Alexa VOC 标准化状态响应无效");
@@ -62,7 +68,7 @@ const recoverablePollError = Object.freeze({
 
 export type AlexaVocDiscoveryResult =
   | Readonly<{ phase: "ready"; response: AlexaVocNormalizationStatusResponse }>
-  | Readonly<{ phase: "recoverable-error"; message: "状态发现暂时失败，请重试读取" }>;
+  | Readonly<{ phase: "recoverable-error"; message: string }>;
 
 export async function deliverAlexaVocResultIfActive<T, TResult>(input: Readonly<{
   signal: AbortSignal;
@@ -92,13 +98,14 @@ export async function discoverAlexaVocNormalizationStatuses(
     return { phase: "ready", response: prepareAlexaVocDiscoveryForPolling(response) };
   } catch (error) {
     if (input.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-    return { phase: "recoverable-error", message: "状态发现暂时失败，请重试读取" };
+    return { phase: "recoverable-error", message: error instanceof AlexaVocScopeError ? scopeErrorMessage : "状态发现暂时失败，请重试读取" };
   }
 }
 
 export async function pollAlexaVocNormalizationOnce(input: Readonly<{
   projectId: string;
   runId: string;
+  marketplace: ProjectMarketplace;
   asin: string;
   fingerprint: string;
   request?: AlexaVocNormalizationStatusFetch;
@@ -109,6 +116,7 @@ export async function pollAlexaVocNormalizationOnce(input: Readonly<{
     const status = await readAlexaVocNormalizationStatuses({
       projectId: input.projectId,
       runId: input.runId,
+      marketplace: input.marketplace,
       asins: [input.asin],
       request,
       signal: input.signal,
@@ -120,24 +128,26 @@ export async function pollAlexaVocNormalizationOnce(input: Readonly<{
     if (!observed || observed.status === "pending") return { phase: "processing" };
     if (observed.status === "failure") return { phase: "failure", error: observed.error! };
 
-    const query = new URLSearchParams({ projectId: input.projectId, marketplace: "US" });
+    const query = new URLSearchParams({ projectId: input.projectId, marketplace: input.marketplace });
     query.append("asins", asin);
     const response = await request(`/api/alexa-voc?${query.toString()}`, {
       credentials: "same-origin",
       ...(input.signal ? { signal: input.signal } : {}),
     });
     const payload: unknown = await response.json().catch(() => null);
+    if (response.status === 401 || response.status === 403) return { phase: "failure", error: "authorization" };
     if (!response.ok) return recoverablePollError;
     const parsed = ManualAlexaVocListResponseSchema.safeParse(payload);
     if (!parsed.success) return recoverablePollError;
     const record = parsed.data.records.find(candidate =>
-      candidate.asin === asin
+      candidate.marketplace === input.marketplace
+      && candidate.asin === asin
       && candidate.contentHash === input.fingerprint
       && candidate.revision === observed.revision
     );
     return record ? { phase: "done", record } : { phase: "applying", revision: observed.revision! };
   } catch (error) {
     if (input.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
-    return recoverablePollError;
+    return error instanceof AlexaVocScopeError ? { phase: "failure", error: "authorization" } : recoverablePollError;
   }
 }

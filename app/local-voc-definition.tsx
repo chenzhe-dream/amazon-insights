@@ -112,14 +112,14 @@ function LocalVocRuleFlow({products, sources, enabled, initialSelectedAsins, pro
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const status = await readAlexaVocNormalizationStatuses({projectId,runId:baseSyncRunId,asins:selected,signal:controller.signal});
+        const status = await readAlexaVocNormalizationStatuses({marketplace: "US", projectId,runId:baseSyncRunId,asins:selected,signal:controller.signal});
         const blocked: string[] = [];
         const error = vocNormalizationFailureMessage(status.records);
         for (const record of status.records) {
           if (record.status !== "success") {
             blocked.push(record.asin);
           } else if (!delivered.has(`${record.asin}:${record.fingerprint}:${record.revision}`)) {
-            const result = await pollAlexaVocNormalizationOnce({projectId,runId:baseSyncRunId,asin:record.asin,fingerprint:record.fingerprint,signal:controller.signal});
+            const result = await pollAlexaVocNormalizationOnce({marketplace: "US", projectId,runId:baseSyncRunId,asin:record.asin,fingerprint:record.fingerprint,signal:controller.signal});
             if (result.phase === "done" && !controller.signal.aborted) {
               onImported?.(result.record);
               delivered.add(`${record.asin}:${record.fingerprint}:${record.revision}`);

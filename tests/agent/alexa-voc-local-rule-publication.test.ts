@@ -30,7 +30,7 @@ for (const mode of [undefined, "local-rules", "model"] as const) {
         async createRunStage(value: unknown) { return value; },
         async enqueueJob() { enqueued++; },
       } as unknown as RuntimeAgentRepository;
-      const result = await publishCumulativeVocSnapshotAndWake(repository, {
+      const result = await publishCumulativeVocSnapshotAndWake(repository, {marketplace: "US",
         ...input, ...(mode ? { positioningMode: mode } : {}),
       });
       assert.equal(snapshots.length, 1, "snapshot persistence is independent of downstream mode");

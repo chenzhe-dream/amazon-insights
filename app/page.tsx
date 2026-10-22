@@ -2259,7 +2259,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
       {activeTab === "voc" && <div className="page-content compare-page">
         <VocOverviewIntroduction products={products} />
         <AlexaVocImportPanel
-          key={`${authSession.sessionIdentity}:${authSession.user.organizationId}`}
+          marketplace={market}
+          key={`${authSession.sessionIdentity}:${authSession.user.organizationId}:${market}`}
           projectId={alexaVocPageScope.authoritativeImportScope?.projectId ?? null}
           runId={alexaVocPageScope.authoritativeImportScope?.runId ?? null}
           products={products.map(p => ({ asin: p.asin, brand: p.brand, title: p.title }))}
@@ -2267,7 +2268,7 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           statusByAsin={manualVoc.statusByAsin}
           onImported={manualVoc.onImported}
           pollingEnabled={alexaVocPageScope.canPoll}
-          disabled={market !== "US" || !alexaVocPageScope.authoritativeImportScope}
+          disabled={!alexaVocPageScope.authoritativeImportScope}
         />
         <ManualVocMatrixSection products={products} market={market}
           effectiveVocByAsin={manualVoc.effectiveVocByAsin} statusByAsin={manualVoc.statusByAsin}

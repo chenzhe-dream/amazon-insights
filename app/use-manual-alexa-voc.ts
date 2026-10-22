@@ -1,5 +1,8 @@
 "use client";
 
+import { ProjectMarketplaceSchema } from "../shared/project-marketplaces";
+
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ManualAlexaVocListResponseSchema,
@@ -59,7 +62,7 @@ export type UseManualAlexaVocResult = Readonly<{
 }>;
 
 export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexaVocResult {
-  const enabled = (input.enabled ?? true) && input.marketplace === "US" && Boolean(input.projectId);
+  const enabled = (input.enabled ?? true) && ProjectMarketplaceSchema.safeParse(input.marketplace).success && Boolean(input.projectId);
   const activeProjectId = enabled ? input.projectId : null;
   const request = input.request ?? fetch;
   const asinKey = useMemo(() => normalizedAsins(input.asins).join(","), [input.asins]);
@@ -123,13 +126,13 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     const context = {
       sessionOrgEpoch: current.sessionOrgEpoch,
       requestGeneration,
-      scope: { organizationId: input.organizationId, marketplace: "US" as const },
+      scope: { organizationId: input.organizationId, marketplace: ProjectMarketplaceSchema.parse(input.marketplace) },
     };
     const controller = new AbortController();
     requestsRef.current.set(requestGeneration, controller);
     apply(hydrationStarted({ ...context, asins }));
 
-    const query = new URLSearchParams({ projectId, marketplace: "US" });
+    const query = new URLSearchParams({ projectId, marketplace: ProjectMarketplaceSchema.parse(input.marketplace) });
     for (const asin of asins) query.append("asins", asin);
     try {
       const response = await request(`/api/alexa-voc?${query.toString()}`, {
@@ -142,7 +145,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
       if (
         activeScope.sessionIdentity !== input.sessionIdentity
         || activeScope.organizationId !== input.organizationId
-        || activeScope.marketplace !== "US"
+        || activeScope.marketplace !== input.marketplace
         || activeScope.projectId !== projectId
       ) return;
       apply(hydrationSucceeded({ ...context, requestedAsins: asins, records }));
@@ -152,7 +155,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
       if (
         activeScope.sessionIdentity !== input.sessionIdentity
         || activeScope.organizationId !== input.organizationId
-        || activeScope.marketplace !== "US"
+        || activeScope.marketplace !== input.marketplace
         || activeScope.projectId !== projectId
       ) return;
       apply(hydrationFailed({ ...context, asins }));
@@ -181,7 +184,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     const current = stateRef.current;
     const projectId = input.projectId;
     const activeScope = currentScopeRef.current;
-    if (!enabled || !projectId || record.marketplace !== "US") return false;
+    if (!enabled || !projectId || record.marketplace !== input.marketplace) return false;
     if (
       current.identity !== input.sessionIdentity
       || current.organizationId !== input.organizationId
@@ -196,7 +199,7 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     apply(importSucceeded({
       sessionOrgEpoch: current.sessionOrgEpoch,
       requestGeneration,
-      scope: { organizationId: input.organizationId, marketplace: "US" },
+      scope: { organizationId: input.organizationId, marketplace: ProjectMarketplaceSchema.parse(input.marketplace) },
       record,
     }));
     void refreshAsins([record.asin]);
@@ -205,8 +208,8 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
 
   const effectiveVocByAsin = useMemo(() => Object.fromEntries(scopedAsins.map(asin => [
     asin,
-    enabled && state.projectId === input.projectId && input.marketplace === "US"
-      ? selectEffectiveVocByAsin(state, input.organizationId, "US", asin, input.projectId)
+    enabled && state.projectId === input.projectId && ProjectMarketplaceSchema.safeParse(input.marketplace).success
+      ? selectEffectiveVocByAsin(state, input.organizationId, ProjectMarketplaceSchema.parse(input.marketplace), asin, input.projectId)
       : null,
   ])), [enabled, input.marketplace, input.organizationId, input.projectId, scopedAsins, state]);
 
@@ -214,9 +217,9 @@ export function useManualAlexaVoc(input: UseManualAlexaVocInput): UseManualAlexa
     asin,
     enabled
       && state.projectId === input.projectId
-      && input.marketplace === "US"
+      && ProjectMarketplaceSchema.safeParse(input.marketplace).success
       && state.marketplace === input.marketplace
-      ? state.statusByKey.get(manualVocOverlayKey(input.organizationId, "US", asin))
+      ? state.statusByKey.get(manualVocOverlayKey(input.organizationId, ProjectMarketplaceSchema.parse(input.marketplace), asin))
       : undefined,
   ])), [enabled, input.marketplace, input.organizationId, input.projectId, scopedAsins, state.marketplace, state.projectId, state.statusByKey]);
 

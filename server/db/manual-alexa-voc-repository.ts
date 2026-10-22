@@ -1,3 +1,4 @@
+import type { ProjectMarketplace } from "../../shared/project-marketplaces";
 import type {
   AlexaVocNormalizationStatus,
   ManualAlexaVocNormalizedRecord,
@@ -7,7 +8,7 @@ import type { AlexaVocNormalizationInputEncryptedEnvelope } from "../security/al
 import type { AlexaVocNormalizationExecutionIdentity } from "../domain/voc/alexa-voc-normalization-contracts";
 import { canonicalJsonSha256 } from "../runtime/model-request-accounting";
 
-export type ManualAlexaVocMarketplace = "US";
+export type ManualAlexaVocMarketplace = ProjectMarketplace;
 
 export type ManualAlexaVocScope = Readonly<{
   organizationId: string;
@@ -69,7 +70,7 @@ export type AlexaVocNormalizationInputSnapshot = Readonly<{
   organizationId: string;
   projectId: string;
   runId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asin: string;
   rawReportSha256: string;
   plaintextBytes: number;
@@ -84,7 +85,7 @@ export type QueueAlexaVocNormalizationInput = Readonly<{
   actorOrganizationId: string;
   projectId: string;
   runId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asin: string;
   snapshotId: string;
   stageId: string;
@@ -171,7 +172,7 @@ export function createRunCreationFingerprint(
 
 export type ManualAlexaVocOutboxLease = Readonly<{
   organizationId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asin: string;
   revision: string;
   contentHash: string;
@@ -219,7 +220,7 @@ export interface ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<readonly AlexaVocNormalizationStatus[]>;
   queueNormalizationInput(
@@ -229,7 +230,7 @@ export interface ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
   }>): Promise<AlexaVocNormalizationInputSnapshot | null>;
@@ -248,14 +249,14 @@ export interface ManualAlexaVocRepository {
   }>): Promise<void>;
   findCommittedNormalizationReplayByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
   }>): Promise<CommittedAlexaVocNormalizationReplay | null>;
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
@@ -275,18 +276,18 @@ export interface ManualAlexaVocRepository {
   getCurrent(input: ManualAlexaVocScope): Promise<ManualAlexaVocRevision | null>;
   listCurrent(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<readonly ManualAlexaVocRevision[]>;
   listAtCutoff(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
     dataCutoffAt: string;
   }>): Promise<readonly ManualAlexaVocRevision[]>;
   lockScopes(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<void>;
   peekNextRevision(input: ManualAlexaVocScope): Promise<string>;
@@ -324,7 +325,7 @@ export interface ManualAlexaVocRepository {
   recordRawAccess(input: Readonly<{
     id: string;
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     revision: string;
     actorUserId: string;

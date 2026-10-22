@@ -94,6 +94,7 @@ function successfulHarness(options: Readonly<{
       pricing: Readonly<{ inputUsdPerMillionTokens: number; outputUsdPerMillionTokens: number }>;
     }>;
   }>;
+  marketplace?: "US" | "DE";
   projectId?: string;
   runId?: string;
   existingQueueIdentity?: Readonly<{ snapshotId: string; jobId: string }>;
@@ -198,7 +199,7 @@ function successfulHarness(options: Readonly<{
     id: options.projectId ?? PROJECT_ID,
     organizationId: options.projectOrganizationId ?? ORGANIZATION_ID,
     name: "Alexa project",
-    marketplace: "US" as const,
+    marketplace: options.marketplace ?? "US",
     asins: [ASIN, "B07VY9Q95Q"],
     createdBy: USER_ID,
     currentRunId: options.runId ?? RUN_ID,
@@ -427,7 +428,7 @@ test("maps invalid list input to the service validation error before repository 
   await assert.rejects(
     harness.service.listReports({
       principal: { organizationId: ORGANIZATION_ID, userId: USER_ID },
-      query: { projectId: PROJECT_ID, marketplace: "CA", asins: [ASIN] },
+      query: { projectId: PROJECT_ID, marketplace: "JP", asins: [ASIN] },
     }),
     (error: unknown) =>
       error instanceof ManualAlexaVocServiceError &&
@@ -440,7 +441,7 @@ test("maps invalid list input to the service validation error before repository 
 test("rejects invalid scope and exact-one text inputs before opening a transaction", async () => {
   for (const request of [
     { ...importRequest(), asin: "invalid" },
-    { ...importRequest(), marketplace: "CA" },
+    { ...importRequest(), marketplace: "JP" },
     { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US" },
     { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, marketplace: "US", text: REPORT, rawText: REPORT },
   ]) {
@@ -485,6 +486,7 @@ test("strict fast-path import publishes a cutoff-visible cumulative snapshot in 
   assert.equal(response.disposition, "success");
   assert.equal((harness.putInput() as unknown as { capturedAt?: string })?.capturedAt, NOW);
   assert.deepEqual(harness.cumulativePublications(), [{
+    marketplace: "US",
     positioningMode: "local-rules",
     actorId: USER_ID,
     actorOrganizationId: ORGANIZATION_ID,
@@ -754,6 +756,7 @@ test("reuses one successful fingerprint for an authorized new run and same-organ
   assert.equal(harness.queueInput(), null);
   assert.equal(harness.normalizationEncryptionInput(), null);
   assert.deepEqual(harness.cumulativePublications(), [{
+    marketplace: "US",
     positioningMode: "local-rules",
     actorId: USER_ID,
     actorOrganizationId: ORGANIZATION_ID,
@@ -937,3 +940,20 @@ test("rejects foreign, mismatched-run, and non-member status scopes without repo
   );
   assert.equal(nonMember.normalizationStatusLookup(), null);
 });
+
+for (const text of [STRICT_REPORT, "使用人群：家庭。使用场景：户外。希望说明书更清楚。"] ) {
+  test(`DE authorized import preserves market through ${text === STRICT_REPORT ? "strict publication" : "normalization queue"}`, async () => {
+    const harness = successfulHarness({marketplace:"DE"});
+    const response = await harness.service.importReport({principal:{organizationId:ORGANIZATION_ID,userId:USER_ID},request:{...importRequest(text),marketplace:"DE"}});
+    if (text === STRICT_REPORT) {
+      assert.equal(response.record?.marketplace,"DE");
+      assert.equal(harness.putInput()?.marketplace,"DE");
+      assert.equal((harness.cumulativePublications()[0] as {marketplace:string}).marketplace,"DE");
+    } else {
+      assert.equal(response.disposition,"pending");
+      assert.equal(harness.queueInput()?.marketplace,"DE");
+      assert.equal(harness.normalizationEncryptionInput()?.identity.marketplace,"DE");
+    }
+    await assert.rejects(harness.service.importReport({principal:{organizationId:ORGANIZATION_ID,userId:USER_ID},request:importRequest(text)}), error => error instanceof ManualAlexaVocServiceError && error.kind === "forbidden");
+  });
+}

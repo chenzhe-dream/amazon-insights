@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readLatestProjectAnalysts, type ProjectLatestAnalystInput } from "./project-latest-analyst-repository";
 import { SqliteVocAutomationStore } from './sqlite/voc-automation-store';
@@ -1019,7 +1020,7 @@ export class SqliteAgentRepository
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
   }>): AlexaVocNormalizationInputSnapshot | null {
@@ -1105,7 +1106,7 @@ export class SqliteAgentRepository
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>) {
     const organizationId = EntityIdSchema.parse(input.actorOrganizationId);
@@ -1285,7 +1286,7 @@ export class SqliteAgentRepository
 
   #findCommittedAlexaVocNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
@@ -1309,7 +1310,7 @@ export class SqliteAgentRepository
 
   #findCommittedAlexaVocNormalizationReplayByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
@@ -1847,7 +1848,7 @@ export class SqliteAgentRepository
 
   #listCurrentManualAlexaVoc(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): readonly ManualAlexaVocRevision[] {
     const scope = validateManualAlexaVocListScope(input);
@@ -1876,7 +1877,7 @@ export class SqliteAgentRepository
 
   #listManualAlexaVocAtCutoff(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
     dataCutoffAt: string;
   }>): readonly ManualAlexaVocRevision[] {
@@ -1915,7 +1916,7 @@ export class SqliteAgentRepository
 
   #lockManualAlexaVocScopes(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): void {
     const context = this.#manualAlexaVocTransactionContext();
@@ -9279,25 +9280,25 @@ function validateManualAlexaVocScope(
 
 function validateManualAlexaVocListScope(input: Readonly<{
   organizationId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
 }>): Readonly<{
   organizationId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
 }> {
   if (!Array.isArray(input.asins)) manualAlexaVocConflict();
   const organizationId = validateManualAlexaVocOrganizationId(
     input.organizationId,
   );
-  if (input.marketplace !== "US") manualAlexaVocConflict();
+  if (!ProjectMarketplaceSchema.safeParse(input.marketplace).success) manualAlexaVocConflict();
   try {
     const asins = [...new Set(input.asins.map((asin) =>
       AsinSchema.parse(asin.trim().toUpperCase()),
     ))].sort();
     return Object.freeze({
       organizationId,
-      marketplace: "US" as const,
+      marketplace: input.marketplace,
       asins: Object.freeze(asins),
     });
   } catch {

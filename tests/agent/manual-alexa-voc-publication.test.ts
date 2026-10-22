@@ -491,3 +491,19 @@ test("manual VOC publication and dependent feature flags default off and validat
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("DE and US projections for the same ASIN retain separate manifests", async t => {
+  const root=temporaryRoot("manual-voc-markets-");
+  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const store=new ManualAlexaVocProjectionStore({root,projectionPathKey:PROJECTION_PATH_KEY});
+  const us=revision({organizationId:randomUUID(),marker:"US-only"});
+  const de={...revision({organizationId:us.organizationId,marker:"DE-only"}),marketplace:"DE" as const};
+  await store.publish(us); await store.publish(de);
+  const owner=createHmac("sha256",PROJECTION_PATH_KEY).update(us.organizationId).digest("base64url");
+  for (const marketplace of ["US","DE"]) {
+    const artifact=JSON.parse(readFileSync(join(root,owner,marketplace,"generation-1.json"),"utf8"));
+    assert.equal(artifact.marketplace,marketplace);
+    assert.match(JSON.stringify(artifact.records),new RegExp(`${marketplace}-only`));
+    assert.doesNotMatch(JSON.stringify(artifact.records),new RegExp(`${marketplace==="US"?"DE":"US"}-only`));
+  }
+});

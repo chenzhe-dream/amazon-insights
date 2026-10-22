@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../../shared/project-marketplaces";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
@@ -186,7 +187,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<readonly AlexaVocNormalizationStatus[]> {
     return this.#execute(async () => {
@@ -349,7 +350,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     actorOrganizationId: string;
     projectId: string;
     runId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
   }>): Promise<AlexaVocNormalizationInputSnapshot | null> {
@@ -448,7 +449,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
@@ -460,7 +461,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   findCommittedNormalizationReplayByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
     dataCutoffAt?: string;
@@ -710,7 +711,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   listCurrent(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<readonly ManualAlexaVocRevision[]> {
     return this.#execute(async () => {
@@ -738,7 +739,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   listAtCutoff(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
     dataCutoffAt: string;
   }>): Promise<readonly ManualAlexaVocRevision[]> {
@@ -762,7 +763,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   lockScopes(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asins: readonly string[];
   }>): Promise<void> {
     return this.#execute(async () => {
@@ -1220,7 +1221,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       for (const row of cleared.rows) {
         const scope = validateScope({
           organizationId,
-          marketplace: row.marketplace as "US",
+          marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
           asin: String(row.asin),
         });
         const revision = validateCounter(row.revision);
@@ -1737,7 +1738,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
 
   #insertOutbox(input: Readonly<{
     organizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     revision: string;
     contentHash: string;
@@ -1861,7 +1862,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
       typeof row.run_id !== "string" ||
       typeof row.project_id !== "string" ||
       (row.mode !== "existing-data" && row.mode !== "collect-missing") ||
-      row.marketplace !== "US" ||
+      !ProjectMarketplaceSchema.safeParse(row.marketplace).success ||
       !Array.isArray(row.asins_json) ||
       row.asins_json.length === 0 ||
       typeof row.snapshot_id !== "string" ||
@@ -1884,7 +1885,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
     const reconstructed = createRunCreationFingerprint({
       organizationId: claim.organizationId,
       projectId: row.project_id,
-      marketplace: "US",
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asins: asins!,
       mode: row.mode,
     });
@@ -1989,7 +1990,7 @@ function validateNormalizationQueueInput(
 ): QueueAlexaVocNormalizationInput {
   try {
     if (
-      input.marketplace !== "US" ||
+      !ProjectMarketplaceSchema.safeParse(input.marketplace).success ||
       !sha256Pattern.test(input.rawReportSha256) ||
       !sha256Pattern.test(input.executionFingerprint) ||
       !Number.isSafeInteger(input.plaintextBytes) ||
@@ -2043,7 +2044,7 @@ function mapNormalizationInputSnapshot(row: QueryResultRow): AlexaVocNormalizati
       organizationId: EntityIdSchema.parse(row.organization_id),
       projectId: EntityIdSchema.parse(row.project_id),
       runId: EntityIdSchema.parse(row.run_id),
-      marketplace: row.marketplace === "US" ? "US" : deserializeFailure(),
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asin: AsinSchema.parse(payload.asin),
       rawReportSha256: payload.rawReportSha256,
       plaintextBytes: payload.plaintextBytes,
@@ -2151,10 +2152,10 @@ function validateEntityId(value: unknown): string {
 
 function validateScope(input: ManualAlexaVocScope): ManualAlexaVocScope {
   try {
-    if (input.marketplace !== "US") conflictFailure();
+    if (!ProjectMarketplaceSchema.safeParse(input.marketplace).success) conflictFailure();
     return Object.freeze({
       organizationId: validateOrganizationId(input.organizationId),
-      marketplace: "US" as const,
+      marketplace: ProjectMarketplaceSchema.parse(input.marketplace),
       asin: AsinSchema.parse(input.asin.trim().toUpperCase()),
     });
   } catch (error) {
@@ -2165,23 +2166,23 @@ function validateScope(input: ManualAlexaVocScope): ManualAlexaVocScope {
 
 function validateListScope(input: Readonly<{
   organizationId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
 }>): Readonly<{
   organizationId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asins: readonly string[];
 }> {
   if (!Array.isArray(input.asins)) conflictFailure();
   const organizationId = validateOrganizationId(input.organizationId);
-  if (input.marketplace !== "US") conflictFailure();
+  if (!ProjectMarketplaceSchema.safeParse(input.marketplace).success) conflictFailure();
   try {
     const asins = [...new Set(input.asins.map((asin) =>
       AsinSchema.parse(asin.trim().toUpperCase()),
     ))].sort();
     return Object.freeze({
       organizationId,
-      marketplace: "US" as const,
+      marketplace: ProjectMarketplaceSchema.parse(input.marketplace),
       asins: Object.freeze(asins),
     });
   } catch {
@@ -2265,7 +2266,7 @@ function mapRawEnvelope(
     if (!row) throw new Error("missing row");
     const scope = validateScope({
       organizationId: String(row.organization_id),
-      marketplace: String(row.marketplace) as "US",
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asin: String(row.asin),
     });
     if (
@@ -2320,7 +2321,7 @@ function mapRawAccessAudit(
     if (!row) throw new Error("missing row");
     const scope = validateScope({
       organizationId: String(row.organization_id),
-      marketplace: String(row.marketplace) as "US",
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asin: String(row.asin),
     });
     const purpose = String(row.purpose);
@@ -2457,7 +2458,7 @@ function mapRevision(row: RevisionRow | undefined): ManualAlexaVocRevision {
     if (!row) throw new Error("missing row");
     const scope = validateScope({
       organizationId: String(row.organization_id),
-      marketplace: String(row.marketplace) as "US",
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asin: String(row.asin),
     });
     if (
@@ -2491,7 +2492,7 @@ function mapOutboxLease(
     if (!row) throw new Error("missing row");
     return validateOutboxLease({
       organizationId: String(row.organization_id),
-      marketplace: String(row.marketplace) as "US",
+      marketplace: ProjectMarketplaceSchema.parse(row.marketplace),
       asin: String(row.asin),
       revision: String(row.revision),
       contentHash: String(row.content_hash),
