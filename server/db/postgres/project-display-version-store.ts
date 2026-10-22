@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { EntityIdSchema, MarketplaceSchema, LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
-import { validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
+import { validIndependentReviewRating, validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
 import { hasUsableImageRemark, isUnavailableImageRemark } from "../../../scripts/lib/image-remark-validity.mjs";
 import { ImageRemarkOverlayEntrySchema, type ImageRemarkOverlayEntry } from "../../../shared/image-remark-overlay";
 import {
@@ -378,6 +378,20 @@ function isZeroReviewShell(value: unknown, asin: string, marketplace: string): b
     && Object.keys(row).every(key => metadata.has(key));
 }
 
+function isContradictedZeroRating(value: unknown, product: Record<string, unknown> | undefined,
+  asin: string, marketplace: string): boolean {
+  const rating = record(value);
+  const metadata = new Set(['asin', 'marketplace', 'status', 'rating', 'reviewCount', 'fetchedAt',
+    'source', 'provenance', 'statusMessage']);
+  return validIndependentReviewRating(value, asin, { marketplace })
+    && rating.rating === 0 && rating.reviewCount === 0 && rating.source === 'Sorftime'
+    && Object.keys(rating).every(key => metadata.has(key))
+    && product?.asin === asin && product.marketplace === marketplace
+    && product.catalogSource === 'sellerSprite' && product.synced === true
+    && typeof product.rating === 'number' && product.rating > 0 && product.rating <= 5
+    && Number.isSafeInteger(product.reviews) && Number(product.reviews) > 0;
+}
+
 function stageData(output: DisplayStageOutput): Record<string, unknown> {
   return output.stageStatus === "missing-output" ? {} : record(output.data);
 }
@@ -460,6 +474,14 @@ function assertNoCoverageRegression(current: CurrentProjectDisplayVersion | null
         const reviewOutput = candidate[stage];
         if (stage === 'reviews' && field === 'analysisByAsin' && !hasValue(next)
           && isZeroReviewShell(previous, asin, current.marketplace)
+          && reviewOutput.stageStatus === 'partial'
+          && reviewOutput.gap?.items?.some(item => item.asin === asin && item.causeCode === 'UPSTREAM_EMPTY')) continue;
+        // A legacy zero-rating placeholder is contradicted by scoped positive
+        // catalog evidence. Keep the immutable old record, but expose the current
+        // missing independent rating instead of forcing a known-conflicting zero.
+        if (stage === 'reviews' && field === 'ratingByAsin' && !hasValue(next)
+          && isZeroReviewShell(record(stageData(current.stageOutputs.reviews).analysisByAsin)[asin], asin, current.marketplace)
+          && isContradictedZeroRating(previous, newCatalog.get(asin), asin, current.marketplace)
           && reviewOutput.stageStatus === 'partial'
           && reviewOutput.gap?.items?.some(item => item.asin === asin && item.causeCode === 'UPSTREAM_EMPTY')) continue;
         const sales = stage === "sales_trend" && field === "trendByAsin";

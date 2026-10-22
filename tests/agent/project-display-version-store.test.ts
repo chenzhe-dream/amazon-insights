@@ -180,6 +180,29 @@ test('verified zero-review shell may become an explicit empty gap while ratings 
   assert.deepEqual((await pool.query('SELECT body_json FROM project_display_versions WHERE id=$1',[current.versionId])).rows[0].body_json,oldBody);
 });
 
+test('contradicted legacy zero rating becomes a visible gap only with scoped positive catalog evidence', async () => {
+  for (const patch of [{}, {rating:4.4}, {reviewCount:2}, {catalogMarket:'UK'},
+    {catalogRating:0}, {catalogReviews:0}, {catalogSource:'unknown'}, {catalogSynced:false},
+    {gapCode:'CONNECTOR_FAILED'}, {extraEvidence:'Keep this evidence'}]) {
+    const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
+    const {catalogMarket='US',catalogRating=4.4,catalogReviews=20,catalogSource='sellerSprite',catalogSynced=true,
+      gapCode='UPSTREAM_EMPTY',...ratingPatch}=patch as Record<string,unknown>;
+    const zero={asin,marketplace:'US',status:'ready',sampledReviews:0,mentionTopics:0,blocks:[],fetchedAt:NOW};
+    const rating={asin,marketplace:'US',status:'ready',rating:0,reviewCount:0,fetchedAt:NOW,source:'Sorftime',...ratingPatch};
+    await replaceDoneOutput(pool,ids,'reviews',{analysisByAsin:{[asin]:zero},ratingByAsin:{[asin]:rating}});
+    const current=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+    const old=(await pool.query('SELECT body_json FROM project_display_versions WHERE id=$1',[current.versionId])).rows[0].body_json;
+    const next=await addJob(pool,ids,'2026-09-22T10:00:00.000Z');const data={analysisByAsin:{},ratingByAsin:{}};
+    const gap={state:'partial',reasonCode:gapCode,items:[{asin,causeCode:gapCode}]};
+    await pool.query("UPDATE sync_job_stage_outputs SET stage_status='partial',data_json=$2::jsonb,gap_json=$3::jsonb,content_hash=$4 WHERE job_id=$1 AND stage_id='reviews'",[next.jobId,JSON.stringify(data),JSON.stringify(gap),hash({stage:'reviews',data,gap})]);
+    const publish=()=>store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:next.jobId,expectedCurrentVersionId:current.versionId,
+      catalog:[{asin,marketplace:catalogMarket,rating:catalogRating,reviews:catalogReviews,catalogSource,synced:catalogSynced}]});
+    if(Object.keys(patch).length) await assert.rejects(publish,/Candidate would lose verified data: reviews/,JSON.stringify(patch));
+    else {const result=await publish();assert.ok(result.gaps.some(g=>g.asin===asin&&g.field==='reviews.ratingByAsin'));}
+    assert.deepEqual((await pool.query('SELECT body_json FROM project_display_versions WHERE id=$1',[current.versionId])).rows[0].body_json,old);
+  }
+});
+
 test('zero-review exception rejects real content, uncertain identity, failed source and lost ratings', async () => {
   for (const patch of [{sampledReviews:1},{mentionTopics:1},{blocks:[{title:'Actual review finding'}]},
     {summary:'Useful review text'},{marketplace:'UK'},{asin:ASINS[1]},{status:'pending'},
