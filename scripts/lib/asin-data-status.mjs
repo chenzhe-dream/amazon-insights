@@ -6,6 +6,7 @@ import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport, readCachedArrayExport, hasCompleteKeywordRecord, hasCompleteReviewRecord } from "./sync-cache.mjs";
 import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-data-validity.mjs";
 import { selectReviewEvidence } from "./uk-review-fallback.mjs";
+import { hasUsableImageRemark } from "./image-remark-validity.mjs";
 
 const root = getProjectRoot();
 
@@ -112,7 +113,7 @@ export function hasCompleteImageRemarks(listingRecord, remarkSlots, previousUrls
       const remark = remarkSlots?.[item.slotIndex];
       const listedUrl = String(item.url ?? "").trim();
       const boundUrl = String(remark?.imageUrl ?? previousUrls?.[item.slotIndex] ?? "").trim();
-      return Boolean(remark?.remark?.trim() && listedUrl && boundUrl === listedUrl);
+      return Boolean(hasUsableImageRemark(remark) && listedUrl && boundUrl === listedUrl);
     },
   );
 }

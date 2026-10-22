@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { EntityIdSchema, MarketplaceSchema, LocalDataStageOutputResponseSchema } from "../../../shared/agent-contracts";
 import { validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
+import { hasUsableImageRemark, isUnavailableImageRemark } from "../../../scripts/lib/image-remark-validity.mjs";
 import { ImageRemarkOverlayEntrySchema, type ImageRemarkOverlayEntry } from "../../../shared/image-remark-overlay";
 import {
   imageRemarkEvidenceSummary,
@@ -385,6 +386,7 @@ function assertRemarkCoverage(current: CurrentProjectDisplayVersion,
   const newGallery = galleryFor(candidate, asin);
   for (let index = 0; index < oldNotes.length; index += 1) {
     const oldNote = record(oldNotes[index]);
+    if (isUnavailableImageRemark(oldNote.remark)) continue;
     const oldUrl = typeof oldNote.imageUrl === "string" ? oldNote.imageUrl : oldGallery[index];
     if (!oldUrl) {
       const lost = lostCoverage(oldNote, newNotes[index], `${field}[${index}]`);
@@ -449,7 +451,7 @@ function effectiveImageRemarkGaps(gaps: readonly ProjectDisplayGap[],
     const notes = notesByAsin[gap.asin];
     const fullyCovered = gallery.every((url, index) => {
       const note = record(Array.isArray(notes) ? notes[index] : null);
-      if (hasValue(note.remark) && (typeof note.imageUrl !== "string" || note.imageUrl === url)) return true;
+      if (hasUsableImageRemark(note) && (typeof note.imageUrl !== "string" || note.imageUrl === url)) return true;
       return supplemental.get(`${gap.asin}:${index}`)?.imageUrl === url;
     });
     return !fullyCovered;

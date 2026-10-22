@@ -4,6 +4,7 @@ import path from "node:path";
 import { generatedAppDataPath } from "./lib/generated-app-data-path.mjs";
 import { randomUUID } from "node:crypto";
 import { hasCompleteImageRemarks } from "./lib/asin-data-status.mjs";
+import { hasUsableImageRemark, revalidateCachedImageRemark } from "./lib/image-remark-validity.mjs";
 import { imageRemarkOutcome } from "./lib/image-remark-outcome.mjs";
 import {
   aggregateImageRemarkResults,
@@ -180,7 +181,7 @@ async function writeRemarksFile({
           slots[slotIndex] = null;
           continue;
         }
-        if (latestRemarks[asin]?.[slotIndex]?.remark?.trim() &&
+        if (hasUsableImageRemark(latestRemarks[asin]?.[slotIndex]) &&
           latestRemarks[asin]?.[slotIndex]?.imageUrl === record.galleryImages[slotIndex] &&
           (!isExplicitImageAction() || !slots[slotIndex] || slots[slotIndex].status === "ready")) {
           slots[slotIndex] = imageRemarkOutcome("ready");
@@ -301,6 +302,14 @@ async function main() {
     const alignedOutcomes = reconcileListingImageRemarks(previousUrls, record.galleryImages, existingMeta.imageOutcomesByAsin?.[asin]);
     remarks[asin] = reconcileListingImageRemarks(previousUrls, record.galleryImages, previousRemarks)
       .map((remark, slotIndex) => remark ? { ...remark, imageUrl: record.galleryImages[slotIndex] } : null);
+    for (let slotIndex = 0; slotIndex < remarks[asin].length; slotIndex += 1) {
+      const checked = revalidateCachedImageRemark(remarks[asin][slotIndex], alignedOutcomes[slotIndex]);
+      if (checked.note !== remarks[asin][slotIndex]) {
+        remarks[asin][slotIndex] = checked.note;
+        alignedOutcomes[slotIndex] = checked.outcome;
+        if (dispatch.has(asin)) remarkUpdates.push({ asin, slotIndex, remark: null });
+      }
+    }
     if (explicitImageAction && dispatch.has(asin)) {
       const aligned = Array.from({length:Math.max(previousRemarks.length,record.galleryImages.length)},(_,slotIndex)=>({asin,slotIndex,remark:remarks[asin][slotIndex] ?? null}));
       remarkUpdates.push(...aligned);
@@ -334,12 +343,12 @@ async function main() {
       if (!dispatch.has(asin)) {
         const prior = alignedOutcomes[slotIndex];
         imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome(prior?.status ??
-          (remarks[asin][slotIndex]?.remark ? "ready" : "upstream-empty"), prior ?? {});
+          (hasUsableImageRemark(remarks[asin][slotIndex]) ? "ready" : "upstream-empty"), prior ?? {});
         completedStaticImages += 1;
         counts[imageOutcomesByAsin[asin][slotIndex].status] += 1;
         continue;
       }
-      if (!force && !explicitImageAction && remarks[asin][slotIndex]?.remark) {
+      if (!force && !explicitImageAction && hasUsableImageRemark(remarks[asin][slotIndex])) {
         imageOutcomesByAsin[asin][slotIndex] = imageRemarkOutcome("ready");
         completedStaticImages += 1;
         counts.ready += 1;

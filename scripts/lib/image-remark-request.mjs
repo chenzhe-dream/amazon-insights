@@ -1,4 +1,5 @@
 import { IMAGE_REMARK_TIMEOUT_MS } from "./image-remark-policy.mjs";
+import { hasUsableImageRemark } from "./image-remark-validity.mjs";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_IMAGE_REMARK_MODEL = "gpt-4o-mini";
@@ -138,8 +139,8 @@ export async function requestImageRemark({
     throw invalidOutputError(response.status);
   }
 
-  const remark = String(parsed.remark ?? "").trim();
-  if (!remark) throw invalidOutputError(response.status);
+  if (!hasUsableImageRemark(parsed)) throw invalidOutputError(response.status);
+  const remark = parsed.remark.trim();
   return {
     remark,
     image_types: Array.isArray(parsed.image_types) ? parsed.image_types.map(String).slice(0, 3) : [],

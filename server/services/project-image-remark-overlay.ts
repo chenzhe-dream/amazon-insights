@@ -1,3 +1,4 @@
+import { hasUsableImageRemark } from "../../scripts/lib/image-remark-validity.mjs";
 import {
   ImageRemarkCandidateManifestSchema,
   ImageRemarkOverlayEntrySchema,
@@ -36,7 +37,7 @@ function galleryFor(outputs: StageOutputs, asin: string): string[] {
 function hasCurrentRemark(outputs: StageOutputs, asin: string, index: number): boolean {
   const notes = record(stageData(outputs.image_remarks).remarksByAsin)[asin];
   const note = Array.isArray(notes) ? record(notes[index]) : {};
-  return typeof note.remark === "string" && note.remark.trim().length > 0 &&
+  return hasUsableImageRemark(note) &&
     (typeof note.imageUrl !== "string" || note.imageUrl === galleryFor(outputs, asin)[index]);
 }
 

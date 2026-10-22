@@ -329,6 +329,26 @@ test("a same-URL image remark cannot disappear when a newer candidate is publish
   assert.equal(next.jobId, reordered.jobId, "a fully remarked gallery may be reordered");
 });
 
+test("an unavailable-vision message is not verified coverage but real image notes stay protected", async () => {
+  const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
+  const gallery=['https://example.test/main.jpg','https://example.test/secondary.jpg'];
+  const listing={contentByAsin:{[asin]:{status:'ready',galleryImages:gallery}}};
+  const valid={imageUrl:gallery[0],remark:'白底展示三支黑色飞镖',image_types:['产品展示']};
+  const unavailable={imageUrl:gallery[1],remark:'图片内容无法识别，未获取到可分析的视觉信息。',image_types:['其他']};
+  await replaceDoneOutput(pool,ids,'listing',listing);
+  await replaceDoneOutput(pool,ids,'image_remarks',{remarksByAsin:{[asin]:[valid,unavailable]},outcomesByAsin:{}});
+  const current=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+  const losing=await addJob(pool,ids,'2026-09-22T10:00:00.000Z');
+  await replaceDoneOutput(pool,losing,'listing',listing);
+  await replaceDoneOutput(pool,losing,'image_remarks',{remarksByAsin:{[asin]:[null,null]},outcomesByAsin:{}});
+  await assert.rejects(store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:losing.jobId,expectedCurrentVersionId:current.versionId}),/lose verified data/);
+  const repaired=await addJob(pool,ids,'2026-09-23T10:00:00.000Z');
+  await replaceDoneOutput(pool,repaired,'listing',listing);
+  await replaceDoneOutput(pool,repaired,'image_remarks',{remarksByAsin:{[asin]:[valid,null]},outcomesByAsin:{}});
+  const next=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:repaired.jobId,expectedCurrentVersionId:current.versionId});
+  assert.equal(next.jobId,repaired.jobId);
+});
+
 test("a partial gallery may reorder while its verified remark follows the image URL", async () => {
   const { pool, ids, store } = await fixture();
   const asin = ASINS[0]!;
