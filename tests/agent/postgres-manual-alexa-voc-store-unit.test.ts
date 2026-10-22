@@ -131,7 +131,7 @@ test("PostgreSQL normalization queue and finalizer helper share run-then-stage l
   assert.ok(activeJobRead);
   assert.match(activeJobRead.sql, /status = 'queued'[\s\S]*status = 'running'/);
   assert.match(activeJobRead.sql, /status = 'failed'[\s\S]*retry_scheduled_at IS NULL/);
-  assert.match(activeJobRead.sql, /attempt\.attempt_number = \([\s\S]*MAX\(latest_attempt\.attempt_number\)/);
+  assert.match(activeJobRead.sql, /NOT EXISTS[\s\S]*successor\.retry_cycle_start_attempt = attempt\.retry_cycle_start_attempt[\s\S]*successor\.attempt_number > attempt\.attempt_number/);
   // Durable eligibility is validated from every input by the shared recovery
   // reducer after this candidate read, rather than an EXISTS on any sibling.
   assert.doesNotMatch(activeJobRead.sql, /agent_run\.validation_status/);
@@ -233,6 +233,25 @@ test("PostgreSQL normalization status query is exact-run scoped and returns only
   assert.match(calls[0]!.sql, /newest_attempt\.retry_scheduled_at IS NULL/);
   assert.deepEqual(calls[0]!.values, [RUN_ID, PROJECT_ID, ORGANIZATION_ID, "US", [ASIN]]);
   assert.doesNotMatch(JSON.stringify(records), /rawText|ciphertext|wrappedDek|modelResponse/i);
+});
+
+test("normalization configuration failures before model execution are not persistence failures", async () => {
+  const executor: PostgresQueryExecutor = {
+    async query<Row extends QueryResultRow>(sql: string) {
+      assert.match(sql, /error_json ->> 'classification' AS newest_attempt_error_classification/);
+      return result<Row>([{
+        asin: ASIN, execution_fingerprint: "d".repeat(64), terminal_status: null,
+        newest_attempt_status: "failed", newest_attempt_retryable: false,
+        newest_attempt_error_classification: "configuration",
+      } as unknown as Row]);
+    },
+    async transaction<Result>(operation: () => Promise<Result>) { return operation(); },
+  };
+  const records = await new PostgresManualAlexaVocStore(executor).listNormalizationStatuses({
+    actorOrganizationId: ORGANIZATION_ID, projectId: PROJECT_ID, runId: RUN_ID, marketplace: "US", asins: [ASIN],
+  });
+  assert.equal(records[0]?.error, "configuration");
+  assert.equal(records[0]?.status, "failure");
 });
 
 test("PostgreSQL normalization status reports a newer active retry as pending", async () => {

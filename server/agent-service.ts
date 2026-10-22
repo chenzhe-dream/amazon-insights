@@ -448,6 +448,11 @@ export async function createAgentService(
         shapeModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.shapeExplanationConfigurationVersion,promptVersion:marketModelRuntime.shapeExplanationPromptVersion} : null,
         now: options.clock }) : null;
     const marketLinkedService=repository.marketExecutionContext&&marketResearchService&&marketModuleService?new MarketLinkedService({context:repository.marketExecutionContext,research:marketResearchService,modules:marketModuleService,now:options.clock,onError:()=>app.log.warn({component:'market-linked'},'Market linked dispatcher iteration failed')}):null;
+    const normalizationExecutionIdentity = resolution.status === "configured" ? {
+      providerName: options.providerName ??
+        (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
+      model: resolution.config.model,
+    } : null;
     const app = buildAgentApp({
       marketResearchService,
       marketModuleService,
@@ -458,13 +463,7 @@ export async function createAgentService(
       storageAvailable: true,
       openaiCapability,
       repository,
-      normalizationExecutionIdentity: resolution.status === "configured"
-        ? {
-            providerName: options.providerName ??
-              (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
-            model: resolution.config.model,
-          }
-        : null,
+      normalizationExecutionIdentity,
       ...(executionContext ? { executionContext } : {}),
       concurrencyAdminService,
       connectorProbeService,
@@ -555,10 +554,7 @@ export async function createAgentService(
                   baseUrl: resolution.config.baseUrl,
                   ...(resourceGovernor ? { resourceGovernor } : {}),
                 }));
-          const providerName = options.providerName ??
-            (env.AGENT_VOC_LOCAL_FAKE === "1"
-              ? "local-fixture"
-              : resolution.config.providerName + (resolution.config.transport === "relay-chat-json" && env.AGENT_VOC_RELAY_RESPONSE_FORMAT === "json_object" ? ":json-object" : ""));
+          const providerName = normalizationExecutionIdentity!.providerName;
           try {
             normalizationRuntime = await createAlexaVocNormalizationRuntime({
               positioningMode: "local-rules",

@@ -126,6 +126,16 @@ test("relay transport requires and canonicalizes HTTPS base URL", () => {
   assert.match(config.providerName, /^openai:relay-chat-json:[a-f0-9]{64}$/);
 });
 
+test("relay JSON object identity is resolved before imports and workers construct fingerprints", () => {
+  const env = { ...validRuntimeEnv(), AGENT_VOC_TRANSPORT: "relay-chat-json", OPENAI_BASE_URL: "https://relay.example.test/v1" };
+  const schema = loadVocPositioningRuntimeConfig(env);
+  const object = loadVocPositioningRuntimeConfig({ ...env, AGENT_VOC_RELAY_RESPONSE_FORMAT: "json_object" });
+  assert.equal(object.providerName, `${schema.providerName}:json-object`);
+  assert.deepEqual(object.model, schema.model);
+  const direct = loadVocPositioningRuntimeConfig({ ...validRuntimeEnv(), AGENT_VOC_RELAY_RESPONSE_FORMAT: "json_object" });
+  assert.equal(direct.providerName, "openai:responses-strict");
+});
+
 test("runtime passes resolved relay options to its provider factory", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "amazon-voc-relay-runtime-"));
   const repository = openSqliteAgentRepository({
