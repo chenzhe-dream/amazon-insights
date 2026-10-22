@@ -161,6 +161,44 @@ async function addJob(pool: Pool, ids: Awaited<ReturnType<typeof fixture>>["ids"
   return { ...ids, runId, jobId };
 }
 
+test('verified zero-review shell may become an explicit empty gap while ratings and history remain', async () => {
+  const { pool, ids, store } = await fixture();
+  const asin = ASINS[0]!;
+  const zero = { asin, marketplace: 'US', status: 'ready', sampledReviews: 0, mentionTopics: 0,
+    blocks: [], fetchedAt: NOW, statusMessage: 'Source confirmed zero reviews' };
+  const rating = { asin, marketplace: 'US', status: 'ready', rating: 0, reviewCount: 0, fetchedAt: NOW };
+  await replaceDoneOutput(pool, ids, 'reviews', {analysisByAsin:{[asin]:zero},ratingByAsin:{[asin]:rating}});
+  const current = await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+  const oldBody = (await pool.query('SELECT body_json FROM project_display_versions WHERE id=$1',[current.versionId])).rows[0].body_json;
+  const next = await addJob(pool, ids, '2026-09-22T10:00:00.000Z');
+  const data = {analysisByAsin:{},ratingByAsin:{[asin]:rating}};
+  const gap = {state:'partial',reasonCode:'UPSTREAM_EMPTY',items:[{asin,causeCode:'UPSTREAM_EMPTY'}]};
+  await pool.query("UPDATE sync_job_stage_outputs SET stage_status='partial',data_json=$2::jsonb,gap_json=$3::jsonb,content_hash=$4 WHERE job_id=$1 AND stage_id='reviews'",[next.jobId,JSON.stringify(data),JSON.stringify(gap),hash({stage:'reviews',data,gap})]);
+  const published = await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:next.jobId,expectedCurrentVersionId:current.versionId});
+  assert.ok(published.gaps.some(g=>g.asin===asin&&g.field==='reviews.analysisByAsin'));
+  assert.ok(!published.gaps.some(g=>g.asin===asin&&g.field==='reviews.ratingByAsin'));
+  assert.deepEqual((await pool.query('SELECT body_json FROM project_display_versions WHERE id=$1',[current.versionId])).rows[0].body_json,oldBody);
+});
+
+test('zero-review exception rejects real content, uncertain identity, failed source and lost ratings', async () => {
+  for (const patch of [{sampledReviews:1},{mentionTopics:1},{blocks:[{title:'Actual review finding'}]},
+    {summary:'Useful review text'},{marketplace:'UK'},{asin:ASINS[1]},{status:'pending'},
+    {gapCode:'CONNECTOR_FAILED'},{dropRating:true}]) {
+    const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
+    const {gapCode='UPSTREAM_EMPTY',dropRating=false,...recordPatch}=patch as Record<string,unknown>;
+    const zero={asin,marketplace:'US',status:'ready',sampledReviews:0,mentionTopics:0,blocks:[],fetchedAt:NOW,...recordPatch};
+    const rating={asin,marketplace:'US',status:'ready',rating:4.6,reviewCount:12,fetchedAt:NOW};
+    await replaceDoneOutput(pool,ids,'reviews',{analysisByAsin:{[asin]:zero},ratingByAsin:{[asin]:rating}});
+    const current=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+    const next=await addJob(pool,ids,'2026-09-22T10:00:00.000Z');
+    const data={analysisByAsin:{},ratingByAsin:dropRating?{}:{[asin]:rating}};
+    const gap={state:'partial',reasonCode:gapCode,items:[{asin,causeCode:gapCode}]};
+    await pool.query("UPDATE sync_job_stage_outputs SET stage_status='partial',data_json=$2::jsonb,gap_json=$3::jsonb,content_hash=$4 WHERE job_id=$1 AND stage_id='reviews'",[next.jobId,JSON.stringify(data),JSON.stringify(gap),hash({stage:'reviews',data,gap})]);
+    await assert.rejects(store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:next.jobId,expectedCurrentVersionId:current.versionId}),/Candidate would lose verified data: reviews/,JSON.stringify(patch));
+    assert.equal((await store.readCurrent({organizationId:ids.organizationId,projectId:ids.projectId}))?.versionId,current.versionId);
+  }
+});
+
 test('new display binds missing captured price provenance and preserves immutable source rows and seven images', async () => {
   const { pool, ids, store } = await fixture();
   const asin = ASINS[0]!;

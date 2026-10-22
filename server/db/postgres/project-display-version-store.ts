@@ -363,6 +363,21 @@ function salesCoverageEvidence(value: unknown): unknown {
   return evidence;
 }
 
+function isZeroReviewShell(value: unknown, asin: string, marketplace: string): boolean {
+  const row = record(value);
+  // Legacy collectors stored confirmed zero-review metadata under analysisByAsin.
+  // Preserve all real/unknown content shapes; only this exact empty shell is not
+  // a review sample. Its original immutable display version remains available.
+  const metadata = new Set(['asin', 'marketplace', 'status', 'sampledReviews', 'mentionTopics',
+    'blocks', 'fetchedAt', 'statusMessage']);
+  return row.asin === asin && row.marketplace === marketplace && row.status === 'ready'
+    && row.sampledReviews === 0 && row.mentionTopics === 0
+    && Array.isArray(row.blocks) && row.blocks.length === 0
+    && typeof row.fetchedAt === 'string' && Number.isFinite(Date.parse(row.fetchedAt))
+    && (row.statusMessage === undefined || typeof row.statusMessage === 'string')
+    && Object.keys(row).every(key => metadata.has(key));
+}
+
 function stageData(output: DisplayStageOutput): Record<string, unknown> {
   return output.stageStatus === "missing-output" ? {} : record(output.data);
 }
@@ -442,6 +457,11 @@ function assertNoCoverageRegression(current: CurrentProjectDisplayVersion | null
         if (stage === "image_remarks" && field === "remarksByAsin") continue;
         const previous = record(stageData(current.stageOutputs[stage])[field])[asin];
         const next = record(stageData(candidate[stage])[field])[asin];
+        const reviewOutput = candidate[stage];
+        if (stage === 'reviews' && field === 'analysisByAsin' && !hasValue(next)
+          && isZeroReviewShell(previous, asin, current.marketplace)
+          && reviewOutput.stageStatus === 'partial'
+          && reviewOutput.gap?.items?.some(item => item.asin === asin && item.causeCode === 'UPSTREAM_EMPTY')) continue;
         const sales = stage === "sales_trend" && field === "trendByAsin";
         const lost = lostCoverage(sales ? salesCoverageEvidence(previous) : previous,
           sales ? salesCoverageEvidence(next) : next, `${stage}.${field}.${asin}`);
