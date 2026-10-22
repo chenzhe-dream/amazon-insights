@@ -22,6 +22,9 @@ const unavailableRemarks = [
   "图片转写服务暂时不可用，无法进行视觉分析。",
   "无法识别图片内容，转写服务暂不可用，无法进行视觉分析。",
   "图片识别与转写服务当前不可用，无法获取画面内容，未能分析展示方式与核心卖点。",
+  "当前图片无法识别，无法提取展示方式与卖点信息，需用户提供可读图片或文字描述。",
+  "当前图片无法识别，无法进行视觉分析，请提供可正常加载的图片或文字描述画面内容。",
+  "图片转写与画面识别服务不可用，无法确认可见内容，暂不能描述展示方式或核心卖点。",
   "I cannot view the image because the vision service is unavailable.",
 ];
 test('vision failure text is neither a successful provider result nor complete cached evidence', async () => {
@@ -33,21 +36,26 @@ test('vision failure text is neither a successful provider result nor complete c
   }
 });
 test('visible content with limited uncertainty remains valid image evidence', async () => {
-  const remark='白底展示三支黑色飞镖，金属镖身带环形纹路；图片无法确认具体尺寸和材质。';
-  const result=await requestImageRemark({endpoint:'https://example.test',apiKey:'secret',
-    fetchImpl:async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({remark,image_types:['产品展示'],confidence:'low'})}}]}))});
-  assert.equal(result.remark,remark);
-  assert.equal(hasCompleteImageRemarks({galleryImages:['https://images.test/a']},[{...result,imageUrl:'https://images.test/a'}]),true);
+  for (const remark of [
+    '白底展示三支黑色飞镖，金属镖身带环形纹路；图片无法确认具体尺寸和材质。',
+    '当前图片展示蓝色支架和红白靶面，图片无法确认具体尺寸和材质。',
+  ]) {
+    const result=await requestImageRemark({endpoint:'https://example.test',apiKey:'secret',
+      fetchImpl:async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({remark,image_types:['产品展示'],confidence:'low'})}}]}))});
+    assert.equal(result.remark,remark);
+    assert.equal(hasCompleteImageRemarks({galleryImages:['https://images.test/a']},[{...result,imageUrl:'https://images.test/a'}]),true);
+  }
 });
 
 test('cached false success becomes a non-retrying failure, while explicit repair may retry', () => {
   const previous={status:'ready',attemptJobId:'old-job'};
-  const invalid={remark:unavailableRemarks[0],imageUrl:'https://images.test/a'};
-  const checked=revalidateCachedImageRemark(invalid,previous);
-  assert.equal(checked.note,null);
-  assert.equal(checked.outcome.status,'connector-failed');
-  assert.equal(shouldQueueImageRemarkSlot({outcome:checked.outcome,jobId:'new-job'}),false);
-  assert.equal(shouldQueueImageRemarkSlot({outcome:checked.outcome,jobId:'new-job',force:true}),true);
+  for (const remark of unavailableRemarks) {
+    const checked=revalidateCachedImageRemark({remark,imageUrl:'https://images.test/a'},previous);
+    assert.equal(checked.note,null);
+    assert.equal(checked.outcome.status,'connector-failed');
+    assert.equal(shouldQueueImageRemarkSlot({outcome:checked.outcome,jobId:'new-job'}),false);
+    assert.equal(shouldQueueImageRemarkSlot({outcome:checked.outcome,jobId:'new-job',force:true}),true);
+  }
   const genuine={remark:'白底展示三支黑色飞镖',imageUrl:'https://images.test/a'};
   assert.deepEqual(revalidateCachedImageRemark(genuine,previous),{note:genuine,outcome:previous});
 });
