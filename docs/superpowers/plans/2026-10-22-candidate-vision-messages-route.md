@@ -17,3 +17,5 @@ Scope and authorization: the user already requested repairing alternate vision r
 
 Validation before candidate switch: 60 image regression tests pass; TypeScript check passes. US/UK/DE live samples passed first attempt; CA returned HTTP 502 once and passed one bounded retry. This establishes route usability, not full gallery or provider reliability acceptance.
 
+
+Live publication finding: same-image reanalysis with fewer classification tags was rejected by generic array-length coverage checks. Added two failing PostgreSQL regressions, then limited the exception to nonempty classification tags on usable same-URL notes. Blank/unavailable remarks, missing tags, URL mismatch and lost metadata still reject. All 32 display/retention integration tests and TypeScript pass. US/DE first image jobs need build-only recovery after the candidate switch; no source output is rewritten manually.

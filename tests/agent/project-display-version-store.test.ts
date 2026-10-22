@@ -329,6 +329,47 @@ test("a same-URL image remark cannot disappear when a newer candidate is publish
   assert.equal(next.jobId, reordered.jobId, "a fully remarked gallery may be reordered");
 });
 
+test("same-image reanalysis may reduce classification tags while retaining verified content", async () => {
+  const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
+  const url='https://example.test/reclassified-image.jpg';
+  const listing={contentByAsin:{[asin]:{status:'ready',galleryImages:[url]}}};
+  const oldNote={imageUrl:url,remark:'白底展示黑色飞镖与红色镖翼',image_types:['产品展示','结构展示','品牌形象'],confidence:'high'};
+  await replaceDoneOutput(pool,ids,'listing',listing);
+  await replaceDoneOutput(pool,ids,'image_remarks',{remarksByAsin:{[asin]:[oldNote]},outcomesByAsin:{}});
+  const current=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+  const newer=await addJob(pool,ids,'2026-09-22T10:00:00.000Z');
+  const revised={...oldNote,remark:'白色背景中排列三支黑色镖身与红色镖翼',image_types:['产品展示'],confidence:'medium'};
+  await replaceDoneOutput(pool,newer,'listing',listing);
+  await replaceDoneOutput(pool,newer,'image_remarks',{remarksByAsin:{[asin]:[revised]},outcomesByAsin:{}});
+  const published=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:newer.jobId,expectedCurrentVersionId:current.versionId});
+  assert.equal(published.jobId,newer.jobId);
+  const imageStage=published.stageOutputs.image_remarks;
+  if(imageStage.stageStatus==='missing-output') assert.fail('Reclassified image output is missing');
+  assert.deepEqual(((imageStage.data as Record<string,unknown>).remarksByAsin as Record<string,unknown[]>)[asin],[revised]);
+});
+
+test("image reclassification cannot erase tags or replace verified content with unavailable vision", async () => {
+  const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
+  const url='https://example.test/protected-image.jpg';
+  const listing={contentByAsin:{[asin]:{status:'ready',galleryImages:[url]}}};
+  const note={imageUrl:url,remark:'白底展示黑色飞镖与红色镖翼',image_types:['产品展示'],confidence:'high'};
+  await replaceDoneOutput(pool,ids,'listing',listing);
+  await replaceDoneOutput(pool,ids,'image_remarks',{remarksByAsin:{[asin]:[note]},outcomesByAsin:{}});
+  const current=await store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:ids.jobId,expectedCurrentVersionId:null});
+  for(const replacement of [
+    {...note,image_types:[]},{...note,image_types:['']},{...note,image_types:[null]},
+    {...note,image_types:undefined},{...note,remark:'图片内容无法识别，未获取到可分析的视觉信息。'},
+    {...note,remark:''},{...note,imageUrl:'https://example.test/wrong.jpg'},
+    {...note,confidence:undefined},
+  ]){
+    const newer=await addJob(pool,ids,'2026-09-22T10:00:00.000Z');
+    await replaceDoneOutput(pool,newer,'listing',listing);
+    await replaceDoneOutput(pool,newer,'image_remarks',{remarksByAsin:{[asin]:[replacement]},outcomesByAsin:{}});
+    await assert.rejects(store.publishFromCompletedJob({organizationId:ids.organizationId,projectId:ids.projectId,jobId:newer.jobId,expectedCurrentVersionId:current.versionId}),/lose verified data: image_remarks/);
+    assert.equal((await store.readCurrent({organizationId:ids.organizationId,projectId:ids.projectId}))?.versionId,current.versionId);
+  }
+});
+
 test("an unavailable-vision message is not verified coverage but real image notes stay protected", async () => {
   const {pool,ids,store}=await fixture();const asin=ASINS[0]!;
   const gallery=['https://example.test/main.jpg','https://example.test/secondary.jpg'];

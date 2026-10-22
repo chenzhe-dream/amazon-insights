@@ -400,7 +400,25 @@ function assertRemarkCoverage(current: CurrentProjectDisplayVersion,
     if (hasValue(matchedUrl) && matchedUrl !== oldUrl) {
       throw new ProjectDisplayCoverageRegressionError(`${field}[${newIndex}].imageUrl`);
     }
-    const lost = lostCoverage(oldNote, matched, `${field}[${newIndex}]`);
+    if (hasUsableImageRemark(oldNote) && !hasUsableImageRemark(matched)) {
+      throw new ProjectDisplayCoverageRegressionError(`${field}[${newIndex}].remark`);
+    }
+    // Categories describe the current interpretation of one image, not a count
+    // of retained observations. A valid reanalysis may use fewer categories.
+    const nextNote = record(matched);
+    const validTypes = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0
+      && value.every(type => typeof type === 'string' && Boolean(type.trim()));
+    const compareOld = { ...oldNote }, compareNext = { ...nextNote };
+    if (hasValue(oldNote.image_types)) {
+      if (!validTypes(nextNote.image_types)) {
+        throw new ProjectDisplayCoverageRegressionError(`${field}[${newIndex}].image_types`);
+      }
+      if (validTypes(oldNote.image_types) && hasUsableImageRemark(oldNote) && hasUsableImageRemark(nextNote)) {
+        delete compareOld.image_types;
+        delete compareNext.image_types;
+      }
+    }
+    const lost = lostCoverage(compareOld, compareNext, `${field}[${newIndex}]`);
     if (lost) throw new ProjectDisplayCoverageRegressionError(lost);
   }
 }
