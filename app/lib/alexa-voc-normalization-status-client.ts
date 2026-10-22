@@ -3,6 +3,7 @@ import {
   ManualAlexaVocListResponseSchema,
   type ManualAlexaVocRecord,
   type AlexaVocNormalizationStatusResponse,
+  type AlexaVocNormalizationStatus,
 } from "../../shared/agent-contracts";
 
 export type AlexaVocNormalizationStatusFetch = (
@@ -51,7 +52,7 @@ export type AlexaVocPollResult =
   | Readonly<{ phase: "processing" }>
   | Readonly<{ phase: "applying"; revision: string }>
   | Readonly<{ phase: "done"; record: ManualAlexaVocRecord }>
-  | Readonly<{ phase: "failure"; error: "model-output" | "schema" | "persistence" | "authorization" | "timeout" }>
+  | Readonly<{ phase: "failure"; error: NonNullable<AlexaVocNormalizationStatus["error"]> }>
   | Readonly<{ phase: "recoverable-error"; message: "状态读取暂时失败，将继续重试" }>;
 
 const recoverablePollError = Object.freeze({

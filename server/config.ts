@@ -872,7 +872,8 @@ function resolveVocProviderTransport(env: AgentEnvironment): {
   return {
     transport,
     baseUrl,
-    providerName: `openai:relay-chat-json:${sha256Hex(baseUrl)}`,
+    // Import snapshots and workers must fingerprint the same response mode.
+    providerName: `openai:relay-chat-json:${sha256Hex(baseUrl)}${env.AGENT_VOC_RELAY_RESPONSE_FORMAT === "json_object" ? ":json-object" : ""}`,
   };
 }
 

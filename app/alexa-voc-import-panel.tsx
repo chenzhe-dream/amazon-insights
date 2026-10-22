@@ -430,7 +430,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
             ) : null}
           </div>
         ) : null}
-        {normalizationStatus?.status === "failure" ? <p className="pending-box">{normalizationStatus.error === "timeout" ? VOC_QUEUE_TIMEOUT_MESSAGE : `该 ASIN 标准化失败（${normalizationStatus.error}），可重新提交重试。`}</p> : null}
+        {normalizationStatus?.status === "failure" ? <p className="pending-box">{normalizationStatus.error === "timeout" ? VOC_QUEUE_TIMEOUT_MESSAGE : normalizationStatus.error === "configuration" ? "标准化服务配置异常，原文已保存。请联系管理员修复后重试。" : `该 ASIN 标准化失败（${normalizationStatus.error}），可重新提交重试。`}</p> : null}
         {message ? (
           <div className={status === "error" ? "pending-box" : "launch-meta-row"}>{message}</div>
         ) : null}

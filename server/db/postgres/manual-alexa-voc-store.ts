@@ -223,6 +223,7 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
                 revision.revision::text AS revision,
                 newest_attempt.status AS newest_attempt_status,
                 newest_attempt.error_json ->> 'code' AS newest_attempt_error_code,
+                newest_attempt.error_json ->> 'classification' AS newest_attempt_error_classification,
                 newest_attempt.retryable AS newest_attempt_retryable,
                 newest_attempt.claim_eligible AS newest_attempt_claim_eligible
            FROM latest
@@ -322,7 +323,8 @@ export class PostgresManualAlexaVocStore implements ManualAlexaVocRepository {
           revision: status === "success" ? row.revision : null,
           error: status === "failure"
             ? terminalStatus === "failure" ? row.error_category ?? "persistence"
-              : row.newest_attempt_error_code === "QUEUE_TIMEOUT" ? "timeout" : "persistence"
+              : row.newest_attempt_error_code === "QUEUE_TIMEOUT" ? "timeout"
+              : row.newest_attempt_error_classification === "configuration" ? "configuration" : "persistence"
             : null,
         });
       }));
