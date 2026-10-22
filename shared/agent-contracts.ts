@@ -1512,7 +1512,7 @@ const JsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
 ]));
 const JsonMapSchema = z.record(z.string(), JsonValueSchema);
 export const ImageRemarkDiagnosticSchema = z.object({
-  stage: z.enum(["fetch", "http-response", "response-json", "response-output", "governance"]),
+  stage: z.enum(["image-source", "fetch", "http-response", "response-json", "response-output", "governance"]),
   httpStatus: z.number().int().min(100).max(599).nullable(),
   errorClass: z.enum(["network", "http", "invalid-json", "invalid-output", "governance"]),
   governanceCategory: z.enum(["rolling-window", "concurrency", "paused", "unavailable", "cancelled", "missing-key"]).optional(),

@@ -6,6 +6,7 @@ export const DEFAULT_IMAGE_REMARK_MODEL = "gpt-4o-mini";
 export const DEFAULT_IMAGE_REMARK_REQUEST_TIMEOUT_MS = IMAGE_REMARK_TIMEOUT_MS;
 
 const imageRemarkFailureStages = new Set([
+  "image-source",
   "fetch",
   "http-response",
   "response-json",
@@ -63,6 +64,57 @@ export function imageRemarkProtocol(env = process.env) {
   return protocol;
 }
 
+export function imageRemarkInputMode(env = process.env) {
+  const mode = env.AGENT_IMAGE_REMARK_INPUT_MODE?.trim() || "url";
+  if (!["url", "base64"].includes(mode) || (mode === "base64" && imageRemarkProtocol(env) !== "anthropic-messages")) {
+    throw new Error("Image remark input mode is unsupported for this protocol");
+  }
+  return mode;
+}
+
+// Only the public Amazon gallery origin is eligible for server-side downloads.
+// Redirects, unbounded bodies and non-JPEG payloads fail closed before model dispatch.
+async function inlineAmazonImage(fetchImpl, imageUrl, parentSignal) {
+  const maxBytes = 5 * 1024 * 1024;
+  let reader;
+  let complete = false;
+  let status = null;
+  const fail = (errorClass = "invalid-output") => new ImageRemarkRequestError({ stage: "image-source", httpStatus: status, errorClass });
+  try {
+    const url = new URL(imageUrl);
+    if (url.protocol !== "https:" || url.hostname !== "m.media-amazon.com" || url.port || url.username || url.password || url.hash || !url.pathname.startsWith("/images/I/")) throw fail();
+    const deadline = AbortSignal.timeout(20000);
+    const signal = parentSignal ? AbortSignal.any([parentSignal, deadline]) : deadline;
+    signal.throwIfAborted();
+    const response = await fetchImpl(url.toString(), { method: "GET", redirect: "error", signal });
+    status = response.status;
+    reader = response.body?.getReader();
+    if (!response.ok) throw fail("http");
+    const mediaType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (mediaType !== "image/jpeg" || declaredLength > maxBytes || !reader) throw fail();
+    const chunks = [];
+    let length = 0;
+    while (true) {
+      signal.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) { complete = true; break; }
+      length += value.byteLength;
+      if (length > maxBytes) throw fail();
+      chunks.push(value);
+    }
+    const bytes = Buffer.concat(chunks, length);
+    if (length < 3 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw fail();
+    return { type: "base64", media_type: "image/jpeg", data: bytes.toString("base64") };
+  } catch (error) {
+    if (error instanceof ImageRemarkRequestError) throw error;
+    throw fail("network");
+  } finally {
+    if (reader && !complete) await reader.cancel().catch(() => {});
+    reader?.releaseLock();
+  }
+}
+
 export function imageRemarkApiKey(env = process.env) {
   const key = env.AGENT_IMAGE_REMARK_API_KEY?.trim();
   const protocol = imageRemarkProtocol(env);
@@ -109,9 +161,14 @@ export async function requestImageRemark({
   prompt,
   imageUrl,
   protocol = "openai-chat",
+  inputMode = "url",
 }) {
   imageRemarkProtocol({ AGENT_IMAGE_REMARK_PROTOCOL: protocol });
+  imageRemarkInputMode({ AGENT_IMAGE_REMARK_PROTOCOL: protocol, AGENT_IMAGE_REMARK_INPUT_MODE: inputMode });
   const messagesProtocol = protocol === "anthropic-messages";
+  const imageSource = inputMode === "base64"
+    ? await inlineAmazonImage(fetchImpl, imageUrl, signal)
+    : { type: "url", url: imageUrl };
   let response;
   try {
     response = await fetchImpl(endpoint, {
@@ -129,7 +186,7 @@ export async function requestImageRemark({
         model,
         max_tokens: 2048,
         messages: [{ role: "user", content: [
-          { type: "image", source: { type: "url", url: imageUrl } },
+          { type: "image", source: imageSource },
           { type: "text", text: prompt },
         ] }],
       } : {
@@ -157,7 +214,7 @@ export async function requestImageRemark({
   const payload = await readImageRemarkProviderPayload(response);
   if (messagesProtocol && payload?.stop_reason !== "end_turn") throw invalidOutputError(response.status);
   const raw = messagesProtocol
-    ? payload?.content?.filter?.(block => block?.type === "text" && typeof block.text === "string")
+    ? (Array.isArray(payload?.content) ? payload.content : []).filter(block => block?.type === "text" && typeof block.text === "string")
       .map(block => block.text).join("\n")
     : payload?.choices?.[0]?.message?.content;
   if (typeof raw !== "string" || !raw.trim()) {

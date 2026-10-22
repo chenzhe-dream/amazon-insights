@@ -18,6 +18,7 @@ import {
   imageRemarkEndpoint,
   imageRemarkModel,
   imageRemarkProtocol,
+  imageRemarkInputMode,
   requestImageRemark,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
@@ -64,6 +65,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
     signal,
     model: imageRemarkModel(),
     protocol: imageRemarkProtocol(),
+    inputMode: imageRemarkInputMode(),
     prompt: `${SKILL_PROMPT}\nASIN: ${asin} · 图片${slotIndex + 1}`,
     imageUrl,
   });
@@ -85,6 +87,7 @@ export const listingImageRemarksMeta = ${JSON.stringify(
       syncCommand: "npm run image-remarks:sync",
       requiresOpenAI: "AGENT_IMAGE_REMARK_API_KEY or OPENAI_API_KEY",
       providerProtocol: imageRemarkProtocol(),
+      imageInputMode: imageRemarkInputMode(),
       model: imageRemarkModel(),
       ...extraMeta,
     },
