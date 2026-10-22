@@ -1015,7 +1015,6 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
   } = stageOutputView;
   const reviewAnalysisByAsin = useMemo(() => scopedReviewRecords(stageOutputView.reviewAnalysisByAsin, activeAsins, market), [stageOutputView.reviewAnalysisByAsin, activeAsins, market]);
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
-  const fbaGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.fba);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
     analysisScope: { organizationId: authSession.user.organizationId, projectId: resumedProjectId ?? workspacePath, marketplace: market },
     manualVocByAsin,
@@ -2195,27 +2194,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="category" />
         <CompetitorOverviewCategoryTrend products={products} market={market} categoryTrendByNode={categoryTrendByNode} />
 
-        {reviewGapReasonCode ? (
-          <StageOutputGapNotice
-            label="评论数据"
-            asins={activeAsins}
-            records={reviewAnalysisByAsin}
-            reasonCode={reviewGapReasonCode}
-            gapItems={stageOutputSnapshot.reviews && "gap" in stageOutputSnapshot.reviews ? stageOutputSnapshot.reviews.gap.items : []}
-          />
-        ) : null}
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="sales_trend" />
-        <StageOutputGapCard snapshot={stageOutputSnapshot} stage="child_sales" />
         <StageOutputGapCard snapshot={stageOutputSnapshot} stage="price_strategy" />
-        {fbaGapReasonCode ? (
-          <StageOutputGapNotice
-            label="FBA费用"
-            asins={activeAsins}
-            records={fbaFeeByAsin}
-            reasonCode={fbaGapReasonCode}
-            gapItems={stageOutputSnapshot.fba && "gap" in stageOutputSnapshot.fba ? stageOutputSnapshot.fba.gap.items : []}
-          />
-        ) : null}
         <CompetitorOverviewMatrix products={products} market={market} slugParam={slugParam} salesTrendByAsin={salesTrendByAsin} ratingByAsin={ratingByAsin} fbaFeeByAsin={fbaFeeByAsin} childSalesByAsin={childSalesByAsin} priceStrategyByAsin={priceStrategyByAsin} listingContentByAsin={listingContentByAsin} presentation="page" translationProjectId={authSession.logoutPending ? null : currentProjectId} translationVersionId={authSession.logoutPending ? null : currentDisplayVersion?.versionId ?? null} translationKey={`${runtimeSessionKey}:${currentProjectId}`} />
 
         <CompetitorOverviewHistory products={products} market={market} salesTrendByAsin={salesTrendByAsin} metric={salesView} onMetricChange={setSalesView} />

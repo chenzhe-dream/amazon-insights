@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CategoryChartDialog } from "./category-chart-dialog";
 import {
   sorftimeCategoryTrendData,
   sorftimeCategoryTrendMeta,
@@ -129,13 +130,13 @@ function CategoryMonthlySnapshotDetail({record}: {record: SorftimeCategoryTrendR
   </details>;
 }
 
-function CategoryComboChart({ series }: { series: MergedPoint[] }) {
+function CategoryComboChart({ series, expanded = false }: { series: MergedPoint[]; expanded?: boolean }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 960;
-  const height = 168;
-  const padLeft = 46;
-  const padRight = 50;
-  const padY = 16;
+  const height = expanded ? 420 : 168;
+  const padLeft = expanded ? 64 : 46;
+  const padRight = expanded ? 70 : 50;
+  const padY = expanded ? 24 : 16;
   const chartWidth = width - padLeft - padRight;
   const chartHeight = height - padY * 2;
 
@@ -144,7 +145,7 @@ function CategoryComboChart({ series }: { series: MergedPoint[] }) {
   const volMax = Math.max(...series.map(point => point.volume), 1);
   const amtMax = Math.max(...series.map(point => point.amount), 1);
   const count = series.length;
-  const barWidth = Math.min(18, (chartWidth / Math.max(count, 1)) * 0.55);
+  const barWidth = Math.min(expanded ? 28 : 18, (chartWidth / Math.max(count, 1)) * 0.55);
   const xAt = (index: number) => padLeft + (index * chartWidth) / Math.max(count - 1, 1);
   const yVol = (value: number) => padY + (1 - value / volMax) * chartHeight;
   const yAmt = (value: number) => padY + (1 - value / amtMax) * chartHeight;
@@ -283,7 +284,7 @@ function CategoryComboChart({ series }: { series: MergedPoint[] }) {
       <div className="chart-months category-trend-months">
         {tickIndexes.map(index => (
           <span key={series[index].month} style={{ left: `${(xAt(index) / width) * 100}%` }}>
-            {formatMonthLabel(series[index].month)}
+            {expanded ? series[index].month : formatMonthLabel(series[index].month)}
           </span>
         ))}
       </div>
@@ -299,13 +300,13 @@ function formatPct(value: number) {
   return `${value.toFixed(2)}%`;
 }
 
-function MonopolyTrendChart({ series }: { series: MonopolySeries }) {
+function MonopolyTrendChart({ series, expanded = false }: { series: MonopolySeries; expanded?: boolean }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const width = 960;
-  const height = 156;
-  const padLeft = 40;
-  const padRight = 18;
-  const padY = 14;
+  const height = expanded ? 420 : 156;
+  const padLeft = expanded ? 64 : 40;
+  const padRight = expanded ? 24 : 18;
+  const padY = expanded ? 24 : 14;
   const chartWidth = width - padLeft - padRight;
   const chartHeight = height - padY * 2;
 
@@ -456,7 +457,7 @@ function MonopolyTrendChart({ series }: { series: MonopolySeries }) {
       <div className="chart-months category-trend-months">
         {tickIndexes.map(index => (
           <span key={months[index]} style={{ left: `${(xAt(index) / width) * 100}%` }}>
-            {formatMonthLabel(months[index])}
+            {expanded ? months[index] : formatMonthLabel(months[index])}
           </span>
         ))}
       </div>
@@ -483,6 +484,7 @@ export function CategoryNodeTrendSection({
   const records = useMemo(() => pickCategoryRecords(products, marketplace, trendByNode), [products, marketplace, trendByNode]);
   const boundAsinCount = products.filter(product => product.asin).length;
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [expandedChart, setExpandedChart] = useState<"sales" | "monopoly" | null>(null);
 
   const activeRecord = useMemo(() => {
     if (!records.length) return null;
@@ -609,15 +611,31 @@ export function CategoryNodeTrendSection({
           </div>
           <div className="category-charts-grid">
             <div>
-              <h4 className="category-subchart-title">销量与销售额</h4>
+              <div className="category-subchart-head">
+                <h4 className="category-subchart-title">销量与销售额</h4>
+                {!snapshotNodeId ? <button type="button" className="ghost-btn category-chart-expand" aria-label="放大查看销量与销售额" aria-haspopup="dialog" onClick={() => setExpandedChart("sales")}>⛶ 放大查看</button> : null}
+              </div>
               <CategoryComboChart key={`${activeRecord.nodeId}-sales`} series={series} />
             </div>
             <div>
-              <h4 className="category-subchart-title">垄断系数趋势</h4>
+              <div className="category-subchart-head">
+                <h4 className="category-subchart-title">垄断系数趋势</h4>
+                {!snapshotNodeId ? <button type="button" className="ghost-btn category-chart-expand" aria-label="放大查看垄断系数趋势" aria-haspopup="dialog" onClick={() => setExpandedChart("monopoly")}>⛶ 放大查看</button> : null}
+              </div>
               <MonopolyTrendChart key={`${activeRecord.nodeId}-monopoly`} series={monopolySeries} />
             </div>
           </div>
           {snapshotNodeId ? <CategoryMonthlySnapshotDetail record={activeRecord}/> : null}
+          {expandedChart && !snapshotNodeId ? (
+            <CategoryChartDialog
+              key={`${activeRecord.nodeId}-${expandedChart}`}
+              title={expandedChart === "sales" ? "销量与销售额" : "垄断系数趋势"}
+              description={`${activeRecord.categoryName} · ${activeRecord.nodeId} · 悬停图表查看各月数值`}
+              onClose={() => setExpandedChart(null)}
+            >
+              {expandedChart === "sales" ? <CategoryComboChart series={series} expanded /> : <MonopolyTrendChart series={monopolySeries} expanded />}
+            </CategoryChartDialog>
+          ) : null}
         </>
       )}
     </section>

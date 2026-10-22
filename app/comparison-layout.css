@@ -1285,6 +1285,11 @@
 .sync-progress-manual-note code{font-size:8px;color:#6d5020}
 .sync-progress-foot{margin:0;padding:0 14px 10px;font-size:8px;color:#718095}
 .sync-progress-foot.error{color:#c0392b}
+.sync-stage-gaps{margin-top:6px;font-size:11px;color:#64748b;line-height:1.6}
+.sync-stage-gaps>summary{cursor:pointer;width:fit-content;color:#476484;font-size:10px}
+.sync-stage-gaps>summary:focus-visible{outline:2px solid #72adf8;outline-offset:3px;border-radius:2px}
+.sync-stage-gaps>ul{margin:6px 0 0;padding-left:18px;overflow-wrap:anywhere}
+.sync-stage-gaps>p{margin:4px 0 0}
 @media(max-width:900px){.sync-progress-row-main{grid-template-columns:1fr;gap:3px}.sync-progress-row-side{justify-content:flex-start;flex-wrap:wrap;gap:6px}}
 
 .category-node-trend-card{padding:14px 16px!important}
@@ -1310,6 +1315,29 @@
 .category-combo-axis-hint{display:flex;justify-content:space-between;margin-top:0;padding:0 6px;font-size:7px;color:#8a97a6}
 .category-trend-kpis-wide{grid-template-columns:repeat(6,minmax(0,1fr))!important}
 .category-subchart-title{margin:0 0 4px;font-size:11px;color:#34465d;font-weight:700}
+.category-subchart-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+.category-subchart-head .category-subchart-title{margin:0}
+.category-subchart-head .category-chart-expand{padding:4px 8px;font-size:11px;white-space:nowrap}
+.category-chart-dialog{box-sizing:border-box;width:min(1400px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);margin:auto;padding:24px;border:1px solid #dfe6ee;border-radius:12px;background:#fff;color:#24354a;box-shadow:0 24px 80px #14263b40;overflow:auto}
+.category-chart-dialog::backdrop{background:#172b4d88}
+.category-chart-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px}
+.category-chart-dialog-head h3{margin:0;font-size:20px}
+.category-chart-dialog-head p{margin:6px 0 0;font-size:13px;color:#66758a}
+.category-chart-dialog-head button{flex:none;font-size:13px;padding:8px 12px}
+.category-chart-dialog-scroll{overflow-x:auto;padding-bottom:8px}
+.category-chart-dialog .comparison-chart{min-width:640px}
+.category-node-trend-card .category-chart-dialog .comparison-chart svg{width:100%;height:auto;max-height:none;display:block}
+.category-chart-dialog .sales-trend-axis-label{font-size:12px;fill:#52657b}
+.category-chart-dialog .category-combo-legend{gap:24px;flex-wrap:wrap;margin-bottom:14px}
+.category-chart-dialog .category-combo-legend span{font-size:13px;color:#40536a}
+.category-chart-dialog .category-trend-months{height:30px}
+.category-chart-dialog .category-trend-months>span{font-size:12px;color:#52657b}
+.category-chart-dialog .category-combo-axis-hint,.category-chart-dialog .category-monopoly-note{font-size:12px;color:#66758a;margin-top:8px}
+.category-node-trend-card .category-chart-dialog .category-light-tooltip{width:230px;padding:12px 14px}
+.category-node-trend-card .category-chart-dialog .category-light-tooltip .chart-tooltip-title{font-size:14px}
+.category-node-trend-card .category-chart-dialog .category-light-tooltip .chart-tooltip-row{font-size:13px;padding-top:8px}
+.category-node-trend-card .category-chart-dialog .category-light-tooltip .chart-tooltip-row strong{font-size:14px}
+@media(max-width:600px){.category-chart-dialog{padding:16px}.category-chart-dialog-head{gap:8px;margin-bottom:16px}.category-chart-dialog-head h3{font-size:17px}}
 .category-charts-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;align-items:start}
 .category-monopoly-chart{margin-top:0}
 .category-monopoly-note{margin:4px 0 0;font-size:7px;color:#8a97a6}

@@ -680,6 +680,8 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
         && focusedAutomaticStages.every(stage => ["done", "skipped"].includes(stage.status)),
     };
   }, [focusStageIds, focused, job, now]);
+  const moduleGaps = job ? collectAsinModuleGaps(job.asinProgress) : [];
+  const unmatchedGaps = moduleGaps.filter(gap => !overall.rows.some(row => row.id === gap.module));
   const publicationBlocksTerminalActions = Boolean(
     job &&
     (job.status === "completed" || job.status === "completed-with-gaps") &&
@@ -815,6 +817,7 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
 
       <ul className="sync-progress-list">
         {overall.rows.map(row => {
+          const rowGaps = moduleGaps.filter(gap => gap.module === row.id);
           const color = STAGE_COLORS[row.id] ?? "#2f80ed";
           const isActive = row.mode === "automatic" && (row.status === "active" || row.id === job?.currentStageId);
           const gapTerminal = row.status === "partial" || row.status === "skipped";
@@ -851,6 +854,19 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
                   <i style={{ width: `${row.executionPercent}%` }} />
                 </div>
               ) : null}
+              {rowGaps.length ? (
+                <details key={`${job?.jobId}-${row.id}`} className="sync-stage-gaps" data-asin-module-gaps={row.id}>
+                  <summary>查看缺口（{rowGaps.length}）</summary>
+                  <ul>
+                    {rowGaps.map(gap => (
+                      <li key={`${gap.asin}-${gap.module}`}>
+                        {gap.asin}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                  {row.id === "child_sales" ? <p>未取得数据不代表销量为 0。</p> : null}
+                </details>
+              ) : null}
               {row.id === "alexa_voc" && job?.stages.find(stage => stage.id === row.id)?.manualNote && row.status === "manual" ? (
                 <p className="sync-progress-manual-note">
                   {job?.alexaVoc?.pendingAsins.length ? (
@@ -870,7 +886,7 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
       {job?.status === "completed" || job?.status === "completed-with-gaps" ? (
         <p className="sync-progress-foot">
           {job.status === "completed-with-gaps"
-            ? "同步已完成，但下方列出的 ASIN/模块存在明确缺口；基础数据仍可使用。"
+            ? "同步已完成，部分模块存在数据缺口，可展开对应模块查看；基础数据仍可使用。"
             : "同步已完成。"}
         </p>
       ) : null}
@@ -883,14 +899,17 @@ export function AsinSyncFunnel({ visibleModules, asins, marketplace, projectId =
       ) : job?.publication?.status === "applied" && ["completed", "completed-with-gaps"].includes(job.status) ? (
         <p role="status">数据已发布。</p>
       ) : null}
-      {job && collectAsinModuleGaps(job.asinProgress).length ? (
-        <div className="sync-progress-foot" data-asin-module-gaps="true">
-          {collectAsinModuleGaps(job.asinProgress).map(gap => (
-            <p key={`${gap.asin}-${gap.module}`}>
-              {gap.asin} · {gap.module === "xydc_orders" ? "西柚数据" : gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
-            </p>
-          ))}
-        </div>
+      {unmatchedGaps.length ? (
+        <details key={`${job?.jobId}-other-gaps`} className="sync-progress-foot sync-stage-gaps" data-asin-module-gaps="other">
+          <summary>其他数据缺口（{unmatchedGaps.length}）</summary>
+          <ul>
+            {unmatchedGaps.map(gap => (
+              <li key={`${gap.asin}-${gap.module}`}>
+                {gap.asin} · {gap.module === "xydc_orders" ? "西柚数据" : gap.module}：{moduleStatusLabel[gap.status]}{gap.reason ? `（${gap.reason}）` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {overall.focusReady && job?.status !== "completed" ? (
         <p className="sync-progress-foot">
