@@ -3,7 +3,8 @@ export function isUnavailableImageRemark(value) {
   if (typeof value !== "string") return false;
   const text = value.trim();
   return /^(?:抱歉[，,。\s]*)?(?:图片|图像)(?:内容)?(?:无法|不能)识别/.test(text) ||
-    /(?:图片转写|视觉识别|图像识别|vision|image transcription)\s*(?:服务|service)\s*(?:暂时|暂|currently|temporarily|is|is temporarily|is currently)?\s*(?:不可用|无法使用|unavailable)/i.test(text) ||
+    /^(?:抱歉[，,。\s]*)?(?:无法|不能|未能)识别(?:图片|图像)(?:内容|画面)/.test(text) ||
+    /(?:图片识别与转写|图片转写|视觉识别|图像识别|vision|image transcription)\s*(?:服务|service)\s*(?:当前|暂时|暂|currently|temporarily|is|is temporarily|is currently)?\s*(?:不可用|无法使用|unavailable)/i.test(text) ||
     /^(?:sorry[, .]*)?(?:I |we )?(?:cannot|can't|unable to) (?:view|see|access|analyze) (?:the |this )?image\b/i.test(text);
 }
 

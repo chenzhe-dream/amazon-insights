@@ -20,6 +20,8 @@ const unavailableRemarks = [
   "图片转写服务不可用，无法识别画面内容，无法确认产品类型、展示方式与核心卖点",
   "图片内容无法识别，未获取到可分析的视觉信息，无法描述展示方式与核心卖点。",
   "图片转写服务暂时不可用，无法进行视觉分析。",
+  "无法识别图片内容，转写服务暂不可用，无法进行视觉分析。",
+  "图片识别与转写服务当前不可用，无法获取画面内容，未能分析展示方式与核心卖点。",
   "I cannot view the image because the vision service is unavailable.",
 ];
 test('vision failure text is neither a successful provider result nor complete cached evidence', async () => {
