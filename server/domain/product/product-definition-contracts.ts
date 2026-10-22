@@ -58,7 +58,6 @@ export const ProductDefinitionInputSchema = z.strictObject({
 });
 export type ProductDefinitionInput = z.infer<typeof ProductDefinitionInputSchema>;
 
-const commercialClaimPattern = /profit(?:ability)?|\broi(?=\b|\d)|margin|company approved|project approved|盈利|利润|毛利|投资回报|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
 const approvalOrBypassPattern = /company approved|project approved|公司已批准|批准立项|无需(?:成本|专利|合规|供应链).*验证/i;
 
 export function createProductDefinitionOutputSchema(input: ProductDefinitionInput) {
@@ -169,56 +168,33 @@ export function assertProductDefinitionCapabilityLanguage(value: unknown): void 
   }
 }
 
-// These are explicit unknown/check statements, not a general negation escape.
-// Check each clause independently so a disclaimer cannot hide an adjacent claim.
-const financialSubject = '(?:利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报|ROI)';
-const financialUnknownPatterns = [
-  new RegExp(`^${financialSubject}(?:仍|尚|还)?(?:需|需要|有待|待)(?:验证|评估|测算)$`, 'i'),
-  /^(?:profitability|profit margin|profit|margin|ROI)(?: cannot be determined(?: from the available evidence)?| (?:still )?requires? (?:validation|verification|assessment))$/i,
+// Financial vocabulary is not an assertion. Detect concrete unsupported claims
+// instead of requiring every unknown/check sentence to match a whitelist.
+// This is a bounded language check; structural gates and evidence identity are
+// enforced separately and cannot be made true by narrative text.
+const financialNoun = '(?:利润率|毛利率|利润|毛利|盈利能力|盈利|投资回报率|投资回报|ROI|profit(?:ability)?(?: margin)?|margin)';
+const positiveCommercialPatterns = [
+  new RegExp(`${financialNoun}\\s*(?:(?:已经|已|很|非常|较|十分|是|为|将|可|能够|预计|预期|达到|达|约|至少|超过|is|will be)\\s*)*(?:高|强|可观|可接受|充足|稳定|可靠|达标|保证|attractive|high|strong|positive|guaranteed|profitable)`, 'i'),
+  new RegExp(`(?:高|强|稳定|保证|确保|实现|能够|可以|将会|必然|预期|预计|guaranteed|high|strong)\\s*${financialNoun}`, 'i'),
+  new RegExp(`${financialNoun}\\s*(?:(?:为|是|约|达到|达|至少|超过|预计|预期|可达|将达到|is|of|at least)\\s*)*(?:[+-]?\\d+(?:[.,]\\d+)*\\s*(?:[%％]|元|美元|欧元|英镑|加元)?|百分之[零一二三四五六七八九十百两]+)`, 'i'),
+  new RegExp(`${financialNoun}\\s*(?:已经|已)(?:验证|确认|通过)`, 'i'),
+  new RegExp(`完成${financialNoun}(?:$|[。；;])`, 'i'),
+  /\b(?:will be|is|guaranteed to be)\s+profitable\b/i,
 ];
 
-function onlyFinancialSubjects(list: string): boolean {
-  const subject = new RegExp(`^(?:成本)?${financialSubject}(?:表现|预测|保证|结论|数据|证据)?$`, 'i');
-  return list.split(/[、和与及或]+/u).every(item =>
-    !commercialClaimPattern.test(item) || subject.test(item.trim()),
+function hasUnsupportedCommercialAssertion(text: string): boolean {
+  // Approval/bypass claims are a separate invariant and must not be hidden by
+  // a financial disclaimer elsewhere in the field.
+  if (approvalOrBypassPattern.test(text)) return true;
+  return text.split(/[，,。；;！？!?\n]+/u).some(clause =>
+    positiveCommercialPatterns.some(pattern => pattern.test(clause)),
   );
 }
-
-function isFinancialUnknown(clause: string): boolean {
-  if (financialUnknownPatterns.some(pattern => pattern.test(clause))) return true;
-  const unknownPredicate = clause.match(/^(.+?)(?:(?:尚未|未)(?:评估|测算|验证|确认)|(?:(?:仍|尚|还)?(?:需|需要|待)|另行)(?:另行)?(?:验证|评估|测算)|(?:不能|无法|不可)(?:由此|据此)?(?:判断|推断|确定|确认|预测))$/u);
-  if (unknownPredicate && onlyFinancialSubjects(unknownPredicate[1])) return true;
-  const missing = clause.match(/^(?:当前|目前)?(?:缺少|缺乏|缺失|尚缺|未提供)(.+?)(?:数据|证据)$/u);
-  if (missing && onlyFinancialSubjects(missing[1])) return true;
-  const conditional = clause.match(/^(?:不得|不能|不应|不可)在(?:无|缺少)(.+?)(?:数据|证据)时(?:输出|给出|作出|做出)(.+)$/u);
-  if (conditional && onlyFinancialSubjects(conditional[1]) &&
-    onlyFinancialSubjects(conditional[2].replace(/(^|[、和与及或])(?:承诺|保证|预测)/gu, '$1'))) return true;
-  const denial = clause.match(/^(?:现有证据|现有数据|当前|目前)?(?:无法|不能|尚不能|不足以|不得|不应|不可|不)(?:(?:据|根据)(.+?))?(?:判断|推断|推定|确定|证明|确认|评估|预测|宣称|承诺|保证|认定)(.+)$/u);
-  if (denial && (!denial[1] || !commercialClaimPattern.test(denial[1])) && onlyFinancialSubjects(denial[2])) return true;
-  const inference = clause.match(/^(?:不得|不能|不应|不可)(?:把|将)(.+?)(?:当作|视为|作为)(.+)$/u);
-  return Boolean(inference && !commercialClaimPattern.test(inference[1]) && onlyFinancialSubjects(inference[2]));
-}
-
-function isFinancialValidationStep(clause: string): boolean {
-  const prerequisite = clause.match(/^(.*?)(?:需要|需)补齐(.+?)后再(.+)$/u);
-  if (prerequisite && !commercialClaimPattern.test(prerequisite[1]) &&
-    onlyFinancialSubjects(prerequisite[2]) && !commercialClaimPattern.test(prerequisite[3])) return true;
-  const step = clause.match(/^(.*?)(?:需要|仍需|尚需|有待|必须|应先|补齐|完成|建立|需|待)(.+?)(?:验证|评估|测算|模型)(?:(?:后再|和|与|及)(.+))?$/i);
-  if (!step || commercialClaimPattern.test(step[1]) || (step[3] && commercialClaimPattern.test(step[3]))) return false;
-  // Cost inputs can be BOM, freight, returns, platform fees, etc. Only the
-  // financial items must be bare unknowns: never "high margin" or "margin 30%".
-  return onlyFinancialSubjects(step[2]);
-}
-
 function commercialCapabilityIssuePaths(value: Record<string, unknown>): (string | number)[][] {
   const issues: (string | number)[][] = [];
   const visit = (item: unknown, path: (string | number)[]) => {
     if (typeof item === 'string') {
-      const invalid = approvalOrBypassPattern.test(item) || item.split(/[，,。；;！？!?\n]+/u).some(part => {
-        const clause = part.trim().replace(/[.]+$/, '');
-        return commercialClaimPattern.test(clause) &&
-          !isFinancialUnknown(clause) && !isFinancialValidationStep(clause);
-      });
+      const invalid = hasUnsupportedCommercialAssertion(item);
       if (invalid) issues.push(path);
     } else if (Array.isArray(item)) item.forEach((entry, index) => visit(entry, [...path, index]));
     else if (isRecord(item)) Object.entries(item).forEach(([key, entry]) => visit(entry, [...path, key]));

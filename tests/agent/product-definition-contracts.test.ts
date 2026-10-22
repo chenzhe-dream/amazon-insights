@@ -40,6 +40,11 @@ test('US captured commercial unknowns remain valid without implying profitabilit
     '利润仍需验证。',
     'Profitability cannot be determined from the available evidence.',
     'Profit margin requires validation.',
+    '价格档位受性价比动机支持，但缺成本、竞品价格与毛利数据，具体售价待验证。',
+    '关键词无价格、成本和利润数据，需结合竞品价格带、成本与毛利确定入门/中端定位。',
+    '供应商尚未提供毛利测算所需的成本明细。',
+    '价格决策应在成本利润评估完成之后进行。',
+    '毛利测算缺口尚未补齐。',
   ]) {
     const result = {...base, finalDefinition: [{...base.finalDefinition[0], conclusion}]};
     assert.doesNotThrow(() => assertProductDefinitionCapabilityLanguage(result), conclusion);
@@ -62,6 +67,8 @@ test('commercial disclaimers do not hide unsupported claims or approval bypasses
     '不能判断利润但盈利能力很强', '利润率30%仍需验证',
     '公司已批准立项', '无需成本验证', '当前无需合规验证即可销售', '无需成本、专利，验证就能上市',
     'Profitability cannot be determined, but ROI is 80%',
+    '利润可观', '本产品可以盈利', '预期投资回报率达到百分之三十',
+    '毛利已经验证', 'This product will be profitable.',
   ]) assert.throws(() => assertProductDefinitionCapabilityLanguage({finalDefinition:[{conclusion}]}), /commercial capability boundary/i, conclusion);
 });
 
