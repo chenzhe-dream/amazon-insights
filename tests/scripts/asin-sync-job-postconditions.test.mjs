@@ -7,6 +7,22 @@ import test from "node:test";
 import * as runner from "../../scripts/run-asin-sync-job.mjs";
 import { projectStageOutput } from "../../scripts/lib/sync-stage-output.mjs";
 
+test('image-only repair recaptures old rating identities before cached review projection', () => {
+  const asins=['B07DWKNXNY','B0D4M95CD7','B0GMYQ6B1X'];
+  const job={jobId:'new-image-repair',marketplace:'CA',asins,stages:[{id:'reviews',repairAsins:[],repairParentJobId:'parent-job'}]};
+  const ratings=Object.fromEntries(asins.map(asin=>[asin,{asin,marketplace:'CA',status:'ready',rating:4.3,reviewCount:166,fetchedAt:'2026-10-21',source:'Sorftime',provenance:{jobId:'parent-job',asin,marketplace:'CA',connector:'sorftime'}}]));
+  const calls=[];
+  const project=()=>projectStageOutput('reviews',asins,{jobId:job.jobId,marketplace:'CA',stageStatus:'partial',dataAsins:asins.slice(0,2),readExport:(_file,name)=>name==='sorftimeRatingData'?ratings:{}});
+  assert.equal(project().data.ratingByAsin[asins[2]],undefined,'old capture cannot masquerade as current-job evidence');
+  runner.refreshRepairRatingCapture(job,{ratings,run:invocation=>{calls.push(invocation);for(const asin of invocation.asins)ratings[asin].provenance.jobId=job.jobId;return {succeeded:true};}});
+  assert.equal(calls.length,1);assert.deepEqual(calls[0].asins,asins);assert.equal(calls[0].label,'rating:sync');
+  assert.equal(project().data.ratingByAsin[asins[2]].reviewCount,166);
+  runner.refreshRepairRatingCapture(job,{ratings,run:()=>assert.fail('same-job rating must be reused')});
+  runner.refreshRepairRatingCapture({...job,stages:[{id:'reviews',repairAsins:[asins[2]]}]},{ratings,run:()=>assert.fail('normal review capture owns refreshed cohorts')});
+  ratings[asins[2]].provenance.jobId='parent-job';
+  assert.throws(()=>runner.refreshRepairRatingCapture(job,{ratings,run:()=>({succeeded:false})}),/rating capture/i);
+});
+
 const {
   applyPersistedStagePostcondition,
   createSorftimeVariantInvocation,

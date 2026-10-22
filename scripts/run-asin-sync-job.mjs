@@ -34,6 +34,7 @@ import {
   isProjectableSyncStage,
   persistedStageOutputContentHash,
   projectStageOutput,
+  validIndependentReviewRating,
 } from "./lib/sync-stage-output.mjs";
 import {
   imageCandidateReadiness,
@@ -240,6 +241,30 @@ export function finalizeRepairCachedStages(jobId, job, finalize = finalizeCached
       finalize(jobId, stage.id, job.asins);
     }
   }
+}
+
+/** Cached review samples and product ratings have independent provenance.
+ * A repair must capture old ratings under its own job before freezing them;
+ * do not relabel cached provenance or weaken the publication no-data-loss gate.
+ */
+export function refreshRepairRatingCapture(job, {
+  ratings = readCachedDataExport(generatedAppDataPath(root, "sorftime-rating-data.ts"), "sorftimeRatingData"),
+  run,
+}) {
+  const stage = job.stages?.find(item => item.id === "reviews");
+  if (!Array.isArray(stage?.repairAsins) || stage.repairAsins.length) return [];
+  const asins = job.asins.filter(asin => {
+    const record = ratings?.[asin];
+    return record?.provenance?.jobId && record.provenance.jobId !== job.jobId &&
+      validIndependentReviewRating(record, asin, { marketplace: job.marketplace });
+  });
+  if (!asins.length) return [];
+  const result = run({ connector: "sorftime", stage: "reviews", asins,
+    label: "rating:sync", command: "npm", args: ["run", "rating:sync"],
+    env: { SORFTIME_ASINS: asins.join(","), SORFTIME_MARKETPLACE: job.marketplace },
+  });
+  if (!result.succeeded) throw new Error("Repair rating capture failed; verified ratings were not replaced");
+  return asins;
 }
 
 const explicitSensitiveEnvironmentKeys = new Set([
@@ -1232,6 +1257,7 @@ async function main() {
   const providers = createJobProviderController(jobId, job);
 
   try {
+    refreshRepairRatingCapture(job, { run: invocation => providers.run(invocation) });
     finalizeRepairCachedStages(jobId, job);
     if (shouldRunSyncStage(job, "queue")) {
       activateStage(jobId, "queue");
