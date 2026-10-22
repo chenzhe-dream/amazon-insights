@@ -29,7 +29,7 @@ class ImageRemarkRequestError extends Error {
 }
 
 export function imageRemarkEndpoint(env = process.env) {
-  const configured = env.OPENAI_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL;
+  const configured = env.AGENT_IMAGE_REMARK_BASE_URL?.trim() || env.OPENAI_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL;
   let base;
   try {
     base = new URL(configured);
@@ -51,12 +51,29 @@ export function imageRemarkEndpoint(env = process.env) {
     .replace(/\/{2,}/g, "/")
     .replace(/\/+$/, "")
     .replace(/(?:\/v1)+$/i, "");
-  base.pathname = `${prefix}/v1/chat/completions`;
+  base.pathname = `${prefix}/v1/${imageRemarkProtocol(env) === "anthropic-messages" ? "messages" : "chat/completions"}`;
   return base.toString();
 }
 
+export function imageRemarkProtocol(env = process.env) {
+  const protocol = env.AGENT_IMAGE_REMARK_PROTOCOL?.trim() || "openai-chat";
+  if (!["openai-chat", "anthropic-messages"].includes(protocol)) {
+    throw new Error("Image remark protocol is unsupported");
+  }
+  return protocol;
+}
+
+export function imageRemarkApiKey(env = process.env) {
+  const key = env.AGENT_IMAGE_REMARK_API_KEY?.trim();
+  const protocol = imageRemarkProtocol(env);
+  if (key) return key;
+  // An explicitly separate route must never silently receive the text model key.
+  if (env.AGENT_IMAGE_REMARK_BASE_URL?.trim() || protocol !== "openai-chat") return "";
+  return env.OPENAI_API_KEY?.trim() || "";
+}
+
 export function imageRemarkModel(env = process.env) {
-  return env.OPENAI_VISION_MODEL?.trim() || env.AGENT_VOC_MODEL?.trim() || DEFAULT_IMAGE_REMARK_MODEL;
+  return env.AGENT_IMAGE_REMARK_MODEL?.trim() || env.OPENAI_VISION_MODEL?.trim() || env.AGENT_VOC_MODEL?.trim() || DEFAULT_IMAGE_REMARK_MODEL;
 }
 
 export async function readImageRemarkProviderPayload(response) {
@@ -91,17 +108,31 @@ export async function requestImageRemark({
   model,
   prompt,
   imageUrl,
+  protocol = "openai-chat",
 }) {
+  imageRemarkProtocol({ AGENT_IMAGE_REMARK_PROTOCOL: protocol });
+  const messagesProtocol = protocol === "anthropic-messages";
   let response;
   try {
     response = await fetchImpl(endpoint, {
       method: "POST",
       signal,
-      headers: {
+      headers: messagesProtocol ? {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      } : {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
+      body: JSON.stringify(messagesProtocol ? {
+        model,
+        max_tokens: 2048,
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "url", url: imageUrl } },
+          { type: "text", text: prompt },
+        ] }],
+      } : {
         model,
         response_format: { type: "json_object" },
         messages: [
@@ -124,14 +155,19 @@ export async function requestImageRemark({
   }
 
   const payload = await readImageRemarkProviderPayload(response);
-  const raw = payload?.choices?.[0]?.message?.content;
+  if (messagesProtocol && payload?.stop_reason !== "end_turn") throw invalidOutputError(response.status);
+  const raw = messagesProtocol
+    ? payload?.content?.filter?.(block => block?.type === "text" && typeof block.text === "string")
+      .map(block => block.text).join("\n")
+    : payload?.choices?.[0]?.message?.content;
   if (typeof raw !== "string" || !raw.trim()) {
     throw invalidOutputError(response.status);
   }
 
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    const fenced = messagesProtocol ? raw.trim().match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i) : null;
+    parsed = JSON.parse(fenced ? fenced[1] : raw);
   } catch {
     throw invalidOutputError(response.status);
   }

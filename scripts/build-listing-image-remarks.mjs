@@ -12,10 +12,12 @@ import {
   shouldQueueImageRemarkSlot,
 } from "./lib/image-remark-queue.mjs";
 import { acquireInterprocessLock } from "./lib/interprocess-lock.mjs";
-import { hasOpenAiKey, loadLocalEnv } from "./lib/local-env.mjs";
+import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
+  imageRemarkApiKey,
   imageRemarkEndpoint,
   imageRemarkModel,
+  imageRemarkProtocol,
   requestImageRemark,
 } from "./lib/image-remark-request.mjs";
 import { isForceRefresh, readCachedDataExport } from "./lib/sync-cache.mjs";
@@ -53,7 +55,7 @@ function remarksComplete(asin, record, remarks, imageUrlsByAsin = {}) {
 }
 
 async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = imageRemarkApiKey();
   if (!apiKey) return null;
 
   return requestImageRemark({
@@ -61,6 +63,7 @@ async function analyzeWithOpenAI(imageUrl, slotIndex, asin, signal) {
     apiKey,
     signal,
     model: imageRemarkModel(),
+    protocol: imageRemarkProtocol(),
     prompt: `${SKILL_PROMPT}\nASIN: ${asin} · 图片${slotIndex + 1}`,
     imageUrl,
   });
@@ -80,7 +83,9 @@ export const listingImageRemarksMeta = ${JSON.stringify(
       source: "ecommerce-product-image-analysis",
       updatedAt: fetchedAt,
       syncCommand: "npm run image-remarks:sync",
-      requiresOpenAI: "OPENAI_API_KEY",
+      requiresOpenAI: "AGENT_IMAGE_REMARK_API_KEY or OPENAI_API_KEY",
+      providerProtocol: imageRemarkProtocol(),
+      model: imageRemarkModel(),
       ...extraMeta,
     },
     null,
@@ -257,12 +262,12 @@ async function main() {
   const existing = readCachedDataExport(outPath, "listingImageRemarks");
   const existingMeta = readCachedDataExport(outPath, "listingImageRemarksMeta");
   const remarks = { ...existing };
-  const hasOpenAI = hasOpenAiKey();
+  const hasOpenAI = Boolean(imageRemarkApiKey());
   const force = isForceRefresh();
   const explicitImageAction = ["refresh", "analyze"].includes(process.env.AGENT_SYNC_IMAGE_ACTION);
 
   if (!hasOpenAI) {
-    console.log("[warn] 未设置 OPENAI_API_KEY（可写在 .env / .env.local / data/openai-api-key.txt），仅保留已有备注；新 ASIN 将显示「待分析」");
+    console.log("[warn] 未设置图片分析密钥；独立视觉通道需要 AGENT_IMAGE_REMARK_API_KEY，默认通道使用 OPENAI_API_KEY。仅保留已有备注；新 ASIN 将显示「待分析」");
   }
 
   let analyzed = 0;
@@ -464,7 +469,7 @@ async function main() {
   persistCandidate();
   console.log(`[done] 新分析 ${analyzed} 张 · 跳过 ${skipped} 个 ASIN → app/listing-image-remarks.ts`);
   if (!hasOpenAI && pendingWithoutKey > 0) {
-    console.error(`[error] ${pendingAsins.length} 个 ASIN 仍缺视觉备注：未配置 OPENAI_API_KEY`);
+    console.error(`[error] ${pendingAsins.length} 个 ASIN 仍缺视觉备注：未配置图片分析密钥`);
     process.exitCode = 2;
   } else if (pendingAsins.length) {
     console.error(`[error] ${pendingAsins.length} 个 ASIN 视觉备注未完成`);
