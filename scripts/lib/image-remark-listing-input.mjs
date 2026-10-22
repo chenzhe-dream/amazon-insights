@@ -63,6 +63,16 @@ export function partitionImageListingInput(job, asins) {
   return { listingByAsin, readyAsins: asins.filter(asin => !missingAsins.includes(asin)), missingAsins };
 }
 
+/** No model call occurred: retain the dependency failure instead of claiming empty data. */
+export function missingGalleryStatuses(job, asins) {
+  return Object.fromEntries(asins.map(asin => {
+    const progress = job?.asinProgress?.[asin];
+    const status = [progress?.listing?.status, progress?.image_remarks?.status]
+      .find(value => ['connector-failed', 'timeout'].includes(value));
+    return [asin, status ?? 'upstream-empty'];
+  }));
+}
+
 /** Capturing cache evidence never authorizes analysis outside the dispatch scope. */
 export function imageRemarkCaptureScope(analysisAsins, captureAsins, options = {}) {
   if (!Array.isArray(analysisAsins) || !Array.isArray(captureAsins) ||

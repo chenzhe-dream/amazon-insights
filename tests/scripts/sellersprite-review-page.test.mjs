@@ -16,3 +16,11 @@ test("malformed review items carry schema classification without including provi
     return true;
   });
 });
+
+test("an explicit zero-result terminal page may have null items", () => {
+  const data = {items:null,total:0,pages:0,page:1,hasNextPage:false};
+  assert.deepEqual(parseSellerSpriteReviewPage({code:'OK',data}), {items:[],total:0,pages:0});
+  for (const patch of [{total:1},{pages:1},{hasNextPage:true},{total:undefined},{pages:undefined},{hasNextPage:undefined},{items:undefined},{items:'bad'}]) {
+    assert.throws(() => parseSellerSpriteReviewPage({code:'OK',data:{...data,...patch}}));
+  }
+});

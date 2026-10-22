@@ -66,7 +66,7 @@ import {
 import { runImageRemarkProcess } from "./lib/image-remark-process.mjs";
 import { captureCatalogForSyncJob } from "./lib/catalog-sync.mjs";
 import { asinsNeedingSorftimeCatalogSync } from "./lib/sorftime-catalog-fallback.mjs";
-import { listingInputFromPersistedJob, partitionImageListingInput } from "./lib/image-remark-listing-input.mjs";
+import { listingInputFromPersistedJob, partitionImageListingInput, missingGalleryStatuses } from "./lib/image-remark-listing-input.mjs";
 import { resolveRuntimeRoots } from "./lib/runtime-roots.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -1288,6 +1288,33 @@ async function main() {
       });
     }
 
+    // Capture galleries before optional trend calls can degrade the provider.
+    const listingPending = asinsForSyncStage(
+      job,
+      "listing",
+      asinsNeedingListingSync(asins).map((item) => item.asin),
+      asins,
+    );
+    if (shouldRunSyncStage(job, "listing") && listingPending.length) {
+      activateStage(jobId, "listing");
+      patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
+      const listingAsins = listingPending;
+      const listingResult = providers.run({
+        connector: "sorftime", stage: "listing", asins: listingAsins,
+        label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
+        env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
+        allowScopedEvidenceFallback: true,
+      });
+      finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
+        initialJob: job,
+        commandSucceeded: listingResult.succeeded,
+        resultStatusesByAsin: listingResult.statusesByAsin,
+        diagnostics: listingResult.diagnostics,
+      });
+    } else if (shouldRunSyncStage(job, "listing")) {
+      finalizeCachedStage(jobId, "listing", asins);
+    }
+
     const needing = asinsNeedingMcpSync(asins);
     const mcpAsins = needing.map(item => item.asin);
     const stageAsins = (stageId) => asinsForSyncStage(job, stageId, mcpAsins, asins);
@@ -1457,38 +1484,12 @@ async function main() {
       });
     }
 
-    const listingPending = asinsForSyncStage(
-      job,
-      "listing",
-      asinsNeedingListingSync(asins).map((item) => item.asin),
-      asins,
-    );
     const trafficPending = asinsForSyncStage(
       job,
       "traffic",
       asinsNeedingTrafficSync(asins).map((item) => item.asin),
       asins,
     );
-
-    if (shouldRunSyncStage(job, "listing") && listingPending.length) {
-      activateStage(jobId, "listing");
-      patchSyncJob(jobId, { message: `Sorftime Listing 主辅图 / A+ · ${listingPending.length} 个 ASIN` });
-      const listingAsins = listingPending;
-      const listingResult = providers.run({
-        connector: "sorftime", stage: "listing", asins: listingAsins,
-        label: "listing:sync", command: "npm", args: ["run", "listing:sync"],
-        env: { SORFTIME_ASINS: listingAsins.join(","), SORFTIME_MARKETPLACE: marketplace },
-        allowScopedEvidenceFallback: true,
-      });
-      finalizeProcessedStageCohort(jobId, "listing", listingAsins, asins, {
-        initialJob: job,
-        commandSucceeded: listingResult.succeeded,
-        resultStatusesByAsin: listingResult.statusesByAsin,
-        diagnostics: listingResult.diagnostics,
-      });
-    } else if (shouldRunSyncStage(job, "listing")) {
-      finalizeCachedStage(jobId, "listing", asins);
-    }
 
     const explicitImageStage = job.stages.find(stage => stage.id === "image_remarks");
     const currentImageJob = readSyncJob(jobId);
@@ -1641,10 +1642,7 @@ async function main() {
         const scopedImageStatuses = imageCandidateFile
           ? imageCandidateResultStatuses(imageRemarksData, imageListingByAsin, imageCaptureCohort)
           : readImageRemarkStatuses();
-        for (const asin of missingGalleryAsins) {
-          const previousFailure = persistedImageJob?.asinProgress?.[asin]?.image_remarks?.status;
-          if (["connector-failed", "timeout"].includes(previousFailure)) scopedImageStatuses[asin] = previousFailure;
-        }
+        Object.assign(scopedImageStatuses, missingGalleryStatuses(persistedImageJob, missingGalleryAsins));
         finalizeProcessedStageCohort(jobId, "image_remarks", imageCaptureCohort, asins, {
           initialJob: job,
           commandSucceeded: imageProcess.succeeded,

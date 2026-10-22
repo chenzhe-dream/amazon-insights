@@ -189,6 +189,11 @@ function providerOperation(method, params) {
 export function parseSellerSpriteReviewPage(payload) {
   if (payload?.code !== "OK") throw new Error(`${payload?.code ?? "MCP_SCHEMA"}: ${payload?.message ?? "SellerSprite review 请求失败"}`);
   const data = payload.data;
+  // Observed successful empty pages use null, but only explicit terminal zero
+  // metadata proves absence. Missing or contradictory fields remain errors.
+  if (data?.items === null && data.total === 0 && data.pages === 0 && data.hasNextPage === false) {
+    return { items: [], total: 0, pages: 0 };
+  }
   if (!data || typeof data !== "object" || !Array.isArray(data.items)) throw Object.assign(new Error("MCP_SCHEMA: SellerSprite review items must be an array"), {kind:"schema"});
   const total = Number.isInteger(data.total) && data.total >= 0 ? data.total : 0;
   const pages = Number.isInteger(data.pages) && data.pages >= 0 ? data.pages : 0;

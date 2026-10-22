@@ -1,9 +1,16 @@
 import { normalizeProductDetailResponse } from './sorftime-product-contract.mjs';
 import {sourceMetadata} from './sorftime-source-policy.mjs';
 import { parseSorftimeProductSpecifications, retainScopedListingSpecifications } from './sorftime-content-specifications.mjs';
+import { isExactMissingProductDetail } from './sorftime-product-availability.mjs';
 
 function normalizeListingProductResponse(raw, { asin, marketplace, operation = 'product_detail' }) {
-  const data = normalizeProductDetailResponse(raw, { asin, operation });
+  const contentFields = ['main_image', 'description', 'property', 'feature', 'product_info', 'a_plus_images'];
+  const missingContent = operation === 'product_content' && raw?.data?.asin === `#${asin}` &&
+    Object.keys(raw.data).length === contentFields.length + 1 && contentFields.every(field => Object.hasOwn(raw.data, field) && raw.data[field] === null);
+  const missing = marketplace === 'UK' && raw?.isError !== true && !Object.hasOwn(raw ?? {}, 'error') &&
+    (raw?.code === undefined || raw.code === 'OK') && (operation === 'product_detail' ? isExactMissingProductDetail(raw, asin) : missingContent);
+  // Keep placeholder numbers out of business data; content is queried independently.
+  const data = missing ? { asin, main_image: null } : normalizeProductDetailResponse(raw, { asin, operation });
   for (const container of [raw, data]) {
     if (container?.asin != null && container.asin !== asin) throw Object.assign(new TypeError('Listing product ASIN mismatch'), { kind: 'schema' });
     for (const field of ['marketplace', 'amz_site']) {
