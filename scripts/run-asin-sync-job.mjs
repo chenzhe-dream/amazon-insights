@@ -408,7 +408,7 @@ export async function publishWebBuild(
     throw publicationContentMismatch("Final persisted stage projection set is not acknowledged");
   }
   const artifactId = createArtifactId();
-  await publishArtifact({ worktree, artifactId, ...reconciliation, build, writeManifest, captureSourceIdentity: true });
+  const publishedArtifact = await publishArtifact({ worktree, artifactId, ...reconciliation, build, writeManifest, captureSourceIdentity: true });
   completeBuildStage(jobId);
   const requestedAt = now();
   const target = configuredTarget(env, worktree);
@@ -419,7 +419,12 @@ export async function publishWebBuild(
     stageContentHashes: reconciliation.stageContentHashes,
     buildCompletedAt: requestedAt,
     target,
-  }, { spoolDir });
+  }, {
+    spoolDir,
+    ...(publishedArtifact?.reservationToken ? {
+      reservation: { worktree, reservationToken: publishedArtifact.reservationToken, requireActive: true },
+    } : {}),
+  });
   patchJob(jobId, {
     publication: {
       generation: Number(readJob(jobId)?.publication?.generation ?? 0) + 1,

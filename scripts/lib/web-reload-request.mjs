@@ -376,8 +376,11 @@ export { publicationPayload as createWebReloadRequestPayload, requestId as webRe
 
 export async function writeWebReloadRequest(
   input,
-  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests") } = {},
+  { spoolDir = path.join(process.cwd(), "data", "web-reload-requests"), reservation } = {},
 ) {
+  // Transfer the temporary build reservation to the durable request under
+  // the artifact lock, using the same fence as manual and code publications.
+  if (reservation) return writeWebReloadRequestSync(input, { spoolDir, reservation });
   const payload = publicationPayload(input);
   const paths = await ensureSpool(spoolDir);
   const id = requestId(payload);
