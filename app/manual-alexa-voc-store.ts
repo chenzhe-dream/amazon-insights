@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../shared/project-marketplaces";
 import type {
   AlexaVocNormalizationStatus,
   AlexaVocNormalizationStatusResponse,
@@ -200,13 +201,14 @@ export function selectAlexaVocDraft(
 }
 
 export function createAlexaVocImportSubmission(input: Readonly<{
+  marketplace: ProjectMarketplace;
   projectId: string;
   runId: string;
   asin: string;
   text: string;
 }>) {
   const scope = { projectId: input.projectId, runId: input.runId, asin: input.asin };
-  return { scope, request: { ...scope, text: input.text } } as const;
+  return { scope, request: { ...scope, marketplace: input.marketplace, text: input.text } } as const;
 }
 
 export function isAlexaVocWriteResponseForSubmission(
@@ -235,7 +237,7 @@ export function selectCommittedAlexaVocRecordForPoll<
   );
 }
 
-export type ManualVocMarketplace = "US";
+export type ManualVocMarketplace = ProjectMarketplace;
 export type ManualVocStatus = "loading" | "ready" | "missing" | "source-error" | "protocol-conflict";
 export type OverlayRecord = ManualAlexaVocRecord & Readonly<{ sessionOrgEpoch: number }>;
 export type ManualVocOverlayState = Readonly<{
@@ -337,7 +339,7 @@ export const importSucceeded = (input: RequestContext & Readonly<{ record: Manua
 function validScope(state: ManualVocOverlayState, action: RequestContext) {
   return action.sessionOrgEpoch === state.sessionOrgEpoch
     && action.scope.organizationId === state.organizationId
-    && action.scope.marketplace === "US"
+    && ProjectMarketplaceSchema.safeParse(action.scope.marketplace).success
     && state.marketplace === action.scope.marketplace;
 }
 
@@ -465,7 +467,7 @@ export function selectEffectiveVocByAsin(
   if (
     state.organizationId !== organizationId
     || state.marketplace !== marketplace
-    || marketplace !== "US"
+    || !ProjectMarketplaceSchema.safeParse(marketplace).success
     || (projectId !== undefined && state.projectId !== projectId)
   ) return null;
   const record = state.overlay.get(manualVocOverlayKey(organizationId, marketplace, asin)) ?? null;

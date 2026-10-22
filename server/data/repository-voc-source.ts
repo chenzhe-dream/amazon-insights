@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import {
   sellerSpriteMcpReviewAnalysisData,
   sellerSpriteMcpReviewAnalysisMeta,
@@ -117,11 +118,12 @@ export class RepositoryVocSourceReader {
     const missingSources: MissingVocSource[] = [];
     const sourceBundles: VocSnapshotSourceBundle[] = [];
 
-    const alexa = marketplace === "US"
+    const alexa = ProjectMarketplaceSchema.safeParse(marketplace).success
       ? await readAlexaSource(
           this.#manualVoc,
           this.#legacySource,
           organizationId,
+          ProjectMarketplaceSchema.parse(marketplace),
           asins,
           dataCutoffAt,
           missingSources,
@@ -177,6 +179,7 @@ async function readAlexaSource(
   manualVoc: Pick<ManualAlexaVocRepository, "listAtCutoff">,
   legacySource: LegacyManualAlexaVocSourceReader,
   organizationId: string,
+  marketplace: ProjectMarketplace,
   asins: readonly string[],
   dataCutoffAt: string,
   missing: MissingVocSource[],
@@ -191,7 +194,7 @@ async function readAlexaSource(
   const dynamic = dynamicReadEnabled
     ? await manualVoc.listAtCutoff({
         organizationId,
-        marketplace: "US",
+        marketplace,
         asins,
         dataCutoffAt,
       })
@@ -199,6 +202,7 @@ async function readAlexaSource(
   const dynamicByAsin = validateDynamicRecords(
     dynamic,
     organizationId,
+    marketplace,
     asins,
     dataCutoffAt,
   );
@@ -220,7 +224,7 @@ async function readAlexaSource(
       capturedAt = latestTimestamp(capturedAt, record.capturedAt);
       continue;
     }
-    if (!legacyFallbackEnabled) {
+    if (!legacyFallbackEnabled || marketplace !== "US") {
       addMissing(missing, "alexa-voc", asin, "not-found");
       continue;
     }
@@ -270,7 +274,7 @@ async function readAlexaSource(
         sourceId: "alexa-voc",
         type: "manual-voc",
         reference: VOC_SOURCE_REFERENCES.manualAlexaVocRepository,
-        marketplace: "US",
+        marketplace,
         capturedAt,
         records,
         recordProvenance,
@@ -280,6 +284,7 @@ async function readAlexaSource(
 function validateDynamicRecords(
   records: readonly ManualAlexaVocRevision[],
   organizationId: string,
+  marketplace: ProjectMarketplace,
   asins: readonly string[],
   dataCutoffAt: string,
 ) {
@@ -298,7 +303,7 @@ function validateDynamicRecords(
       : null;
     if (
       record?.organizationId !== organizationId ||
-      record?.marketplace !== "US" ||
+      record?.marketplace !== marketplace ||
       !allowed.has(record?.asin) ||
       byAsin.has(record?.asin) ||
       !/^[1-9]\d*$/.test(record?.revision ?? "") ||

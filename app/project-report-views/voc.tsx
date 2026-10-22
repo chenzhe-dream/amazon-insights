@@ -328,9 +328,7 @@ export function ManualVocMatrixSection({products, market, effectiveVocByAsin, st
                         ? "运行时 VOC 暂不可用，请重试。"
                         : status === "protocol-conflict"
                           ? "服务器返回冲突 revision；已保留较新页面版本。"
-                          : market === "US"
-                            ? "该 ASIN 尚未录入 Manual Alexa VOC。"
-                            : "Manual Alexa VOC 当前仅支持美国站。";
+                          : "该 ASIN 尚未录入 Manual Alexa VOC。";
                     const items = record?.[dimension.key] ?? [fallback];
                     const isTableRow = Boolean(record) && (dimension.key === "audiences" || dimension.key === "scenarios" || dimension.key === "motives");
                     const cellClass = record ? "bullet-cell voc-alexa-cell" : "bullet-cell voc-limited-cell";

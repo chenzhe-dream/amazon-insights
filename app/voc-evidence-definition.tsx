@@ -56,7 +56,7 @@ export function VocEvidenceDefinition(props: Props) {
   const inventory = inventoryState?.owner === inventoryOwner ? inventoryState.value : null;
   const observation = observationState?.owner === owner ? observationState.value : null;
   const runId = runState.owner === owner ? runState.id : null;
-  const manualSupported = props.marketplace === "US";
+  const manualSupported = ProjectMarketplaceSchema.safeParse(props.marketplace).success;
   const enabled = props.enabled && !!props.projectId && !!props.baseSyncRunId && ProjectMarketplaceSchema.safeParse(props.marketplace).success && selected.length > 0;
   const acceptAutomation = useCallback((value: VocAutomationStatus, force = false) => {
     if (liveOwner.current !== owner) return;
@@ -83,7 +83,7 @@ export function VocEvidenceDefinition(props: Props) {
     }
   }, [owner, props.projectId, props.baseSyncRunId, selectedKey]);
   const register = useCallback(async (retry = false) => {
-    if (!enabled || !manualSupported || props.savedRunOnly || registration.current) return;
+    if (!enabled || props.marketplace !== "US" || props.savedRunOnly || registration.current) return;
     const controller = new AbortController(); automationGeneration.current++; registration.current = controller; setBusy({owner,controller,expiresAt:Date.now()+15000,kind:"register"}); setError(null);
     try {
       const observed = observedRunRef.current?.owner === owner ? observedRunRef.current.value : null;

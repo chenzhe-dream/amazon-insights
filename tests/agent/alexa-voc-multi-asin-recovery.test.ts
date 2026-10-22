@@ -111,7 +111,7 @@ after(async () => {
   await postgres?.close();
 });
 
-for (const adapter of ["sqlite", "postgres"] as const) {
+for (const [adapter, marketplace] of [["sqlite", "US"], ["postgres", "US"], ["postgres", "UK"], ["postgres", "DE"], ["postgres", "CA"]] as const) {
   for (const [scenario, positioningMode] of ([
     "deadline-isolation",
     "positioning-running",
@@ -140,7 +140,8 @@ for (const adapter of ["sqlite", "postgres"] as const) {
     ...(["publication", "already-committed", "deadline-isolation"].includes(scenario)
       ? [[scenario, "local-rules"] as const] : []),
   ])) {
-    test(`${adapter}/${positioningMode}: ${scenario.includes("cancelled") ? "audit-seeded" : "natural"} two-ASIN ${scenario} recovery`, async (t) => {
+    if (marketplace !== "US" && !["publication", "already-committed", "expired"].includes(scenario)) continue;
+    test(`${adapter}/${marketplace}/${positioningMode}: ${scenario.includes("cancelled") ? "audit-seeded" : "natural"} two-ASIN ${scenario} recovery`, async (t) => {
       const expired = scenario === "expired" || scenario === "pending-at-limit";
       const permanentSibling = scenario === "permanent-sibling-final-attempt";
       const transientRetry =
@@ -191,7 +192,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         id: projectId,
         organizationId,
         name: "Recovery",
-        marketplace: "US",
+        marketplace,
         // Caller order is authoritative, not the repository's lexical order.
         asins: scenario.startsWith("positioning-") ? [C, B, A] : [A, B, C],
         createdBy: actorId,
@@ -234,7 +235,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             projectId: destination.projectId,
             runId: destination.runId,
             snapshotId,
-            marketplace: "US",
+            marketplace,
             asin,
             schema: "alexa-voc-normalization-input/v1",
           },
@@ -245,7 +246,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           model: config.model,
         };
         const executionFingerprint = createAlexaVocNormalizationFingerprint({
-          marketplace: "US",
+          marketplace,
           asin,
           rawReportSha256: envelope.plaintextSha256,
           executionIdentity,
@@ -258,7 +259,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
             actorOrganizationId: organizationId,
             projectId: destination.projectId,
             runId: destination.runId,
-            marketplace: "US",
+            marketplace,
             asin,
             snapshotId,
             stageId: randomUUID(),
@@ -301,7 +302,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           assert.equal((await repository.listJobAttempts(queued[1]!.stageId)).find(job => job.id === queued[1]!.jobId)?.status, "succeeded");
           assert.deepEqual(calls, [B], "fresh B must not revive expired A or spend B's deadline on A");
           assert.deepEqual(await repository.manualAlexaVoc.listNormalizationInputSnapshots({ actorOrganizationId: organizationId, projectId, runId }), beforeInputs);
-          const saved = await repository.manualAlexaVoc.listAtCutoff({ organizationId, marketplace: "US", asins: [A, B], dataCutoffAt: cutoff });
+          const saved = await repository.manualAlexaVoc.listAtCutoff({ organizationId, marketplace, asins: [A, B], dataCutoffAt: cutoff });
           assert.deepEqual(saved.map(record => record.asin), [B]);
         } finally { await runtime.stop(); }
         return;
@@ -661,7 +662,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         const complete = snapshots.find((snapshot) => snapshot.payload.records.alexaVoc.length === 3)!;
         assert.deepEqual(complete.payload.records.alexaVoc.map((record) => record.asin), [C, B, A]);
         assert.deepEqual((await repository.manualAlexaVoc.listAtCutoff({
-          organizationId, marketplace: "US", asins: [C, B, A], dataCutoffAt: cutoff,
+          organizationId, marketplace, asins: [C, B, A], dataCutoffAt: cutoff,
         })).map((revision) => revision.revision), ["1", "1", "1"]);
         return;
       }
@@ -919,7 +920,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         );
       const revisions = await repository.manualAlexaVoc.listAtCutoff({
         organizationId,
-        marketplace: "US",
+        marketplace,
         asins: hasThird ? [A, B, C] : [A, B],
         dataCutoffAt: cutoff,
       });
@@ -964,7 +965,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           actorOrganizationId: organizationId,
           projectId,
           runId,
-          marketplace: "US",
+          marketplace,
           asins:
             hasThird ? [A, B, C] : [A, B],
         });
@@ -1027,7 +1028,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
           id: replayProjectId,
           organizationId,
           name: "Replay",
-          marketplace: "US",
+          marketplace,
           asins: [A, B, C],
           createdBy: actorId,
           createdAt: now,
@@ -1178,7 +1179,7 @@ for (const adapter of ["sqlite", "postgres"] as const) {
         );
         const finalRevisions = await repository.manualAlexaVoc.listAtCutoff({
           organizationId,
-          marketplace: "US",
+          marketplace,
           asins: [A, B],
           dataCutoffAt: cutoff,
         });

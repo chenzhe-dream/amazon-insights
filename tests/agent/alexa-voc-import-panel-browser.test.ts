@@ -80,6 +80,28 @@ function record() {
   };
 }
 
+for (const marketplace of ["US", "UK", "DE", "CA"] as const) {
+  test(`${marketplace} panel reads pending and persisted VOC with the same explicit marketplace`, async () => {
+    const { page, requests } = await openPanel(route => {
+      const url = new URL(route.request().url());
+      assert.equal(url.searchParams.get("marketplace"), marketplace);
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(
+        url.pathname.endsWith("/pending")
+          ? { records: [status("success", "7")] }
+          : { records: [{ ...record(), marketplace }] },
+      ) });
+    }, async page => {
+      await page.addInitScript(value => { window.vocMarketplace = value; }, marketplace);
+    });
+    try {
+      await page.getByText("导入成功 · PostgreSQL revision 7").waitFor({ timeout: 5_000 });
+      assert.equal(await page.evaluate(() => window.vocImported?.length), 1);
+      assert.equal(requests.some(request => request.path.startsWith("/api/alexa-voc/pending")), true);
+      assert.equal(requests.some(request => request.path.startsWith("/api/alexa-voc?")), true);
+    } finally { await page.close(); }
+  });
+}
+
 test("discovery failure is visible and retry remains GET-only before pending appears", async () => {
   let reads = 0;
   const { page, requests } = await openPanel(route => {

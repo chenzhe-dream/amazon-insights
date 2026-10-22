@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import { createHmac, randomUUID } from "node:crypto";
 import {
   mkdir,
@@ -44,7 +45,7 @@ const ProjectionManifestRecordSchema = z.strictObject({
 const ProjectionManifestSchema = z.strictObject({
   schemaVersion: z.literal(MANIFEST_SCHEMA_VERSION),
   ownerOrganizationId: OwnerIdSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   artifactGeneration: DecimalStringSchema,
   sourceHeadsHash: Sha256Schema,
   generatedAt: DateTimeSchema,
@@ -67,7 +68,7 @@ const ProjectionRecordSchema = z.strictObject({
 const ProjectionArtifactSchema = z.strictObject({
   schemaVersion: z.literal(PROJECTION_SCHEMA_VERSION),
   ownerOrganizationId: OwnerIdSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   artifactGeneration: DecimalStringSchema,
   sourceHeadsHash: Sha256Schema,
   generatedAt: DateTimeSchema,
@@ -76,7 +77,7 @@ const ProjectionArtifactSchema = z.strictObject({
     schemaVersion: z.literal(INVALIDATION_SCHEMA_VERSION),
     scope: z.strictObject({
       organizationId: OwnerIdSchema,
-      marketplace: z.literal("US"),
+      marketplace: ProjectMarketplaceSchema,
     }),
     epoch: DecimalStringSchema,
     changedAsins: z.array(AsinSchema).min(1),
@@ -88,7 +89,7 @@ type ProjectionArtifact = z.infer<typeof ProjectionArtifactSchema>;
 
 const RevisionSchema = z.strictObject({
   organizationId: OwnerIdSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   asin: AsinSchema,
   revision: DecimalStringSchema,
   contentHash: Sha256Schema,
@@ -159,7 +160,7 @@ export class ManualAlexaVocProjectionStore {
     input: ManualAlexaVocRevision,
   ): Promise<ManualAlexaVocProjectionPublishResult> {
     const record = parseRevision(input);
-    const directory = this.#projectionDirectory(record.organizationId);
+    const directory = this.#projectionDirectory(record.organizationId, record.marketplace);
     try {
       return await withProjectionLock({
         directory,
@@ -270,11 +271,11 @@ export class ManualAlexaVocProjectionStore {
     return Object.freeze({ artifactGeneration, changed: true });
   }
 
-  #projectionDirectory(organizationId: string) {
+  #projectionDirectory(organizationId: string, marketplace: ProjectMarketplace) {
     const ownerPartition = createHmac("sha256", this.#projectionPathKey)
       .update(organizationId)
       .digest("base64url");
-    return join(this.#root, ownerPartition, "US");
+    return join(this.#root, ownerPartition, marketplace);
   }
 }
 

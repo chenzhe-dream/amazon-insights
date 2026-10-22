@@ -13,14 +13,14 @@ const PROJECT_ID = "10000000-0000-4000-8000-000000000010";
 const RUN_ID = "10000000-0000-4000-8000-000000000011";
 
 test("normalization timeout remains a terminal failure after status discovery", async () => {
-  const result = await readAlexaVocNormalizationStatuses({ projectId: PROJECT_ID, runId: RUN_ID, asins: ["B099WTN2TR"], request: async () => Response.json({ records: [{ asin: "B099WTN2TR", fingerprint: "a".repeat(64), status: "failure", revision: null, error: "timeout" }] }) });
+  const result = await readAlexaVocNormalizationStatuses({ marketplace: "US", projectId: PROJECT_ID, runId: RUN_ID, asins: ["B099WTN2TR"], request: async () => Response.json({ records: [{ asin: "B099WTN2TR", fingerprint: "a".repeat(64), status: "failure", revision: null, error: "timeout" }] }) });
   assert.equal(result.records[0].status, "failure");
   assert.equal(result.records[0].error, "timeout");
 });
 
 test("hydrates normalization status for every scoped ASIN after a page remount", async () => {
   const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-  const response = await readAlexaVocNormalizationStatuses({
+  const response = await readAlexaVocNormalizationStatuses({ marketplace: "US",
     projectId: PROJECT_ID,
     runId: RUN_ID,
     asins: ["b099wtn2tr", "B0B95XH99V", "B099WTN2TR"],
@@ -51,7 +51,7 @@ test("hydrates normalization status for every scoped ASIN after a page remount",
 
 test("rejects a failed or malformed status response instead of erasing client state", async () => {
   await assert.rejects(
-    readAlexaVocNormalizationStatuses({
+    readAlexaVocNormalizationStatuses({ marketplace: "US",
       projectId: PROJECT_ID,
       runId: RUN_ID,
       asins: ["B099WTN2TR"],
@@ -61,7 +61,7 @@ test("rejects a failed or malformed status response instead of erasing client st
   );
 
   await assert.rejects(
-    readAlexaVocNormalizationStatuses({
+    readAlexaVocNormalizationStatuses({ marketplace: "US",
       projectId: PROJECT_ID,
       runId: RUN_ID,
       asins: ["B099WTN2TR"],
@@ -82,7 +82,7 @@ test("one poll reports network, non-2xx, and malformed status reads as bounded r
   ];
   for (const request of cases) {
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
-    const result = await pollAlexaVocNormalizationOnce({
+    const result = await pollAlexaVocNormalizationOnce({ marketplace: "US",
       projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: FINGERPRINT,
       request: async (input, init) => { calls.push({ input, init }); return request(); },
     });
@@ -95,7 +95,7 @@ test("one poll reports network, non-2xx, and malformed status reads as bounded r
 
 test("a successful status remains applying until the exact revision is readable", async () => {
   const calls: string[] = [];
-  const result = await pollAlexaVocNormalizationOnce({
+  const result = await pollAlexaVocNormalizationOnce({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: FINGERPRINT,
     request: async (input) => {
       calls.push(String(input));
@@ -123,7 +123,7 @@ test("poll completion requires the request-bound ASIN, fingerprint, and exact re
     },
     source: "postgres" as const, generation: null, capturedAt: "2026-09-07T08:00:00.000Z",
   };
-  const result = await pollAlexaVocNormalizationOnce({
+  const result = await pollAlexaVocNormalizationOnce({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: FINGERPRINT,
     request: async (input) => String(input).includes("/pending?")
       ? Response.json({ records: [
@@ -136,13 +136,13 @@ test("poll completion requires the request-bound ASIN, fingerprint, and exact re
 });
 
 test("a missing fingerprint remains processing and a matching terminal failure is explicit", async () => {
-  const processing = await pollAlexaVocNormalizationOnce({
+  const processing = await pollAlexaVocNormalizationOnce({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: FINGERPRINT,
     request: async () => Response.json({ records: [] }),
   });
   assert.deepEqual(processing, { phase: "processing" });
 
-  const failure = await pollAlexaVocNormalizationOnce({
+  const failure = await pollAlexaVocNormalizationOnce({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN, fingerprint: FINGERPRINT,
     request: async () => Response.json({ records: [
       { asin: ASIN, fingerprint: FINGERPRINT, status: "failure", revision: null, error: "schema" },
@@ -188,10 +188,10 @@ test("failed discovery is visible and retry remains GET-only", async () => {
     if (attempt === 1) throw new Error("offline secret");
     return Response.json({ records: [] });
   };
-  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({
+  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asins: [ASIN], request,
   }), { phase: "recoverable-error", message: "状态发现暂时失败，请重试读取" });
-  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({
+  assert.deepEqual(await discoverAlexaVocNormalizationStatuses({ marketplace: "US",
     projectId: PROJECT_ID, runId: RUN_ID, asins: [ASIN], request,
   }), { phase: "ready", response: { records: [] } });
   assert.deepEqual(calls.map(call => call.method), ["GET", "GET"]);

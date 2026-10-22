@@ -92,6 +92,7 @@ export type AgentServiceClient = (
 
 export async function getAlexaVocNormalizationStatus(input: Readonly<{
   client: AgentServiceClient;
+  marketplace: import("../../shared/project-marketplaces").ProjectMarketplace;
   projectId: string;
   runId: string;
   asins: readonly string[];
@@ -101,7 +102,7 @@ export async function getAlexaVocNormalizationStatus(input: Readonly<{
   const query = AlexaVocNormalizationStatusQuerySchema.parse({
     projectId: input.projectId,
     runId: input.runId,
-    marketplace: "US",
+    marketplace: input.marketplace,
     asins: input.asins,
   });
   const params = new URLSearchParams({ projectId: query.projectId, runId: query.runId, marketplace: query.marketplace });

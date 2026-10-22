@@ -235,8 +235,8 @@ export class AnalysisRunService {
           throw new AnalysisLifecycleError(404, "Project not found");
         }
         const selection = input.evidenceSelection;
-        if (project.marketplace !== "US" && (!selection || selection.sourcePolicy !== "manual-with-review-fallback")) {
-          throw new AnalysisLifecycleError(409, "Non-US analysis requires explicit scoped review fallback");
+        if (project.marketplace !== "US" && !selection) {
+          throw new AnalysisLifecycleError(409, "Non-US analysis requires explicit scoped evidence selection");
         }
         if (selection && input.mode !== "existing-data") throw new AnalysisLifecycleError(409, "Evidence analysis uses existing data only");
         const selectedAsins = selection ? [...selection.selectedAsins].sort() : project.asins;
@@ -264,9 +264,9 @@ export class AnalysisRunService {
           );
         }
 
-        if (project.marketplace === "US") await repository.manualAlexaVoc.lockScopes({
+        await repository.manualAlexaVoc.lockScopes({
           organizationId: project.organizationId,
-          marketplace: "US",
+          marketplace: project.marketplace as import("../../shared/project-marketplaces").ProjectMarketplace,
           asins: [...project.asins].sort(),
         });
         const dataCutoffAt = await repository.manualAlexaVoc.readDatabaseClock();

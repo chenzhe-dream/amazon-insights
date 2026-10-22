@@ -32,6 +32,7 @@ export function createAlexaVocPendingHandler(dependencies: Partial<PendingDepend
     if (!uiEnabled) return Response.json({ records: [] });
     const result = await getAlexaVocNormalizationStatus({
       client,
+      marketplace: parsed.data.marketplace,
       projectId: parsed.data.projectId,
       runId: parsed.data.runId,
       asins: parsed.data.asins,

@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema } from "../../../shared/project-marketplaces";
 import {
   AgentRunTerminalMetadataSchema,
   Sha256Schema,
@@ -110,7 +111,7 @@ export function normalizationRecoveryDisposition(
   if (!audits || !snapshots || !terminals) return invalid();
   const inputs = new Map<
     string,
-    { fingerprint: string; organizationId: unknown; asin: unknown }
+    { fingerprint: string; organizationId: unknown; marketplace: unknown; asin: unknown }
   >();
   for (const snapshot of snapshots) {
     const payload = json(snapshot.payload_json) as Row;
@@ -118,7 +119,7 @@ export function normalizationRecoveryDisposition(
       !payload ||
       snapshot.run_id !== job.runId ||
       snapshot.snapshot_kind !== "alexa-voc-normalization-input" ||
-      snapshot.marketplace !== "US"
+      !ProjectMarketplaceSchema.safeParse(snapshot.marketplace).success
     )
       return invalid();
     const fingerprint = Sha256Schema.parse(payload.executionFingerprint);
@@ -130,6 +131,7 @@ export function normalizationRecoveryDisposition(
     inputs.set(String(snapshot.id), {
       fingerprint,
       organizationId: snapshot.organization_id,
+      marketplace: snapshot.marketplace,
       asin: payload.asin,
     });
   }
@@ -228,7 +230,7 @@ export function normalizationRecoveryDisposition(
         terminal.agent_run_id !== terminal.source_audit_id ||
         terminal.source_audit_fingerprint !== input.fingerprint ||
         terminal.source_organization_id !== input.organizationId ||
-        terminal.source_marketplace !== "US" ||
+        terminal.source_marketplace !== input.marketplace ||
         !Array.isArray(sourceAsins) ||
         sourceAsins.length !== 1 ||
         sourceAsins[0] !== input.asin ||

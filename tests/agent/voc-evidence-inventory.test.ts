@@ -162,12 +162,12 @@ test("snapshot rejects a changed manifest fingerprint even with valid source rec
  const payload=structuredClone(result.fallbackCandidate!.payload);payload.evidenceSelection!.fingerprint="a".repeat(64);
  assert.equal(VocSnapshotPayloadSchema.safeParse(payload).success,false);
 });
-for (const marketplace of ["UK", "DE", "CA"] as const) test(`${marketplace} fallback freezes same-site evidence without manual vault access`, async () => {
+for (const marketplace of ["UK", "DE", "CA"] as const) test(`${marketplace} fallback freezes same-site evidence when its manual vault is empty`, async () => {
  const marketData = structuredClone(data); marketData.analysisByAsin[asin].marketplace = marketplace;
  const projection = {...output, data: marketData, contentHash: canonicalJsonSha256({stage:"reviews", data:marketData})};
  const repo = fixture(projection);
  repo.syncJobs.findById = async () => ({jobId:"job",organizationId:org,projectId,runId,marketplace,asins:[asin]});
- repo.manualAlexaVoc.listAtCutoff = async () => { throw Error("non-US manual access"); };
+ repo.manualAlexaVoc.listAtCutoff = async (...args: unknown[]) => { assert.equal((args[0] as {marketplace:string}).marketplace,marketplace); return []; };
  const result = await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace} as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
  assert.equal(result.manualCandidate,null);
  assert.equal(result.fallbackCandidate?.marketplace,marketplace);

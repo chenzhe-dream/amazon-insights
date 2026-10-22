@@ -11,6 +11,7 @@ const ASIN_B = "B0B95XH99V";
 
 declare global {
   interface Window {
+    vocMarketplace?: "US" | "UK" | "DE" | "CA";
     vocImported?: unknown[];
     switchVocScope?: (projectId: string, runId: string) => void;
     unmountVocPanel?: () => void;
@@ -38,20 +39,21 @@ const existingRecord = {
 };
 
 function Harness() {
+  const marketplace = window.vocMarketplace ?? "US";
   const [scope, setScope] = useState({ projectId: PROJECT_A, runId: RUN_A });
   useEffect(() => {
     window.switchVocScope = (projectId, runId) => setScope({ projectId, runId });
     return () => { delete window.switchVocScope; };
   }, []);
   return (
-    <AlexaVocImportPanel
+    <AlexaVocImportPanel marketplace={marketplace}
       projectId={scope.projectId}
       runId={scope.runId}
       products={[
         { asin: ASIN_A, brand: "Alpha", title: "Alpha lamp" },
         { asin: ASIN_B, brand: "Beta", title: "Beta lamp" },
       ]}
-      effectiveVocByAsin={{ [ASIN_A]: existingRecord, [ASIN_B]: null }}
+      effectiveVocByAsin={{ [ASIN_A]: { ...existingRecord, marketplace }, [ASIN_B]: null }}
       statusByAsin={{ [ASIN_A]: "ready", [ASIN_B]: "missing" }}
       onImported={record => {
         window.vocImported!.push(record);

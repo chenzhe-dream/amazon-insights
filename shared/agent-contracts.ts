@@ -1190,7 +1190,7 @@ export type GetReportResponse = z.infer<typeof GetReportResponseSchema>;
 
 export const LocalVocSubmissionRequestSchema = strictObject({
   asins: AsinListSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
 });
 export type LocalVocSubmissionRequest = z.infer<typeof LocalVocSubmissionRequestSchema>;
 export const LocalVocSubmissionResponseSchema = strictObject({
@@ -1251,7 +1251,7 @@ const RawManualAlexaVocImportSchema = strictObject({
   projectId: EntityIdSchema,
   runId: EntityIdSchema,
   asin: AsinSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   text: z.string().optional(),
   rawText: z.string().optional(),
 }).superRefine((value, context) => {
@@ -1266,7 +1266,7 @@ export type ManualAlexaVocImportRequest = z.infer<typeof ManualAlexaVocImportReq
 
 export const ManualAlexaVocRecordSchema = strictObject({
   asin: AsinSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   revision: DecimalStringSchema,
   contentHash: Sha256Schema,
   normalizedRecord: ManualAlexaVocNormalizedRecordSchema,
@@ -1299,7 +1299,7 @@ export type AlexaVocNormalizationStatus = z.infer<typeof AlexaVocNormalizationSt
 export const AlexaVocNormalizationStatusQuerySchema = strictObject({
   projectId: EntityIdSchema,
   runId: EntityIdSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
     message: "ASINs must be unique",
   }),
@@ -1324,7 +1324,7 @@ export const ManualAlexaVocWriteResponseSchema = strictObject({
 export type ManualAlexaVocWriteResponse = z.infer<typeof ManualAlexaVocWriteResponseSchema>;
 export const ManualAlexaVocListQuerySchema = strictObject({
   projectId: EntityIdSchema,
-  marketplace: z.literal("US"),
+  marketplace: ProjectMarketplaceSchema,
   asins: z.array(AsinSchema).min(1).max(10).refine((asins) => new Set(asins).size === asins.length, {
     message: "ASINs must be unique",
   }),

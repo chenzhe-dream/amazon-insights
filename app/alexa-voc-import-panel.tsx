@@ -46,6 +46,7 @@ import { AlexaVocTutorialDialog } from "./alexa-voc-tutorial-dialog";
 type ProductOption = { asin: string; brand: string; title?: string };
 
 type Props = Readonly<{
+  marketplace: import("../shared/project-marketplaces").ProjectMarketplace;
   projectId: string | null;
   runId: string | null;
   products: ProductOption[];
@@ -76,7 +77,7 @@ function waitForPoll(signal: AbortSignal) {
   });
 }
 
-export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocByAsin, statusByAsin, onImported, disabled = false, pollingEnabled = false }: Props) {
+export function AlexaVocImportPanel({ marketplace, projectId, runId, products, effectiveVocByAsin, statusByAsin, onImported, disabled = false, pollingEnabled = false }: Props) {
   const defaultAsin = products[0]?.asin ?? "";
   const [asin, setAsin] = useState(defaultAsin);
   const [draftState, setDraftState] = useState(initialAlexaVocDraftState);
@@ -109,7 +110,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
     ? selectAlexaVocStatus(normalizationState, projectId, runId, selectedAsin)
     : undefined;
   const normalizationAsinKey = products.map(product => product.asin.trim().toUpperCase()).join(",");
-  const discoveryScopeKey = `${projectId ?? ""}:${runId ?? ""}:${normalizationAsinKey}`;
+  const discoveryScopeKey = `${marketplace}:${projectId ?? ""}:${runId ?? ""}:${normalizationAsinKey}`;
   const selectedPollKey = normalizationStatus && projectId && runId
     ? `${alexaVocCardKey(projectId, runId, selectedAsin)}:${normalizationStatus.fingerprint}`
     : null;
@@ -129,6 +130,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         await deliverAlexaVocResultIfActive({
           signal: controller.signal,
           operation: () => discoverAlexaVocNormalizationStatuses({
+            marketplace,
             projectId,
             runId,
             asins: normalizationAsinKey.split(","),
@@ -153,7 +155,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
       }
     })();
     return () => controller.abort();
-  }, [discoveryRetryNonce, discoveryScopeKey, normalizationAsinKey, pollingEnabled, projectId, runId]);
+  }, [marketplace, discoveryRetryNonce, discoveryScopeKey, normalizationAsinKey, pollingEnabled, projectId, runId]);
 
   useEffect(() => {
     if (!projectId || !runId || !pollingEnabled) {
@@ -179,6 +181,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
             const shouldStop = await deliverAlexaVocResultIfActive({
               signal: controller.signal,
               operation: () => pollAlexaVocNormalizationOnce({
+                marketplace,
                 projectId,
                 runId,
                 asin: record.asin,
@@ -243,7 +246,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
         }
       })();
     }
-  }, [normalizationState, onImported, pollingEnabled, pollRetryNonce, projectId, runId]);
+  }, [marketplace, normalizationState, onImported, pollingEnabled, pollRetryNonce, projectId, runId]);
 
   useEffect(() => () => {
       for (const controller of pollControllers.current.values()) controller.abort();
@@ -253,6 +256,7 @@ export function AlexaVocImportPanel({ projectId, runId, products, effectiveVocBy
   async function handleImport() {
     if (!projectId || !runId || !selectedAsin) return;
     const submission = createAlexaVocImportSubmission({
+      marketplace,
       projectId,
       runId,
       asin: selectedAsin,

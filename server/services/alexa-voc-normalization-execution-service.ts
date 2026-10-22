@@ -1,3 +1,4 @@
+import type { ProjectMarketplace } from "../../shared/project-marketplaces";
 import {
   EntityIdSchema,
   ManualAlexaVocNormalizedRecordSchema,
@@ -60,7 +61,7 @@ export interface AlexaVocNormalizationCommitInput {
   readonly snapshotId: string;
   readonly agentRunId: string;
   readonly asin: string;
-  readonly marketplace: "US";
+  readonly marketplace: ProjectMarketplace;
   readonly contentHash: string;
   readonly rawReportSha256: string;
   readonly rawReportPlaintextBytes: number;
@@ -82,7 +83,7 @@ export interface AlexaVocNormalizationExecutionRepository {
   }>): Promise<AlexaVocNormalizationInputSnapshot | null>;
   findCommittedNormalizationByFingerprint(input: Readonly<{
     actorOrganizationId: string;
-    marketplace: "US";
+    marketplace: ProjectMarketplace;
     asin: string;
     executionFingerprint: string;
   }>): Promise<ManualAlexaVocRevision | null>;

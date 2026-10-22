@@ -1,3 +1,4 @@
+import { ProjectMarketplaceSchema, type ProjectMarketplace } from "../../shared/project-marketplaces";
 import { Buffer } from "node:buffer";
 import {
   createCipheriv,
@@ -28,7 +29,7 @@ export type AlexaVocNormalizationInputCipherIdentity = Readonly<{
   projectId: string;
   runId: string;
   snapshotId: string;
-  marketplace: "US";
+  marketplace: ProjectMarketplace;
   asin: string;
   schema: typeof AAD_SCHEMA;
 }>;
@@ -73,7 +74,7 @@ function canonicalAad(identity: AlexaVocNormalizationInputCipherIdentity): Buffe
     !validBounded(identity.projectId) ||
     !validBounded(identity.runId) ||
     !validBounded(identity.snapshotId) ||
-    identity.marketplace !== "US" ||
+    !ProjectMarketplaceSchema.safeParse(identity.marketplace).success ||
     !/^[A-Z0-9]{10}$/.test(identity.asin) ||
     identity.schema !== AAD_SCHEMA
   ) {

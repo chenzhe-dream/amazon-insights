@@ -132,7 +132,7 @@ test("drafts and the captured import request stay bound to the selected ASIN car
   });
   assert.equal(selectAlexaVocDraft(drafts, PROJECT_ID, RUN_ID, ASIN_A), "A-only report");
 
-  const submission = createAlexaVocImportSubmission({
+  const submission = createAlexaVocImportSubmission({ marketplace: "US",
     projectId: PROJECT_ID,
     runId: RUN_ID,
     asin: ASIN_B,
@@ -140,12 +140,12 @@ test("drafts and the captured import request stay bound to the selected ASIN car
   });
   assert.deepEqual(submission, {
     scope: { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B },
-    request: { projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B, text: "B-only report" },
+    request: { marketplace: "US", projectId: PROJECT_ID, runId: RUN_ID, asin: ASIN_B, text: "B-only report" },
   });
 });
 
 test("an import response can update only the ASIN captured by the submission", () => {
-  const submission = createAlexaVocImportSubmission({
+  const submission = createAlexaVocImportSubmission({ marketplace: "US",
     projectId: PROJECT_ID,
     runId: RUN_ID,
     asin: ASIN_A,

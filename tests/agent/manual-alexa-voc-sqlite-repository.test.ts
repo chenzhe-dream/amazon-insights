@@ -33,6 +33,15 @@ const ASIN = "B0AAAA0001";
 const OTHER_ASIN = "B0BBBB0002";
 const THIRD_ASIN = "B0CCCC0003";
 const CREATED_AT = "2026-08-31T08:00:00.000Z";
+test("legacy SQLite non-US evidence reads and scope locking remain empty and isolated", async () => {
+  const repository = openSqliteAgentRepository({ path: ":memory:", busyTimeoutMs: 5_000 });
+  try {
+    const scope = { organizationId: randomUUID(), marketplace: "DE" as const, asins: [ASIN] };
+    await repository.transaction(() => repository.manualAlexaVoc.lockScopes(scope));
+    assert.deepEqual(await repository.manualAlexaVoc.listCurrent(scope), []);
+    assert.deepEqual(await repository.manualAlexaVoc.listAtCutoff({ ...scope, dataCutoffAt: CREATED_AT }), []);
+  } finally { await repository.close(); }
+});
 const NORMALIZED_SCHEMA_VERSION = "alexa-voc-record/v2" as const;
 const PARSER_VERSION = "deterministic-alexa-parser/v3" as const;
 const NORMALIZATION_EXECUTION_IDENTITY = {

@@ -94,7 +94,6 @@ export function createAlexaVocImportHandler(
       return Response.json({ error: "请求内容必须是对象" }, { status: 400 });
     }
     const parsed = ManualAlexaVocImportRequestSchema.safeParse({
-      marketplace: "US",
       ...(value as Record<string, unknown>),
     });
     if (!parsed.success) {

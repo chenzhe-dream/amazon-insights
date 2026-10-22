@@ -149,7 +149,7 @@ test("import rejects non-object, exact-one violations, and oversized bodies afte
   }
 });
 
-test("GET proxy forwards only a parsed US marketplace and one to ten unique ASINs", async () => {
+test("GET proxy forwards a supported marketplace and one to ten unique ASINs", async () => {
   const calls: AgentServiceRequest[] = [];
   const handler = createAlexaVocListHandler({ client: clientWithSession(calls) });
   const response = await handler(new Request(
@@ -167,7 +167,7 @@ test("GET proxy forwards only a parsed US marketplace and one to ten unique ASIN
   assert.equal(new Headers(calls[0]?.headers).get("cookie"), COOKIE);
 
   for (const query of [
-    `projectId=${PROJECT_ID}&marketplace=CA&asins=${ASIN}`,
+    `projectId=${PROJECT_ID}&marketplace=JP&asins=${ASIN}`,
     `projectId=${PROJECT_ID}&marketplace=US&asins=${ASIN}&asins=${ASIN}`,
     `projectId=${PROJECT_ID}&marketplace=US`,
   ]) {
@@ -323,4 +323,12 @@ test("client Manual VOC paths hydrate through the scoped hook without tenant dat
     /abortManualVocRequests\(requestsRef\.current\);[\s\S]{0,300}manualVocScopeChanged\(input\.sessionIdentity, input\.organizationId, input\.marketplace, activeProjectId\)/,
   );
   assert.doesNotMatch(hookSource, /setInterval|setTimeout/);
+});
+
+test("pending proxy preserves DE rather than silently querying US", async () => {
+  const calls: AgentServiceRequest[]=[];
+  const handler=createAlexaVocPendingHandler({client:(async request=>{calls.push(request);return result(200,{records:[]});}) as AgentServiceClient});
+  const response=await handler(new Request(`${ORIGIN}/api/alexa-voc/pending?projectId=${PROJECT_ID}&runId=${RUN_ID}&marketplace=DE&asins=${ASIN}`,{headers:{cookie:COOKIE}}));
+  assert.equal(response.status,200);
+  assert.match(calls[0].path,/marketplace=DE/);
 });
