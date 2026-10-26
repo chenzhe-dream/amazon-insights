@@ -44,7 +44,7 @@ import {
   validatePersistedImageStageOutput,
 } from "./lib/image-remark-job-candidate.mjs";
 import { readCachedDataExport } from "./lib/sync-cache.mjs";
-import { selectUkReviewFallbackAsins } from "./lib/uk-review-fallback.mjs";
+import { selectReviewFallbackAsins, reviewFallbackEnabled, sellerSpriteReviewFallbackEnv } from "./lib/uk-review-fallback.mjs";
 import { loadLocalEnv } from "./lib/local-env.mjs";
 import {
   shouldBuildForSync,
@@ -1347,15 +1347,15 @@ async function main() {
         });
         const sorftimeReviewRecords = readCachedDataExport(
           generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData");
-        const fallbackAsins = selectUkReviewFallbackAsins(reviewAsins, sorftimeReviewRecords, {
+        const fallbackAsins = selectReviewFallbackAsins(reviewAsins, sorftimeReviewRecords, {
           marketplace,
-          enabled: process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1",
+          enabled: reviewFallbackEnabled(marketplace),
           attempts: [ratingResult, reviewResult],
         });
         const sellerResult = fallbackAsins.length ? providers.run({
           connector: "sellerSprite", stage: "reviews", asins: fallbackAsins,
           label: "review:sellersprite:sync", command: "npm", args: ["run", "review:sellersprite:sync"],
-          env: { SELLERSPRITE_ASINS: fallbackAsins.join(","), SELLERSPRITE_MARKETPLACE: "UK", AGENT_SYNC_MARKETPLACE: marketplace },
+          env: sellerSpriteReviewFallbackEnv(fallbackAsins, marketplace),
         }) : null;
         const reviewDiagnostics = [...ratingResult.diagnostics, ...reviewResult.diagnostics, ...(sellerResult?.diagnostics ?? [])];
         const reviewStatuses = {

@@ -12,6 +12,38 @@ function fixture(projection: unknown = output) {
  return { manualAlexaVoc: { listAtCutoff: async () => [] }, findAnalysisRun: async () => ({ id: runId, projectId, idempotencyKey: "job", idempotencyScope: `sync:${org}:${projectId}` }), syncJobs: { findById: async () => ({ jobId: "job", organizationId: org, projectId, runId, marketplace: "US", asins: [asin] }), readStageOutput: async ({ stage }: { stage: string }) => stage === "reviews" ? projection : null } };
 }
 const project = { id: projectId, organizationId: org, marketplace: "US", asins: [asin] };
+test('visible empty and unmatched observations remain gaps in downstream VOC coverage', async () => {
+ const asins=[asin,'B0C3Z8F66G','B0GY49HWVP'];
+ const primary=Object.fromEntries(asins.map(id=>[id,{asin:id,marketplace:'CA',status:'pending',terminalReason:'valid-empty',sampledReviews:0,mentionTopics:0,fetchedAt:'2026-09-09',blocks:[]} ]));
+ const secondary={
+  [asin]:{...data.analysisByAsin[asin],marketplace:'CA'},
+  [asins[1]]:primary[asins[1]],
+  [asins[2]]:{...primary[asins[2]],terminalReason:undefined,status:'ready',sampledReviews:2},
+ };
+ const stage=projectStageOutput('reviews',asins,{marketplace:'CA',sellerSpriteReviewFallback:true,stageStatus:'partial',dataAsins:[asin],updatedAt:output.updatedAt,
+  readExport:(_file:string,name:string)=>name==='sorftimeReviewAnalysisData'?primary:name==='sellerSpriteMcpReviewAnalysisData'?secondary:{}});
+ const repo=fixture(JSON.parse(JSON.stringify({...output,...stage})));
+ repo.syncJobs.findById=async()=>({jobId:'job',organizationId:org,projectId,runId,marketplace:'CA',asins});
+ const result=await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace:'CA',asins} as never,baseSyncRunId:runId,selectedAsins:asins,dataCutoffAt:now});
+ assert.equal(result.fallbackCandidate?.payload.records.sellerSpriteReviewAnalysis.length,1);
+ assert.equal(result.inventory.fallback.coverage.filter(row=>row.review).length,1);
+ assert.equal(result.inventory.fallback.coverage.filter(row=>row.primary==='missing').length,2);
+});
+for (const marketplace of ["US", "UK", "DE", "CA"]) test(`${marketplace} fallback projection reaches VOC preprocessing with exact provider evidence`, async () => {
+ const primary = { asin, marketplace, status:"pending", terminalReason:"valid-empty", sampledReviews:0, mentionTopics:0, fetchedAt:"2026-09-09", blocks:[] };
+ const secondary = { ...data.analysisByAsin[asin], marketplace };
+ const stage = projectStageOutput("reviews", [asin], { marketplace, sellerSpriteReviewFallback:true, updatedAt:output.updatedAt,
+   readExport:(_file:string,name:string)=>name==="sorftimeReviewAnalysisData"?{[asin]:primary}:name==="sellerSpriteMcpReviewAnalysisData"?{[asin]:secondary}:{} });
+ const projection = { ...output, ...stage };
+ const repo = fixture(projection);
+ repo.syncJobs.findById=async()=>({jobId:"job",organizationId:org,projectId,runId,marketplace,asins:[asin]});
+ const result = await buildVocEvidenceInventory({repository:repo as never,project:{...project,marketplace} as never,baseSyncRunId:runId,selectedAsins:[asin],dataCutoffAt:now});
+ assert.equal(result.fallbackCandidate?.payload.records.sellerSpriteReviewAnalysis.length,1);
+ assert.equal(result.fallbackCandidate?.payload.records.sorftimeReviewAnalysis.length,0);
+ const facts=preprocessVocSnapshot({...result.fallbackCandidate!,id:projectId,runId,createdAt:now});
+ assert.equal(facts.evidenceIndex.length,1);
+ assert.equal(facts.evidenceIndex[0].sourceId,"seller-sprite-review-analysis");
+});
 test("inventory is scoped, separates manual and explicit fallback, preserves keyword gap", async () => {
  const result = await buildVocEvidenceInventory({ repository: fixture() as never, project: project as never, baseSyncRunId: runId, selectedAsins: [asin], dataCutoffAt: now });
  assert.equal(result.manualCandidate, null);

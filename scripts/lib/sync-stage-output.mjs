@@ -4,7 +4,7 @@ import { generatedAppDataPath } from "./generated-app-data-path.mjs";
 
 import { readCachedDataExport } from "./sync-cache.mjs";
 import { getProjectRoot } from "./project-root.mjs";
-import { selectReviewEvidence } from "./uk-review-fallback.mjs";
+import { selectReviewEvidence, selectReviewObservation, reviewFallbackEnabled } from "./uk-review-fallback.mjs";
 
 export const PROJECTABLE_SYNC_STAGE_IDS = [
   "keywords", "reviews", "sales_trend", "fba", "listing", "category", "traffic",
@@ -71,6 +71,8 @@ export function isProjectableSyncStage(stageId) {
  * @param {{
  *   stageStatus?: "done" | "partial" | "failed";
  *   gapReasonCode?: "CONNECT_TIMEOUT" | "UPSTREAM_EMPTY" | "CONNECTOR_FAILED" | "SIF_KEYWORD_SCHEMA_INVALID" | "MCP_SCHEMA";
+ *   gapItems?: readonly { asin: string; causeCode: string }[];
+ *   dataAsins?: readonly string[];
  *   updatedAt?: string;
  *   now?: () => string;
  *   readExport?: (filePath: string, exportName: string) => unknown;
@@ -81,6 +83,7 @@ export function isProjectableSyncStage(stageId) {
  *   jobId?: string;
  *   marketplace?: string;
  *   ukSellerSpriteReviewFallback?: boolean;
+ *   sellerSpriteReviewFallback?: boolean;
  * }} options
  */
 export function projectStageOutput(stageId, asins, {
@@ -97,7 +100,10 @@ export function projectStageOutput(stageId, asins, {
   runId,
   jobId,
   marketplace = "US",
-  ukSellerSpriteReviewFallback = process.env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1",
+  ukSellerSpriteReviewFallback,
+  sellerSpriteReviewFallback = ukSellerSpriteReviewFallback === undefined
+    ? reviewFallbackEnabled(marketplace)
+    : marketplace === "UK" && ukSellerSpriteReviewFallback,
 } = {}) {
   const source = projectionSources[stageId];
   if (!source) throw new TypeError(`Stage ${stageId} cannot be projected`);
@@ -122,7 +128,7 @@ export function projectStageOutput(stageId, asins, {
     const gap = boundedGap(stageStatus, reasonCode, gapItems, requestedAsins, readyAsins);
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
-  const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData, { marketplace, ukSellerSpriteReviewFallback });
+  const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData, { marketplace, sellerSpriteReviewFallback });
   if (stageId === "keywords") {
     // Terminal empty observations remain evidence in a partial stage, without
     // promoting those ASINs into the ready cohort or removing their gaps.
@@ -134,11 +140,17 @@ export function projectStageOutput(stageId, asins, {
     }
   }
   if (stageStatus === "partial" && stageId === "reviews") {
+    const primary = readSource(source.analysis, readExport);
+    const secondary = sellerSpriteReviewFallback ? readSource(source.sellerSprite, readExport) : {};
     // A rating is product_detail evidence, independent of review sample readiness.
     // The analysis cohort and bounded review gaps continue to use readyAsins.
     const ratings = readSource(source.rating, readExport);
     for (const asin of requestedAsins) {
       if (projectedAsins.includes(asin)) continue;
+      const reviewCause = gapItems.find(item => item.asin === asin)?.causeCode ?? gapReasonCode;
+      const observation = !reviewCause || reviewCause === "UPSTREAM_EMPTY"
+        ? selectReviewObservation(asin, marketplace, primary?.[asin], secondary?.[asin], draft.updatedAt) : null;
+      if (observation) data.analysisByAsin[asin] = observation;
       const rating = ratings?.[asin];
       if (validIndependentReviewRating(rating, asin, {
         marketplace, updatedAt: draft.updatedAt, jobId, organizationId, projectId, runId,
@@ -184,7 +196,7 @@ function validTerminalKeywordEmpty(record, asin, marketplace, updatedAt) {
     record.queryWindow?.listingSearch === true;
 }
 
-function projectDoneData(stageId, source, asins, readExport, imageRemarksData, { marketplace = "US", ukSellerSpriteReviewFallback = false } = {}) {
+function projectDoneData(stageId, source, asins, readExport, imageRemarksData, { marketplace = "US", sellerSpriteReviewFallback = false } = {}) {
   if (stageId === "keywords") {
     const analysisByAsin = pickRequestedAsins(readSource(source.analysis, readExport), asins);
     const requestedKeywords = new Set(Object.values(analysisByAsin)
@@ -198,7 +210,7 @@ function projectDoneData(stageId, source, asins, readExport, imageRemarksData, {
   }
   if (stageId === "reviews") {
     const sorftime = readSource(source.analysis, readExport);
-    const sellerSprite = ukSellerSpriteReviewFallback && marketplace === "UK" ? readSource(source.sellerSprite, readExport) : {};
+    const sellerSprite = sellerSpriteReviewFallback ? readSource(source.sellerSprite, readExport) : {};
     return {
       analysisByAsin: Object.fromEntries(asins.flatMap(asin => {
         const selected = selectReviewEvidence(asin, marketplace, sorftime?.[asin], sellerSprite?.[asin]);

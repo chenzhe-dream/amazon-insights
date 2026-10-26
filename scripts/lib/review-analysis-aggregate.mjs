@@ -114,16 +114,20 @@ const lightingThemeRules = {
 
 const genericThemeRules = {
   consumerProfile: [
+    { label: "儿童使用", patterns: [/\b(?:kids?|children|child|toddlers?)\b/i], stars: "any" },
     { label: "家庭使用", patterns: [/family|household|we\s+use/i], stars: "any" },
     { label: "送礼对象", patterns: [/gift\s+for|bought\s+for/i], stars: "any" },
   ],
   scenarios: [
+    { label: "室内使用", patterns: [/\bindoor\b/i], stars: "any" },
+    { label: "平衡活动", patterns: [/\bbalance\s+board\b|\b(?:exercise|practice|training)\s+balance\b|\bwhile\s+[^.!?]{0,30}\bbalancing\b/i], stars: "any" },
+    { label: "学习间隙休息", patterns: [/\b(?:homeschooling|school|study|learning)\s+breaks?\b/i], stars: "any" },
     { label: "日常家用", patterns: [/home|house|daily|everyday/i], stars: "any" },
     { label: "礼物场景", patterns: [/gift|birthday|christmas|holiday/i], stars: "any" },
   ],
   unmet: [
     { label: "品控改进", patterns: [/quality\s+control|missing\s+part|defect|qc/i], stars: "negative" },
-    { label: "耐用性", patterns: [/not\s+durable|broke|fell\s+apart|cheap/i], stars: "negative" },
+    { label: "耐用性", patterns: [/not\s+durable|\bbroke\b|fell\s+apart/i], stars: "negative" },
   ],
   positives: [
     { label: "安装便捷", patterns: [/easy\s+assembl|quick\s+assembl|simple\s+assembl/i], stars: "positive" },

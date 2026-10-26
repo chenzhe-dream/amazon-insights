@@ -25,3 +25,10 @@ test("SellerSprite fallback is attributed by provider in the review UI", () => {
   assert.doesNotMatch(reviewEvidenceText(seller), /Customers Say/);
   assert.match(reviewEmptyMessage(seller), /8.*本维度暂无匹配主题/);
 });
+
+test('valid empty fallback names the actual provider and leaves an explicit supplementation gap', () => {
+  const record = {...base, sourceProvider:'sellerSprite' as const, status:'pending' as const, sampledReviews:0, terminalReason:'valid-empty' as const};
+  assert.match(reviewEmptyMessage(record), /卖家精灵.*0 条.*待补充/);
+  assert.match(reviewEmptyMessage(record), /不代表商品没有评论/);
+  assert.doesNotMatch(reviewEmptyMessage(record), /Sorftime/);
+});

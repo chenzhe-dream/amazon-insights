@@ -17,7 +17,7 @@ type StageOutputGapEntry =
 type Props = Readonly<{
   label: "评论数据" | "FBA费用";
   asins: readonly string[];
-  records: Readonly<Record<string, Readonly<{ status?: unknown }> | undefined>>;
+  records: Readonly<Record<string, Readonly<{ status?: unknown; sampledReviews?: unknown }> | undefined>>;
   reasonCode: StageOutputGapReasonCode;
   gapItems?: readonly { asin: string; causeCode: StageOutputGapReasonCode }[];
 }>;
@@ -37,14 +37,24 @@ export function stageOutputGapReasonCode(entry: StageOutputGapEntry | undefined)
 }
 
 export function StageOutputGapNotice({ label, asins, records, reasonCode, gapItems = [] }: Props) {
-  const ready = asins.filter(asin => records[asin]?.status === "ready");
-  const missing = asins.filter(asin => records[asin]?.status !== "ready");
+  const causes = new Map(gapItems.map(item => [item.asin, item.causeCode]));
+  const missing = asins.filter(asin => causes.has(asin) || records[asin]?.status !== "ready");
+  const readyCount = asins.length - missing.length;
   if (!missing.length) return null;
+  const describe = (asin: string) => {
+    const cause = causes.get(asin) ?? reasonCode;
+    const samples = records[asin]?.sampledReviews;
+    if (label === "评论数据" && cause === "UPSTREAM_EMPTY" &&
+        typeof samples === "number" && Number.isInteger(samples) && samples > 0) {
+      return "已有评论样本，暂无可用分析主题";
+    }
+    return reasonCopy[cause];
+  };
   return (
     <p className="stage-output-gap-notice" role="status">
-      <strong>{`${label} ${ready.length}/${asins.length}`}</strong>
+      <strong>{`${label} ${readyCount}/${asins.length}`}</strong>
       <span>{gapItems.length
-        ? `；${missing.map(asin => `${asin}：${reasonCopy[gapItems.find(item => item.asin === asin)?.causeCode ?? reasonCode]}`).join("；")}`
+        ? `；${missing.map(asin => `${asin}：${describe(asin)}`).join("；")}`
         : `；${missing.join("、")} ${reasonCopy[reasonCode]}`}</span>
     </p>
   );

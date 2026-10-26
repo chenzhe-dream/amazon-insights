@@ -99,3 +99,25 @@ test("mixed ASIN failures use individual causes instead of labelling the entire 
   assert.match(html, /B000000001：连接超时/);
   assert.match(html, /B000000002：连接失败/);
 });
+
+test("saved review observations do not hide authoritative analysis gaps", () => {
+  const html = JSON.stringify(StageOutputGapNotice({ label: "评论数据",
+    asins: ["B000000001", "B000000002"],
+    records: { B000000001: { status: "ready" }, B000000002: { status: "ready", sampledReviews: 5 } },
+    reasonCode: "UPSTREAM_EMPTY",
+    gapItems: [{ asin: "B000000002", causeCode: "UPSTREAM_EMPTY" }, { asin: "B0OTHER001", causeCode: "CONNECT_TIMEOUT" }],
+  }));
+  assert.match(html, /评论数据 1\/2/);
+  assert.match(html, /B000000002：已有评论样本，暂无可用分析主题/);
+  assert.doesNotMatch(html, /上游暂无记录|B0OTHER001/);
+});
+
+test("a current connector failure still outranks an older review observation", () => {
+  const html = JSON.stringify(StageOutputGapNotice({ label: "评论数据", asins: ["B000000001"],
+    records: { B000000001: { status: "ready", sampledReviews: 5 } }, reasonCode: "CONNECT_TIMEOUT",
+    gapItems: [{ asin: "B000000001", causeCode: "CONNECT_TIMEOUT" }],
+  }));
+  assert.match(html, /评论数据 0\/1/);
+  assert.match(html, /B000000001：连接超时/);
+  assert.doesNotMatch(html, /暂无可用分析主题/);
+});

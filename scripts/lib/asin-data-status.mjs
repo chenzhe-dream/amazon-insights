@@ -5,7 +5,7 @@ import { IMAGE_REMARK_ESTIMATED_SECONDS_PER_IMAGE } from "./image-remark-policy.
 import { getProjectRoot } from "./project-root.mjs";
 import { readCachedDataExport, readCachedArrayExport, hasCompleteKeywordRecord, hasCompleteReviewRecord } from "./sync-cache.mjs";
 import { positiveMoneyOrNull, hasCatalogRatingReviewConflict } from "./commerce-data-validity.mjs";
-import { selectReviewEvidence } from "./uk-review-fallback.mjs";
+import { selectReviewEvidence, reviewFallbackEnabled } from "./uk-review-fallback.mjs";
 import { hasUsableImageRemark } from "./image-remark-validity.mjs";
 
 const root = getProjectRoot();
@@ -139,11 +139,12 @@ export function readAsinStatusSources(scopeEnv) {
   const paths = sourcePaths(scopeEnv);
   const env = scopeEnv ?? process.env;
   const sorftimeReviews = readCachedDataExport(paths.reviews, "sorftimeReviewAnalysisData");
-  const sellerSpriteReviews = env.AGENT_SYNC_MARKETPLACE === "UK" && env.AGENT_UK_SELLERSPRITE_REVIEW_FALLBACK === "1"
+  const marketplace = env.AGENT_SYNC_MARKETPLACE ?? "US";
+  const sellerSpriteReviews = reviewFallbackEnabled(marketplace, env)
     ? readCachedDataExport(paths.sellerSpriteReviews, "sellerSpriteMcpReviewAnalysisData") : {};
   const reviews = { ...sorftimeReviews };
   for (const asin of Object.keys(sellerSpriteReviews)) {
-    const selected = selectReviewEvidence(asin, "UK", sorftimeReviews[asin], sellerSpriteReviews[asin]);
+    const selected = selectReviewEvidence(asin, marketplace, sorftimeReviews[asin], sellerSpriteReviews[asin]);
     if (selected?.sourceProvider === "sellerSprite") reviews[asin] = selected;
   }
   const imageRemarksMeta = readCachedDataExport(paths.imageRemarks, "listingImageRemarksMeta");
