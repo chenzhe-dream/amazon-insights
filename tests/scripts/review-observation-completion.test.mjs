@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { buildReviewAnalysisFromRecords } from '../../scripts/lib/review-analysis-aggregate.mjs';
 import { projectStageOutput } from '../../scripts/lib/sync-stage-output.mjs';
 import { hasCompleteReviewRecord } from '../../scripts/lib/sync-cache.mjs';
+import { projectFinalStageHashes } from '../../scripts/run-asin-sync-job.mjs';
 
 const asin = 'B0GY49HWVP';
 const empty = market => ({ asin, marketplace: market, status: 'pending', terminalReason: 'valid-empty', sampledReviews: 0, mentionTopics: 0, fetchedAt: '2026-10-26', blocks: [] });
@@ -12,6 +13,19 @@ const projection = (market, primary, secondary, enabled = true) => projectStageO
 });
 
 for (const market of ['US', 'UK', 'DE', 'CA']) {
+  test(`${market}: final publication retains empty and unclassified observations without promoting readiness`, () => {
+    for (const secondary of [empty(market), {...empty(market), status:'ready', terminalReason:undefined, sampledReviews:1}]) {
+      const output = projection(market, empty(market), secondary);
+      const job = {jobId:'review-observation-publication', jobVersion:1, marketplace:market, asins:[asin],
+        stages:[{id:'reviews',status:'partial'}], outputs:[output]};
+      const replay = (stage, asins, options) => projectStageOutput(stage,asins,{...options,sellerSpriteReviewFallback:true,
+        readExport:(_file,name)=>name==='sorftimeReviewAnalysisData'?{[asin]:empty(market)}:name==='sellerSpriteMcpReviewAnalysisData'?{[asin]:secondary}:{}});
+      assert.deepEqual(projectFinalStageHashes(job.jobId,job,replay),{reviews:output.contentHash});
+      const changed = {...secondary, sampledReviews:secondary.sampledReviews+1, status:'ready'};
+      assert.throws(()=>projectFinalStageHashes(job.jobId,job,(stage,asins,options)=>projectStageOutput(stage,asins,{...options,sellerSpriteReviewFallback:true,
+        readExport:(_file,name)=>name==='sorftimeReviewAnalysisData'?{[asin]:empty(market)}:name==='sellerSpriteMcpReviewAnalysisData'?{[asin]:changed}:{}})),/content differs from its source/);
+    }
+  });
   test(`${market}: samples without matched themes remain visible evidence, not completed analysis`, () => {
     const secondary = {...empty(market), status: 'ready', terminalReason: undefined, sampledReviews: 1};
     const output = projection(market, empty(market), secondary);

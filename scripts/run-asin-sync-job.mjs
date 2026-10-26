@@ -735,13 +735,15 @@ function publicationContentMismatch(message) {
   return error;
 }
 
-function persistedDataAsins(stageId, data) {
+function persistedDataAsins(stageId, data, gap) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return [];
   const keyed = (...keys) => keys.flatMap(key => Object.keys(data[key] ?? {}));
   if (stageId === "keywords") return keyed("analysisByAsin").filter(asin =>
     data.analysisByAsin[asin]?.status === "ready");
-  // Ratings do not determine review readiness or remove bounded sample gaps.
-  if (stageId === "reviews") return keyed("analysisByAsin");
+  // Retained empty/unclassified observations and ratings do not establish
+  // theme readiness. Reconciliation must use the original ready cohort.
+  if (stageId === "reviews") return keyed("analysisByAsin").filter(asin =>
+    !(gap?.items ?? []).some(item => item.asin === asin));
   // Incomplete observation records are retained as evidence, not ready ASINs.
   if (stageId === "sales_trend") return keyed("trendByAsin").filter(asin =>
     !["empty", "error"].includes(data.trendByAsin[asin]?.status));
@@ -799,7 +801,7 @@ export function projectFinalStageHashes(jobId, job, projectOutput) {
         stageStatus: persisted.stageStatus,
         gapReasonCode: persisted.gap?.reasonCode,
         gapItems: persisted.gap?.items ?? [],
-        ...(persisted.stageStatus === "partial" ? { dataAsins: persistedDataAsins(stageId, persisted.data) } : {}),
+        ...(persisted.stageStatus === "partial" ? { dataAsins: persistedDataAsins(stageId, persisted.data, persisted.gap) } : {}),
         updatedAt: persisted.updatedAt,
       });
     } catch {
