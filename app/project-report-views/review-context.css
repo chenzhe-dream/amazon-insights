@@ -1,0 +1,13 @@
+.review-context-card { padding: 20px; }
+.review-context-table { min-width: 950px; width: 100%; }
+.review-context-table th:first-child { width: 130px; }
+.review-context-table td { padding: 12px; vertical-align: top; line-height: 1.65; }
+.review-context-table td small { display: block; margin-top: 7px; color: #64748b; overflow-wrap: anywhere; }
+.review-context-table a, .review-reference-product a { color: #2563eb; }
+.review-reference-notice { padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #92400e; line-height: 1.6; }
+.review-reference-grid { display: grid; gap: 12px; margin-top: 14px; }
+.review-reference-product { border: 1px solid #dbe4ef; border-radius: 8px; padding: 14px; }
+.review-reference-product summary { cursor: pointer; color: #334155; line-height: 1.7; }
+.review-reference-product article { border-top: 1px solid #e2e8f0; margin-top: 14px; padding-top: 12px; }
+.review-reference-product p, .review-reference-product small { display: block; color: #64748b; line-height: 1.6; }
+.review-reference-product blockquote { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid #cbd5e1; padding: 8px 14px; margin: 12px 0; line-height: 1.7; }

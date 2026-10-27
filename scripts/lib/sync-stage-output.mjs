@@ -20,6 +20,7 @@ const projectionSources = {
   reviews: {
     analysis: [generatedAppDataPath(root, "sorftime-review-analysis-data.ts"), "sorftimeReviewAnalysisData"],
     sellerSprite: [generatedAppDataPath(root, "seller-sprite-mcp-review-analysis-data.ts"), "sellerSpriteMcpReviewAnalysisData"],
+    context: [generatedAppDataPath(root, "review-context-data.ts"), "reviewContextData"],
     rating: [generatedAppDataPath(root, "sorftime-rating-data.ts"), "sorftimeRatingData"],
   },
   sales_trend: {
@@ -129,6 +130,16 @@ export function projectStageOutput(stageId, asins, {
     return { ...draft, gap, contentHash: hashCanonical({ stage: stageId, gap }) };
   }
   const data = projectDoneData(stageId, source, projectedAsins, readExport, imageRemarksData, { marketplace, sellerSpriteReviewFallback });
+  if (stageId === 'reviews' && organizationId && projectId) {
+    const observations = readSource(source.context, readExport);
+    const contextByAsin = Object.fromEntries(requestedAsins.flatMap(asin => {
+      const r = observations?.[asin];
+      return r?.asin === asin && r.marketplace === marketplace && r.organizationId === organizationId && r.projectId === projectId &&
+        Date.parse(r.page?.checkedAt) <= Date.parse(draft.updatedAt) ? [[asin, r]] : [];
+    }));
+    // Supplemental evidence never changes readyAsins, local rows, or denominators.
+    if (Object.keys(contextByAsin).length) data.contextByAsin = contextByAsin;
+  }
   if (stageId === "keywords") {
     // Terminal empty observations remain evidence in a partial stage, without
     // promoting those ASINs into the ready cohort or removing their gaps.

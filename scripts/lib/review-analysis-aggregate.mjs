@@ -1,5 +1,6 @@
 import { detectProductFamily } from "./product-family.mjs";
 import { translateReviewReason } from "./review-label-zh.mjs";
+import { germanReviewMatches, isGermanGenericPraise } from "./german-review-themes.mjs";
 
 const blockLabels = {
   consumerProfile: "消费者画像",
@@ -197,7 +198,7 @@ function snippet(text, pattern, max = 140) {
   return text.slice(start, start + max).trim();
 }
 
-function aggregateBlock(reviews, key, family, limit = 5) {
+function aggregateBlock(reviews, key, family, marketplace, limit = 5) {
   const rules = themeRulesFor(family)[key] ?? [];
   const total = reviews.length || 1;
   const hits = new Map();
@@ -206,16 +207,23 @@ function aggregateBlock(reviews, key, family, limit = 5) {
     const bucket = starBucket(review.star);
     const text = reviewText(review);
     if (!text) return;
+    const reviewHits = new Map();
 
     rules.forEach(rule => {
       if (rule.stars === "positive" && bucket !== "positive") return;
       if (rule.stars === "negative" && bucket !== "negative") return;
       if (!rule.patterns.some(pattern => pattern.test(text))) return;
-      const current = hits.get(rule.label) ?? { count: 0, reason: "" };
-      current.count += 1;
-      if (!current.reason) current.reason = snippet(text, rule.patterns[0]);
-      hits.set(rule.label, current);
+      reviewHits.set(rule.label, snippet(text, rule.patterns[0]));
     });
+    if (marketplace === 'DE') {
+      for (const match of germanReviewMatches(text, key, bucket)) reviewHits.set(match.label, match.reason);
+    }
+    for (const [label, reason] of reviewHits) {
+      const current = hits.get(label) ?? { count: 0, reason: "" };
+      current.count += 1;
+      if (!current.reason) current.reason = reason;
+      hits.set(label, current);
+    }
   });
 
   return {
@@ -252,13 +260,16 @@ export function buildReviewAnalysisFromRecords(asin, marketplace, reviews, fetch
   }
 
   const keys = ["consumerProfile", "scenarios", "unmet", "positives", "negatives", "motives"];
+  const genericPraiseOnly = marketplace === 'DE' && reviews.every(review =>
+    starBucket(review.star) === 'positive' && isGermanGenericPraise(reviewText(review)));
   return {
     asin,
     marketplace,
     sampledReviews: reviews.length,
     fetchedAt,
     status: "ready",
+    ...(genericPraiseOnly ? {statusMessage:'仅有笼统好评（原文：Super），缺少具体主题，待补充。'} : {}),
     family,
-    blocks: keys.map(key => aggregateBlock(reviews, key, family)),
+    blocks: keys.map(key => aggregateBlock(reviews, key, family, marketplace)),
   };
 }

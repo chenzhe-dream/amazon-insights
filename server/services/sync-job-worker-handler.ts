@@ -9,6 +9,7 @@ import {
   parseProviderDiagnosticOutput,
 } from "../../scripts/lib/provider-diagnostics.mjs";
 import { StageOutputGapSchema } from "../../shared/agent-contracts";
+import { validReviewContextMap, reviewContextsMatchScope } from '../../shared/review-context';
 import { detachedProviderEnvironment } from "../../scripts/lib/provider-network.mjs";
 import { mutateSyncJobMirror } from "../../scripts/lib/sync-job-store.mjs";
 
@@ -818,6 +819,9 @@ export function stageOutputPatches(
     if (draft.stageStatus === "partial" && (data === undefined || gap === undefined)) return [];
     if (draft.stageStatus === "failed" && (data !== undefined || gap === undefined)) return [];
     if (data !== undefined && !validStageData(String(draft.stage), data)) return [];
+    if (draft.stage === 'reviews' && data?.contextByAsin !== undefined && !reviewContextsMatchScope(data.contextByAsin, {
+      organizationId: job.organizationId, projectId, marketplace: job.marketplace, asins: job.asins,
+    }, draft.updatedAt)) return [];
     if (
       gap !== undefined &&
       (draft.stageStatus === "done" ||
@@ -880,8 +884,9 @@ const stageDataKeys: Readonly<Record<string, readonly string[]>> = {
 };
 
 function validStageData(stage: string, data: Record<string, unknown>): boolean {
-  const expected = stageDataKeys[stage];
+  const expected = stage === 'reviews' && Object.hasOwn(data,'contextByAsin') ? [...stageDataKeys.reviews,'contextByAsin'] : stageDataKeys[stage];
   if (!expected) return false;
+  if (stage === 'reviews' && Object.hasOwn(data,'contextByAsin') && !validReviewContextMap(data.contextByAsin)) return false;
   const actual = Object.keys(data).sort();
   return actual.length === expected.length
     && actual.every((key, index) => key === [...expected].sort()[index])

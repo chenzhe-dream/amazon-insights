@@ -20,7 +20,7 @@ const stages: readonly ProjectableSyncStage[] = [
 ];
 const perAsinFields: Partial<Record<ProjectableSyncStage, readonly string[]>> = {
   keywords: ["analysisByAsin"],
-  reviews: ["analysisByAsin", "ratingByAsin"],
+  reviews: ["analysisByAsin", "ratingByAsin", "contextByAsin"],
   sales_trend: ["trendByAsin"],
   fba: ["feeByAsin"],
   listing: ["contentByAsin"],

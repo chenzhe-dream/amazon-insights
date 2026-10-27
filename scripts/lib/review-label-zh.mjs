@@ -307,6 +307,8 @@ function translateGenericPhrase(text) {
 
 export function translateReviewReason(label, reason, family = "generic") {
   if (!reason) return "";
+  // Explicit source evidence is quoted, not a failed machine translation.
+  if (reason.startsWith('评论原文：')) return reason;
   if (/[\u4e00-\u9fff]/.test(reason) && !/[a-zA-Z]{4,}/.test(reason)) return reason;
   if (family !== "scooter" && /kick scooter|\bscooter\b/i.test(reason)) return "";
 

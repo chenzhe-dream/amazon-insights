@@ -21,6 +21,7 @@ import { MarketModuleIdSchema, MarketStudyRequestSchema, MarketStudyResponseSche
   MarketModuleRetryRequestSchema, MarketModuleRetryResponseSchema, MarketModuleCancelResponseSchema } from './market-module-contracts';
 import { VocEvidenceSelectionRequestSchema, VocEvidenceManifestSchema, VocEvidenceInventoryQuerySchema, VocEvidenceInventorySchema } from "./voc-evidence-contracts";
 import { z } from "zod";
+import { ReviewContextSchema } from './review-context';
 import {MarketThemeSelectionResponseSchema,MarketThemeSelectionRequestSchema,MarketThemeSelectionRevisionIdSchema} from './market-theme-selection-contracts';
 import {MarketKeywordStartRequestSchema} from './market-keyword-flow-contracts';
 import {MarketKeywordRunResponseSchema} from './market-keyword-public-contracts';
@@ -1525,7 +1526,7 @@ export const ImageRemarkOutcomeSchema = z.object({
 });
 const StageDataSchemas = {
   keywords: strictObject({ analysisByAsin: JsonMapSchema, enrichmentByKeyword: JsonMapSchema }),
-  reviews: strictObject({ analysisByAsin: JsonMapSchema, ratingByAsin: JsonMapSchema }),
+  reviews: strictObject({ analysisByAsin: JsonMapSchema, ratingByAsin: JsonMapSchema, contextByAsin: z.record(z.string(), ReviewContextSchema).optional() }),
   sales_trend: strictObject({ trendByAsin: JsonMapSchema }),
   fba: strictObject({ feeByAsin: JsonMapSchema }),
   listing: strictObject({ contentByAsin: JsonMapSchema }),

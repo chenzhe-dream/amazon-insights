@@ -3,6 +3,10 @@ import test from "node:test";
 import { reviewEmptyMessage, reviewEvidenceText, scopedReviewRecords, reviewMissingMessage } from "../../app/lib/voc-review-display";
 
 const base = { asin: "B0F43M9KWW", marketplace: "US", sampledReviews: 33, fetchedAt: "2026-09-10", status: "ready" as const, blocks: [] };
+test('unclassified sample explanation remains visible without inventing dimension themes',()=>{
+ const message='仅有笼统好评（原文：Super），缺少具体主题，待补充。';
+ assert.match(reviewEmptyMessage({...base,marketplace:'DE',sampledReviews:1,statusMessage:message}),/1.*笼统好评.*Super/);
+});
 test("distinguishes failed request, explicit no samples, unmatched dimension and pending read", () => {
   assert.match(reviewEmptyMessage({ ...base, status: "error", sampledReviews: 0, statusMessage: "Provider request failed" }), /请求失败/);
   assert.match(reviewEmptyMessage({ ...base, status: "pending", sampledReviews: 0, statusMessage: "No reviews found." }), /明确返回.*无评论样本/);
@@ -13,6 +17,7 @@ test("distinguishes failed request, explicit no samples, unmatched dimension and
 test("missing record uses the current gap, never historical diagnostics or fabricated zero samples", () => {
   assert.match(reviewMissingMessage({ stage: "reviews", stageStatus: "missing-output", reasonCode: "OUTPUT_UNAVAILABLE" }, base.asin), /读取失败/);
   assert.match(reviewMissingMessage(undefined, base.asin), /不会使用全局缓存/);
+  assert.match(reviewMissingMessage({stage:'reviews',stageStatus:'partial',gap:{state:'partial',reasonCode:'UPSTREAM_EMPTY'}} as any,base.asin),/原因待核实/);
 });
 test("scoped records discard other ASIN and marketplace records", () => {
   const records = { [base.asin]: base, OTHER: { ...base, asin: "OTHER" } };

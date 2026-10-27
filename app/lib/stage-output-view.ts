@@ -20,7 +20,7 @@ type StageOutputFallbacks = {
 
 export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: StageOutputSnapshot, fallbacks: T, options: { authoritative?: boolean } = {}) {
   const keywordOutput = availableData(snapshot, "keywords") as { analysisByAsin?: Record<string, unknown>; enrichmentByKeyword?: Record<string, unknown> } | null;
-  const reviewOutput = availableData(snapshot, "reviews") as { analysisByAsin?: Record<string, unknown>; ratingByAsin?: Record<string, unknown> } | null;
+  const reviewOutput = availableData(snapshot, "reviews") as { analysisByAsin?: Record<string, unknown>; ratingByAsin?: Record<string, unknown>; contextByAsin?: Record<string, unknown> } | null;
   const salesOutput = availableData(snapshot, "sales_trend") as { trendByAsin?: Record<string, unknown> } | null;
   const fbaOutput = availableData(snapshot, "fba") as { feeByAsin?: Record<string, unknown> } | null;
   const listingOutput = availableData(snapshot, "listing") as { contentByAsin?: Record<string, unknown> } | null;
@@ -62,6 +62,7 @@ export function buildStageOutputView<T extends StageOutputFallbacks>(snapshot: S
     keywordAnalysisByAsin: scopedMap(fallbacks.keywordAnalysisByAsin, keywordOutput?.analysisByAsin, options.authoritative) as T["keywordAnalysisByAsin"],
     keywordEnrichmentByKeyword: scopedMap(fallbacks.keywordEnrichmentByKeyword, keywordOutput?.enrichmentByKeyword, options.authoritative) as T["keywordEnrichmentByKeyword"],
     reviewAnalysisByAsin: scopedMap(fallbacks.reviewAnalysisByAsin, reviewOutput?.analysisByAsin, options.authoritative) as T["reviewAnalysisByAsin"],
+    reviewContextByAsin: reviewOutput?.contextByAsin ?? {},
     ratingByAsin: scopedMap(fallbacks.ratingByAsin, reviewOutput?.ratingByAsin, options.authoritative) as T["ratingByAsin"],
     salesTrendByAsin: scopedMap(fallbacks.salesTrendByAsin, salesOutput?.trendByAsin, options.authoritative) as T["salesTrendByAsin"],
     fbaFeeByAsin: scopedMap(fallbacks.fbaFeeByAsin, fbaOutput?.feeByAsin, options.authoritative) as T["fbaFeeByAsin"],

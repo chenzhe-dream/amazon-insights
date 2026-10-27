@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { QueryResultRow } from "pg";
 import { z } from "zod";
 import { StageOutputGapSchema } from "../../../shared/agent-contracts";
+import { validReviewContextMap, reviewContextsMatchScope } from '../../../shared/review-context';
 import { validIndependentReviewRatings } from "../../../scripts/lib/sync-stage-output.mjs";
 
 import type { PostgresQueryContext } from "./query-context";
@@ -2328,6 +2329,9 @@ function validScopedStageOutput(
   const stage = stages.find((candidate) => candidate.id === output.stage);
   if (!stage || stage.status !== output.stageStatus) return false;
   const hasData = output.data !== undefined && validStageData(output.stage, output.data);
+  if (hasData && output.stage === 'reviews' && output.data?.contextByAsin !== undefined && !reviewContextsMatchScope(output.data.contextByAsin, {
+    organizationId: job.organizationId, projectId: job.projectId, marketplace: job.marketplace, asins: job.asins,
+  }, output.updatedAt)) return false;
   if (hasData && output.stage === "reviews" && output.stageStatus === "partial") {
     if (!validIndependentReviewRatings(output.data, { asins: job.asins, marketplace: job.marketplace,
       updatedAt: output.updatedAt, jobId: job.jobId, organizationId: job.organizationId,
@@ -2365,7 +2369,8 @@ const stageDataKeys: Readonly<Record<ProjectableSyncStage, readonly string[]>> =
 
 function validStageData(stage: ProjectableSyncStage, value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
-  const expected = stageDataKeys[stage];
+  const expected = stage === 'reviews' && Object.hasOwn(value,'contextByAsin') ? [...stageDataKeys.reviews,'contextByAsin'] : stageDataKeys[stage];
+  if (stage === 'reviews' && Object.hasOwn(value,'contextByAsin') && !validReviewContextMap(value.contextByAsin)) return false;
   const keys = Object.keys(value).sort();
   return keys.length === expected.length
     && keys.every((key, index) => key === [...expected].sort()[index])

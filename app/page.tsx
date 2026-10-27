@@ -1,4 +1,6 @@
 "use client";
+import { scopedReviewContexts } from '../shared/review-context';
+import { ReviewContextSection } from './project-report-views/review-context';
 import {priorityRecoveryProjectId,readHistoricalSyncPointer,sourceProjectIdForSave} from "./lib/image-source-project";
 import { readCurrentProjectDisplayVersion, type CurrentProjectDisplayVersion } from "./lib/project-display-version-browser";
 import {ListingImageSourceProject} from "./listing-image-source-project";
@@ -1014,6 +1016,9 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
     childSalesByAsin, priceStrategyByAsin, imageRemarksByAsin, imageRemarkOutcomesByAsin,
   } = stageOutputView;
   const reviewAnalysisByAsin = useMemo(() => scopedReviewRecords(stageOutputView.reviewAnalysisByAsin, activeAsins, market), [stageOutputView.reviewAnalysisByAsin, activeAsins, market]);
+  const reviewContexts = useMemo(() => scopedReviewContexts(stageOutputView.reviewContextByAsin, {
+    organizationId: authSession.user.organizationId, projectId: currentProjectId ?? '', marketplace: market, asins: activeAsins,
+  }), [stageOutputView.reviewContextByAsin, authSession.user.organizationId, currentProjectId, market, activeAsins]);
   const reviewGapReasonCode = stageOutputGapReasonCode(stageOutputSnapshot.reviews);
   const productLaunchSources = useMemo<ProductLaunchRuntimeSources>(() => ({
     analysisScope: { organizationId: authSession.user.organizationId, projectId: resumedProjectId ?? workspacePath, marketplace: market },
@@ -2283,6 +2288,8 @@ function VisibleAmazonOpportunityApp({ authSession }: { authSession: Authenticat
           />
         ) : null}
         {reviewRefreshFailed ? <p role="status">本次评论结果读取失败；如有本项目已验证结果，将继续保留显示。重新进入 VOC 页可重试读取。</p> : null}
+        <ReviewContextSection asins={activeAsins} records={reviewAnalysisByAsin} contexts={reviewContexts}
+          missingMessages={Object.fromEntries(activeAsins.map(asin => [asin, reviewMissingMessage(stageOutputSnapshot.reviews, asin)]))} />
         <ReviewAnalysisMatrixSection
           title="智能评论分析"
           description="按各 ASIN 实际来源的评论样本与 Customers Say 主题展示 · 六维同屏对齐 · 格式：【分类】+ 提及占比；来源、样本数和采集时间见表头。"
