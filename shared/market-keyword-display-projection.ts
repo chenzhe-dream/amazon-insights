@@ -7,7 +7,7 @@ export function originalEstimateInput(facts:MarketKeywordFacts,productSeed:strin
  // "empty" describes the requested months, not the complete saved history.
  const keywords=facts.members.map(m=>({keyword:m.keyword,weeklySearchRank:m.pageMetrics.weeklySearchRank.value,weeklySearchVolume:m.pageMetrics.weeklySearchVolume.value,monthlySearchVolume:m.pageMetrics.monthlySearchVolume.value,cpcExactBid:m.pageMetrics.recommendedCpcUsd.value,peakSeason:m.pageMetrics.seasonality?.replace(/^Peak season of search volume:\s*/i,'').trim()||null,
  trend:['ready','partial','empty'].includes(m.trend.status)?(m.trend.historyMonths??m.trend.months).filter(p=>p.month<=facts.referenceMonth&&p.searchVolume.value!==null&&p.searchVolume.reason===null).map(p=>({month:p.month,volume:p.searchVolume.value!,abaRank:p.searchRank.value,cpc:p.recommendedBid.value})):[],yearlySearchVolume:{}}));
- return {productName:productSeed,marketplace:facts.scope.marketplace,queryMode:'keyword_extends',keywords,totalCount:keywords.length,fetchedPages:facts.pool.receivedPageCount,trendEnrichedCount:keywords.filter(k=>k.trend.length).length};
+ return {productName:productSeed,marketplace:facts.scope.marketplace,queryMode:facts.members.some(m=>m.occurrences.some(o=>o.sourceMode==='category-keywords'))?'category_keywords':'keyword_extends',keywords,totalCount:keywords.length,fetchedPages:facts.pool.receivedPageCount,trendEnrichedCount:keywords.filter(k=>k.trend.length).length};
 }
 /** Local display-only recovery from saved facts; no collection or model call. */
 export function recoverKeywordDisplay(facts:MarketKeywordFacts,productSeed:string){

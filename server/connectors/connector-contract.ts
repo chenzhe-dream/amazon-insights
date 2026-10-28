@@ -4,6 +4,7 @@ export const CONNECTOR_IDS = ["sif", "sorftime", "sellerSprite"] as const;
 export type ConnectorId = (typeof CONNECTOR_IDS)[number];
 
 export type ConnectorErrorCode =
+  | "keyword-not-trending"
   | "configuration"
   | "authentication"
   | "local-admission"
@@ -16,6 +17,7 @@ export type ConnectorErrorCode =
 
 const SAFE_ERROR_MESSAGES: Readonly<Record<ConnectorErrorCode, string>> =
   Object.freeze({
+    "keyword-not-trending":"The input is not a supported trending keyword",
     "local-admission": "Local request capacity is unavailable",
     configuration: "Connector configuration is unavailable",
     authentication: "Connector authentication failed",

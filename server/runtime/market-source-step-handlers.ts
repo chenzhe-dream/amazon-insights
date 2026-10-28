@@ -33,7 +33,7 @@ const snapshotId = z.string().regex(/^market-input:[a-f0-9]{64}$/), asin = Marke
 const productInput = z.object({ month: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), poolSize: z.number().int().min(1).max(100),
   newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
   selectedAsins: z.array(asin).min(1).max(100).optional(), selectionInputSnapshotId: snapshotId.optional() }).strict();
-const pageInput = z.object({ seed: MarketSourceIdentityValueSchemas.keyword, page: MarketSourceIdentityValueSchemas.page }).strict();
+const pageInput = z.object({ seed: MarketSourceIdentityValueSchemas.keyword, page: MarketSourceIdentityValueSchemas.page,sourceMode:z.literal('category-keywords').optional() }).strict();
 const trendInput = z.object({ keyword: MarketSourceIdentityValueSchemas.keyword, keywordId: z.string().min(1).max(160), poolInputSnapshotId: snapshotId }).strict();
 const themesInput = z.object({ asin, selectionInputSnapshotId: snapshotId }).strict();
 const abaInput=z.object({poolInputSnapshotId:snapshotId,referenceMonth:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
@@ -57,7 +57,7 @@ function evidenceProposal(evidence: MarketSourceEvidence) {
 function failure(sourceCode: string, retryable: boolean, themeIssue?:MarketThemeSourceIssue): MarketStepWork {
   const code: MarketStepError['code'] = ['scope-mismatch', 'identity-conflict', 'identity-mismatch', 'source-mismatch'].includes(sourceCode) ? 'scope-mismatch'
     : ['quota-exhausted','rate-limit'].includes(sourceCode) ? sourceCode as MarketStepError['code']
-    : sourceCode === 'authentication' ? 'authentication'
+    : sourceCode === 'keyword-not-trending' ? 'keyword-not-trending' : sourceCode === 'authentication' ? 'authentication'
     : ['configuration', 'local-admission', 'governor-rejected'].includes(sourceCode) ? 'governance'
     : sourceCode === 'timeout' ? 'timeout' : ['interrupted', 'cancelled'].includes(sourceCode) ? 'interrupted'
     : ['rate-limit', 'upstream-temporary'].includes(sourceCode) ? 'upstream-temporary' : 'invalid-data';

@@ -22,6 +22,6 @@ export function linkedModuleParams(module:LinkedModule,categoryName:string|null,
  if(module==='themes')return {memberCount:20,poolSize:100,newProductMonths};
  const seed=categoryName?.trim();
  if(!seed||!/[\p{L}]/u.test(seed)||/^Node\s*[\d:]+$/i.test(seed))throw new Error('类目名称尚未取得，不能用类目数字代替关键词；可在关键词模块输入产品名称单独分析。');
- return MarketKeywordStartRequestSchema.parse({paginationMode:'until-short-page/v1',analysisMode:'global-reconciliation/v2',supplementalSources:'sif-aba/v1',plannedPages:Array.from({length:5},(_,i)=>({seed,page:i+1})),maxMembers:100,
+ return MarketKeywordStartRequestSchema.parse({paginationMode:'until-short-page/v1',analysisMode:'global-reconciliation/v2',supplementalSources:'sif-aba/v1',plannedPages:Array.from({length:5},(_,i)=>({seed,page:i+1,sourceMode:'category-keywords'})),maxMembers:100,
  catalog:{task:'market-keyword-semantics',dictionaryVersion:'keyword-discovery-catalog/v1',discoveryMode:'labels-and-clusters/v1',outputProtocol:'explicit-shape/v1',categoryContext:seed,dimensionLabels:{W1:[],W2:[],W3:[],W4:[]},clusterCatalog:[]}});
 }

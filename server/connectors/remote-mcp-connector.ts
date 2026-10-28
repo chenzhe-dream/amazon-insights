@@ -156,6 +156,7 @@ function classifyError(connectorId: ConnectorId, error: unknown) {
   if (structural?.kind === "timeout") {
     return new ConnectorError(connectorId, "timeout", true);
   }
+  if (connectorId==='sorftime'&&structural?.kind==='keyword-not-trending')return new ConnectorError(connectorId,'keyword-not-trending',false);
   if (structural?.kind === "malformed" || error instanceof SyntaxError) {
     return new ConnectorError(connectorId, "malformed-response", false);
   }

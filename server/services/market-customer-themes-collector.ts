@@ -14,7 +14,7 @@ import { ResourceGovernorAdmissionError } from "../db/concurrency-control-reposi
 import { createMarketSourceEvidence } from "../domain/market-research/source-evidence";
 import type { CustomerThemesAsinInput } from "../domain/market-research/customer-themes";
 
-export type MarketCustomerThemesIssueCode = ConnectorErrorCode | "cancelled" | "governor-rejected" | "identity-mismatch" | "invalid-theme" | "source-mismatch";
+export type MarketCustomerThemesIssueCode = Exclude<ConnectorErrorCode, "keyword-not-trending"> | "cancelled" | "governor-rejected" | "identity-mismatch" | "invalid-theme" | "source-mismatch";
 export type MarketCustomerThemesIssue = {
   code: MarketCustomerThemesIssueCode;
   message: string;
@@ -70,7 +70,7 @@ class CollectionStopped extends Error {
 function collectionIssue(error: unknown): MarketCustomerThemesIssue {
   if (error instanceof CollectionStopped) return issue(error.code, error.code === "timeout");
   if (error instanceof ResourceGovernorAdmissionError) return issue("governor-rejected", true);
-  if (error instanceof ConnectorError) return issue(error.code, error.retryable);
+  if (error instanceof ConnectorError) return issue(error.code === "keyword-not-trending" ? "upstream-permanent" : error.code, error.retryable);
   return issue("upstream-permanent");
 }
 

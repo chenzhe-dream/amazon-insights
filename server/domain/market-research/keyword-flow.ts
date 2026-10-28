@@ -7,6 +7,7 @@ import type { CreateMarketModuleRunInput, MarketExecutionStep, MarketModuleRunVi
 import { MARKET_KEYWORD_POOL_VERSION } from './keyword-source-pool';
 import { canonicalJsonSha256 as digest } from '../../runtime/model-request-accounting';
 import {inspectMarketKeywordReconciliationFlow} from './keyword-reconciliation-flow';
+import {MarketKeywordPageIdentitySchema} from '../../../shared/market-keyword-source-contracts';
 
 const obj = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const inputId = z.string().regex(/^market-input:[a-f0-9]{64}$/);
@@ -75,7 +76,7 @@ export function inspectMarketKeywordContinuation(view: MarketModuleRunView, now:
     }
     if(children.length||waiting.size)return result(children);
   }else pages.push(...marketKeywordFlowInitialSteps(view.run).map(d=>find(d,true)!));
-  const collectedPages=pages.map(s=>({seed:String(obj(s.input).seed),page:Number(obj(s.input).page)}));
+  const collectedPages=pages.map(s=>MarketKeywordPageIdentitySchema.parse(s.input));
   if (pages.some(s => !terminal(s))) return result();
   const attempts = pages.map(attempt);
   const sourceBasis = attempts.map(a => ({ id: a.id, status: a.status }));

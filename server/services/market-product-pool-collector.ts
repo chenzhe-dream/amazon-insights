@@ -5,7 +5,7 @@ import { MARKET_SOURCE_IDENTITY_FIELDS, MarketSourceIdentityValueSchemas, type M
 import { ConnectorError, type ConnectorErrorCode, type ConnectorRequest, type ConnectorResult, type RemoteMcpConnector } from '../connectors/connector-contract';
 import { createMarketSourceEvidence } from '../domain/market-research/source-evidence';
 
-type IssueCode=ConnectorErrorCode|'scope-mismatch'|'empty'|'missing-member'|'missing-metric'|'invalid-metric'|'interrupted'|'local-admission';
+type IssueCode=Exclude<ConnectorErrorCode,'keyword-not-trending'>|'scope-mismatch'|'empty'|'missing-member'|'missing-metric'|'invalid-metric'|'interrupted'|'local-admission';
 export interface MarketProductPoolIssue { code:IssueCode; message:string; retryable:boolean; asin?:string; field?:string }
 export interface MarketPoolProduct {
   asin:string; sourceIndex:number; title:string|null; brand:string|null; price:number|null;
@@ -82,7 +82,7 @@ function classify(error:unknown,signal:AbortSignal,external?:AbortSignal):Market
   if(external?.aborted)return issue('interrupted',true);
   if(signal.aborted)return issue('timeout',true);
   if(error instanceof CollectionFailure)return issue(error.code);
-  if(error instanceof ConnectorError)return issue(error.code,error.retryable);
+  if(error instanceof ConnectorError)return issue(error.code==='keyword-not-trending'?'upstream-permanent':error.code,error.retryable);
   if(error instanceof Error&&error.name==='ResourceGovernorAdmissionError')return issue('local-admission',true);
   return issue('malformed-response');
 }

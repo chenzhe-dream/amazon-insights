@@ -22,6 +22,38 @@ import { PostgresAgentRepository } from '../../server/db/postgres-repository';
 const catalog = { task: 'market-keyword-semantics' as const, dictionaryVersion: 'synthetic/v1',
   categoryContext: 'Synthetic shelf lamps', dimensionLabels: { W1: [], W2: [], W3: [], W4: [] }, clusterCatalog: [] };
 
+test('category keyword flow persists page mode, stops at a short page and restores a real rule report', {timeout:120000}, async t=>{
+  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
+  const context=new PostgresQueryContext(pg.pool),steps=new PostgresMarketModuleExecutionStore(context),snapshots=new PostgresMarketAnalysisSnapshotStore(context);
+  const actor={organizationId:randomUUID(),userId:randomUUID()};
+  await pg.pool.query("INSERT INTO users(id,organization_id,email,display_name,role,status,created_at,updated_at) VALUES($1,$2,$3,'Category keyword fixture','member','active',clock_timestamp(),clock_timestamp())",[actor.userId,actor.organizationId,`${actor.userId}@example.com`]);
+  const scope={organizationId:actor.organizationId,researchId:randomUUID(),marketplace:'CA' as const,nodeIdPath:'12:3024183011',fromMonth:'2026-09',toMonth:'2026-09',currency:'CAD' as const};
+  await snapshots.createStudy({actor,scope,idempotencyKey:randomUUID(),now:new Date().toISOString()});
+  const service=new MarketModuleService({context,modelIdentity:()=>null});
+  const created=await service.startKeywords(actor,scope.researchId,{catalog,maxMembers:100,paginationMode:'until-short-page/v1',plannedPages:[1,2,3].map(page=>({seed:'Synthetic car seats',page,sourceMode:'category-keywords'}))},randomUUID());
+  const calls:Array<{operation:string;input:Record<string,unknown>}>=[];
+  const connector:RemoteMcpConnector={id:'sorftime',probe:async()=>{throw Error('Unused');},execute:async request=>{
+    calls.push({operation:request.operation,input:request.input});
+    const data=request.operation==='category_keywords'?{data:Array.from({length:request.input.page===1?20:1},(_,i)=>({keyword:`synthetic seat ${request.input.page}-${i}`,monthly_search_volume:'100',weekly_search_volume:'20',weekly_search_rank:'10',cpc_exact_bid:'1.53'}))}:{data:{keyword:request.input.keyword,search_volume_trend:['2026-09 search volume 100'],search_rank_trend:[],recommended_bid_trend:[]}};
+    return {data,source:{connectorId:'sorftime',operation:request.operation,fetchedAt:new Date().toISOString(),attemptCount:1}};
+  }};
+  const worker=new MarketModuleStepWorker({steps,handlers:{...createMarketSourceStepHandlers({context,connectors:{sorftime:connector,sellerSprite:{...connector,id:'sellerSprite'}}}),'prepare-keyword-pool':createMarketKeywordPoolStep(context)}});
+  t.after(()=>worker.stop());
+  for(let i=0;i<60;i++){if(!await worker.tick())break;if(i===59)assert.fail('Category keyword flow did not settle');}
+  const {run}=await service.findKeywords(actor,created.run.id);
+  assert.equal(run.status,'succeeded',JSON.stringify(run.steps));
+  assert.equal(run.facts?.members.length,21);
+  assert.equal(run.facts?.pool.receivedPageCount,2);
+  assert.ok(run.facts?.members.every(m=>m.occurrences.every(o=>o.sourceMode==='category-keywords')&&m.pageMetrics.recommendedCpcUsd.value===null));
+  assert.ok(run.originalEstimate);assert.ok(run.ruleReport);
+  assert.deepEqual(calls.filter(c=>c.operation==='category_keywords').map(c=>c.input),[1,2].map(page=>({node_id:'3024183011',amz_site:'CA',page})));
+  assert.equal(calls.filter(c=>c.operation==='keyword_trend').length,21);
+  assert.equal(calls.some(c=>c.operation==='keyword_extends'),false);
+  const restored=await new MarketModuleService({context:new PostgresQueryContext(pg.pool),modelIdentity:()=>null}).findKeywords(actor,run.id);
+  assert.deepEqual(restored.run.facts,run.facts);
+  assert.deepEqual(restored.run.ruleReport,run.ruleReport);
+});
+
 test('keyword pool without a model retains sources and trends, and does not create semantic work', { timeout: 120000 }, async t => {
   const pg = await startPostgresTestContainer(); t.after(() => pg.close());
   await runPostgresMigrations(pg.pool);

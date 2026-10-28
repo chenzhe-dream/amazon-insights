@@ -24,7 +24,7 @@ const growth = z.object({ value: z.number().finite().min(-1).nullable(), reason:
 const trendMonth = z.object({ month, searchVolume: measurement, searchRank: measurement, recommendedBid: measurement,
   yoyGrowth: growth, recentGrowth: growth }).strict();
 const pageIdentity = MarketKeywordStartRequestSchema.shape.plannedPages.element;
-const occurrence = z.object({ inputSnapshotId: inputId, sourceRef, seed: z.string(), page: count, sourceIndex: count, memberHash: hash }).strict();
+const occurrence = z.object({ inputSnapshotId: inputId, sourceRef, seed: z.string(), page: count, sourceMode:z.literal('category-keywords').optional(), sourceIndex: count, memberHash: hash }).strict();
 
 export const MarketKeywordFactsSchema = z.object({
   version: z.literal('market-keyword-facts/v1'), factsId: z.string().regex(/^market-keyword-facts:[a-f0-9]{64}$/),

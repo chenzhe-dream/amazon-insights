@@ -35,7 +35,7 @@ export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema,
   latestAttemptId: MarketModuleIdSchema.nullable(), attemptCount: count, current: z.boolean(), canRetry: z.boolean(), asin: z.string().regex(/^[A-Z0-9]{10}$/).nullable(),
   nextAttemptAt:z.string().datetime().nullable().optional(),
   sourceIssue:MarketThemeSourceIssueSchema.optional(),
-  errorCode: z.enum(['quota-exhausted', 'rate-limit', 'local-admission', 'upstream-temporary', 'timeout', 'interrupted', 'authentication', 'governance', 'invalid-data', 'scope-mismatch', 'cancelled', 'internal', 'unsupported-marketplace']).nullable() }).strict();
+  errorCode: z.enum(['keyword-not-trending', 'quota-exhausted', 'rate-limit', 'local-admission', 'upstream-temporary', 'timeout', 'interrupted', 'authentication', 'governance', 'invalid-data', 'scope-mismatch', 'cancelled', 'internal', 'unsupported-marketplace']).nullable() }).strict();
 export const MarketThemeRunResponseSchema = z.object({ run: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema,
   status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), createdAt: z.string().datetime(), planRevision: count,
   params: MarketThemeStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), currentReport: MarketThemeReportEntrySchema.nullable(),

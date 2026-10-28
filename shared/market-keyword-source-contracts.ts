@@ -7,9 +7,8 @@ const request = {
   jobId: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   timeoutMs: z.number().finite().int().min(1).max(60_000).default(15_000),
 };
-export const MarketKeywordPageRequestSchema = z.object({
-  ...request, seed: MarketSourceIdentityValueSchemas.keyword, page: MarketSourceIdentityValueSchemas.page,
-}).strict();
+export const MarketKeywordPageIdentitySchema = z.object({seed:MarketSourceIdentityValueSchemas.keyword,page:MarketSourceIdentityValueSchemas.page,sourceMode:z.literal('category-keywords').optional()}).strict();
+export const MarketKeywordPageRequestSchema = MarketKeywordPageIdentitySchema.extend(request);
 export const MarketKeywordTrendRequestSchema = z.object({ ...request, keyword: MarketSourceIdentityValueSchemas.keyword }).strict();
 export type MarketKeywordPageRequest = z.input<typeof MarketKeywordPageRequestSchema>;
 export type MarketKeywordTrendRequest = z.input<typeof MarketKeywordTrendRequestSchema>;
@@ -24,9 +23,9 @@ export interface MarketKeywordIssue {
 }
 export interface MarketKeywordSourceFailure {
   readonly status: "failed";
-  readonly operation: "keyword_extends" | "keyword_trend";
+  readonly operation: "keyword_extends" | "category_keywords" | "keyword_trend";
   readonly failure: Readonly<{
-    code: "quota-exhausted" | "local-admission" | "invalid-request" | "cancelled" | "identity-conflict" | "configuration" | "authentication" | "rate-limit" | "timeout" | "upstream-temporary" | "upstream-permanent" | "malformed-response";
+    code: "keyword-not-trending" | "quota-exhausted" | "local-admission" | "invalid-request" | "cancelled" | "identity-conflict" | "configuration" | "authentication" | "rate-limit" | "timeout" | "upstream-temporary" | "upstream-permanent" | "malformed-response";
     retryable: boolean;
   }>;
   /** Diagnostics only; rejected responses are never valid evidence. */
@@ -47,8 +46,8 @@ export interface MarketKeywordPageMember {
 }
 export interface MarketKeywordPageData {
   readonly status: "ready" | "partial" | "empty";
-  readonly operation: "keyword_extends";
-  readonly sourceMode: "seed-extensions";
+  readonly operation: "keyword_extends" | "category_keywords";
+  readonly sourceMode: "seed-extensions" | "category-keywords";
   readonly seed: string;
   readonly page: number;
   readonly receivedCount: number;

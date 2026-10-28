@@ -5,6 +5,28 @@ import {createServer} from 'vite';
 import react from '@vitejs/plugin-react';
 import {keywordPageRun,keywordRunId} from './helpers/market-keyword-page-fixture';
 
+test('category source survives reload and resubmission without becoming a trending seed query',{timeout:45000},async t=>{
+ const server=await createServer({configFile:false,cacheDir:'test-results/keyword-category-browser-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();
+ const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});
+ const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();page.setDefaultTimeout(8000);
+ const response=keywordPageRun();response.run.params.plannedPages=response.run.params.plannedPages.map(p=>({...p,sourceMode:'category-keywords'}));let posts=0;
+ await page.route('**/*',async route=>{
+  const r=route.request(),u=new URL(r.url());if(u.origin!==origin)return route.abort();
+  if(r.isNavigationRequest())return route.fulfill({contentType:'text/html',body:await server.transformIndexHtml('/',`<html><body><div id="root"></div><script type="module" src="/tests/agent/helpers/market-keyword-browser-harness.tsx"></script></body></html>`)});
+  if(!u.pathname.startsWith('/api/'))return route.continue();
+  if(r.method()==='POST'){posts++;assert.ok(r.postDataJSON().params.plannedPages.every((p:any)=>p.sourceMode==='category-keywords'));return route.fulfill({json:response});}
+  if(u.pathname.endsWith('/keywords'))return route.fulfill({json:response});return route.fulfill({status:404,json:{}});
+ });
+ await page.goto(origin+'/?keywordRun='+keywordRunId);
+ await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('#market-keyword-core')?.value.length);
+ assert.equal(await page.getByRole('checkbox',{name:'按类目节点查询核心词',exact:true}).isChecked(),true);
+ assert.equal(posts,0);
+ await page.reload();await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('#market-keyword-core')?.value.length);
+ assert.equal(await page.getByRole('checkbox',{name:'按类目节点查询核心词',exact:true}).isChecked(),true);
+ await page.getByRole('button',{name:'查询关键词',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector<HTMLFieldSetElement>('fieldset')?.disabled);assert.equal(posts,1);
+});
+
 test('failed pool with saved source pages shows failure and retry instead of waiting or partial data',{timeout:45000},async t=>{
  const server=await createServer({configFile:false,cacheDir:'test-results/keyword-failed-pool-vite',define:{'process.env':'{}'},plugins:[react()],server:{host:'127.0.0.1',port:0,hmr:false,forwardConsole:false}});await server.listen();const browser=await chromium.launch();t.after(async()=>{await browser.close();await server.close()});
  const origin=server.resolvedUrls!.local[0].replace(/\/$/,''),page=await browser.newPage();page.setDefaultTimeout(5000);const response=keywordPageRun();response.run.facts=null;response.run.steps=[{id:keywordRunId,kind:'prepare-keyword-pool',status:'failed',latestAttemptId:keywordRunId,attemptCount:1,current:true,canRetry:true,asin:null,errorCode:'invalid-data'}];let writes=0;

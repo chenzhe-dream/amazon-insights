@@ -20,7 +20,7 @@ function issue(dataset: Dataset, code: MarketResearchIssue["code"], retryable=fa
 }
 export function marketResearchFailure(error: unknown, dataset: Dataset="research"): MarketResearchIssue {
   if(error instanceof MarketResearchCollectionError) return error.issue;
-  if(error instanceof ConnectorError) return issue(dataset,error.code,error.retryable);
+  if(error instanceof ConnectorError) return issue(dataset,error.code==='keyword-not-trending'?'upstream-permanent':error.code,error.retryable);
   if(error instanceof Error && ["TimeoutError","AbortError"].includes(error.name)) return issue(dataset,"timeout",true);
   return issue(dataset,"malformed-response");
 }

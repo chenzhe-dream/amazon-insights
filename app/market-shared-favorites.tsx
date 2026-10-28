@@ -5,7 +5,7 @@ import {MarketFavoriteListResponseSchema,MarketFavoriteCreateResponseSchema,type
 import {localAgentFetch,localAgentErrorMessage} from "./lib/local-agent-browser";
 import {marketNavigation,type MarketView} from "./lib/market-navigation";
 
-export type KeywordFavoriteInput={seeds:string;categoryContext:string;pageCount:number;maxMembers:number};
+export type KeywordFavoriteInput={seeds:string;categoryContext:string;pageCount:number;maxMembers:number;sourceMode?:'category-keywords'};
 const runKeys={overview:"overviewRun",shapes:"shapeRun",keywords:"keywordRun",themes:"themeRun"} as const;
 export function MarketSharedFavorites({view,query,keywordInput,onRestore,saveRequest=0}:{view:MarketView;query:Record<string,string>;keywordInput?:KeywordFavoriteInput;onRestore:(favorite:MarketFavorite)=>void;saveRequest?:number}){
  const [open,setOpen]=useState(false),[title,setTitle]=useState(""),[mode,setMode]=useState("query"),[search,setSearch]=useState(""),[q,setQ]=useState(""),[page,setPage]=useState(1),[revision,setRevision]=useState(0);

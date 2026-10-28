@@ -158,6 +158,11 @@ export function normalizeSorftimeToolResult(toolName, result) {
     result.content[0]?.type === "text" && typeof result.content[0].text === "string" &&
     !Object.hasOwn(result, "structuredContent")) {
     const text = result.content[0].text.trim();
+    // Observed keyword_extends business response: HTTP 200, no usable keyword
+    // page. Keep suggested terms out of the pool; they may be a different market.
+    if(toolName==='keyword_extends'&&/^The keyword you queried is not an Amazon trending keyword, but we found related keywords: [\s\S]+\. Which keyword's detail do you want to view\?$/.test(text)){
+      throw new McpTransportError('keyword-not-trending',null,{boundary:'tool-content'});
+    }
     if (toolName === "product_customers_say" && text === "No relevant data.") {
       return { data: { details: [] } };
     }

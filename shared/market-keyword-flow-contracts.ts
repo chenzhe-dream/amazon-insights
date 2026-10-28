@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import { MarketSourceIdentityValueSchemas } from './market-source-contracts';
 import { MarketKeywordSemanticsInputSchema } from './market-semantic-contracts';
+import {MarketKeywordPageIdentitySchema} from './market-keyword-source-contracts';
 
 export const MARKET_KEYWORD_FLOW_VERSION = 'market-keyword-flow/v1';
 export const MARKET_KEYWORD_RULES_FLOW_VERSION = 'market-keyword-flow/rules-v1';
 export const isMarketKeywordGlobalMode=(value:unknown):value is 'global-reconciliation/v1'|'global-reconciliation/v2'=>value==='global-reconciliation/v1'||value==='global-reconciliation/v2';
-const plannedPages = z.array(z.object({ seed: MarketSourceIdentityValueSchemas.keyword, page: MarketSourceIdentityValueSchemas.page }).strict())
+const plannedPages = z.array(MarketKeywordPageIdentitySchema)
   .min(1).max(100).refine(pages => new Set(pages.map(p => JSON.stringify([p.seed, p.page]))).size === pages.length, 'Duplicate planned page');
 export const MarketKeywordStartRequestSchema = z.object({
   paginationMode:z.literal('until-short-page/v1').optional(),
@@ -15,6 +15,8 @@ export const MarketKeywordStartRequestSchema = z.object({
   maxMembers: z.number().int().min(1).max(2000),
   catalog: MarketKeywordSemanticsInputSchema.pick({ task: true, dictionaryVersion: true, categoryContext: true, dimensionLabels: true, clusterCatalog: true, discoveryMode:true,outputProtocol:true }),
 }).strict().superRefine((v,ctx)=>{
+  if(v.plannedPages.some(p=>p.sourceMode==='category-keywords')&&(v.plannedPages.some(p=>p.sourceMode!=='category-keywords')||new Set(v.plannedPages.map(p=>p.seed)).size!==1))
+    ctx.addIssue({code:'custom',path:['plannedPages'],message:'Category pages require one category label and cannot mix source modes'});
   if(v.paginationMode){
     const counts=new Map<string,number>();
     for(const p of v.plannedPages){const next=(counts.get(p.seed)??0)+1;if(p.page!==next)ctx.addIssue({code:'custom',path:['plannedPages'],message:'Automatic pages must start at one and be consecutive per seed'});counts.set(p.seed,next);}

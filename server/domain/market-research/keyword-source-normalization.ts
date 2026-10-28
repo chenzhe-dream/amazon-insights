@@ -35,7 +35,7 @@ function measure(raw: MarketJsonValue | undefined, type: "count" | "decimal" | "
 
 /** Shared deterministic page normalization; pool assembly replays it to verify
  * persisted numeric fields against the original response without a network call. */
-export function normalizeMarketKeywordPageMembers(scope: MarketAnalysisScope, rows: readonly MarketJsonValue[]) {
+export function normalizeMarketKeywordPageMembers(scope: MarketAnalysisScope, rows: readonly MarketJsonValue[], operation:'keyword_extends'|'category_keywords'='keyword_extends') {
   const issues: MarketKeywordIssue[] = [], members: MarketKeywordPageMember[] = [];
   const ids = new Set<string>();
   for (const [index, item] of rows.entries()) {
@@ -45,10 +45,16 @@ export function normalizeMarketKeywordPageMembers(scope: MarketAnalysisScope, ro
     const id = marketKeywordMemberId(scope, identity.data);
     if (ids.has(id)) issues.push({ code: 'duplicate-member', path: ['data', index, 'keyword'] });
     ids.add(id);
-    const metric = <T extends number | string>(key: string, type: 'count' | 'decimal' | 'text') => measure(item[key], type, ['data', index, key], issues) as MarketKeywordMetric<T>;
+    const metric = <T extends number | string>(key: string, type: 'count' | 'decimal' | 'text') => {
+      const raw=item[key];
+      // category_keywords documents integer strings; do not coerce fractions,
+      // exponent syntax, booleans, missing values or unsafe integers.
+      const value=operation==='category_keywords'&&type==='count'&&typeof raw==='string'&&/^(?:0|[1-9]\d*)$/.test(raw)?Number(raw):raw;
+      return measure(value,type,['data',index,key],issues) as MarketKeywordMetric<T>;
+    };
     members.push({ id, keyword: identity.data, rawKeyword: item.keyword as string,
       weeklySearchVolume: metric<number>('weekly_search_volume', 'count'), weeklySearchRank: metric<number>('weekly_search_rank', 'count'),
-      monthlySearchVolume: metric<number>('monthly_search_volume', 'count'), recommendedCpcUsd: metric<number>('recommended_cpc_bid', 'decimal'), seasonality: metric<string>('seasonality', 'text') });
+      monthlySearchVolume: metric<number>('monthly_search_volume', 'count'), recommendedCpcUsd: operation==='category_keywords'?missingKeywordMetric<number>():metric<number>('recommended_cpc_bid', 'decimal'), seasonality: metric<string>(operation==='category_keywords'?'search_volume_peak_season':'seasonality', 'text') });
   }
   return { members, issues };
 }

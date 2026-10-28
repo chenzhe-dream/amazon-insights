@@ -23,7 +23,7 @@ export type ProductKeywordSearchReport = {
   manualDimensions?: Record<string, {W1:string[];W2:string[];W3:string[];W4:string[]}>;
   productName: string;
   marketplace: string;
-  queryMode: "keyword_extends";
+  queryMode: "keyword_extends" | "category_keywords";
   keywords: ProductKeywordRow[];
   totalCount: number;
   fetchedPages: number;

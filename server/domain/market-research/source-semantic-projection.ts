@@ -67,7 +67,8 @@ export function projectMarketSourceSnapshot(options: { snapshot: MarketInputSnap
         title: text === null ? { state: 'missing', reason: 'field-absent' } : { state: 'known', value: field(record.id, 'title', text, ['data', index, 'title']) },
         parameters: { state: 'missing', reason: 'not-collected' } } }, fields);
     } else if (catalog.task === 'market-keyword-semantics') {
-      if (data.collection !== 'keyword-page' || source.provider !== 'sorftime' || source.operation !== 'keyword_extends') throw new TypeError('Invalid keyword source');
+      if (data.collection !== 'keyword-page' || source.provider !== 'sorftime' || !['keyword_extends','category_keywords'].includes(source.operation)) throw new TypeError('Invalid keyword source');
+      if(source.operation==='category_keywords'){same(source.requestIdentity.nodeId,sourceSnapshot.scope.nodeIdPath.split(':').at(-1));same(source.requestIdentity.nodeIdPath,sourceSnapshot.scope.nodeIdPath);}
       const member = obj(data.member), raw = z.string().parse(member.rawKeyword), normalized = MarketSourceIdentityValueSchemas.keyword.parse(raw);
       same(member.keyword, normalized); same(member.id, record.id);
       const scope = sourceSnapshot.scope;
@@ -117,7 +118,7 @@ export function projectMarketSourceSnapshot(options: { snapshot: MarketInputSnap
     ruleVersion: `${MARKET_SOURCE_PROJECTION_VERSION}:${catalogHash}`, collectedAt: sourceSnapshot.collectedAt,
     expectedRecordIds: kind === 'customer-themes' ? rows.map(r => r.id) : sourceSnapshot.expectedRecordIds, records: rows });
   const manifest = { projectionVersion: MARKET_SOURCE_PROJECTION_VERSION, catalogHash, task: catalog.task,
-    sourceKind: kind === 'customer-themes' ? 'customers-say' : kind === 'keywords' ? 'keyword-extensions' : 'product-month',
+    sourceKind: kind === 'customer-themes' ? 'customers-say' : kind === 'keywords' ? ([...verified.values()].some(s=>s.operation==='category_keywords')?'category-keywords':'keyword-extensions') : 'product-month',
     sourceInputSnapshotId: sourceSnapshot.snapshotId, inputSnapshotId: snapshot.snapshotId, sourceRefs: [...verified.keys()].sort(),
     missingSourceMemberIds: [...sourceSnapshot.coverage.missingRecordIds], emptyAsins,
     unrepresentedSelectedAsins: catalog.task === 'market-customer-theme-mapping' ? catalog.selectedAsins.filter(id => !sourceSnapshot.expectedRecordIds.includes(id)) : [] };

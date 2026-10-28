@@ -16,7 +16,7 @@ import {
 import { ConnectorError, type ConnectorRequest, type ConnectorResult, type RemoteMcpConnector } from "../connectors/connector-contract";
 import { createMarketSourceEvidence } from "../domain/market-research/source-evidence";
 
-type Operation = "keyword_extends" | "keyword_trend";
+type Operation = "keyword_extends" | "category_keywords" | "keyword_trend";
 type FailureCode = MarketKeywordSourceFailure["failure"]["code"];
 interface Dependencies { connector: RemoteMcpConnector; signal?: AbortSignal }
 export type CollectMarketKeywordPageInput = MarketKeywordPageRequest & Dependencies;
@@ -24,7 +24,7 @@ export type CollectMarketKeywordTrendInput = MarketKeywordTrendRequest & Depende
 type JsonObject = { [key: string]: MarketJsonValue };
 const count = z.number().finite().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const aliases: Record<MarketSourceIdentityField, readonly string[]> = {
-  marketplace: ["site", "keyword_support_site", "marketplace"],
+  marketplace: ["site", "amz_site", "keyword_support_site", "marketplace"],
   nodeIdPath: ["nodeIdPath", "node_id_path"], nodeId: ["nodeId", "node_id"],
   month: ["month"], asin: ["asin"], keyword: ["keyword"], page: ["page"], currency: ["currency"],
 };
@@ -122,7 +122,7 @@ function identityPaths(payload: JsonObject, operation: Operation): MarketSourceE
   };
   visit(payload, []);
   if (object(payload.data)) visit(payload.data, ["data"]);
-  if (operation === "keyword_extends" && Array.isArray(payload.data)) {
+  if (operation !== "keyword_trend" && Array.isArray(payload.data)) {
     payload.data.forEach((row, index) => { if (object(row)) visit(row, ["data", index], true); });
   }
   if (operation === "keyword_trend" && !paths.keyword?.some(path => path.length === 2 && path[0] === "data" && path[1] === "keyword")) {
@@ -135,18 +135,18 @@ function evidence(scope: MarketAnalysisScope, operation: Operation, keyword: str
   const countUnit = { status: "known", unit: "count", rawUnit: "count" } as const;
   const input: MarketSourceEvidenceInput = {
     scope, provider: "sorftime", operation,
-    requestIdentity: { marketplace: scope.marketplace, keyword, ...(page === null ? {} : { page }) },
+    requestIdentity: { marketplace: scope.marketplace, ...(operation==='category_keywords'?{nodeId:scope.nodeIdPath.split(':').at(-1)!,nodeIdPath:scope.nodeIdPath}:{keyword}), ...(page === null ? {} : { page }) },
     responseIdentityPaths: identityPaths(payload, operation), payload, fetchedAt: timestamp, observationPeriod: period,
-    units: operation === "keyword_extends" ? {
+    units: operation !== "keyword_trend" ? {
       weeklySearchVolume: countUnit, weeklySearchRank: countUnit, monthlySearchVolume: countUnit,
-      recommendedCpcUsd: { status: "known", unit: "currency", rawUnit: "USD", currency: "USD" },
+      ...(operation==='category_keywords'?{recommendedCpcUsd:{status:'unknown' as const,rawUnit:'local-currency exact bid',reason:'category_keywords exact bid is not the USD recommendation metric'}}:{recommendedCpcUsd: { status: "known" as const, unit: "currency" as const, rawUnit: "USD", currency: "USD" }}),
     } : {
       searchVolume: countUnit, searchRank: countUnit,
       recommendedBid: { status: "unknown", rawUnit: "CPC recommended bid", reason: object(payload.data) && Object.hasOwn(payload.data, "cpc_trend") ? "cpc_trend amount scale is ambiguous between documented cents and returned values" : "keyword_trend documentation does not state currency" },
       yoyGrowth: { status: "known", unit: "ratio", rawUnit: "fractional change" },
       recentGrowth: { status: "known", unit: "ratio", rawUnit: "fractional change" },
     },
-    coverage: { receivedCount, expectedCount: null, truncation: { status: "unknown", reason: operation === "keyword_extends" ? "One page only; source does not state total count or hasMore" : "Source returns a history window without a requested start/end or guaranteed continuity" } },
+    coverage: { receivedCount, expectedCount: null, truncation: { status: "unknown", reason: operation !== "keyword_trend" ? "One page only; source does not state total count or hasMore" : "Source returns a history window without a requested start/end or guaranteed continuity" } },
   };
   // The evidence wrapper adds depth/nodes to an otherwise valid raw response.
   if (!MarketInputRecordSchema.shape.data.safeParse(input).success) throw new EvidencePayloadError();
@@ -154,25 +154,26 @@ function evidence(scope: MarketAnalysisScope, operation: Operation, keyword: str
 }
 /** One seed/page only. Caller owns authorization, persistence and pool deduplication. */
 export async function collectMarketKeywordPage(input: CollectMarketKeywordPageInput, now?: Date): Promise<MarketKeywordPageResult> {
-  const operation = "keyword_extends";
-  const parsed = MarketKeywordPageRequestSchema.safeParse({ scope: input.scope, jobId: input.jobId, seed: input.seed, page: input.page, ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) });
+  const operation = input.sourceMode==='category-keywords'?'category_keywords':'keyword_extends';
+  const parsed = MarketKeywordPageRequestSchema.safeParse({ scope: input.scope, jobId: input.jobId, seed: input.seed, page: input.page, ...(input.sourceMode?{sourceMode:input.sourceMode}:{}), ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) });
   if (!parsed.success || !canRequest(parsed.data.scope, input.connector, now ?? new Date())) return failed(operation, "invalid-request");
   const request = parsed.data;
   let response: ConnectorResult;
   try {
-    response = await executeOnce(input.connector, { operation, input: { keyword: request.seed, keyword_support_site: sorftimeMarketSite(request.scope.marketplace), page: request.page }, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
+    const args=operation==='category_keywords'?{node_id:request.scope.nodeIdPath.split(':').at(-1)!,amz_site:sorftimeMarketSite(request.scope.marketplace),page:request.page}:{keyword:request.seed,keyword_support_site:sorftimeMarketSite(request.scope.marketplace),page:request.page};
+    response = await executeOnce(input.connector, { operation, input: args, governorScope: { organizationId: request.scope.organizationId, jobId: request.jobId } }, request.timeoutMs, input.signal);
   } catch (error) { return transportFailure(operation, error); }
   const raw = copyPayload(own(response, "data"));
   if (raw === undefined) return failed(operation, "malformed-response");
   const checkedNow = now ?? new Date();
   const timestamp = fetchedAt(response, operation, checkedNow);
   if (!timestamp || !object(raw) || !Array.isArray(raw.data) || raw.data.length > 20) return failed(operation, "malformed-response", raw);
-  const { issues, members } = normalizeMarketKeywordPageMembers(request.scope, raw.data);
+  const { issues, members } = normalizeMarketKeywordPageMembers(request.scope, raw.data,operation);
   if (issues.some(issue => issue.code === "invalid" || issue.code === "duplicate-member")) return failed(operation, "malformed-response", raw, issues);
   let source: MarketSourceEvidence;
-  try { source = evidence(request.scope, operation, request.seed, request.page, raw, timestamp, { kind: "unknown", reason: "keyword_extends supplies weekly/monthly values without calendar boundaries" }, raw.data.length, checkedNow); }
+  try { source = evidence(request.scope, operation, request.seed, request.page, raw, timestamp, { kind: "unknown", reason: `${operation} supplies weekly/monthly values without calendar boundaries` }, raw.data.length, checkedNow); }
   catch (error) { return failed(operation, error instanceof EvidencePayloadError ? "malformed-response" : "identity-conflict", raw, issues); }
-  return { status: members.length === 0 ? "empty" : issues.length ? "partial" : "ready", operation, sourceMode: "seed-extensions", seed: request.seed, page: request.page, receivedCount: raw.data.length, members,
+  return { status: members.length === 0 ? "empty" : issues.length ? "partial" : "ready", operation, sourceMode: operation==='category_keywords'?'category-keywords':"seed-extensions", seed: request.seed, page: request.page, receivedCount: raw.data.length, members,
     pagination: { pageLimit: 20, nextPageCandidate: raw.data.length === 20 && request.page < Number.MAX_SAFE_INTEGER ? request.page + 1 : null, hasMore: "unknown", totalCount: null }, evidence: source, issues };
 }
 

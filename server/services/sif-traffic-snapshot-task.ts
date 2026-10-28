@@ -1319,7 +1319,7 @@ export class SifTrafficSnapshotExecutionError extends WorkerTaskError {
 
 function safeTaskError(error: unknown) {
   if (error instanceof ConnectorError) {
-    const category = error.code === "quota-exhausted" ? "upstream-permanent" : error.code === "local-admission" ? "rate-limit" : error.code === "timeout"
+    const category = error.code === "quota-exhausted" || error.code === "keyword-not-trending" ? "upstream-permanent" : error.code === "local-admission" ? "rate-limit" : error.code === "timeout"
       ? "upstream-temporary"
       : error.code === "malformed-response"
       ? "data-quality"

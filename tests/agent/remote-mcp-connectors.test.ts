@@ -37,6 +37,14 @@ test('shared quota and wait errors preserve their meaning and quota never retrie
  }
 });
 
+test('non-trending keyword response is a non-retryable query error with no supplier text leakage',async()=>{
+ let calls=0;
+ const connector=createRemoteMcpConnector({id:'sorftime',resolveCredential:async()=> 'fixture',clock:()=>new Date(checkedAt),sleep:async()=>{},policy:immediatePolicy,
+  transport:async()=>{calls++;throw Object.assign(new Error('private supplier payload'),{kind:'keyword-not-trending'});},probeTransport:async()=>({})});
+ const error=await captureConnectorError(connector.execute({operation:'keyword_extends',input:{}}));
+ assert.equal(error.code,'keyword-not-trending');assert.equal(error.retryable,false);assert.equal(calls,1);assert.equal(error.message.includes('private'),false);
+});
+
 function jsonRpcResponse(
   data: Readonly<Record<string, unknown>> = { accepted: true },
   status = 200,
