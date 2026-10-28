@@ -48,10 +48,12 @@ import {canonicalJsonSha256} from '../runtime/model-request-accounting';
 import { MarketNodePathResolutionError, type MarketNodePathResolutionInput } from './market-node-path-resolver';
 import {ShapeCategoryNameRequestSchema,ShapeCategoryNameResponseSchema} from '../../shared/market-shape-category-name-contracts';
 import {ShapeCategoryNameError} from './market-shape-category-name';
+import {ConnectorError} from '../connectors/connector-contract';
+import {MARKET_SERVICE_ERROR_MESSAGES,type MarketServiceErrorCode} from '../../shared/market-service-errors';
 import type { MarketThemeTranslationService } from './market-theme-translation';
 
 export class MarketModuleServiceError extends Error {
-  constructor(readonly statusCode: 400 | 403 | 404 | 503, message: string) { super(message); }
+  constructor(readonly statusCode: 400 | 403 | 404 | 503, message: string, readonly code?:MarketServiceErrorCode) { super(message); }
 }
 type ModelIdentity = { configurationVersion: string; promptVersion: string };
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -73,7 +75,7 @@ export class MarketModuleService {
     try{return ShapeCategoryNameResponseSchema.parse({nodeId:await this.deps.resolveShapeCategoryName({...input,organizationId:actor.organizationId,jobId:crypto.randomUUID()})});}
     catch(error){
       if(error instanceof ShapeCategoryNameError)throw new MarketModuleServiceError(error.reason==='invalid-response'?503:400,error.reason==='empty'?'Sorftime 未找到完全匹配的类目英文名，请输入节点 ID 或核对英文名':error.reason==='ambiguous'?'类目英文名对应多个节点，请输入准确节点 ID':'Sorftime 类目查询响应无效，请稍后重试');
-      throw new MarketModuleServiceError(503,'Sorftime 类目查询暂不可用，请稍后重试');
+      throw new MarketModuleServiceError(503,MARKET_SERVICE_ERROR_MESSAGES.MARKET_CATEGORY_LOOKUP_UNAVAILABLE,'MARKET_CATEGORY_LOOKUP_UNAVAILABLE');
     }
   }
   private async replayModuleStart(actor:MarketExecutionActor,studyId:string,idempotencyKey:string,moduleKind:'shape-price'|'keywords'|'customer-themes',params:unknown){
@@ -84,11 +86,11 @@ export class MarketModuleService {
     if(previous.scope.researchId!==studyId||previous.moduleKind!==moduleKind||canonicalJsonSha256(publicParams)!==canonicalJsonSha256(params))throw new MarketExecutionConflictError();
     return previous;
   }
-  async createStudy(actor: MarketExecutionActor, body: unknown, key: unknown, internal?:{verifiedNodePath:true}) {
+  async createStudy(actor: MarketExecutionActor, body: unknown, key: unknown, internal?:{verifiedNodePath?:true;nodeResolution?:'sorftime-leaf'}) {
     const request = MarketStudyRequestSchema.parse(body), id = MarketModuleIdSchema.parse(key), now = this.now();
     if (request.toMonth >= now.slice(0, 7)) throw new MarketModuleServiceError(400, '请选择当前月份之前的完整月份');
     let scope = { ...request };
-    if (!internal?.verifiedNodePath && !request.nodeIdPath.includes(':') && this.deps.resolveNodePath) {
+    if (!internal?.verifiedNodePath && internal?.nodeResolution !== 'sorftime-leaf' && !request.nodeIdPath.includes(':') && this.deps.resolveNodePath) {
       try {
         scope = { ...scope, nodeIdPath: await this.deps.resolveNodePath({
           marketplace: request.marketplace,
@@ -102,7 +104,8 @@ export class MarketModuleService {
           throw new MarketModuleServiceError(error.reason === 'source-mismatch' ? 503 : 400,
             error.reason === 'empty' ? '未找到该类目节点的完整路径' : '类目节点路径无法确认');
         }
-        throw new MarketModuleServiceError(503, '类目节点解析暂不可用，请稍后重试');
+        const code=error instanceof ConnectorError && error.code==='timeout'?'MARKET_NODE_PATH_TIMEOUT':'MARKET_NODE_PATH_UNAVAILABLE';
+        throw new MarketModuleServiceError(503, MARKET_SERVICE_ERROR_MESSAGES[code],code);
       }
     }
     // The client's one-time UUID command key also names this new study. Retrying

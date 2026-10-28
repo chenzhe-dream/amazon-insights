@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 import { ADMIN_READ_WRITE_ROUTES } from '../../shared/admin-request-timing';
+import {MARKET_SERVICE_ERROR_MESSAGES,type MarketServiceErrorCode} from '../../shared/market-service-errors';
 
 import {
   ApiErrorResponseSchema,
@@ -514,6 +515,13 @@ export function createAgentServiceClient(
         );
       }
 
+      if (upstream.status === 503 && request.path.startsWith('/v1/market-analysis/')) {
+        const parsed = ApiErrorResponseSchema.safeParse(body);
+        if (parsed.success && Object.hasOwn(MARKET_SERVICE_ERROR_MESSAGES,parsed.data.error.code)) {
+          const code=parsed.data.error.code as MarketServiceErrorCode;
+          return errorResult(503,code,MARKET_SERVICE_ERROR_MESSAGES[code],requestId);
+        }
+      }
       if (
         upstream.status >= 500 ||
         upstream.status < 200 ||

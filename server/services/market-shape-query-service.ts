@@ -43,7 +43,10 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
    if(['queued','running'].includes(result.run.status)||(result.run.status==='succeeded'&&result.run.source?.products.length)){cached=result;break;}
   }
   const result=cached?{created:false,...cached}:await (async()=>{
-   const {study}=await service.createStudy(actor,input.scope,command);
+   // This flow sends a numeric leaf to Sorftime, whose returned category identity
+   // is checked by the collectors. It does not need SellerSprite's ancestor path.
+   // Keep an explicitly entered full path intact for scope/cache identity.
+   const {study}=await service.createStudy(actor,input.scope,command,{nodeResolution:'sorftime-leaf'});
    return service.startShapes(actor,study.id,input.params,command);
   })();
   if(input.forceRefresh && result.created) {

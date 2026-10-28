@@ -5,6 +5,21 @@ import {startPostgresTestContainer} from './helpers/postgres-test-container';
 import {runPostgresMigrations} from '../../server/db/postgres/migrations';
 import {createMarketSemanticFixture} from './helpers/market-semantic-fixture';
 import {MarketModuleService} from '../../server/services/market-module-service';
+import {ConnectorError} from '../../server/connectors/connector-contract';
+
+test('standalone Sorftime shape collection accepts a leaf without SellerSprite path lookup',{timeout:120000},async t=>{
+ const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);
+ const f=await createMarketSemanticFixture(pg.pool);let lookups=0;
+ const service=new MarketModuleService({context:f.context,modelIdentity:()=>null,resolveNodePath:async()=>{lookups++;throw new ConnectorError('sellerSprite','timeout',true);}});
+ const {organizationId,researchId,...scope}=f.scope;
+ const body={scope:{...scope,nodeIdPath:'3024183011'},params:{poolSize:100,newProductMonths:6,catalog:{task:'market-product-shape-suggestion',taxonomyVersion:'manual-after-collection/v1',allowedLabels:[]}}};
+ const key=randomUUID(),created=await service.queryShapes(f.actor,body,key);
+ assert.equal(created.run.scope.nodeIdPath,'3024183011');assert.equal(created.run.status,'queued');assert.equal(lookups,0);
+ assert.equal((await service.queryShapes(f.actor,body,key)).run.id,created.run.id);
+ await assert.rejects(service.createStudy(f.actor,body.scope,randomUUID()),(error:any)=>error.code==='MARKET_NODE_PATH_TIMEOUT');
+ assert.equal(lookups,1,'SellerSprite-based study creation retains its path requirement');
+ await assert.rejects(service.queryShapes(f.actor,{...body,scope:{...body.scope,nodeIdPath:'invalid'}},randomUUID()));
+});
 
 test('equivalent concurrent shape queries reuse a run and explicit refresh is idempotent',{timeout:120000},async t=>{
  const pg=await startPostgresTestContainer();t.after(()=>pg.close());await runPostgresMigrations(pg.pool);

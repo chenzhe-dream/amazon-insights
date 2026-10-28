@@ -1151,3 +1151,11 @@ test("upstream 5xx responses are normalized without reflecting sensitive content
   assert.match(serialized, /AGENT_SERVICE_UPSTREAM_ERROR/);
   assert.doesNotMatch(serialized, /10\.0\.0\.8|super-secret-proxy-token/);
 });
+
+test('known market unavailability uses fixed Chinese guidance without upstream details',async()=>{
+ const client=makeClient(async()=>Response.json({error:{code:'MARKET_NODE_PATH_TIMEOUT',message:`${internalUrl} ${proxyToken}`,requestId:'upstream-request',details:[{path:'secret',message:'private-debug'}]}},{status:503}));
+ const response=await callProxy({path:['v1','market-analysis','studies','70000000-0000-4000-8000-000000000001'],client});
+ assert.equal(response.status,503);
+ const body=await response.json();assert.equal(body.error.code,'MARKET_NODE_PATH_TIMEOUT');assert.match(body.error.message,/卖家精灵.*超时/);
+ assert.equal(body.error.details,undefined);assert.doesNotMatch(JSON.stringify(body),/10\.0\.0\.8|super-secret|private-debug/);
+});

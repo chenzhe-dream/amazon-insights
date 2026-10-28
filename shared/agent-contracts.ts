@@ -171,6 +171,9 @@ export const RunModeSchema = z.enum(["existing-data", "collect-missing"]);
 export type RunMode = z.infer<typeof RunModeSchema>;
 
 export const ApiErrorCodeSchema = z.enum([
+  'MARKET_NODE_PATH_TIMEOUT',
+  'MARKET_NODE_PATH_UNAVAILABLE',
+  'MARKET_CATEGORY_LOOKUP_UNAVAILABLE',
   "QUEUE_TIMEOUT",
   "VALIDATION_ERROR",
   "ALEXA_VOC_ASIN_MISMATCH",
