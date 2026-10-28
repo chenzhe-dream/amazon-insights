@@ -24,7 +24,7 @@ test('one overview submission synchronizes modules; late results preserve edited
   return route.fulfill({status:404,json:{error:{message:'no report fixture'}}});
  });
  await page.goto(`${origin}/?themeView=overview&marketNode=1063294&marketMonth=2026-08&marketFrom=2026-06&marketSite=US`);
- await page.getByRole('button',{name:'筛选市场',exact:true}).click();await page.waitForFunction(()=>new URL(location.href).searchParams.has('linkedBatch'));assert.equal(writes,1);assert.equal(await page.getByRole('region',{name:'四模块联动分析'}).count(),0);
+ await page.getByRole('button',{name:'筛选市场',exact:true}).click();await page.waitForFunction(()=>new URL(location.href).searchParams.has('linkedBatch'));assert.equal(writes,1);await page.getByRole('region',{name:'市场总览查询条件'}).getByRole('status',{name:'联动进度'}).waitFor();assert.match(await page.getByRole('status',{name:'联动进度'}).innerText(),/正在获取类目基础数据/);assert.equal(await page.getByRole('region',{name:'四模块联动分析'}).count(),0);
  const nav=page.getByRole('navigation',{name:'市场调研模块'});
  await nav.getByRole('button',{name:'商品形态及价格带'}).click();
  assert.equal(await page.getByLabel('类目节点',{exact:true}).inputValue(),'1063294');
@@ -33,7 +33,7 @@ test('one overview submission synchronizes modules; late results preserve edited
  const editedNode=await page.getByLabel('类目节点',{exact:true}).elementHandle();
  assert.ok(batch);const ready=batch as MarketLinkedBatch;ready.status='started';ready.categoryName='Floor Lamps';ready.resolvedNodeIdPath='228013:1063294';ready.message='四个分析任务已启动';
  for(const module of ['overview','shapes','keywords','themes'] as const)ready.modules[module]={status:'started',runId:randomUUID(),message:null};
- await page.waitForFunction(id=>new URL(location.href).searchParams.get('keywordRun')===id,ready.modules.keywords.runId);assert.equal(await page.getByText('四个分析任务已启动',{exact:true}).count(),0);
+ await page.waitForFunction(id=>new URL(location.href).searchParams.get('keywordRun')===id,ready.modules.keywords.runId);assert.equal(await page.getByText('四个分析任务已启动',{exact:true}).count(),1);
  assert.equal(await page.getByLabel('类目节点',{exact:true}).inputValue(),'999999','late result does not overwrite independently edited category');
  assert.equal(await editedNode!.evaluate(node=>node.isConnected),true,'completion in other modules must not remount this editor');
  assert.equal(new URL(page.url()).searchParams.get('shapeRun'),null);assert.equal(new URL(page.url()).searchParams.get('keywordRun'),ready.modules.keywords.runId);

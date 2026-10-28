@@ -106,9 +106,9 @@ test('durable linked batch survives recreation, deduplicates concurrent commands
   const failedKey=randomUUID();await service.create(f.actor,{...request,forceRefresh:true},failedKey);
   for(let attempt=1;attempt<=(retryable?3:1);attempt++){
    const failedClaim=await store.claim({ownerId:'linked-test',now:new Date().toISOString(),leaseUntil:new Date(Date.now()+120000).toISOString()});assert.ok(failedClaim);
-   await store.finish({claim:failedClaim,now:new Date().toISOString(),report:null,error:{dataset:'research',code:'timeout',message:'Synthetic source unavailable',retryable}});await service.tick();
-   const failed=(await service.find(f.actor,failedKey)).batch;assert.equal(failed.status,'failed');assert.equal(failed.basicRetryable,retryable&&attempt<3);
-   assert.equal(Object.values(failed.modules).every(module=>module.runId===null),true);
+   await store.finish({claim:failedClaim,now:new Date().toISOString(),report:null,error:{dataset:'research',code:'timeout',message:'Synthetic source unavailable',retryable}});for(let dispatch=0;dispatch<4;dispatch++)await service.tick();
+   const failed=(await service.find(f.actor,failedKey)).batch;assert.equal(failed.status,'pending','independent source may still return a category name');assert.equal(failed.basicRetryable,retryable&&attempt<3);
+   assert.ok(failed.modules.shapes.runId);assert.ok(failed.modules.themes.runId);assert.equal(failed.modules.overview.status,'blocked');assert.equal(failed.modules.keywords.runId,null);
    if(failed.basicRetryable){await Promise.all([service.retry(f.actor,failedKey,{basic:true}),service.retry(f.actor,failedKey,{basic:true})]);assert.equal((await research.find(f.actor,failed.basicJobId)).attempts,attempt);}
    else await assert.rejects(service.retry(f.actor,failedKey,{basic:true}),/无法继续重试/);
   }

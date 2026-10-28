@@ -35,7 +35,7 @@ test('offline multi-category dispatch preserves each site, category and date wit
   const batch=(await make().find(f.actor,key)).batch;assert.equal(batch.status,'started');
   const ids=Object.values(batch.modules).map(m=>{assert.equal(m.status,'started');assert.ok(m.runId);return m.runId!;});assert.equal(new Set(ids).size,4);
   const runs=(await pg.pool.query('SELECT id,request_json FROM market_analysis_module_runs WHERE id=ANY($1::uuid[])',[ids])).rows;assert.equal(runs.length,4);
-  for(const r of runs){const s=r.request_json.scope;assert.equal(s.marketplace,marketplace);assert.equal(s.currency,marketSiteCurrency(marketplace));assert.equal(s.nodeIdPath,nodePath);assert.equal(s.fromMonth,fromMonth);assert.equal(s.toMonth,'2026-09');}
+  for(const r of runs){const s=r.request_json.scope;assert.equal(s.marketplace,marketplace);assert.equal(s.currency,marketSiteCurrency(marketplace));assert.equal(s.nodeIdPath,['shape-price','customer-themes'].includes(r.request_json.moduleKind)?nodeQuery:nodePath,'early independent runs preserve their original verified leaf scope');assert.equal(s.fromMonth,fromMonth);assert.equal(s.toMonth,'2026-09');}
   assert.equal(runs.find(r=>r.request_json.moduleKind==='keywords').request_json.params.plannedPages[0].seed,categoryName);
   // Reload/recreate and replay are reads or deduplicated commands; no additional runs.
   await make().find(f.actor,key);await make().create(f.actor,request,key);await make().tick();

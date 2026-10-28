@@ -9,9 +9,10 @@ export const linkedModuleLabels:Record<LinkedModule,string>={overview:'市场总
 export const MarketLinkedRequestSchema=z.object({scope:MarketResearchScopeSchema,fromMonth:z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),forceRefresh:z.boolean().optional()}).strict()
  .refine(v=>v.scope.month!=='last30'&&v.fromMonth<=v.scope.month,'四模块联动请选择完整自然月，最近30天只适用于单独总览');
 export type MarketLinkedRequest=z.infer<typeof MarketLinkedRequestSchema>;
-const moduleState=z.object({status:z.enum(['pending','started','failed']),runId:MarketModuleIdSchema.nullable(),message:z.string().nullable()}).strict();
+const moduleState=z.object({status:z.enum(['pending','started','blocked','failed']),runId:MarketModuleIdSchema.nullable(),message:z.string().nullable()}).strict();
 export const MarketLinkedResponseSchema=z.object({batch:z.object({id:MarketModuleIdSchema,request:MarketLinkedRequestSchema,
- basicJobId:z.string().uuid(),basicRetryable:z.boolean(),status:z.enum(['pending','started','failed']),message:z.string().nullable(),categoryName:z.string().nullable(),resolvedNodeIdPath:z.string().regex(/^\d+(?::\d+)*$/).nullable(),
+ basicJobId:z.string().uuid(),basicRetryable:z.boolean(),basicStatus:z.enum(['queued','running','succeeded','partial','failed']).optional(),basicMessage:z.string().nullable().optional(),
+ status:z.enum(['pending','started','partial','failed']),message:z.string().nullable(),categoryName:z.string().nullable(),categoryNameSource:z.enum(['sellersprite','sorftime']).nullable().optional(),resolvedNodeIdPath:z.string().regex(/^\d+(?::\d+)*$/).nullable(),
  modules:z.object({overview:moduleState,shapes:moduleState,keywords:moduleState,themes:moduleState}).strict()}).strict()}).strict();
 export type MarketLinkedBatch=z.infer<typeof MarketLinkedResponseSchema>['batch'];
 export const MarketLinkedRetrySchema=z.object({modules:z.array(z.enum(linkedModules)).max(4).default([]),basic:z.boolean().default(false)}).strict();
