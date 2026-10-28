@@ -161,11 +161,31 @@ const client = new pg.Client({
 try {
   await client.connect();
   const { rows } = await client.query(`
+    WITH dormant_sync_runs AS (
+      -- Completed imports can retain the canonical, never-dispatched traffic placeholder.
+      -- Preserve those records; any lease, attempt or additional stage still blocks publication.
+      SELECT run.id
+        FROM analysis_runs run
+        JOIN sync_jobs job ON job.run_id = run.id
+        JOIN run_stages stage ON stage.run_id = run.id
+       WHERE run.status = 'queued' AND job.status = 'completed'
+         AND job.project_id = run.project_id AND job.actor_id = run.created_by
+         AND run.idempotency_scope = 'sync:' || job.organization_id || ':' || job.project_id
+         AND run.idempotency_key = job.job_id
+         AND job.leased_by IS NULL AND job.lease_expires_at IS NULL
+         AND stage.stage = 'traffic-analysis' AND stage.status = 'queued'
+         AND stage.attempt_count = 0 AND stage.started_at IS NULL
+         AND (SELECT count(*) FROM run_stages other WHERE other.run_id = run.id) = 1
+         AND (SELECT count(*) FROM sync_jobs other WHERE other.run_id = run.id) = 1
+         AND NOT EXISTS (SELECT 1 FROM job_attempts attempt WHERE attempt.stage_id = stage.id)
+    )
     SELECT
       (SELECT count(*)::int FROM sync_jobs WHERE status IN ('queued', 'running')) +
-      (SELECT count(*)::int FROM run_stages WHERE status IN ('queued', 'running')) +
+      (SELECT count(*)::int FROM run_stages WHERE status IN ('queued', 'running')
+        AND run_id NOT IN (SELECT id FROM dormant_sync_runs)) +
       (SELECT count(*)::int FROM job_attempts WHERE status IN ('queued', 'running')) +
-      (SELECT count(*)::int FROM analysis_runs WHERE status IN ('queued', 'running')) +
+      (SELECT count(*)::int FROM analysis_runs WHERE status IN ('queued', 'running')
+        AND id NOT IN (SELECT id FROM dormant_sync_runs)) +
       (SELECT CASE WHEN EXISTS(SELECT 1 FROM market_analysis_steps WHERE status IN ('queued', 'running')) THEN 1 ELSE 0 END) AS active
   `);
   process.stdout.write(JSON.stringify({ ok: true, active: Number(rows[0]?.active ?? -1) }));
