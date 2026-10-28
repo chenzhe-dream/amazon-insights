@@ -436,7 +436,7 @@ function buildW1Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
   };
 }
 
-function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions): KeywordDemandDimensionSummary {
+function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVolume: number, manual?: ManualDimensions, sourceLabel='扩展词'): KeywordDemandDimensionSummary {
   let matchedKeywordCount = 0;
   const dimensionRows = aggregateDimensionRows(
     rows,
@@ -451,7 +451,7 @@ function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
     totalVolume,
   );
   const coveredShare = dimensionRows.reduce((sum, row) => sum + row.sharePct, 0);
-  const coverageNote = `基于上方 ${rows.length} 条扩展词 · 识别 ${matchedKeywordCount} 条含人群词 · 人群词占样本 ${coveredShare.toFixed(1)}%`;
+  const coverageNote = `基于上方 ${rows.length} 条${sourceLabel} · 识别 ${matchedKeywordCount} 条含人群词 · 人群词占样本 ${coveredShare.toFixed(1)}%`;
 
   let conclusion = "样本未识别到明确人群词，目标用户待验证；不据此推断年龄、性别或家庭定位。";
   if (dimensionRows.length) {
@@ -459,7 +459,7 @@ function buildW2Summary(rows: ProductKeywordRow[], productSeed: string, totalVol
     conclusion =
       coveredShare < 5
         ? `人群信号极弱（合计 < 5%），仅见「${top.label}」等零散词，暂不能确定主要目标人群。`
-        : `「${top.label}」人群信号最强（约 ${top.sharePct.toFixed(1)}%）；含人群词合计约 ${coveredShare.toFixed(1)}%，均来自上方同一批扩展词。`;
+        : `「${top.label}」人群信号最强（约 ${top.sharePct.toFixed(1)}%）；含人群词合计约 ${coveredShare.toFixed(1)}%，均来自上方同一批${sourceLabel}。`;
   }
 
   return {
@@ -700,6 +700,8 @@ function mergeSmallClusters(clusters: KeywordDemandCluster[], totalVolume: numbe
 }
 
 export function buildAmazonKeywordDemandReport(report: ProductKeywordSearchReport): AmazonKeywordDemandReport {
+  const categorySource=report.queryMode==='category_keywords';
+  const source=categorySource?'Sorftime category_keywords':'Sorftime keyword_extends';
   const rows = report.keywords.filter(row => row.keyword && row.monthlySearchVolume != null);
   if (!rows.length) {
     const emptyDimension = (id: "W1" | "W2" | "W3" | "W4" | "W5", title: string, question: string): KeywordDemandDimensionSummary => ({
@@ -715,7 +717,7 @@ export function buildAmazonKeywordDemandReport(report: ProductKeywordSearchRepor
       scope: {
         marketplace: report.marketplace,
         productScope: report.productName,
-        source: "Sorftime keyword_extends",
+        source,
         sampleCount: 0,
         totalMonthlyVolume: 0,
         trendEnrichedCount: 0,
@@ -747,7 +749,7 @@ export function buildAmazonKeywordDemandReport(report: ProductKeywordSearchRepor
   const niche = scored.filter(cluster => cluster.computed.demandClass === "细分需求");
 
   const w1 = buildW1Summary(rows, report.productName, totalVolume, report.manualDimensions);
-  const w2 = buildW2Summary(rows, report.productName, totalVolume, report.manualDimensions);
+  const w2 = buildW2Summary(rows, report.productName, totalVolume, report.manualDimensions,categorySource?'类目核心词':'扩展词');
   const w3 = buildW3Summary(rows, report.productName, totalVolume, report.manualDimensions);
   const w4 = buildW4Summary(rows, report.productName, totalVolume, report.manualDimensions);
   const w5 = buildW5Summary(rows, totalVolume, trendEnrichedCount, scored);
@@ -787,14 +789,14 @@ export function buildAmazonKeywordDemandReport(report: ProductKeywordSearchRepor
     scope: {
       marketplace: report.marketplace,
       productScope: report.productName,
-      source: "Sorftime keyword_extends",
+      source,
       sampleCount: rows.length,
       totalMonthlyVolume: totalVolume,
       trendEnrichedCount,
     },
     sampleWarning: rows.length < 30 ? "样本量不足（< 30），结论仅供参考" : null,
     dataNotes: [
-      `数据来自页面 Sorftime 扩展词缓存，非全类目词池`,
+      categorySource?'数据来自 Sorftime 类目节点核心词分页，保留来源顺序与词义；当前样本不代表全类目词池，相关性仍需校对':`数据来自页面 Sorftime 扩展词缓存，非全类目词池`,
       trendEnrichedCount > 0
         ? `趋势已补拉 ${trendEnrichedCount}/${rows.length}，W5 采用 Sorftime 月搜索量等长窗口增速（非日历年同比）`
         : "趋势尚未补拉完成，W5 标记为无趋势数据",

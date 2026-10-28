@@ -7,6 +7,17 @@ import { buildKeywordOriginalEstimate } from "../../server/domain/market-researc
 import { keywordRuleFixture } from "./helpers/market-keyword-rule-fixture";
 import { canonicalJsonSha256 as digest } from "../../server/runtime/model-request-accounting";
 
+test('category keyword report keeps its source in rules, coverage notes and rendered summary',()=>{
+ const facts=structuredClone(keywordRuleFixture().response.run.facts!);
+ facts.members.forEach(member=>{member.pageMetrics.monthlySearchVolume={value:100,reason:null};member.occurrences=[{inputSnapshotId:facts.pool.rawInputSnapshotId,sourceRef:member.sourceRef,seed:'lamp',page:1,sourceIndex:0,memberHash:'0'.repeat(64),sourceMode:'category-keywords'}];});
+ const {factsId:_,...basis}=facts;facts.factsId=`market-keyword-facts:${digest(basis)}`;
+ const estimate=buildKeywordOriginalEstimate({facts,productSeed:'lamp'});
+ assert.equal(estimate.report.scope.source,'Sorftime category_keywords');
+ const html=renderToStaticMarkup(<MarketKeywordOriginalEstimateReport estimate={estimate}/>);
+ assert.match(html,/类目核心词/);assert.match(html,/不代表全类目词池/);
+ assert.doesNotMatch(html,/keyword_extends|条有效扩展词|扩展词缓存/);
+});
+
 test("keyword report renders the 14 business outputs and explicit pending evidence", () => {
   const facts = structuredClone(keywordRuleFixture().response.run.facts!);
   facts.members.forEach(member => {

@@ -159,7 +159,7 @@ function ArchiveDemandSummary({ report }: { report: AmazonKeywordDemandReport })
               {report.scope.productScope} · {report.scope.marketplace} · 五维需求分析 W1–W5
             </h3>
             <p>
-              基于 {report.scope.sampleCount} 条有效扩展词 · 月搜索量合计 {formatNum(report.scope.totalMonthlyVolume)} ·
+              基于 {report.scope.sampleCount} 条有效{report.scope.source==='Sorftime category_keywords'?'类目核心词':'扩展词'} · 月搜索量合计 {formatNum(report.scope.totalMonthlyVolume)} ·
               数据源 {report.scope.source}
             </p>
           </div>
