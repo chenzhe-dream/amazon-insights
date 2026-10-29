@@ -15,7 +15,7 @@ export type MarketResearchScope = z.infer<typeof MarketResearchScopeSchema>;
 
 export const MarketResearchIssueSchema = object({
   dataset: z.enum(["node", "research", "statistics"]),
-  code: z.enum(["quota-exhausted", "local-admission", "configuration", "authentication", "rate-limit", "timeout", "upstream-temporary", "upstream-permanent", "malformed-response", "empty", "scope-mismatch", "interrupted"]),
+  code: z.enum(["saved-source-missing", "quota-exhausted", "local-admission", "configuration", "authentication", "rate-limit", "timeout", "upstream-temporary", "upstream-permanent", "malformed-response", "empty", "scope-mismatch", "interrupted"]),
   message: z.string().max(240),
   retryable: z.boolean(),
 });

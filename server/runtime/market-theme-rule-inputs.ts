@@ -66,6 +66,7 @@ async function readInputs(context:PostgresQueryContext,view:MarketModuleRunView,
     for (const id of [original.selectionInputSnapshotId, ...original.observations.map(o => o.inputSnapshotId)])
       if (!poolReceipt.step.inputRefs.some(r => r.kind === 'input' && r.id === id)) invalid();
     const selection = await load(original.selectionInputSnapshotId), sources: Record<string, MarketSourceEvidence> = {}, observations = [];
+    for(const record of selection.records){const ref=z.string().parse(obj(record.data).sourceRef);if(!sources[ref]){const saved=await snapshots.findSource({actor,studyId:view.run.scope.researchId,id:ref});if(!saved)invalid();sources[ref]=saved.evidence;}}
     for (const o of original.observations) {
       if (!poolReceipt.step.inputRefs.some(r => r.kind === 'source' && r.id === o.sourceRef)) invalid();
       const source = await snapshots.findSource({ actor, studyId: view.run.scope.researchId, id: o.sourceRef }); if (!source) invalid();

@@ -1,3 +1,4 @@
+import {MarketAcquisitionPolicyFields} from './market-acquisition-policy';
 import { z } from 'zod';
 import { MarketKeywordSemanticsInputSchema } from './market-semantic-contracts';
 import {MarketKeywordPageIdentitySchema} from './market-keyword-source-contracts';
@@ -7,7 +8,7 @@ export const MARKET_KEYWORD_RULES_FLOW_VERSION = 'market-keyword-flow/rules-v1';
 export const isMarketKeywordGlobalMode=(value:unknown):value is 'global-reconciliation/v1'|'global-reconciliation/v2'=>value==='global-reconciliation/v1'||value==='global-reconciliation/v2';
 const plannedPages = z.array(MarketKeywordPageIdentitySchema)
   .min(1).max(100).refine(pages => new Set(pages.map(p => JSON.stringify([p.seed, p.page]))).size === pages.length, 'Duplicate planned page');
-export const MarketKeywordStartRequestSchema = z.object({
+export const MarketKeywordStartRequestSchema = z.object({...MarketAcquisitionPolicyFields,
   paginationMode:z.literal('until-short-page/v1').optional(),
   supplementalSources:z.literal('sif-aba/v1').optional(),
   analysisMode:z.enum(['global-reconciliation/v1','global-reconciliation/v2']).optional(),

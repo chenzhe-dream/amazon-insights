@@ -57,6 +57,7 @@ export function createMarketThemePoolStep(context: PostgresQueryContext): Market
         })) : []) } };
     }
     const selection = await bound(input.selectionInputSnapshotId);
+    for(const record of selection.records)await source(obj(record.data).sourceRef);
     const selectedReceipt = view.attempts.find(a => a.status === 'succeeded' && claim.step.inputRefs.some(r => r.kind === 'step-output' && r.id === a.id) &&
       view.steps.some(s => s.id === a.stepId && s.latestAttemptId === a.id && s.status === 'succeeded' && s.kind === 'prepare-members' && (s.input as { phase?: unknown })?.phase === 'select-theme-members') &&
       (a.output as { selectionInputSnapshotId?: string })?.selectionInputSnapshotId === selection.snapshotId &&

@@ -1,3 +1,4 @@
+import {SavedSourceMissingError} from '../../scripts/lib/sorftime-source-cache.mjs';
 import { readServerConnectorSecret } from "../config/connector-secrets.mjs";
 import {
   callSellerSpriteMcpTool,
@@ -56,7 +57,7 @@ function dependencies(input: McpConnectorDependencies) {
       input.resolveCredential ??
       (async (connectorId: ConnectorId) =>
         readServerConnectorSecret(connectorId, env)),
-    fetchImpl: input.fetchImpl ?? fetch,
+    fetchImpl: env.MARKET_EXTERNAL_COLLECTION_MODE==='saved-only' ? (async()=>{throw new SavedSourceMissingError();}) as typeof fetch : input.fetchImpl ?? fetch,
     clock: input.clock ?? (() => new Date()),
     sleep:
       input.sleep ??
@@ -77,7 +78,7 @@ export function createSifConnector(
     transport: (request, signal, credential, context) =>
       callSifTool(request.operation, request.input, {
         env: { ...resolved.env, SIF_MCP_SECRET: credential, AGENT_EXECUTION_ORGANIZATION_ID: undefined, AGENT_SYNC_JOB_ID: undefined },
-        fetchImpl: resolved.fetchImpl, signal, sourceCache: input.sourceCache,
+        fetchImpl: resolved.fetchImpl, signal, sourceCache: input.sourceCache, savedOnly: request.savedOnly,
         resourceGovernor: context.resourceGovernor ?? undefined,
         organizationId: context.governorScope?.organizationId ?? null,
         jobId: context.governorScope?.jobId ?? null, attemptKind: context.attemptKind,
@@ -105,7 +106,7 @@ export function createSorftimeConnector(
     resolveCredential: scope => resolved.resolveCredential("sorftime", scope),
     transport: (request, signal, credential, context) => callSorftimeTool(
       credential, request.operation, request.input, {
-        sourceCache: input.sourceCache,
+        sourceCache: input.sourceCache, savedOnly: request.savedOnly,
         fetchImpl: resolved.fetchImpl, signal,
         resourceGovernor: context.resourceGovernor ?? undefined,
         organizationId: context.governorScope?.organizationId ?? null,
@@ -145,7 +146,7 @@ export function createSellerSpriteConnector(
         request.input,
         {
           sessionPool,
-          sourceCache: input.sourceCache,
+          sourceCache: input.sourceCache, savedOnly: request.savedOnly,
           sessionScope: request.sessionScope,
           fetchImpl: resolved.fetchImpl,
           signal,

@@ -1,3 +1,4 @@
+import {replayPluginShapeImage} from './plugin-shape-image-reuse';
 import {z} from 'zod';
 import {MarketAnalysisScopeSchema,MarketInputRecordSchema,type MarketAnalysisScope} from '../../shared/market-analysis-contracts';
 import {MarketSourceIdentityValueSchemas,type MarketSourceEvidence,type MarketSourcePayloadPath} from '../../shared/market-source-contracts';
@@ -60,12 +61,12 @@ export async function readMarketShapeImages(input:{view:MarketModuleRunView;acto
   if(!attempt||attempt.status!==step.status||obj(step.input).selectionInputSnapshotId!==input.selectionInputSnapshotId)throw new TypeError('Product image attempt differs');
   const output=obj(attempt.output),query={actor,studyId:scope.researchId,moduleRunId:view.run.id};
   const [saved,raw]=await Promise.all([snapshots.findInput({...query,id:z.string().parse(output.inputSnapshotId)}),snapshots.findSource({...query,id:z.string().parse(output.sourceRef)})]);
-  if(!saved||!raw||digest(saved.snapshot.scope)!==digest(scope)||digest(raw.evidence.scope)!==digest(scope)||raw.id!=='market-source:'+digest(raw.evidence)||raw.evidence.requestIdentity.asin!==asin||raw.evidence.requestIdentity.marketplace!==scope.marketplace||raw.evidence.operation!=='product_detail')throw new TypeError('Product image source differs');
-  const result=await collectMarketShapeProductImage({scope,asin,jobId:'image-replay',now:()=>new Date(raw.evidence.fetchedAt),connector:{id:'sorftime',probe:async()=>{throw Error('No probes in replay')},execute:async()=>({data:structuredClone(raw.evidence.payload) as Record<string,unknown>,source:{connectorId:'sorftime',operation:'product_detail',fetchedAt:raw.evidence.fetchedAt,attemptCount:1}})}});
+  if(!saved||!raw||digest(saved.snapshot.scope)!==digest(scope)||digest(raw.evidence.scope)!==digest(scope)||raw.id!=='market-source:'+digest(raw.evidence)||raw.evidence.requestIdentity.asin!==asin||raw.evidence.requestIdentity.marketplace!==scope.marketplace||!['product_detail','plugin_product_basic'].includes(raw.evidence.operation))throw new TypeError('Product image source differs');
+  const result=raw.evidence.operation==='plugin_product_basic'?replayPluginShapeImage(scope,raw.evidence.payload,raw.evidence.fetchedAt):await collectMarketShapeProductImage({scope,asin,jobId:'image-replay',now:()=>new Date(raw.evidence.fetchedAt),connector:{id:'sorftime',probe:async()=>{throw Error('No probes in replay')},execute:async()=>({data:structuredClone(raw.evidence.payload) as Record<string,unknown>,source:{connectorId:'sorftime',operation:'product_detail',fetchedAt:raw.evidence.fetchedAt,attemptCount:1}})}});
   if(result.status==='failed'||digest(result.evidence)!==digest(raw.evidence))throw new TypeError('Product image source replay differs');
   const expected=createMarketInputSnapshot({scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:[asin],records:[{id:asin,scope,data:{collection:'product-image',asin,imageUrl:result.imageUrl,sourceRef:raw.id}}]});
   if(digest(saved.snapshot)!==digest(expected))throw new TypeError('Product image input replay differs');
-  return {...base,status:result.status,imageUrl:result.imageUrl,sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt,marginObservation:parseSorftimeMarginObservation(raw.evidence.payload,asin)};
+  return {...base,provider:raw.evidence.provider,status:result.status,imageUrl:result.imageUrl,sourceRef:raw.id,inputSnapshotId:saved.snapshot.snapshotId,fetchedAt:raw.evidence.fetchedAt,marginObservation:raw.evidence.operation==='product_detail'?parseSorftimeMarginObservation(raw.evidence.payload,asin):null};
  }));
- return MarketShapeProductImagesPublicSchema.parse({provider:'sorftime',products});
+ return MarketShapeProductImagesPublicSchema.parse({provider:new Set(products.filter(p=>'provider' in p).map(p=>p.provider)).size>1?'mixed':products.find(p=>'provider' in p)?.provider??'sorftime',products});
 }

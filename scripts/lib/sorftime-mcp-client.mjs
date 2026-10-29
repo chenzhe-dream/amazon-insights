@@ -13,7 +13,7 @@ import {
   runWithProviderDiagnostics,
 } from "./provider-diagnostics.mjs";
 import { providerEndpoint } from "./provider-network.mjs";
-import { sourceCacheFromEnv } from "./sorftime-source-cache.mjs";
+import { sourceCacheFromEnv, SavedSourceMissingError } from "./sorftime-source-cache.mjs";
 import { isQuotaResponse, SorftimeQuotaError, assertSourceResponse } from "./sorftime-source-policy.mjs";
 
 export function readSorftimeKey(env = process.env) {
@@ -139,9 +139,10 @@ export async function callSorftimeTool(key, toolName, args, options = {}) {
     }
     return value;
   });
-  if(!cache) return execute();
+  const savedOnly=options.savedOnly===true||env.MARKET_EXTERNAL_COLLECTION_MODE==='saved-only';
+  if(!cache){if(savedOnly)throw new SavedSourceMissingError();return execute();}
   return cache.run({
-    key, endpoint: providerEndpoint("sorftime", env), tool: toolName, args,
+    key, endpoint: providerEndpoint("sorftime", env), tool: toolName, args, savedOnly,
     jobId: options.jobId ?? env.AGENT_SYNC_JOB_ID, signal: options.signal,
     forceRefresh: options.forceRefresh === true || env.FORCE_REFRESH === '1' || process.argv.includes('--force'),
   }, execute);

@@ -132,6 +132,7 @@ function isStructuredData(
 
 function classifyError(connectorId: ConnectorId, error: unknown) {
   if (error instanceof ConnectorError) return error;
+  if(error instanceof Error&&error.name==='SavedSourceMissingError')return new ConnectorError(connectorId,'saved-source-missing',false);
   if (error instanceof AttemptTimeoutError) {
     return new ConnectorError(connectorId, "timeout", true);
   }

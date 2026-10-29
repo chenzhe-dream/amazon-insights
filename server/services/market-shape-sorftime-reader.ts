@@ -1,3 +1,4 @@
+import {replayPluginShapeCategoryPool} from './plugin-shape-category-pool';
 import {z} from 'zod';
 import type {MarketExecutionActor,MarketModuleRunView} from '../db/market-module-execution-repository';
 import {PostgresMarketAnalysisSnapshotStore} from '../db/postgres/market-analysis-snapshot-store';
@@ -15,7 +16,7 @@ export async function replaySorftimeShapePoolPages({view,actor,snapshots,pageAtt
   const input=obj(step.input),out=obj(attempt.output),query={actor,studyId:view.run.scope.researchId,moduleRunId:view.run.id};
   const [raw,saved]=await Promise.all([snapshots.findSource({...query,id:z.string().parse(out.sourceRef)}),snapshots.findInput({...query,id:z.string().parse(out.inputSnapshotId)})]);
   if(!raw||!saved||digest(raw.evidence.scope)!==digest(view.run.scope)||raw.id!=='market-source:'+digest(raw.evidence))throw Error('Pool source scope differs');
-  const result=await collectSorftimeShapePoolPage({scope:view.run.scope,jobId:'pool-replay',...(raw.evidence.operation==='category_report'?{replayOperation:'category_report' as const}:{}),poolSize:z.number().parse(input.poolSize),...(input.page===undefined?{}:{page:z.number().parse(input.page),categoryName:z.string().parse(input.categoryName)}),now:()=>new Date(raw.evidence.fetchedAt),connector:{id:'sorftime',probe:async()=>{throw Error('No replay probes')},execute:async()=>({data:structuredClone(raw.evidence.payload) as Record<string,unknown>,source:{connectorId:'sorftime',operation:raw.evidence.operation,fetchedAt:raw.evidence.fetchedAt,attemptCount:1}})}});
+  const result=raw.evidence.operation==='plugin_category_pool'?replayPluginShapeCategoryPool(view.run.scope,raw.evidence):await collectSorftimeShapePoolPage({scope:view.run.scope,jobId:'pool-replay',...(raw.evidence.operation==='category_report'?{replayOperation:'category_report' as const}:{}),poolSize:z.number().parse(input.poolSize),...(input.page===undefined?{}:{page:z.number().parse(input.page),categoryName:z.string().parse(input.categoryName)}),now:()=>new Date(raw.evidence.fetchedAt),connector:{id:'sorftime',probe:async()=>{throw Error('No replay probes')},execute:async()=>({data:structuredClone(raw.evidence.payload) as Record<string,unknown>,source:{connectorId:'sorftime',operation:raw.evidence.operation,fetchedAt:raw.evidence.fetchedAt,attemptCount:1}})}});
   if(result.status==='failed'||digest(result.evidence)!==digest(raw.evidence))throw Error('Pool source replay differs');
   const makeSnapshot=(products:typeof result.products)=>createMarketInputSnapshot({scope:view.run.scope,kind:'products',sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt:raw.evidence.fetchedAt,expectedRecordIds:products.map(p=>p.asin),records:products.map(product=>({id:product.asin,scope:view.run.scope,data:{collection:'sorftime-shape-pool',product,sourceRef:raw.id}}))});
   let products=result.products;
@@ -38,7 +39,7 @@ export async function replaySorftimeShapePoolPages({view,actor,snapshots,pageAtt
  for(const page of pages)for(const product of page.products)if(!unique.has(product.asin)&&unique.size<poolSize){unique.set(product.asin,product);records.set(product.asin,page.snapshot.records.find(r=>r.id===product.asin)!);}
  const collectedAt=pages.map(p=>p.evidence.fetchedAt).sort().at(-1)!;
  const factory={scope:view.run.scope,kind:'products' as const,sourceVersion:'market-source-handlers/v1',ruleVersion:'source-normalization/v1',collectedAt,expectedRecordIds:[...unique.keys()],records:[...records.values()].map(r=>({id:r.id,scope:r.scope,data:r.data}))};
- return {pages,factory,snapshot:createMarketInputSnapshot(factory),publicPool:SorftimeShapePoolPublicSchema.parse({provider:'sorftime',period:'recent-30-days',fetchedAt:collectedAt,categoryName:pages[0].categoryName,products:[...unique.values()].map(p=>p.price===0?{...p,price:null}:p),sourceRefs:pages.map(p=>p.sourceRef),requestedSize:poolSize})};
+ return {pages,factory,snapshot:createMarketInputSnapshot(factory),publicPool:SorftimeShapePoolPublicSchema.parse({provider:new Set(pages.map(p=>p.evidence.provider)).size>1?'mixed':pages[0].evidence.provider,period:'recent-30-days',fetchedAt:collectedAt,categoryName:pages[0].categoryName,products:[...unique.values()].map(p=>p.price===0?{...p,price:null}:p),sourceRefs:pages.map(p=>p.sourceRef),requestedSize:poolSize})};
 }
 export async function readMarketShapeSorftimePool(input:Input&{current:Set<string>}){
  const step=input.view.steps.find(s=>input.current.has(s.stepKey)&&obj(s.input).phase==='select-sorftime-shape-members');

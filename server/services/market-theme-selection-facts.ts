@@ -1,3 +1,5 @@
+import {replayPluginShapeCategoryPool} from './plugin-shape-category-pool';
+import {projectPluginThemeSample} from './theme-plugin-sample';
 import { z } from 'zod';
 import {readThemeSavedImages} from './market-theme-saved-images';
 import { MarketThemeReportEntrySchema } from '../../shared/market-module-contracts';
@@ -46,13 +48,15 @@ export async function loadThemeSelectionFacts(context:PostgresQueryContext,input
   const record=selection.snapshot.records.find(r=>r.id===asin);if(!record)throw new MarketExecutionConflictError();const data=obj(record.data),p=obj(data.product),ref=z.string().parse(data.sourceRef);
   const source=await store.findSource({actor:input.actor,studyId:view.run.scope.researchId,id:ref});if(!source)throw new MarketExecutionConflictError();same(source.evidence.scope,entry.report.scope);
   const sorftime=view.run.versions.planner==='market-theme-flow/rules-v3';
-  if(sorftime?(source.evidence.provider!=='sorftime'||!['category_report','category_products'].includes(source.evidence.operation)):(source.evidence.provider!=='sellerSprite'||source.evidence.operation!=='market_product_concentration'))throw new MarketExecutionConflictError();
+  const plugin=source.evidence.operation==='plugin_category_pool';if(plugin){if(!sorftime||obj(view.run.params).acquisitionMode!=='plugin-priority/v1')throw new MarketExecutionConflictError();replayPluginShapeCategoryPool(entry.report.scope,source.evidence);}
+  if(!plugin&&(sorftime?(source.evidence.provider!=='sorftime'||!['category_report','category_products'].includes(source.evidence.operation)):(source.evidence.provider!=='sellerSprite'||source.evidence.operation!=='market_product_concentration')))throw new MarketExecutionConflictError();
   same(source.evidence.requestIdentity.marketplace,entry.report.scope.marketplace);if(Date.parse(source.evidence.fetchedAt)>Date.parse(entry.report.dataCutoffAt))throw new MarketExecutionConflictError();
   if(sorftime)same(source.evidence.requestIdentity.nodeId,entry.report.scope.nodeIdPath.split(':').at(-1));else{same(source.evidence.requestIdentity.month,data.month);same(data.month,entry.report.scope.toMonth);}
   const binding=bindings.find(b=>b.asin===asin);let summarySource:Parameters<typeof projectThemeSample>[0]['summarySource'];
   if(binding?.sourceRef&&binding.inputSnapshotId){const observed=await store.findSource({actor:input.actor,studyId:view.run.scope.researchId,id:binding.sourceRef});const inputSnapshot=await store.findInput({actor:input.actor,studyId:view.run.scope.researchId,id:binding.inputSnapshotId});
    if(!observed||!inputSnapshot)throw new MarketExecutionConflictError();same(observed.evidence.scope,entry.report.scope);same(inputSnapshot.snapshot.scope,entry.report.scope);same(observed.evidence.requestIdentity.asin,asin);same(observed.evidence.requestIdentity.marketplace,entry.report.scope.marketplace);if(observed.evidence.provider!=='sorftime'||observed.evidence.operation!=='product_customers_say'||inputSnapshot.snapshot.kind!=='customer-themes')throw new MarketExecutionConflictError();if(Date.parse(observed.evidence.fetchedAt)>Date.parse(entry.report.dataCutoffAt))throw new MarketExecutionConflictError();same(obj(inputSnapshot.snapshot.records.find(r=>r.id===asin)?.data).sourceRef,binding.sourceRef);
    summarySource={ref:binding.sourceRef,snapshotId:binding.inputSnapshotId,payload:observed.evidence.payload};}
+  if(plugin){samples.push(projectPluginThemeSample({scope:entry.report.scope,evidence:source.evidence,sourceRef:ref,inputSnapshotId:selection.snapshot.snapshotId,asin,product:p,summarySource,imageSource:images.get(asin)?.source,imageMissingReason:images.get(asin)?.missingReason}));continue;}
   samples.push(projectThemeSample({asin,sourceIndex:z.number().int().nonnegative().parse(p.sourceIndex),product:p,productSource:{ref,snapshotId:selection.snapshot.snapshotId,payload:source.evidence.payload,...(sorftime?{operation:source.evidence.operation as 'category_report'|'category_products',nodeId:entry.report.scope.nodeIdPath.split(':').at(-1)}:{})},summarySource,...(sorftime?{provider:'sorftime' as const,imageSource:images.get(asin)?.source,imageMissingReason:images.get(asin)?.missingReason}:{})}));
  }
  const facts=ThemeSelectionFactsSchema.parse({base,snapshot:factory(snapshot),priorEvaluations:priorEvaluations.map(factory),samples});restoreThemeSelectionFacts(facts);return facts;

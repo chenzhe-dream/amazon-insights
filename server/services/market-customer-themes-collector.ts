@@ -48,6 +48,7 @@ const OPERATION = "product_customers_say";
 const messages: Record<MarketCustomerThemesIssueCode, string> = {
   "local-admission": "Local request capacity is unavailable",
   "quota-exhausted": "Customers Say source quota is exhausted; collection paused",
+  "saved-source-missing":"仅使用已保存证据，此项暂无可复用来源，保留待补；未发送上游请求。",
   configuration: "Customers Say connector configuration is unavailable",
   authentication: "Customers Say connector authentication failed",
   "rate-limit": "Customers Say request was limited by connector capacity or rate policy",

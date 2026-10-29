@@ -4,9 +4,12 @@ import {
   sourceIdentity, cacheTtl, estimateSorftimeCost, assertSourceResponse,
   attachSourceMetadata, SorftimeQuotaError, SorftimeSourceWaitError,
 } from './sorftime-source-policy.mjs';
+export class SavedSourceMissingError extends Error {
+ constructor(){super('当前仅使用已保存证据；此项暂无可复用来源，保留待补，未向上游发送请求。');this.name='SavedSourceMissingError';}
+}
 export {sourceIdentity,sourceMetadata,estimateSorftimeCost} from './sorftime-source-policy.mjs';
 
-/** @typedef {{provider?:'sorftime'|'sellerSprite'|'sif', key:string, endpoint:string, tool:string, args:Record<string,any>, jobId?:string|null, signal?:AbortSignal, forceRefresh?:boolean}} SourceRequest */
+/** @typedef {{provider?:'sorftime'|'sellerSprite'|'sif', key:string, endpoint:string, tool:string, args:Record<string,any>, jobId?:string|null, signal?:AbortSignal, forceRefresh?:boolean, savedOnly?:boolean}} SourceRequest */
 /** @param {{pool:import('pg').Pool, now?:()=>number}} options */
 export function createSorftimeSourceCache({pool,now=Date.now}) {
   async function fresh(client, id) {
@@ -39,6 +42,7 @@ export function createSorftimeSourceCache({pool,now=Date.now}) {
           return attachSourceMetadata(row.payload,{fetchedAt:new Date(row.fetched_at).toISOString(),cacheHit:true,cacheKey:identity.id});
         };
         const cached=await hit(); if(cached)return cached;
+        if(spec.savedOnly)throw new SavedSourceMissingError();
         const deadline=Date.now()+60_000;
         while(!locked) {
           spec.signal?.throwIfAborted();

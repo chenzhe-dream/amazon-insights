@@ -7,6 +7,7 @@ import { ConnectorError, type ConnectorResult, type RemoteMcpConnector } from ".
 type Dataset = MarketResearchIssue["dataset"];
 const messages: Record<MarketResearchIssue["code"], string> = {
   "quota-exhausted":"数据源额度已耗尽，新采集已暂停；已保存报告仍可查看", "local-admission":"本地调用队列暂满或策略限制",
+  "saved-source-missing":"仅使用已保存证据，此项暂无可复用来源，保留待补；未发送上游请求。",
   configuration:"数据源尚未配置", authentication:"数据源认证失败", "rate-limit":"数据源限流，请稍后重试",
   timeout:"类目数据采集超时", "upstream-temporary":"数据源暂时不可用", "upstream-permanent":"数据源拒绝了本次请求",
   "malformed-response":"数据源返回格式无法识别", empty:"该类目和月份没有可用数据", "scope-mismatch":"返回的类目与请求不匹配",

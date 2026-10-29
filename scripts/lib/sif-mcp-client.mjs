@@ -21,6 +21,7 @@ export function readSifHeaders(env = process.env) {
  * @property {string | null} [organizationId]
  * @property {string | null} [jobId]
  * @property {import('../../server/db/concurrency-control-repository').GovernedAttemptKind} [attemptKind]
+ * @property {boolean} [savedOnly]
  * @property {ReturnType<import('./sorftime-source-cache.mjs').createSorftimeSourceCache>} [sourceCache]
  * @property {boolean} [forceRefresh]
  * @property {()=>Promise<void>} [onPhysicalDispatch]

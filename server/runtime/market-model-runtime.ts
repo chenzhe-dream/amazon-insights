@@ -1,3 +1,4 @@
+import type {PluginProductSources} from '../services/plugin-shape-image-reuse';
 import { marketTaskTimeout } from './market-model-config';
 import type { ModelNetworkDiagnostic } from './model-network-diagnostics';
 import { MARKET_SHAPE_SPAN_NORMALIZATION_VERSION } from '../domain/market-research/shape-span-normalization';
@@ -100,6 +101,7 @@ export async function createMarketModelRuntime(context: PostgresQueryContext, ba
   networkLogger?: (entry: ModelNetworkDiagnostic & { task: MarketSemanticTaskName }) => void;
   validationLogger?: (entry: Readonly<ModelValidationFailureLog & { task: MarketSemanticTaskName }>) => void;
   skillsRoot?: string; client?: OpenAIProviderOptions['client']; worker?: MarketModelWorkerOptions; stepWorker?: MarketModuleStepWorkerOptions;
+  pluginSources?:PluginProductSources;
   connectors?: Pick<ConnectorMap, 'sellerSprite' | 'sorftime'> & Partial<Pick<ConnectorMap,'sif'>>;
 } = {}): Promise<MarketModelRuntime> {
   const registry = await SkillRegistry.open(resolve(options.skillsRoot ?? 'skills-src'));
@@ -173,7 +175,7 @@ export async function createMarketModelRuntime(context: PostgresQueryContext, ba
       if(task==='customer-theme-reconciliation-evaluate')return reconciliationEvaluation(input);
       throw new TypeError('Unsupported theme reconciliation task');
     },
-    ...(options.connectors ? createMarketSourceStepHandlers({ context, connectors: options.connectors }) : {}),
+    ...(options.connectors ? createMarketSourceStepHandlers({ context, connectors: options.connectors, pluginSources:options.pluginSources }) : {}),
     'prepare-model-batches': async ({ claim, signal }) => {
       const input = MarketBatchPreparationInputSchema.parse(claim.step.input);
       const view=await steps.findModuleRun({actor:{organizationId:claim.organizationId,userId:claim.createdBy},moduleRunId:claim.moduleRunId});

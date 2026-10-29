@@ -1,3 +1,4 @@
+import {marketAcquisitionNotice} from '../shared/market-acquisition-policy';
 import React from 'react';
 import {linkedModules,linkedModuleLabels,type MarketLinkedBatch,type LinkedModule} from '../shared/market-linked-contracts';
 
@@ -9,6 +10,7 @@ export function MarketLinkedStatus({batch,error,busy,onRetry}:{batch:MarketLinke
   {busy&&!batch&&<p>正在提交联动任务，请稍候；确认后显示各模块进度。</p>}
   {batch&&<>
    <p>{batch.message}</p>
+   {batch.request.mcpFallbackPolicy==='saved-only/v1'&&<p>{marketAcquisitionNotice}</p>}
    {batch.basicMessage&&<p>基础类目采集：{batch.basicMessage}</p>}
    {linkedModules.map(module=><p key={module}>{linkedModuleLabels[module]}：{labels[batch.modules[module].status]}{batch.modules[module].message&&` · ${batch.modules[module].message}`}{batch.modules[module].status==='failed'&&<> <button type="button" className="ghost-btn" disabled={busy} onClick={()=>onRetry(module)}>恢复{linkedModuleLabels[module]}</button></>}</p>)}
    {batch.basicRetryable&&<button type="button" className="ghost-btn" disabled={busy} onClick={()=>onRetry()}>重试基础采集并继续联动</button>}

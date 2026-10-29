@@ -1,3 +1,4 @@
+import {newMarketAcquisitionPolicy} from '../../shared/market-acquisition-policy';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {MarketModuleIdSchema} from '../../shared/market-module-contracts';
 import {MarketLinkedRequestSchema,type MarketLinkedBatch,type MarketLinkedRequest,type LinkedModule} from '../../shared/market-linked-contracts';
@@ -26,7 +27,7 @@ export function useMarketLinkedAnalysis(sessionIdentity:string,onBatch:(batch:Ma
  },[id,readVersion,accept]);
  const start=async(input:MarketLinkedRequest)=>{
   const controller=owner.current;if(submitting.current||!controller||controller.signal.aborted)return;
-  const parsed=MarketLinkedRequestSchema.safeParse(input);if(!parsed.success){setError('四模块联动请选择完整自然月；最近30天可在总览分析设置中单独使用。');throw new Error('四模块联动需要完整自然月');}
+  const parsed=MarketLinkedRequestSchema.safeParse({...newMarketAcquisitionPolicy,...input});if(!parsed.success){setError('四模块联动请选择完整自然月；最近30天可在总览分析设置中单独使用。');throw new Error('四模块联动需要完整自然月');}
   const serialized=JSON.stringify(parsed.data),url=new URL(window.location.href);
   let saved:{key:string;request:string}|null=null;try{saved=JSON.parse(sessionStorage.getItem(storageKey)??'null');}catch{}
   const command=pending.current?.request===serialized?pending.current:saved?.request===serialized&&MarketModuleIdSchema.safeParse(saved.key).success?saved:{key:browserRequestId(),request:serialized};

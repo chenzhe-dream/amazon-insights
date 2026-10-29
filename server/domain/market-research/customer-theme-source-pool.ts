@@ -1,3 +1,4 @@
+import {replayPluginShapeCategoryPool} from '../../services/plugin-shape-category-pool';
 import { z } from 'zod';
 import { normalizeSorftimeShapePool } from '../../services/market-shape-sorftime-pool';
 import { MarketInputRecordSchema, type MarketInputSnapshot, type MarketJsonValue, type MarketAnalysisScope } from '../../../shared/market-analysis-contracts';
@@ -44,6 +45,12 @@ export function selectMarketThemeMembers(options: { snapshot: MarketInputSnapsho
     const data = obj(record.data), product = obj(data.product), ref = z.string().parse(data.sourceRef);
     const source = checkedSources.get(ref) ?? evidence(s.scope, ref, options.sources); checkedSources.set(ref, source);
     if (data.collection === 'sorftime-shape-pool') {
+      if(source.operation==='plugin_category_pool'){
+       const parsed=sorftimeRows.get(ref)??replayPluginShapeCategoryPool(s.scope,source);sorftimeRows.set(ref,parsed);
+       const index=parsed.products.findIndex(p=>p.asin===record.id),expected=parsed.products[index];
+       if(!expected||indices.has(index)||Date.parse(source.fetchedAt)>Date.parse(s.collectedAt))throw new TypeError('Invalid plugin source partition');
+       same(expected,product);refs.add(ref);indices.add(index);return {record,index};
+      }
       if(source.provider!=='sorftime'||!['category_report','category_products'].includes(source.operation))throw new TypeError('Invalid Sorftime selection source');
       const parsed=sorftimeRows.get(ref)??normalizeSorftimeShapePool(source.payload,source.operation as 'category_report'|'category_products',undefined,300,s.scope.nodeIdPath.split(':').at(-1));sorftimeRows.set(ref,parsed);
       const index=z.number().int().nonnegative().parse(product.sourceIndex),expected=parsed.products.find(p=>p.sourceIndex===index);
@@ -87,7 +94,10 @@ export function assembleMarketThemePool(options: { selection: MarketInputSnapsho
   // Snapshots canonicalize records by ASIN. Reconstruct the selection order using
   // the same category-rank ordering as the Sorftime anchor, not its raw row index.
   const sorftimeSelection = selection.records.every(r => obj(r.data).collection === 'sorftime-shape-pool');
+  const pluginRef=selection.records.map(r=>String(obj(r.data).sourceRef)).find(ref=>options.sources[ref]?.operation==='plugin_category_pool');
+  const pluginOrder=pluginRef?replayPluginShapeCategoryPool(selection.scope,evidence(selection.scope,pluginRef,options.sources)).products.map(p=>p.asin):null;
   const orderedSelection = [...selection.records].sort((a, b) => {
+    if(pluginOrder)return pluginOrder.indexOf(a.id)-pluginOrder.indexOf(b.id);
     const left = obj(obj(a.data).product), right = obj(obj(b.data).product);
     const leftIndex = z.number().int().parse(left.sourceIndex), rightIndex = z.number().int().parse(right.sourceIndex);
     if (sorftimeSelection) {

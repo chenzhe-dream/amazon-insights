@@ -40,7 +40,7 @@ export async function findLinkedBasicHistory(context:PostgresQueryContext,actor:
 
 export async function findLinkedModuleHistory(context:PostgresQueryContext,service:MarketModuleService,actor:MarketExecutionActor,
  request:MarketLinkedRequest,module:LinkedModule,nodePath:string,categoryName:string|null){
- const params=linkedModuleParams(module,categoryName,request.scope.newProductMonths,request.scope.headTopN) as Record<string,unknown>;
+ const params=linkedModuleParams(module,categoryName,request.scope.newProductMonths,request.scope.headTopN,request) as Record<string,unknown>;
  return findCompatibleModuleHistory(context,service,actor,{marketplace:request.scope.marketplace,currency:marketSiteCurrency(request.scope.marketplace),nodeIdPath:nodePath,fromMonth:request.fromMonth,toMonth:request.scope.month},module,params);
 }
 
@@ -64,7 +64,9 @@ export async function findCompatibleModuleHistory(context:PostgresQueryContext,s
    AND ($6::text IS NULL OR r.request_json->'scope'->>'nodeIdPath'=$6 OR r.request_json->'scope'->>'nodeIdPath'=$5)
    AND r.request_json->'scope'->>'fromMonth'=$7 AND r.request_json->'scope'->>'toMonth'=$8
    AND COALESCE(r.request_json->'scope'->>'overviewPeriod','')=''
-   AND r.request_json->'params'=$9::jsonb AND r.request_json->'versions'=$10::jsonb
+   AND (r.request_json->'params'=$9::jsonb OR (r.status IN ('succeeded','partial')
+    AND (r.request_json->'params')-'acquisitionMode'-'mcpFallbackPolicy'-'historySourcePolicy'-'pluginSourceSnapshotId' = $9::jsonb-'acquisitionMode'-'mcpFallbackPolicy'-'historySourcePolicy'-'pluginSourceSnapshotId'))
+   AND r.request_json->'versions'=$10::jsonb
    AND r.status IN ('succeeded','partial','queued','running')
    AND (r.status NOT IN ('queued','running') OR EXISTS(SELECT 1 FROM users u WHERE u.id=r.created_by AND u.organization_id=r.organization_id AND u.status='active'))
   ORDER BY CASE r.status WHEN 'succeeded' THEN 0 WHEN 'partial' THEN 1 ELSE 2 END,r.created_at DESC,r.id DESC LIMIT 30`,

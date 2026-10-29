@@ -12,9 +12,9 @@ export const MarketShapeProductImageUrlSchema=z.string().url().refine(isAllowedA
 export const MarketShapeProductImageSchema=z.object({
  asin,status:z.enum(['queued','running','ready','empty','failed','cancelled']),imageUrl:MarketShapeProductImageUrlSchema,
  sourceRef:z.string().regex(/^market-source:[a-f0-9]{64}$/).nullable(),inputSnapshotId:z.string().regex(/^market-input:[a-f0-9]{64}$/).nullable(),
- fetchedAt:z.string().datetime().nullable(),errorCode:z.string().max(100).nullable(),
+ provider:z.enum(['sorftime','sellerSprite']).optional(),fetchedAt:z.string().datetime().nullable(),errorCode:z.string().max(100).nullable(),
  // Optional read projection of the same frozen detail source; old revisions keep their original fields.
  marginObservation:z.object({grossProfitMargin:z.number().finite().min(-1000).max(100),price:z.number().finite().positive().max(Number.MAX_SAFE_INTEGER)}).strict().nullable().optional(),
 }).strict();
-export const MarketShapeProductImagesPublicSchema=z.object({provider:z.literal('sorftime'),products:z.array(MarketShapeProductImageSchema).max(300)}).strict();
+export const MarketShapeProductImagesPublicSchema=z.object({provider:z.enum(['sorftime','sellerSprite','mixed']),products:z.array(MarketShapeProductImageSchema).max(300)}).strict();
 export type MarketShapeProductImagesPublic=z.infer<typeof MarketShapeProductImagesPublicSchema>;

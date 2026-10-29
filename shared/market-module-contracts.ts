@@ -1,3 +1,4 @@
+import {MarketAcquisitionPolicyFields} from './market-acquisition-policy';
 import { z } from 'zod';
 import { MarketAnalysisScopeSchema } from './market-analysis-contracts';
 export { MarketRuleBaselineSchema, normalizeMarketRuleBaseline } from './market-rule-baseline-contracts';
@@ -8,7 +9,7 @@ export const MarketModuleIdSchema = z.string().uuid().regex(/^[a-f0-9]{8}-[a-f0-
 const { organizationId: _organizationId, researchId: _researchId, ...publicScopeShape } = MarketAnalysisScopeSchema.shape;
 export const MarketStudyRequestSchema = z.object(publicScopeShape).strict().refine(v=>!v.overviewPeriod||v.fromMonth===v.toMonth,'Rolling overview uses one historical cutoff').refine(v => v.fromMonth <= v.toMonth, 'Research period is reversed').refine(marketSiteCurrencyMatches,'Market currency differs from marketplace');
 export const MarketStudyResponseSchema = z.object({ study: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema, createdAt: z.string().datetime() }).strict() }).strict();
-export const MarketThemeStartRequestSchema = z.object({ memberCount: z.number().int().min(1).max(20).default(20),
+export const MarketThemeStartRequestSchema = z.object({...MarketAcquisitionPolicyFields, memberCount: z.number().int().min(1).max(20).default(20),
   poolSize: z.number().int().min(1).max(100).default(100), newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]).default(6),
   topN: z.number().int().min(0).max(2000).optional() }).strict().refine(v => v.poolSize >= v.memberCount);
 export const MarketModuleRetryRequestSchema = z.object({ steps: z.array(z.object({ stepId: MarketModuleIdSchema, failedAttemptId: MarketModuleIdSchema }).strict()).min(1).max(2000) }).strict();
@@ -35,7 +36,7 @@ export const MarketModuleStepPublicSchema = z.object({ id: MarketModuleIdSchema,
   latestAttemptId: MarketModuleIdSchema.nullable(), attemptCount: count, current: z.boolean(), canRetry: z.boolean(), asin: z.string().regex(/^[A-Z0-9]{10}$/).nullable(),
   nextAttemptAt:z.string().datetime().nullable().optional(),
   sourceIssue:MarketThemeSourceIssueSchema.optional(),
-  errorCode: z.enum(['keyword-not-trending', 'quota-exhausted', 'rate-limit', 'local-admission', 'upstream-temporary', 'timeout', 'interrupted', 'authentication', 'governance', 'invalid-data', 'scope-mismatch', 'cancelled', 'internal', 'unsupported-marketplace']).nullable() }).strict();
+  errorCode: z.enum(['saved-source-missing', 'keyword-not-trending', 'quota-exhausted', 'rate-limit', 'local-admission', 'upstream-temporary', 'timeout', 'interrupted', 'authentication', 'governance', 'invalid-data', 'scope-mismatch', 'cancelled', 'internal', 'unsupported-marketplace']).nullable() }).strict();
 export const MarketThemeRunResponseSchema = z.object({ run: z.object({ id: MarketModuleIdSchema, scope: MarketAnalysisScopeSchema,
   status: z.enum(['queued', 'running', 'partial', 'succeeded', 'failed', 'cancelled']), createdAt: z.string().datetime(), planRevision: count,
   params: MarketThemeStartRequestSchema, steps: z.array(MarketModuleStepPublicSchema), currentReport: MarketThemeReportEntrySchema.nullable(),

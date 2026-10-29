@@ -157,6 +157,7 @@ export function parseReferenceListingDate(value: string | null | undefined): Ref
 }
 
 export function isReferencePeriodBeforeLaunch(product: SorftimeCategoryDashboardProduct, period: ReferencePeriod, calculationVersion?: string): boolean {
+  if(product.salesHistory?.periodPolicy==='calendar-windows/v2')return false;
   if (period !== 'y2024' && period !== 'y2025') return false;
   if(calculationVersion==='shape-reference/1'){
     const launch=product.onlineDate?.match(/^(\d{4})-(0[1-9]|1[0-2])(?:-(\d{2}))?$/);if(!launch)return false;

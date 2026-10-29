@@ -7,6 +7,11 @@ const errors:Record<string,string>={timeout:'等待上游超时',authentication:
 export function referenceSalesGapReason(product:SorftimeCategoryDashboardProduct,period:ReferencePeriod,calculationVersion?:string):string|null {
   if(hasReferencePeriodDateConflict(product,period,calculationVersion))return '上市日期与历史销量冲突';
   if(referencePeriodContribution(product,period,calculationVersion)!==null)return null;
+  if(product.salesHistory?.periodPolicy==='calendar-windows/v2'){
+    const key=period==='last3Months'?'last-3':period==='last6Months'?'last-6':`year-${period.slice(1)}`;
+    const missing=product.salesHistory.windowGaps?.[key];
+    if(missing?.length)return `待补月份：${missing.join('、')}；未补零，其他有效期间独立参与分析`;
+  }
   if((period==='y2024'||period==='y2025')&&parseReferenceListingDate(product.onlineDate).status==='uncertain')return '上市日期待核实，无法确认该年度是否适用；原始日期已保留';
   const history=product.salesHistory;
   if(!history)return '缺少历史销量，原因尚未确认';

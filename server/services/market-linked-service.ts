@@ -1,3 +1,4 @@
+import type {PluginProductSources} from './plugin-shape-image-reuse';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {MarketLinkedRequestSchema,MarketLinkedRetrySchema,MarketLinkedResponseSchema,linkedModules,linkedModuleParams,type MarketLinkedBatch,type LinkedModule} from '../../shared/market-linked-contracts';
@@ -17,7 +18,7 @@ function command(id:string,part:string){const hash=createHash('sha256').update(`
 export class MarketLinkedService{
  private timer:ReturnType<typeof setInterval>|null=null;
  private running:Promise<void>|null=null;
- constructor(private deps:{context:PostgresQueryContext;research:MarketResearchService;modules:MarketModuleService;now?:()=>Date;onError?:()=>void}){}
+ constructor(private deps:{context:PostgresQueryContext;research:MarketResearchService;modules:MarketModuleService;pluginSources?:PluginProductSources;now?:()=>Date;onError?:()=>void}){}
  private async authorize(actor:MarketExecutionActor){const user=await this.deps.context.query("SELECT id FROM users WHERE id=$1 AND organization_id=$2 AND status='active'",[actor.userId,actor.organizationId]);if(!user.rowCount)throw new MarketModuleServiceError(403,'没有该组织的市场调研权限');}
  private parse(row:Row){return MarketLinkedResponseSchema.parse({batch:row.state_json});}
  async find(actor:MarketExecutionActor,id:string){await this.authorize(actor);MarketModuleIdSchema.parse(id);const row=await this.deps.context.query<Row>('SELECT * FROM market_linked_batches WHERE id=$1 AND organization_id=$2 AND created_by=$3',[id,actor.organizationId,actor.userId]);if(!row.rows[0])throw new MarketModuleServiceError(404,'未找到该联动分析批次');return this.parse(row.rows[0]);}
@@ -86,7 +87,12 @@ export class MarketLinkedService{
     if(batch.modules[module].status!=='pending')return;
     await this.deps.context.query('SAVEPOINT linked_module_start');
     try{
-     const params=linkedModuleParams(module,batch.categoryName,scope.newProductMonths,scope.headTopN);
+     if(batch.request.acquisitionMode==='plugin-priority/v1'&&batch.pluginSourceSnapshotId===undefined){
+      const saved=batch.request.pluginSourceSnapshotId?await this.deps.pluginSources?.findSnapshot?.({organizationId:actor.organizationId,userId:actor.userId,snapshotId:batch.request.pluginSourceSnapshotId}):null;
+      const pool=!batch.request.pluginSourceSnapshotId?await this.deps.pluginSources?.findCategoryPool?.({organizationId:actor.organizationId,userId:actor.userId,marketplace:scope.marketplace,node:scope.nodeQuery.split(':').at(-1)!,poolSize:100,savedOnly:batch.request.mcpFallbackPolicy==='saved-only/v1',...(batch.request.forceRefresh?{notBefore:(this.deps.now?.()??new Date()).toISOString()}: {})}):null;
+      batch.pluginSourceSnapshotId=saved&&!saved.source.frozenCohort&&saved.source.site===scope.marketplace&&saved.source.node===scope.nodeQuery.split(':').at(-1)?saved.snapshotId:pool?.snapshotId??null;
+     }
+     const params=linkedModuleParams(module,batch.categoryName,scope.newProductMonths,scope.headTopN,{...batch.request,...(batch.pluginSourceSnapshotId!==undefined?{pluginSourceSnapshotId:batch.pluginSourceSnapshotId}:{})});
      const lock=marketModuleQueryLock(actor.organizationId,module,studyScope,params);
      await this.deps.context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[lock]);
      const previous=batch.request.forceRefresh?null:await findLinkedModuleHistory(this.deps.context,this.deps.modules,actor,batch.request,module,studyScope.nodeIdPath,batch.categoryName);

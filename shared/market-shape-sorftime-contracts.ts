@@ -8,6 +8,6 @@ export const SorftimeShapeProductSchema=z.object({
  categoryRank:text,productCategory:text,sellerOrigin:text,
 }).strict();
 export type SorftimeShapeProduct=z.infer<typeof SorftimeShapeProductSchema>;
-export const SorftimeShapePoolPublicSchema=z.object({provider:z.literal('sorftime'),period:z.literal('recent-30-days'),fetchedAt:z.string().datetime(),categoryName:text,
+export const SorftimeShapePoolPublicSchema=z.object({provider:z.enum(['sorftime','sellerSprite','mixed']),period:z.literal('recent-30-days'),fetchedAt:z.string().datetime(),categoryName:text,
  products:z.array(SorftimeShapeProductSchema).max(300),sourceRefs:z.array(z.string()).max(21),requestedSize:z.number().int().min(1).max(300),
 }).strict();

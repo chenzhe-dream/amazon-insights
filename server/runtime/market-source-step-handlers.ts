@@ -1,3 +1,7 @@
+import {collectPluginShapeCategoryPool} from '../services/plugin-shape-category-pool';
+import {collectPluginShapeImage,type PluginProductSources} from '../services/plugin-shape-image-reuse';
+import {evaluatePluginShapeHistory} from '../services/plugin-shape-history-reuse';
+import {ShapeHistoryPolicySchema} from '../../shared/shape-history-selection';
 import {createOverviewExternalStep} from './market-overview-external-step';
 import {createOverviewIndustryDemandStep} from './market-overview-industry-demand-step';
 import {inspectMarketThemeContinuation,MARKET_THEME_RULES_FLOW_V3} from '../domain/market-research/customer-theme-flow';
@@ -56,9 +60,10 @@ function evidenceProposal(evidence: MarketSourceEvidence) {
 }
 function failure(sourceCode: string, retryable: boolean, themeIssue?:MarketThemeSourceIssue): MarketStepWork {
   const code: MarketStepError['code'] = ['scope-mismatch', 'identity-conflict', 'identity-mismatch', 'source-mismatch'].includes(sourceCode) ? 'scope-mismatch'
+    : sourceCode==='saved-source-missing'?'saved-source-missing'
     : ['quota-exhausted','rate-limit'].includes(sourceCode) ? sourceCode as MarketStepError['code']
     : sourceCode === 'keyword-not-trending' ? 'keyword-not-trending' : sourceCode === 'authentication' ? 'authentication'
-    : ['configuration', 'local-admission', 'governor-rejected'].includes(sourceCode) ? 'governance'
+    : ['configuration', 'local-admission', 'governor-rejected','saved-source-missing'].includes(sourceCode) ? 'governance'
     : sourceCode === 'timeout' ? 'timeout' : ['interrupted', 'cancelled'].includes(sourceCode) ? 'interrupted'
     : ['rate-limit', 'upstream-temporary'].includes(sourceCode) ? 'upstream-temporary' : 'invalid-data';
   return { kind: 'settlement', value: { outcome: { status: 'failed', error: { code, retryable },
@@ -75,7 +80,7 @@ function collected(scope: MarketAnalysisScope, kind: 'products' | 'keywords' | '
     sources: [json(evidenceProposal(evidence))], inputs: [json(input)] } };
 }
 
-function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; connectors: Pick<ConnectorMap, 'sellerSprite' | 'sorftime'> & Partial<Pick<ConnectorMap,'sif'>> }) {
+function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; pluginSources?:PluginProductSources; connectors: Pick<ConnectorMap, 'sellerSprite' | 'sorftime'> & Partial<Pick<ConnectorMap,'sif'>> }) {
   const steps = new PostgresMarketModuleExecutionStore(deps.context), snapshots = new PostgresMarketAnalysisSnapshotStore(deps.context);
   async function scopeFor(claim: MarketStepClaim, signal: AbortSignal, moduleKind?:'overview') {
     signal.throwIfAborted();
@@ -113,6 +118,18 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if(!view)invalid('Pool run unavailable');
     const theme=view.run.moduleKind==='customer-themes'&&object(view.run.params).flow===MARKET_THEME_RULES_FLOW_V3;
     if(!(theme ? input.page===undefined && inspectMarketThemeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey) : view.run.moduleKind==='shape-price'&&object(view.run.params).flow==='market-shape-price-flow/rules-v4'&&inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey)))invalid('Pool outside Sorftime frontier');
+    if(input.page===undefined&&input.poolSize<=150&&object(view.run.params).acquisitionMode==='plugin-priority/v1'){
+      const params=object(view.run.params),actor={organizationId:claim.organizationId,userId:claim.createdBy};
+      const refresh=await deps.context.query<{not_before:Date}>('SELECT not_before FROM sorftime_source_refresh_scopes WHERE job_id=$1',[claim.moduleRunId]);
+      const notBefore=refresh.rows[0]?.not_before?.toISOString(),reuseSaved=params.mcpFallbackPolicy==='saved-only/v1';
+      const bound=typeof params.pluginSourceSnapshotId==='string'?await deps.pluginSources?.findSnapshot?.({...actor,snapshotId:params.pluginSourceSnapshotId}):null;
+      const source=bound&&!bound.source.frozenCohort?{snapshotId:bound.snapshotId,jobId:bound.jobId,node:bound.source.node,marketplace:bound.source.site,collectedAt:bound.source.collectedAt,asins:bound.source.asins,basic:bound.source.basic,membershipProvider:(['amazon-page','sorftime'].includes(String(object(bound.source.summary.discovery).provider))?object(bound.source.summary.discovery).provider:'unknown') as 'amazon-page'|'sorftime'|'unknown'}
+       :Object.hasOwn(params,'pluginSourceSnapshotId')?null:await deps.pluginSources?.findCategoryPool?.({...actor,marketplace:scope.marketplace,node:scope.nodeIdPath.split(':').at(-1)!,poolSize:input.poolSize,notBefore,savedOnly:reuseSaved});
+      if(source){
+       const result=collectPluginShapeCategoryPool({scope,poolSize:input.poolSize,source,notBefore,reuseSaved});
+       return collected(scope,'products',result.products.map(p=>p.asin),result.products.map(product=>({id:product.asin,data:{collection:'sorftime-shape-pool',product}})),result.status,result.evidence,{productCount:result.products.length,productAsins:result.products.map(p=>p.asin),receivedCount:result.receivedCount,categoryName:result.categoryName});
+      }
+    }
     const result=await collectSorftimeShapePoolPage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
     return collected(scope,'products',result.products.map(p=>p.asin),result.products.map(product=>({id:product.asin,data:{collection:'sorftime-shape-pool',product}})),result.status,result.evidence,{productCount:result.products.length,productAsins:result.products.map(p=>p.asin),receivedCount:result.receivedCount,categoryName:result.categoryName});
@@ -125,12 +142,37 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
     if(!(themeImage ? inspectMarketThemeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey) : view.run.moduleKind==='shape-price'&&inspectMarketShapeContinuation(view,new Date().toISOString()).currentStepKeys.includes(claim.step.stepKey)))invalid('History is outside the current frontier');
     const pool=await selected(claim,input.selectionInputSnapshotId,scope);
     if(pool.kind!=='products'||!pool.records.some(r=>r.id===input.asin&&['product-month','sorftime-shape-pool'].includes(String(object(r.data).collection))&&object(object(r.data).product).asin===input.asin))invalid('History ASIN is outside frozen pool');
+    const params=object(view.run.params),reuseSaved=params.mcpFallbackPolicy==='saved-only/v1';
+    let pluginSource:import('../services/plugin-shape-image-reuse').PluginProductSource|null=null;
+    if(params.acquisitionMode==='plugin-priority/v1'){
+     const product=pool.records.find(r=>r.id===input.asin),ref=object(product?.data).sourceRef;
+     const raw=typeof ref==='string'?await snapshots.findSource({actor:{organizationId:claim.organizationId,userId:claim.createdBy},studyId:claim.studyId,id:ref}):null;
+     if(raw&&raw.id==='market-source:'+digest(raw.evidence)&&digest(raw.evidence.scope)===digest(scope)&&raw.evidence.operation==='plugin_category_pool'){
+      const identity=object(object(raw.evidence.payload).source);
+      const bound=typeof identity.snapshotId==='string'?await deps.pluginSources?.findSnapshot?.({organizationId:claim.organizationId,userId:claim.createdBy,snapshotId:identity.snapshotId}):null;
+      if(bound&&bound.source.site===scope.marketplace&&bound.source.node===scope.nodeIdPath.split(':').at(-1)&&bound.source.asins.includes(input.asin)&&bound.jobId===identity.jobId&&bound.source.collectedAt===identity.collectedAt){
+       pluginSource={snapshotId:bound.snapshotId,jobId:bound.jobId,node:bound.source.node,marketplace:bound.source.site,collectedAt:bound.source.collectedAt,asin:input.asin,basic:bound.source.basic[input.asin]??{},history:bound.source.history[input.asin]??{}};
+      }
+     }
+    }
     if(claim.step.kind==='collect-product-image'){
+      if(pluginSource&&!themeImage){
+       const result=collectPluginShapeImage({scope,asin:input.asin,userId:claim.createdBy,source:pluginSource,product:object(pool.records.find(r=>r.id===input.asin)?.data).product,reuseSaved,allowMissingDetail:reuseSaved});
+       if(result)return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-image',asin:input.asin,imageUrl:result.imageUrl}}],result.status,result.evidence,{asin:input.asin,selectionInputSnapshotId:input.selectionInputSnapshotId});
+      }
+
       const result=await collectMarketShapeProductImage({...input,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
       if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
       return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:'product-image',asin:input.asin,imageUrl:result.imageUrl}}],result.status,result.evidence,{asin:input.asin,selectionInputSnapshotId:input.selectionInputSnapshotId});
     }
     const metric=claim.step.kind==='collect-product-amount-history'?'SalesAmount':'SalesVolume';
+    const historyPolicy=ShapeHistoryPolicySchema.safeParse(params.historySourcePolicy);
+    if(params.acquisitionMode==='plugin-priority/v1'&&historyPolicy.success){
+      const {reuse,selection}=evaluatePluginShapeHistory({scope,asin:input.asin,metric,source:pluginSource,reuseSaved,policy:historyPolicy.data});
+      if(reuse)return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:metric==='SalesAmount'?'product-amount-history':'product-history',asin:input.asin,metric,points:reuse.points}}],reuse.status,reuse.evidence,{asin:input.asin,metric,selectionInputSnapshotId:input.selectionInputSnapshotId,historySelection:selection});
+      // A missing plugin series may still have a valid saved MCP response.
+      // The request wrapper enforces savedOnly at the cache/transport boundary.
+    }
     const result=await collectMarketProductHistory({...input,metric,scope,jobId:claim.moduleRunId,connector:deps.connectors.sorftime,signal});
     if(result.status==='failed')return failure(result.failure.code,result.failure.retryable);
     return collected(scope,'products',[input.asin],[{id:input.asin,data:{collection:metric==='SalesAmount'?'product-amount-history':'product-history',asin:input.asin,metric,points:result.points}}],result.status,result.evidence,{asin:input.asin,metric,selectionInputSnapshotId:input.selectionInputSnapshotId});
@@ -220,13 +262,30 @@ function buildMarketSourceStepHandlers(deps: { context: PostgresQueryContext; co
 
 /** Per-invocation wrappers keep safe admission metadata across collectors that flatten errors. */
 export function createMarketSourceStepHandlers(deps: Parameters<typeof buildMarketSourceStepHandlers>[0]) {
+  // The bound source is immutable and actor-scoped. Avoid decoding the entire
+  // 150-product archive again for every metric; keep a small per-runtime cache.
+  const savedSnapshots=new Map<string,ReturnType<NonNullable<PluginProductSources['findSnapshot']>>>();
+  const findSnapshot=deps.pluginSources?.findSnapshot?.bind(deps.pluginSources);
+  const pluginSources=deps.pluginSources&&findSnapshot?{...deps.pluginSources,
+    findProduct:deps.pluginSources.findProduct.bind(deps.pluginSources),
+    findCategoryPool:deps.pluginSources.findCategoryPool?.bind(deps.pluginSources),
+    findSnapshot:(input:Parameters<NonNullable<PluginProductSources['findSnapshot']>>[0])=>{
+      const key=JSON.stringify([input.organizationId,input.userId,input.snapshotId]);
+      let saved=savedSnapshots.get(key);
+      if(!saved){saved=findSnapshot(input);savedSnapshots.set(key,saved);if(savedSnapshots.size>8)savedSnapshots.delete(savedSnapshots.keys().next().value!);
+       void saved.then(value=>{if(!value&&savedSnapshots.get(key)===saved)savedSnapshots.delete(key);},()=>{if(savedSnapshots.get(key)===saved)savedSnapshots.delete(key);});}
+      return saved;
+    }}:deps.pluginSources;
+  deps={...deps,pluginSources};
   const handlers = buildMarketSourceStepHandlers(deps);
   return Object.fromEntries(Object.keys(handlers).map(kind => [kind, (async input => {
     let admission: ConnectorError['admission'];
+    const run=await new PostgresMarketModuleExecutionStore(deps.context).findModuleRun({actor:{organizationId:input.claim.organizationId,userId:input.claim.createdBy},moduleRunId:input.claim.moduleRunId});
+    const savedOnly=object(run?.run.params).mcpFallbackPolicy==='saved-only/v1';
     const connectors = Object.fromEntries(Object.entries(deps.connectors).map(([id, connector]) => [id, {
       ...connector,
       execute: async (request: Parameters<typeof connector.execute>[0]) => {
-        try { return await connector.execute({...request, sessionScope:'market'}); }
+        try { return await connector.execute({...request, sessionScope:'market',...(savedOnly?{savedOnly:true}:{})}); }
         catch(error) { if(error instanceof ConnectorError && error.code==='local-admission') admission=error.admission; throw error; }
       },
     }])) as typeof deps.connectors;

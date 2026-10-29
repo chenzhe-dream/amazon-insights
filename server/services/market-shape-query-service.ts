@@ -1,3 +1,4 @@
+import {findCompatibleModuleHistory,marketModuleQueryLock} from './market-linked-history';
 import {MarketShapeQueryRequestSchema} from '../../shared/market-shape-query-contracts';
 import {MarketModuleIdSchema} from '../../shared/market-module-contracts';
 import {MARKET_SOURCE_HANDLER_VERSION} from '../../shared/market-source-contracts';
@@ -26,7 +27,9 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
   }
   assertMarketProductQueryWindow(input.scope,new Date(now));
   await context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`shape-query:${identity}`]);
-  const candidates=input.forceRefresh?[]:(await context.query<{id:string}>(`SELECT r.id FROM market_analysis_module_runs r
+  await context.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[marketModuleQueryLock(actor.organizationId,'shapes',input.scope,input.params)]);
+  const compatible=input.forceRefresh?null:await findCompatibleModuleHistory(context,service,actor,input.scope,'shapes',input.params);
+  const candidates=input.forceRefresh||compatible?[]:(await context.query<{id:string}>(`SELECT r.id FROM market_analysis_module_runs r
    WHERE r.organization_id=$1 AND r.created_by=$2 AND r.request_json->>'moduleKind'='shape-price'
     AND r.request_json->'scope'->>'marketplace'=$3 AND r.request_json->'scope'->>'currency'=$4
     AND regexp_replace(r.request_json->'scope'->>'nodeIdPath','^.*:','')=$5
@@ -37,7 +40,7 @@ export async function queryShapeRun(service:MarketModuleService,context:Postgres
     AND (r.status IN ('queued','running') OR (r.status='succeeded' AND r.created_at >= $13::timestamptz-interval '7 days'))
    ORDER BY (r.status IN ('queued','running')) DESC,r.created_at DESC,r.id DESC`,
    [actor.organizationId,actor.userId,input.scope.marketplace,input.scope.currency,leaf,input.scope.nodeIdPath.includes(':')?input.scope.nodeIdPath:null,input.scope.fromMonth,input.scope.toMonth,JSON.stringify(input.params),MARKET_SHAPE_SORFTIME_FLOW_VERSION,MARKET_SOURCE_HANDLER_VERSION,MARKET_SHAPE_REFERENCE_RULE_VERSION,now])).rows;
-  let cached:Awaited<ReturnType<MarketModuleService['findShapes']>>|null=null;
+  let cached:Awaited<ReturnType<MarketModuleService['findShapes']>>|null=compatible?await service.findShapes(actor,compatible.id):null;
   for(const candidate of candidates){
    const result=await service.findShapes(actor,candidate.id);
    if(['queued','running'].includes(result.run.status)||(result.run.status==='succeeded'&&result.run.source?.products.length)){cached=result;break;}

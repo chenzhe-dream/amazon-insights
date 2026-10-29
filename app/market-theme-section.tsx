@@ -1,4 +1,5 @@
 "use client";
+import {MarketSourceQuotaNotice} from './market-source-quota-notice';
 import {MarketRetainedResult} from './market-retained-result';
 import {rememberPreviousMarketRun} from './lib/market-retained-result';
 import { browserRequestId } from "./lib/browser-request-id";
@@ -152,7 +153,7 @@ export function MarketThemeSection({maxMonth,selection,onSelectionChange,onFavor
     {readError&&<p className="market-research-error" role="alert">状态读取失败：{readError}。{run?'下方为上次取得的结果，未确认最新状态。':'未读取到任务。'}</p>}
     {run&&(run.scope.marketplace!==(selection?.marketplace??localSite)||run.scope.nodeIdPath!==node||run.scope.fromMonth!==(selection?.fromMonth??month)||run.scope.toMonth!==month||run.params.memberCount!==members||run.params.poolSize!==pool)&&<p className="market-research-notice">查询条件与下方任务不同；下方仍是类目 {run.scope.nodeIdPath}、{run.scope.fromMonth} 至 {run.scope.toMonth} 的已保存结果。</p>}
     {!run?.currentReport&&selected&&<p className="market-research-notice">当前分析尚无新报告，以下保留的历史报告不代表本轮结果。</p>}
-    <MarketRetainedResult current={run} runKey="themeRun" read={readThemeRun} usable={value=>!!(value.currentReport??value.latestSavedReport)?.report.counts.successfulCount}>{saved=><MarketThemeReport entry={{...(saved.currentReport??saved.latestSavedReport)!,current:false}} writesDisabled/>}</MarketRetainedResult>
+    <MarketSourceQuotaNotice run={run}/><MarketRetainedResult current={run} runKey="themeRun" read={readThemeRun} usable={value=>!!(value.currentReport??value.latestSavedReport)?.report.counts.successfulCount}>{saved=><MarketThemeReport entry={{...(saved.currentReport??saved.latestSavedReport)!,current:false}} writesDisabled/>}</MarketRetainedResult>
     {selected?<MarketThemeReport entry={selected} writesDisabled={targetLoading||busy} onWriteState={onReportWrite}/>:<MarketThemeLaunchSection title="类目买家评论见解" description={(selection?.marketplace??localSite)+" · 基于样本链接的 Amazon Customers Say 聚合"}><MarketThemePendingReport run={run} runId={runId} node={node} readError={readError}/></MarketThemeLaunchSection>}
     <section className="card market-insights-workflow" aria-label="主题任务与报告"><details className="market-research-boundaries" open={workflowOpen} onToggle={e=>setWorkflowOpen(e.currentTarget.open)}><summary>任务进度、重试与历史报告</summary>
       <div className="market-theme-actions"><button type="button" className="ghost-btn" disabled={!runId||busy||targetLoading} onClick={()=>setReload(n=>n+1)}>刷新状态</button>{run&&themeRunActive(run)&&<button type="button" className="ghost-btn" disabled={busy||reportSaving||targetLoading||!!readError} onClick={()=>void action('cancel')}>取消本次分析</button>}</div>

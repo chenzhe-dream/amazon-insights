@@ -4,6 +4,7 @@ export const CONNECTOR_IDS = ["sif", "sorftime", "sellerSprite"] as const;
 export type ConnectorId = (typeof CONNECTOR_IDS)[number];
 
 export type ConnectorErrorCode =
+  | "saved-source-missing"
   | "keyword-not-trending"
   | "configuration"
   | "authentication"
@@ -17,6 +18,7 @@ export type ConnectorErrorCode =
 
 const SAFE_ERROR_MESSAGES: Readonly<Record<ConnectorErrorCode, string>> =
   Object.freeze({
+    "saved-source-missing":"当前仅使用已保存证据；来源缺失，保留待补，未发送上游请求。",
     "keyword-not-trending":"The input is not a supported trending keyword",
     "local-admission": "Local request capacity is unavailable",
     configuration: "Connector configuration is unavailable",
@@ -49,6 +51,7 @@ export class ConnectorError extends Error {
 }
 
 export interface ConnectorRequest {
+  savedOnly?: boolean;
   sessionScope?: "market";
   operation: string;
   input: Readonly<Record<string, unknown>>;

@@ -24,6 +24,8 @@ export type SorftimeCategoryDashboardProduct = {
   monthlySalesAmount: number | null;
   sales: SorftimeProductSalesSummary;
   salesHistory?: {
+    periodPolicy?: 'calendar-windows/v2';
+    windowGaps?: Record<string,string[]>;
     status: 'queued' | 'running' | 'ready' | 'partial' | 'empty' | 'failed' | 'cancelled';
     errorCode: string | null;
   };

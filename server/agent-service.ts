@@ -1,3 +1,7 @@
+import {createMarketThemeRulesStep} from './runtime/market-theme-rules-step';
+import {createMarketThemeReportStep} from './runtime/market-theme-report-step';
+import {MARKET_THEME_RULES_FLOW_V3} from './domain/market-research/customer-theme-flow';
+import {PostgresPluginProductSourceStore} from './db/postgres/plugin-product-source-store';
 import {createMarketSourceProjectionStep} from './runtime/market-source-projection-step';
 import { MarketResearchService, MarketResearchWorker } from "./services/market-research-service";
 import { MarketModuleService } from './services/market-module-service';
@@ -12,7 +16,7 @@ import { createMarketOverviewSynthesisReportStep } from './runtime/market-overvi
 import { createMarketSourceStepHandlers } from './runtime/market-source-step-handlers';
 import {createMarketShapeSelectionStep} from './runtime/market-shape-selection-step';
 import {MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION} from './domain/market-research/shape-price-flow';
-import {MARKET_KEYWORD_FLOW_VERSION} from './domain/market-research/keyword-flow';
+import {MARKET_KEYWORD_FLOW_VERSION,MARKET_KEYWORD_RULES_FLOW_VERSION} from './domain/market-research/keyword-flow';
 import {createMarketKeywordPoolStep} from './runtime/market-keyword-pool-step';
 import {createMarketOverviewCatalogStep} from './runtime/market-overview-catalog-step';
 import {MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION,MARKET_OVERVIEW_FLOW_VERSION,MARKET_OVERVIEW_EXPLAINED_FLOW_VERSION,MARKET_OVERVIEW_EXPANDED_FLOW_VERSION,MARKET_OVERVIEW_COMPLETE_FLOW_VERSION,MARKET_OVERVIEW_SYNTHESIS_FLOW_VERSION} from './domain/market-research/overview-flow';
@@ -376,17 +380,23 @@ export async function createAgentService(
     }) : null;
     const marketResearchWorker = repository.marketResearch ? new MarketResearchWorker({
       repository: repository.marketResearch,
-      collect: input => collectMarketOverview({ ...input, connector: connectors.sellerSprite, now: options.clock }),
+      collect: async input => {
+        const policy=await repository.marketExecutionContext?.query<{saved_only:boolean}>("SELECT true AS saved_only FROM market_linked_batches WHERE basic_job_id=$1 AND organization_id=$2 AND request_json->>'mcpFallbackPolicy'='saved-only/v1' LIMIT 1",[input.jobId,input.organizationId]);
+        const savedOnly=Boolean(policy?.rows.length);
+        const connector=savedOnly?{...connectors.sellerSprite,execute:(request:import('./connectors/connector-contract').ConnectorRequest)=>connectors.sellerSprite.execute({...request,savedOnly:true})}:connectors.sellerSprite;
+        return collectMarketOverview({...input,connector,now:options.clock});
+      },
       now: options.clock,
       onError: () => app.log.warn({ component: "market-research" }, "Market research worker iteration failed"),
     }) : null;
+    const pluginSources=repository.marketExecutionContext?new PostgresPluginProductSourceStore(repository.marketExecutionContext):undefined;
     let marketModelRuntime: MarketModelRuntime | null = null;
     let marketModelUnavailable = false;
-    if (repository.marketExecutionContext && resolution.status === 'configured') {
+    if (repository.marketExecutionContext && resolution.status === 'configured' && env.MARKET_EXTERNAL_COLLECTION_MODE !== 'saved-only') {
       try {
         if (env.AGENT_VOC_LOCAL_FAKE === '1' && !options.marketModelClient) throw new Error('Local fixture mode requires a synthetic market client');
         marketModelRuntime = await createMarketModelRuntime(repository.marketExecutionContext, loadMarketModelRuntimeConfig(runtimeEnv), {
-          skillsRoot: options.skillsRoot, client: options.marketModelClient, connectors,
+          skillsRoot: options.skillsRoot, client: options.marketModelClient, connectors, pluginSources,
           validationLogger: options.validationLogger ?? ((entry) => app.log.warn({ component: 'market-model', ...entry }, entry.event)),
           networkLogger: entry => app.log.info({ component: 'market-model-network', ...entry }, 'Market model network phase'),
           worker: { onEvent: event => app.log.info({ component: 'market-model', ...event }, 'Market model queue iteration') },
@@ -405,23 +415,24 @@ export async function createAgentService(
     };
     const marketCollectionWorker = repository.marketExecutionContext && !marketModelRuntime ? new MarketModuleStepWorker({
       steps: new PostgresMarketModuleExecutionStore(repository.marketExecutionContext),
-      moduleKindsByStepKind:{rules:['overview'],'prepare-members':['overview','shape-price'],report:['overview'],'prepare-keyword-pool':['keywords'],'prepare-model-batches':['overview']},
-      flowVersionsByStepKind:{rules:[MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],
-        'prepare-members':[...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION],report:[...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
+      moduleKindsByStepKind:{rules:['overview','customer-themes'],'prepare-members':['overview','shape-price','customer-themes'],report:['overview','customer-themes'],'prepare-keyword-pool':['keywords'],'prepare-model-batches':['overview']},
+      flowVersionsByStepKind:{rules:[MARKET_THEME_RULES_FLOW_V3,MARKET_OVERVIEW_FLOW_VERSION,...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],
+        'prepare-members':[MARKET_THEME_RULES_FLOW_V3,...explainedOverviewFlows,MARKET_SHAPE_FLOW_VERSION,MARKET_SHAPE_RULES_FLOW_VERSION,MARKET_SHAPE_HISTORY_FLOW_VERSION,MARKET_SHAPE_CATEGORY_FLOW_VERSION,MARKET_SHAPE_SORFTIME_FLOW_VERSION],report:[MARKET_THEME_RULES_FLOW_V3,...explainedOverviewFlows,MARKET_OVERVIEW_RULES_FLOW_VERSION,MARKET_OVERVIEW_PRODUCT_RULES_FLOW_VERSION,MARKET_OVERVIEW_DEMAND_RULES_FLOW_VERSION,MARKET_OVERVIEW_EXTERNAL_RULES_FLOW_VERSION],'prepare-keyword-pool':[MARKET_KEYWORD_FLOW_VERSION,MARKET_KEYWORD_RULES_FLOW_VERSION],'prepare-model-batches':completeOverviewFlows},
       handlers: {
-        ...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors }),
-        rules:createMarketOverviewCatalogStep(repository.marketExecutionContext),
+        ...createMarketSourceStepHandlers({ context: repository.marketExecutionContext, connectors, pluginSources }),
+        rules:input=>(input.claim.step.input as {task?:unknown})?.task==='overview-source-catalog'?createMarketOverviewCatalogStep(repository.marketExecutionContext!)(input):createMarketThemeRulesStep(repository.marketExecutionContext!)(input),
         'prepare-members':input=>{
           const phase=(input.claim.step.input as {phase?:unknown})?.phase;
           if(phase==='select-shape-members'||phase==='select-sorftime-shape-members')return createMarketShapeSelectionStep(repository.marketExecutionContext!)(input);
           if((input.claim.step.subject as {flow?:string})?.flow?.startsWith('market-shape-price-flow/rules-'))return createMarketSourceProjectionStep(repository.marketExecutionContext!)(input);
           if(phase==='prepare-overview-synthesis')return modelUnavailableStep(input);
+          if((input.claim.step.subject as {flow?:string})?.flow?.startsWith('market-theme-flow/'))return createMarketSourceProjectionStep(repository.marketExecutionContext!)(input);
           return createMarketOverviewWindowsStep(repository.marketExecutionContext!,null)(input);
         },
         'prepare-model-batches':modelUnavailableStep,
         report:input=>(input.claim.step.input as {phase?:unknown})?.phase==='overview-synthesis-report'
           ?createMarketOverviewSynthesisReportStep(repository.marketExecutionContext!)(input)
-          :createMarketOverviewReportStep(repository.marketExecutionContext!)(input),
+          :(input.claim.step.input as {task?:unknown})?.task==='overview-report'?createMarketOverviewReportStep(repository.marketExecutionContext!)(input):createMarketThemeReportStep(repository.marketExecutionContext!)(input),
         'prepare-keyword-pool':createMarketKeywordPoolStep(repository.marketExecutionContext),
       },
       onEvent: event => app.log.info({ component: 'market-source', ...event }, 'Market source queue iteration'),
@@ -447,7 +458,7 @@ export async function createAgentService(
         keywordExplicitModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.keywordExplicitConfigurationVersion,promptVersion:marketModelRuntime.keywordExplicitPromptVersion} : null,
         shapeModelIdentity: () => marketModelRuntime ? {configurationVersion:marketModelRuntime.shapeExplanationConfigurationVersion,promptVersion:marketModelRuntime.shapeExplanationPromptVersion} : null,
         now: options.clock }) : null;
-    const marketLinkedService=repository.marketExecutionContext&&marketResearchService&&marketModuleService?new MarketLinkedService({context:repository.marketExecutionContext,research:marketResearchService,modules:marketModuleService,now:options.clock,onError:()=>app.log.warn({component:'market-linked'},'Market linked dispatcher iteration failed')}):null;
+    const marketLinkedService=repository.marketExecutionContext&&marketResearchService&&marketModuleService?new MarketLinkedService({context:repository.marketExecutionContext,research:marketResearchService,modules:marketModuleService,pluginSources,now:options.clock,onError:()=>app.log.warn({component:'market-linked'},'Market linked dispatcher iteration failed')}):null;
     const normalizationExecutionIdentity = resolution.status === "configured" ? {
       providerName: options.providerName ??
         (env.AGENT_VOC_LOCAL_FAKE === "1" ? "local-fixture" : resolution.config.providerName),
@@ -507,6 +518,10 @@ export async function createAgentService(
         } catch (error) {
           await closeOwnedRepository();
           throw error;
+        }
+        if(env.MARKET_EXTERNAL_COLLECTION_MODE==='saved-only'){
+          marketResearchWorker?.start();marketLinkedService?.start();marketCollectionWorker?.start();marketUnavailableModelWorker?.start();
+          return;
         }
         manualAlexaVocPublicationRuntime?.start();
         marketResearchWorker?.start();

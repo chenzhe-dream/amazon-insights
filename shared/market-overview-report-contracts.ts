@@ -1,3 +1,4 @@
+import {MarketAcquisitionPolicyFields} from './market-acquisition-policy';
 import {MarketOverviewReportSchema as BasicOverviewReportSchema} from './market-research-contracts';
 import {MarketOverviewExternalDataSchema,MarketOverviewProductDemandSchema} from './market-overview-external';
 import {MarketOverviewOriginalSynthesisSchema} from './market-overview-original-synthesis';
@@ -12,7 +13,7 @@ import {MarketOverviewFinalSynthesisOutputSchema,MarketOverviewSynthesisChildSch
 import {MarketRuleBaselineSchema} from './market-rule-baseline-contracts';
 import {MarketOverviewOriginalFieldsSchema} from './market-overview-original-fields';
 const id=z.string().min(1).max(240),hash=z.string().regex(/^[a-f0-9]{64}$/),count=z.number().int().nonnegative().safe(),month=z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/);
-export const MarketOverviewStartRequestSchema=z.object({headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]).default(10),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6),sampleSize:z.union([z.literal(50),z.literal(100),z.literal(200)]).optional()}).strict();
+export const MarketOverviewStartRequestSchema=z.object({...MarketAcquisitionPolicyFields,headTopN:z.union([z.literal(5),z.literal(10),z.literal(20)]).default(10),newProductMonths:z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)]).default(6),sampleSize:z.union([z.literal(50),z.literal(100),z.literal(200)]).optional()}).strict();
 export const MarketOverviewSavedRunQuerySchema=z.object({marketplace:MarketAnalysisScopeSchema.shape.marketplace,nodeIdPath:MarketAnalysisScopeSchema.shape.nodeIdPath,toMonth:MarketAnalysisScopeSchema.shape.toMonth,overviewPeriod:MarketAnalysisScopeSchema.shape.overviewPeriod,
   headTopN:z.coerce.number().pipe(z.union([z.literal(5),z.literal(10),z.literal(20)])),newProductMonths:z.coerce.number().pipe(z.union([z.literal(1),z.literal(3),z.literal(6),z.literal(12)])),sampleSize:z.coerce.number().pipe(z.union([z.literal(50),z.literal(100),z.literal(200)])).optional()}).strict();
 export const MarketOverviewSavedRunResponseSchema=z.object({runId:uuid.nullable(),fromMonth:month.nullable()}).strict();
@@ -38,7 +39,7 @@ export const MarketOverviewSynthesisReportSchema=MarketOverviewLegacyReportSchem
 export const MarketOverviewReportSchema=z.discriminatedUnion('reportVersion',[MarketOverviewLegacyReportSchema,MarketOverviewSynthesisReportSchema]);
 export const MarketOverviewReportEntrySchema=z.object({attemptId:uuid,current:z.boolean(),report:MarketOverviewReportSchema}).strict();
 export const MarketOverviewRunResponseSchema=z.object({run:z.object({id:uuid,scope:MarketAnalysisScopeSchema,status:z.enum(['queued','running','partial','succeeded','failed','cancelled']),createdAt:z.string().datetime(),planRevision:count,
-  params:MarketOverviewStartRequestSchema,steps:z.array(MarketModuleStepPublicSchema.extend({industryDemand:z.literal(true).optional(),externalStage:z.enum(['sales','prices','profits']).optional(),source:z.object({month,operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS_V2)}).strict().optional()})),currentReport:MarketOverviewReportEntrySchema.nullable(),latestSavedReport:MarketOverviewReportEntrySchema.nullable(),history:z.array(MarketOverviewReportEntrySchema)}).strict()}).strict();
+  params:MarketOverviewStartRequestSchema,steps:z.array(MarketModuleStepPublicSchema.extend({sourceProvider:z.literal('sorftime').optional(),industryDemand:z.literal(true).optional(),externalStage:z.enum(['sales','prices','profits']).optional(),source:z.object({month,operation:z.enum(MARKET_OVERVIEW_ALL_OPERATIONS_V2)}).strict().optional()})),currentReport:MarketOverviewReportEntrySchema.nullable(),latestSavedReport:MarketOverviewReportEntrySchema.nullable(),history:z.array(MarketOverviewReportEntrySchema)}).strict()}).strict();
 const reason=z.enum(['not-collected','collection-failed','field-absent','invalid-source','unit-unknown','period-incompatible']);
 const metric=z.object({state:z.enum(['known','missing','conflict']),value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),
   observations:z.array(z.object({sourceRef:id,field:id,raw:MarketInputRecordSchema.shape.data,value:z.number().finite().nullable(),unit:MarketSourceUnitSchema.nullable(),reason:reason.nullable(),scopeBasis:z.enum(['request-bound','response-verified']).optional()}).strict())}).strict();

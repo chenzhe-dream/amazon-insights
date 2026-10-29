@@ -1,3 +1,4 @@
+import {MarketAcquisitionPolicyFields} from '../../shared/market-acquisition-policy';
 import {MarketDevelopmentConclusionService} from './market-development-conclusion-service';
 import {ConclusionSaveSchema} from '../../shared/market-development-conclusion';
 import {queryStandaloneRun} from './market-standalone-query-service';
@@ -160,8 +161,8 @@ export class MarketModuleService {
       const reports=await new MarketOverviewReportService(this.deps.context).read({actor,moduleRunId:id});if(!reports)throw unavailable();
       const current=new Set(inspectMarketOverviewContinuation(view,this.now()).currentStepKeys),p=obj(view.run.params);
       return MarketOverviewRunResponseSchema.parse({run:{id,scope:view.run.scope,status:view.run.status,createdAt:view.run.createdAt,planRevision:view.run.planRevision,
-        params:{headTopN:p.headTopN,newProductMonths:p.newProductMonths,...(p.sampleSize!==undefined?{sampleSize:p.sampleSize}: {})},currentReport:reports.currentReport,latestSavedReport:reports.latestSavedReport,history:reports.history,
-        steps:view.steps.map(s=>{const a=view.attempts.find(a=>a.id===s.latestAttemptId);return {id:s.id,kind:s.kind,status:s.status,latestAttemptId:s.latestAttemptId,attemptCount:s.attemptCount,nextAttemptAt:s.nextAttemptAt??null,current:current.has(s.stepKey),...(obj(s.input).phase==='overview-industry-demand'?{industryDemand:true}:{}),...(obj(s.input).phase==='overview-external'?{externalStage:obj(s.input).kind}:{}),...(s.kind==='collect-overview-month'&&!['overview-industry-demand','overview-external'].includes(String(obj(s.input).phase))?{source:{month:obj(s.input).month,operation:obj(s.input).operation}}:{}),
+        params:{...z.object(MarketAcquisitionPolicyFields).parse(p),headTopN:p.headTopN,newProductMonths:p.newProductMonths,...(p.sampleSize!==undefined?{sampleSize:p.sampleSize}: {})},currentReport:reports.currentReport,latestSavedReport:reports.latestSavedReport,history:reports.history,
+        steps:view.steps.map(s=>{const a=view.attempts.find(a=>a.id===s.latestAttemptId);return {id:s.id,kind:s.kind,status:s.status,latestAttemptId:s.latestAttemptId,attemptCount:s.attemptCount,nextAttemptAt:s.nextAttemptAt??null,current:current.has(s.stepKey),...(obj(s.input).phase==='overview-industry-demand'?{industryDemand:true,...(obj(a?.error).code==='quota-exhausted'&&Array.isArray(obj(obj(a?.output).result).issues)&&(obj(obj(a?.output).result).issues as unknown[]).some(issue=>obj(issue).operation==='category_keywords'&&obj(issue).code==='quota-exhausted')?{sourceProvider:'sorftime'}:{})}:{}),...(obj(s.input).phase==='overview-external'?{externalStage:obj(s.input).kind}:{}),...(s.kind==='collect-overview-month'&&!['overview-industry-demand','overview-external'].includes(String(obj(s.input).phase))?{source:{month:obj(s.input).month,operation:obj(s.input).operation}}:{}),
           canRetry:current.has(s.stepKey)&&s.status==='failed'&&view.run.status!=='cancelled',asin:null,errorCode:['failed','interrupted'].includes(a?.status??'')?obj(a?.error).code??'internal':null};})}});
     });
   }
@@ -294,7 +295,7 @@ export class MarketModuleService {
         "SELECT id,diagnostic_json->'themeIssue' AS issue FROM market_analysis_step_attempts WHERE organization_id=$1 AND run_id=$2 AND id=ANY($3::uuid[]) AND status='failed'",
         [actor.organizationId,id,failedThemeAttempts])).rows.map(row=>[row.id,MarketThemeSourceIssueSchema.safeParse(row.issue)])):new Map();
       return MarketThemeRunResponseSchema.parse({ run: { id, scope: view.run.scope, status: view.run.status, createdAt: view.run.createdAt, planRevision: view.run.planRevision,
-        params: { memberCount: p.memberCount, poolSize: p.poolSize, newProductMonths: p.newProductMonths, ...(p.topN !== undefined ? { topN: p.topN } : {}) },
+        params: { ...z.object(MarketAcquisitionPolicyFields).parse(p),memberCount: p.memberCount, poolSize: p.poolSize, newProductMonths: p.newProductMonths, ...(p.topN !== undefined ? { topN: p.topN } : {}) },
         steps: view.steps.map(step => { const attempt = view.attempts.find(a => a.id === step.latestAttemptId), current = currentKeys.has(step.stepKey), issue=issues.get(step.latestAttemptId);
           return { id: step.id, kind: step.kind, status: step.status, latestAttemptId: step.latestAttemptId, attemptCount: step.attemptCount,nextAttemptAt:step.nextAttemptAt??null, current,
             canRetry: current && step.status === 'failed' && view.run.status !== 'cancelled', asin: obj(step.input).asin ?? null,

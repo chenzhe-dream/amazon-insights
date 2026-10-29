@@ -1,3 +1,4 @@
+import {MarketAcquisitionPolicyFields} from '../../../shared/market-acquisition-policy';
 import { z } from 'zod';
 import { MARKET_SOURCE_HANDLER_VERSION } from '../../../shared/market-source-contracts';
 import type { CreateMarketModuleRunInput, MarketModuleRunView, MarketExecutionStep, MarketStepDefinition } from '../../db/market-module-execution-repository';
@@ -12,7 +13,7 @@ export const MARKET_THEME_RECONCILED_FLOW_VERSION = 'market-theme-flow/v2';
 export const MARKET_THEME_RULES_FLOW_VERSION = 'market-theme-flow/rules-v1';
 export const MARKET_THEME_RULES_FLOW_V2 = 'market-theme-flow/rules-v2';
 export const MARKET_THEME_RULES_FLOW_V3 = 'market-theme-flow/rules-v3';
-export const MarketThemeFlowParamsSchema = z.object({ flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2,MARKET_THEME_RULES_FLOW_V3]), memberCount: z.number().int().min(1).max(20),
+export const MarketThemeFlowParamsSchema = z.object({...MarketAcquisitionPolicyFields, flow: z.enum([MARKET_THEME_FLOW_VERSION,MARKET_THEME_RECONCILED_FLOW_VERSION,MARKET_THEME_RULES_FLOW_VERSION,MARKET_THEME_RULES_FLOW_V2,MARKET_THEME_RULES_FLOW_V3]), memberCount: z.number().int().min(1).max(20),
   poolSize: z.number().int().min(1).max(100), newProductMonths: z.union([z.literal(1), z.literal(3), z.literal(6), z.literal(12)]),
   catalog: MarketThemePoolCatalogSchema, topN: z.number().int().min(0).max(2000).optional() }).strict().refine(p => p.poolSize >= p.memberCount);
 const obj = (v: unknown): Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
